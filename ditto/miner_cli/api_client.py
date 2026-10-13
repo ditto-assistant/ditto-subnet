@@ -530,7 +530,7 @@ class ApiClient:
             kwargs["json"] = body.model_dump(mode="json")
         response = self._request(method, path, **kwargs)
         if not response.is_success:
-            if response.status_code == 401:
+            if response.status_code == 401 and token is not None:
                 raise LoginRequiredError(
                     "miner session is invalid or expired; run `ditto login`"
                 )

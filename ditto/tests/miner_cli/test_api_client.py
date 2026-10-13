@@ -78,6 +78,32 @@ def _envelope_response(
     )
 
 
+class TestContributorAuthenticationErrors:
+    def test_tokenless_cla_401_keeps_endpoint_error(self) -> None:
+        with (
+            make_client(
+                lambda _request: httpx.Response(
+                    401, json={"detail": "endpoint unauthorized"}
+                )
+            ) as client,
+            pytest.raises(ApiResponseError) as caught,
+        ):
+            client.get_cla_version(version=1)
+        assert not isinstance(caught.value, LoginRequiredError)
+        assert "ditto login" not in str(caught.value)
+
+    def test_token_bearing_github_401_requests_login(self) -> None:
+        with (
+            make_client(
+                lambda _request: httpx.Response(
+                    401, json={"detail": "endpoint unauthorized"}
+                )
+            ) as client,
+            pytest.raises(LoginRequiredError, match="ditto login"),
+        ):
+            client.get_github_link(token="fixture-token")
+
+
 class TestEvalPricing:
     def test_happy_path(self) -> None:
         captured: dict[str, Any] = {}

@@ -1677,7 +1677,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool('publish_cla_version', {
     title: 'Publish approved pinned CLA text',
     description: 'Publish the exact UTF-8 bytes of maintainer-approved docs/legal/CLA-vN.md with its SHA-256, version, effective date and operator reason. Supply confirmation PUBLISH CLA {version} {sha256}. Text and digest are immutable; versions and effective dates advance monotonically. Never publish test fixtures or draft legal wording. This only publishes the registry entry and does not change rollout mode. Requires backroom:write.',
-    inputSchema: claPublishInputSchema, annotations: toolAnnotations('write'),
+    inputSchema: claPublishInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => publishClaVersion(props.session.email, input)))
 
   registerTool(

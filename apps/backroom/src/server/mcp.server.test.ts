@@ -11428,10 +11428,10 @@ describe('contributor identity and CLA MCP tools', () => {
     await client.close(); await server.close()
   })
 
-  it('marks CLA enforcement policy revisions as destructive and non-idempotent', async () => {
+  it.each(['set_cla_policy', 'publish_cla_version'])('marks %s as destructive and non-idempotent', async (name) => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
     const tools = await client.listTools()
-    expect(tools.tools.find((tool) => tool.name === 'set_cla_policy')?.annotations)
+    expect(tools.tools.find((tool) => tool.name === name)?.annotations)
       .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false })
     await client.close(); await server.close()
   })
