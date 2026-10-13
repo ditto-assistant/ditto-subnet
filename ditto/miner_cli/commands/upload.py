@@ -16,8 +16,13 @@ Glues every other module together. Walk:
 9. POST /upload/agent with tar + payment proof
 10. Print returned agent_id to stdout; print poll hint to stderr
 
+``--track reranker`` (Season 2, shadow) replaces steps 2-10 with: validate
+the reranker artifact locally, pack a directory deterministically, sign a
+domain-separated reranker payload, and POST /upload/reranker. No fee, no
+payment, no admission token; the submission id is printed to stdout.
+
 Exit codes:
-- 0 success (agent_id printed to stdout)
+- 0 success (agent_id, or reranker submission_id, printed to stdout)
 - 1 generic error (pre-flight failed, sig failed, API rejected, chain failure)
 - 2 payment or registration cancelled at a confirm prompt
 """
@@ -82,7 +87,8 @@ from ditto.miner_cli.preferences import (
     save_pending_payment,
 )
 from ditto.miner_cli.registration import quote_registration, submit_registration
-from ditto.miner_cli.signing import sign_upload_payload
+from ditto.miner_cli.reranker import prepare_reranker_artifact
+from ditto.miner_cli.signing import sign_reranker_upload_payload, sign_upload_payload
 from ditto.miner_cli.tar_validator import run_preflight
 from ditto.miner_cli.wallet import load_wallet
 
@@ -129,13 +135,26 @@ def add_subparser(
         parents=parents or [],
     )
     parser.add_argument(
+        "--track",
+        choices=("memory", "reranker"),
+        default="memory",
+        help=(
+            "Competition track. 'memory' (default) uploads an agent harness "
+            "and pays the eval fee. 'reranker' uploads a Season 2 reranker "
+            "artifact (directory or tar.gz) to the shadow track: no fee, no "
+            "weights. See docs/reranker-season.md."
+        ),
+    )
+    parser.add_argument(
         "--path",
         "--tar-path",
         dest="tar_path",
         type=Path,
         required=True,
         help=(
-            "Path to the gzipped tarball to upload. Flag aliases: --path / --tar-path."
+            "Path to the gzipped tarball to upload. With --track reranker, an "
+            "artifact directory is also accepted and packed deterministically. "
+            "Flag aliases: --path / --tar-path."
         ),
     )
     parser.add_argument(
@@ -241,6 +260,13 @@ def run(args: argparse.Namespace) -> int:
 
     network = resolve_network(args.network)
 
+    if getattr(args, "track", "memory") == "reranker":
+        try:
+            return _run_reranker_upload(args, network_api_url=network.api_url)
+        except MinerCliError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+
     try:
         return _run_upload(
             args,
@@ -267,6 +293,59 @@ def run(args: argparse.Namespace) -> int:
     ) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+
+
+def _run_reranker_upload(args: argparse.Namespace, *, network_api_url: str) -> int:
+    """Season 2 reranker upload (shadow): validate, sign, POST. No payment."""
+    handle, live_wallet = load_wallet(
+        coldkey_name=args.coldkey_name, hotkey_name=args.hotkey_name
+    )
+    print(f"validating reranker artifact {args.tar_path}...", file=sys.stderr)
+    prepared = prepare_reranker_artifact(args.tar_path)
+    for warning in prepared.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    if not prepared.model_checked:
+        print(
+            "note: onnx is not installed, so model.onnx is checked only by the "
+            "platform (pip install onnx to check it locally)",
+            file=sys.stderr,
+        )
+    print(
+        f"artifact sha256={prepared.artifact_sha256} upload={len(prepared.data)} bytes",
+        file=sys.stderr,
+    )
+
+    timestamp = int(time.time())
+    nonce = uuid4()
+    signature = sign_reranker_upload_payload(
+        handle=handle,
+        live_wallet=live_wallet,
+        sha256_hex=prepared.sha256,
+        signature_timestamp=timestamp,
+        signature_nonce=nonce,
+    )
+    with ApiClient(base_url=network_api_url) as client:
+        result = client.post_upload_reranker(
+            artifact=prepared.data,
+            artifact_filename="artifact.tar.gz",
+            hotkey=handle.hotkey_ss58,
+            sha256=prepared.sha256,
+            signature=signature,
+            signature_timestamp=timestamp,
+            signature_nonce=nonce,
+        )
+
+    for warning in result.warnings:
+        print(f"platform warning: {warning}", file=sys.stderr)
+    print(str(result.submission_id))
+    print(
+        f"reranker submission {result.status} ({result.contract_id}). Shadow "
+        "track: no payment and no weights. Scores appear at "
+        f"{network_api_url.rstrip('/')}/api/v1/public/reranker/submissions/"
+        f"{result.submission_id}",
+        file=sys.stderr,
+    )
+    return 0
 
 
 def _run_upload(

@@ -104,6 +104,9 @@ from ditto.api_server.endpoints.admin_quarantine import (
 from ditto.api_server.endpoints.admin_queue_policy_settings import (
     router as admin_queue_policy_settings_router,
 )
+from ditto.api_server.endpoints.admin_reranker_submissions import (
+    router as admin_reranker_submissions_router,
+)
 from ditto.api_server.endpoints.admin_retirement import (
     router as admin_retirement_router,
 )
@@ -193,6 +196,9 @@ from ditto.api_server.endpoints.miner_mcp import router as miner_mcp_router
 from ditto.api_server.endpoints.miner_me import router as miner_me_router
 from ditto.api_server.endpoints.name_claims import router as name_claims_router
 from ditto.api_server.endpoints.public import router as public_router
+from ditto.api_server.endpoints.reranker_upload import (
+    router as reranker_upload_router,
+)
 from ditto.api_server.endpoints.retrieval import router as retrieval_router
 from ditto.api_server.endpoints.scoring import router as scoring_router
 from ditto.api_server.endpoints.screener import router as screener_router
@@ -249,6 +255,7 @@ __all__ = [
     "admin_scoring_lease_settings_router",
     "admin_traces_router",
     "admin_queue_policy_settings_router",
+    "admin_reranker_submissions_router",
     "admin_efficiency_bonus_settings_router",
     "admin_inference_routes_router",
     "admin_hotkey_bans_router",
@@ -298,6 +305,7 @@ __all__ = [
     "miner_mcp_router",
     "miner_me_router",
     "public_router",
+    "reranker_upload_router",
     "retrieval_router",
     "scoring_router",
     "screener_router",

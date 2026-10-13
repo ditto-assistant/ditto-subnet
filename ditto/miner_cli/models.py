@@ -178,6 +178,17 @@ class UploadResult:
 
 
 @dataclass(frozen=True)
+class RerankerUploadResult:
+    """Server response from ``POST /upload/reranker`` (shadow track)."""
+
+    submission_id: UUID
+    status: str
+    artifact_sha256: str
+    contract_id: str
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class MinerCliConfig:
     """Resolved configuration for one CLI invocation.
 

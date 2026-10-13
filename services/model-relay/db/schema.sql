@@ -3869,6 +3869,35 @@ ALTER SEQUENCE public.queue_policy_settings_revisions_revision_seq OWNED BY publ
 
 
 --
+-- Name: reranker_submissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.reranker_submissions (
+    id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    miner_coldkey text,
+    upload_sha256 text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    contract_sha256 text NOT NULL,
+    size_bytes bigint NOT NULL,
+    base_model text NOT NULL,
+    base_model_license text NOT NULL,
+    status text DEFAULT 'accepted'::text NOT NULL,
+    invalid_reason text,
+    seed_block_hash text,
+    seed bigint,
+    score jsonb,
+    scored_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_reranker_submissions_base_model CHECK ((((length(base_model) >= 1) AND (length(base_model) <= 256)) AND ((length(base_model_license) >= 1) AND (length(base_model_license) <= 64)))),
+    CONSTRAINT ck_reranker_submissions_digests CHECK (((upload_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (contract_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_reranker_submissions_seed CHECK (((seed IS NULL) OR (seed >= 0))),
+    CONSTRAINT ck_reranker_submissions_size CHECK ((size_bytes > 0)),
+    CONSTRAINT ck_reranker_submissions_status CHECK ((status = ANY (ARRAY['accepted'::text, 'invalid'::text, 'scored'::text, 'failed'::text])))
+);
+
+
+--
 -- Name: score_audit_log; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8251,6 +8280,22 @@ ALTER TABLE ONLY public.queue_policy_settings_revisions
 
 
 --
+-- Name: reranker_submissions reranker_submissions_artifact_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reranker_submissions
+    ADD CONSTRAINT reranker_submissions_artifact_sha256_key UNIQUE (artifact_sha256);
+
+
+--
+-- Name: reranker_submissions reranker_submissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reranker_submissions
+    ADD CONSTRAINT reranker_submissions_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: score_audit_log score_audit_log_entry_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9494,6 +9539,34 @@ CREATE INDEX owner_attestations_lo_idx ON public.owner_attestations USING btree 
 --
 
 CREATE UNIQUE INDEX queue_policy_settings_scope_revision_idx ON public.queue_policy_settings_revisions USING btree (scope, revision);
+
+
+--
+-- Name: reranker_submissions_coldkey_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX reranker_submissions_coldkey_created_idx ON public.reranker_submissions USING btree (miner_coldkey, created_at);
+
+
+--
+-- Name: reranker_submissions_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX reranker_submissions_created_idx ON public.reranker_submissions USING btree (created_at);
+
+
+--
+-- Name: reranker_submissions_hotkey_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX reranker_submissions_hotkey_created_idx ON public.reranker_submissions USING btree (miner_hotkey, created_at);
+
+
+--
+-- Name: reranker_submissions_status_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX reranker_submissions_status_created_idx ON public.reranker_submissions USING btree (status, created_at);
 
 
 --

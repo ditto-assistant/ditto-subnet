@@ -70,11 +70,12 @@ from ditto.miner_cli.errors import (
     PaymentAmountMismatchError,
     PaymentRecoveryExpiredError,
     PreCheckRejectedError,
+    RerankerUploadRejectedError,
     SubmissionCooldownError,
     TransientApiError,
     UploadAgentRejectedError,
 )
-from ditto.miner_cli.models import PaymentReceipt
+from ditto.miner_cli.models import PaymentReceipt, RerankerUploadResult
 
 logger = logging.getLogger(__name__)
 
@@ -301,6 +302,64 @@ class ApiClient:
                 _format_error(response, prefix="upload-agent")
             )
         return UploadAgentResponse.model_validate(response.json())
+
+    # ---- /upload/reranker (Season 2 shadow track) -----------------------
+
+    def post_upload_reranker(
+        self,
+        *,
+        artifact: bytes,
+        artifact_filename: str,
+        hotkey: str,
+        sha256: str,
+        signature: str,
+        signature_timestamp: int,
+        signature_nonce: UUID,
+    ) -> RerankerUploadResult:
+        """Submit a reranker artifact. No payment and no admission token.
+
+        Multipart shape mirrors ``upload_reranker`` in
+        ``apps/platform/ditto/api_server/endpoints/reranker_upload.py``.
+        """
+        response = self._request(
+            "POST",
+            "/api/v1/upload/reranker",
+            files={"artifact": (artifact_filename, artifact, "application/gzip")},
+            data={
+                "hotkey": hotkey,
+                "sha256": sha256,
+                "signature": signature,
+                "signature_timestamp": str(signature_timestamp),
+                "signature_nonce": str(signature_nonce),
+            },
+            timeout=UPLOAD_TIMEOUT_S,
+        )
+        if response.status_code == 429:
+            retry_after_raw = response.headers.get("Retry-After")
+            try:
+                retry_after = (
+                    int(retry_after_raw) if retry_after_raw is not None else None
+                )
+            except ValueError:
+                retry_after = None
+            raise SubmissionCooldownError(
+                _format_error(response, prefix="upload-reranker"),
+                retry_after_seconds=retry_after,
+            )
+        if response.status_code in _RETRYABLE_UPLOAD_STATUS_CODES:
+            raise TransientApiError(_format_error(response, prefix="upload-reranker"))
+        if response.status_code not in (200, 201):
+            raise RerankerUploadRejectedError(
+                _format_error(response, prefix="upload-reranker")
+            )
+        body = response.json()
+        return RerankerUploadResult(
+            submission_id=UUID(str(body["submission_id"])),
+            status=str(body["status"]),
+            artifact_sha256=str(body["artifact_sha256"]),
+            contract_id=str(body["contract_id"]),
+            warnings=tuple(str(w) for w in body.get("warnings") or ()),
+        )
 
     # ---- /attestations/owner-link ---------------------------------------
 

@@ -467,6 +467,21 @@ the signed-in operator identity plus the previous ban evidence to
 returns the post-write state so a successful call proves `banned=false` and
 surfaces the new audit entry.
 
+## Season 2 reranker shadow intake
+
+`get_reranker_submissions` reads `GET /api/v1/admin/reranker-submissions`, the
+intake behind `POST /api/v1/upload/reranker` (SN-207). It returns a
+zero-filled count per status over the whole table, the season contract id and
+digest, the effective per-owner upload window (`upload_window_seconds`,
+`uploads_per_window`, from the Platform environment) that explains a miner's
+429, and recent rows newest first with owner hotkey and coldkey, artifact and
+upload digests, base model and licence. `seed` is a decimal string and stays
+null until the trusted scorer derives it post-commit; `score` stays null until
+scored. Optional `status` and `hotkey` filters narrow the rows and `total`.
+The track is shadow only: these rows never reach the screener queue,
+validators, the leaderboard, payments or weights, and no tarball URL is
+returned. The tool is read-only.
+
 ## Reading miner source
 
 Three tools, used in this order. Skipping the middle one is the expensive

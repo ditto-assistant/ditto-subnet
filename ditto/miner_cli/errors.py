@@ -298,6 +298,27 @@ class SubmissionCooldownError(TransientApiError):
         super().__init__(message)
 
 
+class RerankerArtifactError(MinerCliError):
+    """Raised when a reranker artifact fails local validation before upload.
+
+    The message is the season-contract violation from
+    :mod:`dittobench_reranker.artifact`; nothing is sent to the API.
+    """
+
+    pass
+
+
+class RerankerUploadRejectedError(ApiResponseError):
+    """Raised when ``/upload/reranker`` definitively rejects an artifact.
+
+    Covers an invalid artifact (422), an exact duplicate (409), a bad
+    signature (401), and a banned or unregistered hotkey (403). No payment
+    is involved, so nothing needs recovering.
+    """
+
+    pass
+
+
 class UploadAgentRejectedError(ApiResponseError):
     """Raised when ``/upload/agent`` returns non-2xx after payment was made.
 

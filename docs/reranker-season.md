@@ -71,6 +71,43 @@ the BM25 base order scores a mean NDCG@10 of 0.718, and gold is already first in
 73% of pools. Most of the headroom is in ranking all of a case's evidence
 highly, since most cases plant three or more memories.
 
+## Uploading (shadow)
+
+Submissions go to Platform with the miner CLI (SN-207):
+
+```bash
+uv run ditto --network finney upload --track reranker \
+  --path <artifact directory or tar.gz> \
+  --wallet.name <coldkey> --wallet.hotkey <hotkey>
+```
+
+The CLI runs the structural checks above locally (the `model.onnx` check only
+when `onnx` is installed), packs a directory with the deterministic `pack()`,
+and calls `POST /api/v1/upload/reranker`. There is no fee, no payment and no
+admission token, and an accepted submission earns no weight: the track is in
+shadow.
+
+| Rule | Behaviour |
+|---|---|
+| Signature | The hotkey signs `reranker-season-v1:upload:{hotkey}:{sha256 of the upload}:{unix time}:{uuid4}` within five minutes. The prefix separates it from a memory-track upload signature, so neither can be replayed as the other, and binds it to this season. |
+| Eligibility | The hotkey must be registered on the subnet and not banned. |
+| Size | At most the three file caps plus 1 MiB of tar overhead, enforced on the streamed bytes and again on the decompressed archive. At most eight tar entries. |
+| Validation | Every check in "The artifact", run by Platform on the uploaded bytes. A violation is HTTP 422 with the reason. |
+| Duplicates | The artifact digest covers the three files. An exact duplicate of an earlier submission is HTTP 409; the first submitter keeps it. |
+| Rate | One accepted upload per owner coldkey per hour by default, matching the memory track's cooldown (HTTP 429 with `Retry-After`). A request refused for any other reason (signature, eligibility, size, validation, duplicate) does not use the slot. Operators set `DITTO_RERANKER_UPLOADS_PER_WINDOW` and `DITTO_RERANKER_UPLOAD_WINDOW_SECONDS`; Backroom `get_reranker_submissions` shows the effective values. |
+
+An accepted submission is stored and recorded with status `accepted`. Its
+`seed` and `seed_block_hash` stay null at intake. The trusted scorer worker
+(SN-209) derives them after the commit from a finalized block, scores the
+artifact, and moves it to `scored`, `invalid` (for example the latency gate)
+or `failed`. Status and score are public at
+`GET /api/v1/public/reranker/submissions?hotkey=…` and
+`GET /api/v1/public/reranker/submissions/{id}`; no tarball URL is published.
+
+Reranker submissions live in their own table. They never enter the memory
+track's screener queue, validator allocation, leaderboard, anti-copy checks or
+payments.
+
 ## Score
 
 For each pool:

@@ -432,6 +432,8 @@ import {
   submissionSettingsControlSchema,
   hotkeyBanControlSchema,
   hotkeyBanListSchema,
+  rerankerSubmissionListSchema,
+  rerankerSubmissionsInputSchema,
   hotkeyBanLookupInputSchema,
   hotkeyUnbanResponseSchema,
   unbanHotkeyInputSchema,
@@ -1193,6 +1195,20 @@ export async function fetchHotkeyBans(limit: number, offset: number) {
   })
   const payload = await platformAdminRequest(`${HOTKEY_BANS_PATH}?${query}`)
   return hotkeyBanListSchema.parse(payload)
+}
+
+const RERANKER_SUBMISSIONS_PATH = '/api/v1/admin/reranker-submissions'
+
+export async function fetchRerankerSubmissions(rawInput: unknown) {
+  const input = rerankerSubmissionsInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+  })
+  if (input.status) query.set('status', input.status)
+  if (input.hotkey) query.set('hotkey', input.hotkey)
+  const payload = await platformAdminRequest(`${RERANKER_SUBMISSIONS_PATH}?${query}`)
+  return rerankerSubmissionListSchema.parse(payload)
 }
 
 export async function fetchHotkeyBan(rawInput: unknown) {

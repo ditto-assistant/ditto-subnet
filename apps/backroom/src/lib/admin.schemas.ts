@@ -28,6 +28,10 @@ type GeneratedAdminHotkeyBanAuditEntry =
   PlatformComponents['schemas']['AdminHotkeyBanAuditEntry']
 type GeneratedAdminHotkeyBanControl = PlatformComponents['schemas']['AdminHotkeyBanControl']
 type GeneratedAdminHotkeyBanList = PlatformComponents['schemas']['AdminHotkeyBanList']
+type GeneratedAdminRerankerSubmission =
+  PlatformComponents['schemas']['AdminRerankerSubmission']
+type GeneratedAdminRerankerSubmissionList =
+  PlatformComponents['schemas']['AdminRerankerSubmissionList']
 type GeneratedAdminHotkeyUnbanResponse =
   PlatformComponents['schemas']['AdminHotkeyUnbanResponse']
 type GeneratedScoredPolicyRescreenView =
@@ -1384,6 +1388,51 @@ export const hotkeyBanListSchema = z.object({
   total: z.number().int().nonnegative(),
   bans: z.array(activeHotkeyBanSchema).max(200),
 } satisfies PlatformResponseShape<GeneratedAdminHotkeyBanList>)
+
+const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/)
+
+export const RERANKER_SUBMISSION_STATUSES = ['accepted', 'invalid', 'scored', 'failed'] as const
+
+// Season 2 reranker shadow intake (SN-207). Read-only: no tarball URL is ever
+// part of the payload, and nothing here pays or sets weights.
+export const rerankerSubmissionSchema = z.object({
+  submission_id: z.string().uuid(),
+  miner_hotkey: z.string().min(1),
+  miner_coldkey: z.string().nullable(),
+  status: z.enum(RERANKER_SUBMISSION_STATUSES),
+  artifact_sha256: sha256HexSchema,
+  upload_sha256: sha256HexSchema,
+  contract_sha256: sha256HexSchema,
+  size_bytes: z.number().int().positive(),
+  base_model: z.string().min(1),
+  base_model_license: z.string().min(1),
+  invalid_reason: z.string().nullable(),
+  // Decimal string: a JSON number would round a 64-bit seed.
+  seed: z.string().regex(/^\d+$/).nullable(),
+  seed_block_hash: z.string().nullable(),
+  score: z.record(z.string(), z.unknown()).nullable(),
+  scored_at: z.string().datetime({ offset: true }).nullable(),
+  created_at: z.string().datetime({ offset: true }),
+} satisfies PlatformResponseShape<GeneratedAdminRerankerSubmission>)
+
+export const rerankerSubmissionListSchema = z.object({
+  contract_id: z.string().min(1),
+  contract_sha256: sha256HexSchema,
+  total: z.number().int().nonnegative(),
+  status_counts: z.record(z.string(), z.number().int().nonnegative()),
+  upload_window_seconds: z.number().int().positive(),
+  uploads_per_window: z.number().int().positive(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  submissions: z.array(rerankerSubmissionSchema).max(200),
+} satisfies PlatformResponseShape<GeneratedAdminRerankerSubmissionList>)
+
+export const rerankerSubmissionsInputSchema = z.object({
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).default(0),
+  status: z.enum(RERANKER_SUBMISSION_STATUSES).optional(),
+  hotkey: z.string().trim().min(3).max(96).optional(),
+})
 
 export const hotkeyBanLookupInputSchema = z.object({
   hotkey: z.string().trim().min(3).max(96),

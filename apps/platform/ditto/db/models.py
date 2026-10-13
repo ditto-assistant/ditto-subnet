@@ -11667,3 +11667,67 @@ class TreasuryPublicEvent(Base):
         ),
         Index("treasury_public_event_at_idx", "event_at", "id"),
     )
+
+
+class RerankerSubmission(Base):
+    """One Season 2 reranker artifact accepted at intake (shadow, SN-207).
+
+    Kept out of ``agents`` on purpose: an ``agents`` row in ``uploaded`` is
+    claimed by the Docker screener and flows into validator allocation,
+    leaderboard, anti-copy and payments. None of that applies to an ONNX model.
+    ``seed``/``seed_block_hash`` stay null until the trusted scorer worker
+    derives them post-commit from a finalized block.
+    """
+
+    __tablename__ = "reranker_submissions"
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_sha256", name="reranker_submissions_artifact_sha256_key"
+        ),
+        CheckConstraint(
+            "status IN ('accepted', 'invalid', 'scored', 'failed')",
+            name="status",
+        ),
+        CheckConstraint(
+            "upload_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "artifact_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "contract_sha256 ~ '^[0-9a-f]{64}$'",
+            name="digests",
+        ),
+        CheckConstraint("size_bytes > 0", name="size"),
+        CheckConstraint(
+            "length(base_model) BETWEEN 1 AND 256 "
+            "AND length(base_model_license) BETWEEN 1 AND 64",
+            name="base_model",
+        ),
+        CheckConstraint("seed IS NULL OR seed >= 0", name="seed"),
+        Index("reranker_submissions_status_created_idx", "status", "created_at"),
+        Index("reranker_submissions_hotkey_created_idx", "miner_hotkey", "created_at"),
+        Index(
+            "reranker_submissions_coldkey_created_idx", "miner_coldkey", "created_at"
+        ),
+        Index("reranker_submissions_created_idx", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_coldkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    upload_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    contract_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    base_model: Mapped[str] = mapped_column(Text, nullable=False)
+    base_model_license: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'accepted'")
+    )
+    invalid_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seed_block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seed: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    score: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    scored_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )

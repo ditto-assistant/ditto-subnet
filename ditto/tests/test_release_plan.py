@@ -186,8 +186,33 @@ def test_coding_starter_kit_change_is_shadow_only(components, ignored_paths) -> 
     assert root_verification(components, ignored_paths, path) == "none"
 
 
-def test_reranker_season_change_is_isolated(components, ignored_paths) -> None:
-    path = "packages/dittobench-reranker/dittobench_reranker/contract.py"
+@pytest.mark.parametrize(
+    "path",
+    [
+        "packages/dittobench-reranker/dittobench_reranker/contract.py",
+        "packages/dittobench-reranker/pyproject.toml",
+    ],
+)
+def test_reranker_contract_change_releases_its_consumers(
+    components, ignored_paths, path: str
+) -> None:
+    # Platform intake (/upload/reranker) and the miner CLI (`ditto upload
+    # --track reranker`) validate and sign against the season contract, so a
+    # contract change must re-release both. The validator image installs the
+    # package but never imports it, and stays out.
+    assert selected(components, ignored_paths, path) == {
+        "dittobench_reranker",
+        "dittobench_reranker_starter_kit",
+        "miner_cli",
+        "platform_api",
+        "platform",
+        "backroom",
+    }
+    assert "validator_stack" not in selected(components, ignored_paths, path)
+
+
+def test_reranker_package_tests_stay_isolated(components, ignored_paths) -> None:
+    path = "packages/dittobench-reranker/tests/test_contract.py"
     assert selected(components, ignored_paths, path) == {
         "dittobench_reranker",
         "dittobench_reranker_starter_kit",

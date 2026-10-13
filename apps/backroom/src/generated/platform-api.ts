@@ -1728,6 +1728,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/reranker-submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Reranker Submissions
+         * @description Recent reranker submissions with owner identity and status counts.
+         *
+         *     ``status_counts`` covers the whole table; ``total`` matches the filters.
+         *     The effective per-owner upload window is reported so an operator can see
+         *     why a miner was refused with 429.
+         */
+        get: operations["admin_reranker_submissions_api_v1_admin_reranker_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/retirements": {
         parameters: {
             query?: never;
@@ -5503,6 +5527,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/reranker/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Public Reranker Submissions
+         * @description Shadow reranker submissions, newest first. Scores are null until scored.
+         */
+        get: operations["list_public_reranker_submissions_api_v1_public_reranker_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/reranker/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Public Reranker Submission
+         * @description One shadow reranker submission by id.
+         */
+        get: operations["get_public_reranker_submission_api_v1_public_reranker_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/screener-capacity-watchdog": {
         parameters: {
             query?: never;
@@ -6895,6 +6959,30 @@ export interface paths {
         get: operations["eval_pricing_api_v1_upload_eval_pricing_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/upload/reranker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Reranker
+         * @description Accept one Season 2 reranker artifact into the shadow track.
+         *
+         *     ``sha256`` is the digest of the uploaded file. The hotkey signs
+         *     ``reranker-season-v1:upload:{hotkey}:{sha256}:{timestamp}:{nonce}``
+         *     (fresh within five minutes). No payment is taken and no weight is set.
+         */
+        post: operations["upload_reranker_api_v1_upload_reranker_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11420,6 +11508,81 @@ export interface components {
              */
             idempotent: boolean;
         };
+        /**
+         * AdminRerankerSubmission
+         * @description Operator view: adds the owner coldkey and the uploaded tarball digest.
+         */
+        AdminRerankerSubmission: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Base Model */
+            base_model: string;
+            /** Base Model License */
+            base_model_license: string;
+            /** Contract Sha256 */
+            contract_sha256: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Invalid Reason */
+            invalid_reason: string | null;
+            /** Miner Coldkey */
+            miner_coldkey: string | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Score */
+            score: {
+                [key: string]: unknown;
+            } | null;
+            /** Scored At */
+            scored_at: string | null;
+            /** Seed */
+            seed: string | null;
+            /** Seed Block Hash */
+            seed_block_hash: string | null;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "invalid" | "scored" | "failed";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Upload Sha256 */
+            upload_sha256: string;
+        };
+        /**
+         * AdminRerankerSubmissionList
+         * @description Backroom read: recent rows plus a zero-filled count per status.
+         */
+        AdminRerankerSubmissionList: {
+            /** Contract Id */
+            contract_id: string;
+            /** Contract Sha256 */
+            contract_sha256: string;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Status Counts */
+            status_counts: {
+                [key: string]: number;
+            };
+            /** Submissions */
+            submissions: components["schemas"]["AdminRerankerSubmission"][];
+            /** Total */
+            total: number;
+            /** Upload Window Seconds */
+            upload_window_seconds: number;
+            /** Uploads Per Window */
+            uploads_per_window: number;
+        };
         /** AdminRetireCodingCatalogRequest */
         AdminRetireCodingCatalogRequest: {
             /**
@@ -14695,6 +14858,27 @@ export interface components {
             payment_block_number: number;
             /** Payment Extrinsic Index */
             payment_extrinsic_index: number;
+            /** Sha256 */
+            sha256: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid4
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
+        };
+        /** Body_upload_reranker_api_v1_upload_reranker_post */
+        Body_upload_reranker_api_v1_upload_reranker_post: {
+            /**
+             * Artifact
+             * @description Reranker artifact as tar.gz (see docs/reranker-season.md)
+             */
+            artifact: string;
+            /** Hotkey */
+            hotkey: string;
             /** Sha256 */
             sha256: string;
             /** Signature */
@@ -29493,6 +29677,96 @@ export interface components {
             signed_heartbeat_fresh: boolean;
         };
         /**
+         * RerankerSubmission
+         * @description Public view of one submission. ``score`` is null until scored.
+         */
+        RerankerSubmission: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Base Model */
+            base_model: string;
+            /** Base Model License */
+            base_model_license: string;
+            /** Contract Sha256 */
+            contract_sha256: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Invalid Reason */
+            invalid_reason: string | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Score */
+            score: {
+                [key: string]: unknown;
+            } | null;
+            /** Scored At */
+            scored_at: string | null;
+            /** Seed */
+            seed: string | null;
+            /** Seed Block Hash */
+            seed_block_hash: string | null;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "invalid" | "scored" | "failed";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** RerankerSubmissionList */
+        RerankerSubmissionList: {
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Submissions */
+            submissions: components["schemas"]["RerankerSubmission"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * RerankerUploadResponse
+         * @description ``POST /upload/reranker`` result for a newly accepted artifact.
+         */
+        RerankerUploadResponse: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Contract Id */
+            contract_id: string;
+            /** Contract Sha256 */
+            contract_sha256: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "invalid" | "scored" | "failed";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Upload Sha256 */
+            upload_sha256: string;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings: string[];
+        };
+        /**
          * RestoreScoredScreeningSnapshotRequest
          * @description Restore the last pre-activation pass for an exact scored cohort.
          *
@@ -40377,6 +40651,42 @@ export interface operations {
             };
         };
     };
+    admin_reranker_submissions_api_v1_admin_reranker_submissions_get: {
+        parameters: {
+            query?: {
+                hotkey?: string | null;
+                status?: ("accepted" | "invalid" | "scored" | "failed") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRerankerSubmissionList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     preview_retirements_api_v1_admin_retirements_get: {
         parameters: {
             query?: {
@@ -47181,6 +47491,71 @@ export interface operations {
             };
         };
     };
+    list_public_reranker_submissions_api_v1_public_reranker_submissions_get: {
+        parameters: {
+            query?: {
+                hotkey?: string | null;
+                status?: ("accepted" | "invalid" | "scored" | "failed") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerankerSubmissionList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_public_reranker_submission_api_v1_public_reranker_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerankerSubmission"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     screener_capacity_watchdog_api_v1_public_screener_capacity_watchdog_get: {
         parameters: {
             query?: {
@@ -49623,6 +49998,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EvalPricingResponse"];
+                };
+            };
+        };
+    };
+    upload_reranker_api_v1_upload_reranker_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_reranker_api_v1_upload_reranker_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RerankerUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

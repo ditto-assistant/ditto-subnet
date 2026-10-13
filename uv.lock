@@ -483,6 +483,7 @@ dependencies = [
     { name = "bittensor-pylon-client" },
     { name = "bittensor-wallet" },
     { name = "ditto-screening-protocol" },
+    { name = "dittobench-reranker" },
     { name = "httpx" },
     { name = "psutil" },
     { name = "pydantic" },
@@ -513,6 +514,7 @@ requires-dist = [
     { name = "bittensor-pylon-client", git = "https://github.com/bittensor-church/bittensor-pylon?subdirectory=pylon_client" },
     { name = "bittensor-wallet", specifier = ">=4.1.0" },
     { name = "ditto-screening-protocol", directory = "packages/ditto-screening-protocol" },
+    { name = "dittobench-reranker", editable = "packages/dittobench-reranker" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pydantic", specifier = ">=2.12" },
@@ -541,6 +543,25 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2.12" }]
+
+[[package]]
+name = "dittobench-reranker"
+version = "0.1.0"
+source = { editable = "packages/dittobench-reranker" }
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", marker = "extra == 'score'", specifier = ">=1.26" },
+    { name = "onnx", marker = "extra == 'score'", specifier = ">=1.17,<2" },
+    { name = "onnxruntime", marker = "extra == 'score'", specifier = "==1.22.0" },
+]
+provides-extras = ["score"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = ">=0.6" },
+]
 
 [[package]]
 name = "docker"

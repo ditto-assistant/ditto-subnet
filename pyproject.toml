@@ -23,6 +23,10 @@ dependencies = [
     "pydantic>=2.12",
     "psutil>=5.9",
     "ditto-screening-protocol==0.18.0",
+    # Season 2 reranker contract for `ditto upload --track reranker`. The base
+    # package has no dependencies; local ONNX checks run only if onnx is
+    # installed (e.g. the starter kit's environment).
+    "dittobench-reranker==0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +38,9 @@ telemetry = ["wandb>=0.17"]
 [tool.uv.sources]
 bittensor-pylon-client = { git = "https://github.com/bittensor-church/bittensor-pylon", subdirectory = "pylon_client" }
 ditto-screening-protocol = { path = "packages/ditto-screening-protocol" }
+# Editable, so `git pull && uv sync` never keeps a stale built copy of the
+# season contract.
+dittobench-reranker = { path = "packages/dittobench-reranker", editable = true }
 
 [project.scripts]
 ditto = "ditto.miner_cli.__main__:main"

@@ -475,6 +475,7 @@ describe('Backroom MCP tools', () => {
         'list_copy_court_recommendations',
         'apply_copy_court_settings',
         'list_hotkey_bans',
+        'get_reranker_submissions',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
         'get_agent_coding_certifications',
@@ -659,8 +660,10 @@ describe('Backroom MCP tools', () => {
     // 179,468 bytes before the optional review-posture pin, node cap and
     // expected-value canary guard inputs. Keep operational tutorials in help
     // and retain the existing catalog budget as these inputs evolve.
+    // The Season 2 reranker shadow-intake read (SN-207) adds one bounded
+    // page/status/hotkey input and a one-line summary; measured 180,675 bytes.
     // Measure the serialized UTF-8 catalog, including guarded Gamma controls.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(180_000)
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(181_200)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1703,6 +1706,7 @@ describe('Backroom MCP tools', () => {
       list_stuck_submissions: { maxLimit: 200, maxDefault: 10 },
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
       list_hotkey_bans: { maxLimit: 200, maxDefault: 50 },
+      get_reranker_submissions: { maxLimit: 200, maxDefault: 50 },
       get_leaderboard: { maxLimit: 200, maxDefault: 50 },
       get_validator_fleet: { maxLimit: 200, maxDefault: 50 },
       list_validator_assignments: { maxLimit: 200, maxDefault: 50 },
@@ -7537,6 +7541,69 @@ describe('Backroom MCP tools', () => {
     )
     await granted.client.close()
     await granted.server.close()
+  })
+
+  it('reads the Season 2 reranker shadow intake read-only', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const row = {
+      submission_id: '6f1c9a52-7d3e-4b8a-9c2f-1e5d7a3b9c40',
+      miner_hotkey: '5FKbkmKbJHTgsELVPigLJqbmovaviDN7dHZzX7UJ6xoqG4fx',
+      miner_coldkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY',
+      status: 'scored',
+      artifact_sha256: 'a'.repeat(64),
+      upload_sha256: 'b'.repeat(64),
+      contract_sha256: 'c'.repeat(64),
+      size_bytes: 4096,
+      base_model: 'cross-encoder/ms-marco-TinyBERT-L2-v2',
+      base_model_license: 'apache-2.0',
+      invalid_reason: null,
+      seed: '18446744073709551615',
+      seed_block_hash: `0x${'d'.repeat(64)}`,
+      score: { ndcg_at_10: 0.831 },
+      scored_at: '2026-10-13T12:00:00Z',
+      created_at: '2026-10-13T11:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        contract_id: 'reranker-season-v1',
+        contract_sha256: 'e'.repeat(64),
+        total: 3,
+        status_counts: { accepted: 2, invalid: 0, scored: 1, failed: 0 },
+        upload_window_seconds: 3600,
+        uploads_per_window: 1,
+        limit: 1,
+        offset: 0,
+        submissions: [row],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_reranker_submissions',
+        arguments: { limit: 1, offset: 0, status: 'scored' },
+      })
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as Record<string, unknown>
+      expect(body).toMatchObject({
+        total: 3,
+        returned: 1,
+        has_more: true,
+        status_counts: { accepted: 2, scored: 1 },
+        upload_window_seconds: 3600,
+      })
+      expect(JSON.stringify(body)).toContain('18446744073709551615')
+      expect(JSON.stringify(body)).not.toContain('url')
+      const url = String(fetchMock.mock.calls[0][0])
+      expect(url).toContain('/api/v1/admin/reranker-submissions?')
+      expect(url).toContain('status=scored')
+      expect(url).not.toContain('hotkey=')
+      expect(fetchMock.mock.calls[0][1]?.method ?? 'GET').toBe('GET')
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('lists, reads, and guardedly removes hotkey-level upload bans', async () => {

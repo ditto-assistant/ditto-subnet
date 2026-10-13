@@ -164,6 +164,7 @@ import {
   retryTrustedImageBuildInputSchema,
   hasScreeningSubmissionFilters,
   screeningSubmissionFiltersSchema,
+  RERANKER_SUBMISSION_STATUSES,
 } from '../lib/admin.schemas'
 import {
   fetchCopyReviewSourceDiff,
@@ -330,6 +331,7 @@ import {
   updateArtifactReleaseSettings,
   updateSubmissionSettings,
   fetchHotkeyBans,
+  fetchRerankerSubmissions,
   unbanHotkey,
   fetchConfirmationBundleSettings,
   setConfirmationBundleSettings,
@@ -928,6 +930,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_submission_cooldown:
     'Read fee/coldkey cooldown; optional history, default 0.',
   list_hotkey_bans: 'Hotkey bans.',
+  get_reranker_submissions:
+    'Read Season 2 reranker shadow intake: status counts, upload window, recent rows. No payment.',
   unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
     'Read issuance/history; shadow cannot confirm or activate rewards.',
@@ -2294,6 +2298,34 @@ export function createBackroomMcpServer(props: McpGrantProps) {
             has_more: offset + value.bans.length < value.total,
           },
           { bans: { pin: ['hotkey', 'banned_at'] } },
+        ),
+      )
+    },
+  )
+
+  registerTool(
+    'get_reranker_submissions',
+    {
+      title: 'Get Season 2 reranker submissions',
+      description:
+        'Read the Season 2 reranker shadow intake (POST /api/v1/upload/reranker, SN-207): a zero-filled count per status (accepted, invalid, scored, failed) over the whole table, the effective per-owner upload window that explains a miner 429, the season contract id and digest, and recent submissions newest first with owner hotkey/coldkey, artifact and upload digests, base model and licence, seed (null until the trusted scorer derives it post-commit), and score (null until scored). Optional status and hotkey filters; total matches the filters. The track is shadow only: these rows never enter the screener queue, validator allocation, leaderboard, payments or weights, and no tarball URL is returned. Requires backroom:read and changes nothing.',
+      inputSchema: {
+        ...MCP_PAGINATION_INPUT,
+        status: z.enum(RERANKER_SUBMISSION_STATUSES).optional(),
+        hotkey: z.string().trim().min(3).max(96).optional(),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => {
+      const value = await fetchRerankerSubmissions(input)
+      return result(
+        compacted(
+          {
+            ...value,
+            returned: value.submissions.length,
+            has_more: value.offset + value.submissions.length < value.total,
+          },
+          { submissions: { pin: ['submission_id', 'status'] } },
         ),
       )
     },

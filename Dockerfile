@@ -27,6 +27,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY ditto ./ditto
 COPY packages/ditto-screening-protocol ./packages/ditto-screening-protocol
+COPY packages/dittobench-reranker/pyproject.toml packages/dittobench-reranker/README.md ./packages/dittobench-reranker/
+COPY packages/dittobench-reranker/dittobench_reranker ./packages/dittobench-reranker/dittobench_reranker
 RUN uv sync --frozen --no-dev --extra telemetry
 
 CMD ["uv", "run", "--no-sync", "python", "-m", "ditto.validator"]

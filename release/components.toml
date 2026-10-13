@@ -76,6 +76,10 @@ paths = [
   "ditto/api_models/name_claim.py",
   "ditto/api_models/retrieval.py",
   "ditto/api_models/upload.py",
+  # `ditto upload --track reranker` validates and signs with the season
+  # contract. Pool generation (poolgen) is not a CLI input.
+  "packages/dittobench-reranker/pyproject.toml",
+  "packages/dittobench-reranker/dittobench_reranker/**",
 ]
 
 [components.miner_starter_kit]
@@ -244,6 +248,10 @@ paths = [
   "apps/platform/skills-lock.json",
   "apps/platform/uv.lock",
   ".github/workflows/platform-ci.yml",
+  # Reranker intake (/upload/reranker) validates artifacts with the season
+  # contract. Pool generation (poolgen) is not a Platform input.
+  "packages/dittobench-reranker/pyproject.toml",
+  "packages/dittobench-reranker/dittobench_reranker/**",
   # Platform consumes these shared coding contract vectors.
   "packages/dittobench-coding-contract/testdata/coding_hosted_control_v2.json",
   "packages/dittobench-coding-contract/generate_hosted_vectors.py",

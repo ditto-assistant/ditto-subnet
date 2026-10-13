@@ -27,12 +27,20 @@ dependencies = [
     "cryptography>=42",
     "aioboto3>=13.0",
     "ditto-screening-protocol==0.18.0",
+    # Season 2 reranker intake validates artifacts with the season contract.
+    # onnx is the only extra the static check needs; the scorer runtime
+    # (onnxruntime, numpy) stays out of Platform.
+    "dittobench-reranker==0.1.0",
+    "onnx>=1.17,<2",
     "zstandard>=0.23",
 ]
 
 [tool.uv.sources]
 bittensor-pylon-client = { git = "https://github.com/bittensor-church/bittensor-pylon", subdirectory = "pylon_client" }
 ditto-screening-protocol = { path = "../../packages/ditto-screening-protocol" }
+# Editable, so a deploy's plain `uv sync` can never keep serving a stale built
+# copy of the season contract after the package changes.
+dittobench-reranker = { path = "../../packages/dittobench-reranker", editable = true }
 
 [dependency-groups]
 dev = [

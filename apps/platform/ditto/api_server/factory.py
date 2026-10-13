@@ -98,6 +98,7 @@ from ditto.api_server.endpoints import (
     admin_owner_router,
     admin_quarantine_router,
     admin_queue_policy_settings_router,
+    admin_reranker_submissions_router,
     admin_retirement_router,
     admin_scoring_lease_settings_router,
     admin_scoring_readiness_router,
@@ -133,6 +134,7 @@ from ditto.api_server.endpoints import (
     miner_me_router,
     name_claims_router,
     public_router,
+    reranker_upload_router,
     retrieval_router,
     scoring_router,
     screener_l2_report_canary_router,
@@ -657,6 +659,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Root path (no /api/v1): Ditto fetches the challenge at the origin root.
     app.include_router(ditto_callback_challenge_router)
     app.include_router(upload_router, prefix="/api/v1")
+    app.include_router(reranker_upload_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
     app.include_router(validator_private_dataset.router, prefix="/api/v1")
@@ -693,6 +696,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_routes_router, prefix="/api/v1")
     app.include_router(admin_hotkey_bans_router, prefix="/api/v1")
+    app.include_router(admin_reranker_submissions_router, prefix="/api/v1")
     app.include_router(admin_leaderboard_router, prefix="/api/v1")
     app.include_router(admin_validator_weights_router, prefix="/api/v1")
     app.include_router(admin_lease_revocations_router, prefix="/api/v1")

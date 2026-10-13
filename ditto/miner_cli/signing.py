@@ -71,3 +71,42 @@ def sign_upload_payload(
     )
     signature_bytes = live_wallet.hotkey.sign(payload)
     return signature_bytes.hex()
+
+
+def build_reranker_upload_payload(
+    *,
+    hotkey_ss58: str,
+    sha256_hex: str,
+    signature_timestamp: int,
+    signature_nonce: UUID,
+) -> bytes:
+    """Return the bytes signed for ``POST /upload/reranker``.
+
+    Domain separated from :func:`build_upload_payload` and bound to the
+    season contract id, mirroring ``build_reranker_upload_payload`` in
+    ``apps/platform/ditto/api_server/endpoints/reranker_upload.py``.
+    """
+    from dittobench_reranker.contract import CONTRACT_ID
+
+    return (
+        f"{CONTRACT_ID}:upload:{hotkey_ss58}:{sha256_hex}:"
+        f"{signature_timestamp}:{signature_nonce}"
+    ).encode("ascii")
+
+
+def sign_reranker_upload_payload(
+    *,
+    handle: WalletHandle,
+    live_wallet: bittensor.Wallet,
+    sha256_hex: str,
+    signature_timestamp: int,
+    signature_nonce: UUID,
+) -> str:
+    """Sign one reranker upload request with the hotkey, return hex."""
+    payload = build_reranker_upload_payload(
+        hotkey_ss58=handle.hotkey_ss58,
+        sha256_hex=sha256_hex,
+        signature_timestamp=signature_timestamp,
+        signature_nonce=signature_nonce,
+    )
+    return live_wallet.hotkey.sign(payload).hex()
