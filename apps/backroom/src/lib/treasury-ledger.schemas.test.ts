@@ -95,3 +95,14 @@ it('rejects duplicate bucket IDs, as the protocol does', () => {
   expect(result.success).toBe(false)
   if (!result.success) expect(result.error.issues[0].message).toBe('duplicate treasury bucket')
 })
+
+it.each([
+  ['shared wallet', '5' + 'c'.repeat(47)],
+  ['collector wallet', '5' + 'b'.repeat(47)],
+])('rejects a %s as a holding destination, as the protocol does', (_, wallet) => {
+  const bad = structuredClone(ranged)
+  bad.policy.buckets.push({ bucket_id: 'bitsec', allocation_bps: 0, holding_coldkey: wallet, min_allocation_bps: 0, max_allocation_bps: 1000 })
+  const result = publicTreasuryApprovalSchema.safeParse(bad)
+  expect(result.success).toBe(false)
+  if (!result.success) expect(result.error.issues[0].message).toBe('holding coldkeys must be distinct from collector')
+})

@@ -35,6 +35,12 @@ const policy = z.object({
   buckets: z.array(bucket).min(1).max(20),
 }).refine((value) => new Set(value.buckets.map((b) => b.bucket_id)).size === value.buckets.length, {
   path: ['buckets'], message: 'duplicate treasury bucket',
+}).refine((value) => {
+  const wallets = value.buckets.map((b) => b.holding_coldkey)
+  return new Set(wallets).size === wallets.length
+    && wallets.every((key) => key !== value.collector_hotkey && key !== value.collector_coldkey)
+}, {
+  path: ['buckets'], message: 'holding coldkeys must be distinct from collector',
 }).refine((value) => value.buckets.reduce((total, b) => total + bucketMaximumBps(b), 0) <= 10000, {
   path: ['buckets'], message: 'combined service allocation exceeds 10000 bps',
 }) satisfies z.ZodType<components['schemas']['TreasuryEmissionPolicy']>
