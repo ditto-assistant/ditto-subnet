@@ -4372,7 +4372,18 @@ func (b *inferenceBroker) proxy(
 		// usageUnavailable is still incremented, unchanged, so the run fails
 		// exactly as before via requireCompleteV7Usage. The new counter is
 		// purely attributive.
-		agentAttributedRejection := trustedChatHandler == nil || preReservationReaderRejection
+		//
+		// A stale refusal is the one 4xx the harness cannot cause. The Platform
+		// compares X-Ditto-Requested-At -- stamped by this broker immediately
+		// before the send -- against its own clock with a 30s window, so it
+		// measures validator clock drift or a stalled upload, never the
+		// harness's bytes. Charging it to the agent spent miners' only attempt
+		// on 5CFtzzb4's intermittent skew; it is infrastructure, and the
+		// unattributed branch already lands on model_relay_unavailable, which
+		// every deployed validator retries without fault.
+		staleRefusal := trustedChatHandler == nil &&
+			admissionCode(responseStatus, platformRejectionMessage(responseBody)) == "stale_session"
+		agentAttributedRejection := (trustedChatHandler == nil || preReservationReaderRejection) && !staleRefusal
 		session.mu.Lock()
 		session.usageUnavailable++
 		if agentAttributedRejection {
@@ -4384,6 +4395,9 @@ func (b *inferenceBroker) proxy(
 				session.caseSnapshots[caseGeneration] = snapshot
 			}
 		} else {
+			if staleRefusal {
+				session.noteAdmissionLocked(responseStatus, platformRejectionMessage(responseBody))
+			}
 			session.failures++
 		}
 		session.providerLatency += totalLatency
@@ -4402,6 +4416,11 @@ func (b *inferenceBroker) proxy(
 			log.Printf(
 				"run %s: platform rejected the harness's inference request with %d (%s) before any reservation -- AGENT fault, no provider was contacted (rejection #%d): %s",
 				runID, responseStatus, admissionCode(responseStatus, detail), rejections, detail,
+			)
+		} else if staleRefusal {
+			log.Printf(
+				"run %s: platform refused the broker's request timestamp as stale (%d) -- validator clock or transport, NOT an agent fault: %s",
+				runID, responseStatus, detail,
 			)
 		} else {
 			log.Printf(
