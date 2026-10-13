@@ -580,6 +580,18 @@ class AdminScreeningImageBuild(BaseModel):
     completed_at: datetime | None = None
 
 
+class AdminRejectedAncestorLookup(BaseModel):
+    """Observed window lookup, not a policy finding or evidence of clearance."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    fetched_at: datetime
+    attempt_id: UUID | None
+    status: Literal["available", "partial", "mechanical_only"]
+    window_count: int = Field(ge=0, le=32)
+    unavailable: list[UUID] = Field(max_length=3)
+
+
 class AdminScreeningSubmission(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -604,6 +616,12 @@ class AdminScreeningSubmission(BaseModel):
     submitted_at: datetime
     attempts: list[AdminScreeningAttempt]
     image_builds: list[AdminScreeningImageBuild] = []
+    rejected_ancestor_lookup: AdminRejectedAncestorLookup | None = None
+    """Latest source fetch's lookup metadata, bound to this artifact hash.
+
+    Null means not recorded, including old Platform versions and list views.
+    Available means historical lookup completed, not that source was cleared.
+    """
 
 
 class AdminScreeningSubmissionList(BaseModel):

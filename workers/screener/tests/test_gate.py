@@ -840,6 +840,7 @@ async def _screen(  # type: ignore[no-untyped-def]
     record_archive_verification=None,
     execution_namespace=None,
     deadline=None,
+    rejected_ancestor_windows=(),
 ):
     return await gate.screen(
         agent_id=_AGENT,
@@ -855,6 +856,7 @@ async def _screen(  # type: ignore[no-untyped-def]
         record_archive_verification=record_archive_verification,
         execution_namespace=execution_namespace,
         deadline=deadline,
+        rejected_ancestor_windows=rejected_ancestor_windows,
     )
 
 
@@ -1854,6 +1856,62 @@ async def test_l3_cleared_static_lead_can_continue_to_build(
     assert result.outcome == ScreeningOutcome.PASS
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
+    assert any(call[0] == "build" for call in calls)
+
+
+async def test_rejected_ancestor_match_is_reviewed_and_can_be_cleared(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    from ditto_screening_protocol.rejected_ancestor import (
+        RejectedAncestorWindow,
+        rolling_hash,
+        source_tokens,
+        window_sha256,
+    )
+
+    source = (
+        'fn serve() { let limit = 3; if calls > limit { return "held"; } dispatch(); }'
+    )
+    tokens = [token for token, _line in source_tokens(source)]
+    window = RejectedAncestorWindow(
+        agent_id=uuid4(),
+        artifact_sha256="b" * 64,
+        path="src/old.rs",
+        start_line=1,
+        end_line=1,
+        token_count=len(tokens),
+        sha256=window_sha256(tokens),
+        rolling_hash=rolling_hash(tokens),
+    )
+    tarball = _valid_tar(**{"src/main.rs": ("\n" + source).encode()})
+    calls: list[list[str]] = []
+    observed: list[SourceReviewObservation] = []
+
+    class RemediationReviewer(_SafeStaticLeadReviewer):
+        async def resolve_lead(
+            self, *args: Any, **kwargs: Any
+        ) -> SourceReviewObservation:
+            observed.append(kwargs["l1_observation"])
+            return await super().resolve_lead(*args, **kwargs)
+
+    reviewer = RemediationReviewer()
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    gate._source_reviewer = reviewer  # type: ignore[assignment]
+    async with gate._client:
+        result = await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            rejected_ancestor_windows=[window],
+        )
+    assert result.outcome == ScreeningOutcome.PASS
+    assert reviewer.resolve_calls == 1
+    assert observed[0].categories == ("rejected-ancestor-mechanism",)
+    assert not observed[0].violation_certified
+    assert not observed[0].clearance_certified
+    assert observed[0].finding is not None
+    assert observed[0].finding["evidence"] == [
+        {"path": "src/main.rs", "line": 2, "category": "rejected-ancestor-mechanism"}
+    ]
     assert any(call[0] == "build" for call in calls)
 
 

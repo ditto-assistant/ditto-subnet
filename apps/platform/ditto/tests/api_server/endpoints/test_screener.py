@@ -10798,6 +10798,77 @@ class TestArtifactFetchAuditTrail:
 
 
 class TestArtifact:
+    async def test_ancestor_attention_survives_the_actual_response_model(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto_screening_protocol import ArtifactResponse
+        from ditto_screening_protocol.rejected_ancestor import RejectedAncestorWindow
+
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_storage(app)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
+        window = RejectedAncestorWindow(
+            agent_id=uuid4(),
+            artifact_sha256="b" * 64,
+            path="src/main.rs",
+            start_line=1,
+            end_line=5,
+            token_count=20,
+            sha256="c" * 64,
+            rolling_hash="d" * 16,
+        )
+        missing = uuid4()
+        producer = AsyncMock(return_value=([window], [missing]))
+        monkeypatch.setattr(screener_endpoint, "rejected_ancestor_windows", producer)
+        response = await client.get(
+            f"/api/v1/screener/agent/{agent_id}/artifact",
+            params={"attempt_id": str(attempt_id)},
+            headers=_AUTH_HEADER,
+        )
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "no-store"
+        parsed = ArtifactResponse.model_validate(response.json())
+        assert parsed.rejected_ancestor_windows == [window]
+        assert parsed.rejected_ancestor_unavailable == [missing]
+        assert producer.call_args.kwargs["candidate"].agent_id == agent_id
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        headers = {"Authorization": "Bearer test-admin-token-at-least-32-characters"}
+        path = f"/api/v1/admin/screening-submissions/{agent_id}"
+        detail = await client.get(path, headers=headers)
+        assert detail.status_code == 200, detail.text
+        lookup = detail.json()["rejected_ancestor_lookup"]
+        assert lookup["status"] == "partial"
+        assert lookup["window_count"] == 1
+        assert lookup["unavailable"] == [str(missing)]
+        assert lookup["attempt_id"] == str(attempt_id)
+        assert lookup["fetched_at"] is not None
+
+        # Reads remain artifact-bound even when a newer audit row exists for
+        # another source hash. A current legacy fetch then resets to unknown.
+        for digest, expected in [("0" * 64, lookup), (parsed.sha256, None)]:
+            async with session_maker() as session, session.begin():
+                session.add(
+                    ArtifactFetchAudit(
+                        agent_id=agent_id,
+                        endpoint="screener.agent_artifact",
+                        requester_kind="screener",
+                        requester_id="test-screener",
+                        artifact_sha256=digest,
+                        lease_id=attempt_id,
+                    )
+                )
+            observed = await client.get(path, headers=headers)
+            assert observed.status_code == 200
+            assert observed.json()["rejected_ancestor_lookup"] == expected
+
     async def test_returns_presigned_url_and_sha(
         self,
         app: FastAPI,

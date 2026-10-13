@@ -104,6 +104,7 @@ from ditto_screener.preflight_audit import (
     StaticPreflightAuditError,
     StaticPreflightAuditJournal,
 )
+from ditto_screener.rejected_ancestor_leads import ancestor_lead
 from ditto_screener.runtime_semantics import (
     SemanticOutcome,
     judge_isolation,
@@ -127,6 +128,7 @@ from ditto_screening_protocol.reason_codes import DOCKER_BUILD_INFRASTRUCTURE
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
     from ditto_screener.review_settings import EffectiveReviewSettings
+    from ditto_screening_protocol.rejected_ancestor import RejectedAncestorWindow
 
 logger = logging.getLogger(__name__)
 
@@ -1243,6 +1245,7 @@ class BuildGate:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
         scored_runtime_evidence_received_at: int | None = None,
         execution_namespace: UUID | None = None,
+        rejected_ancestor_windows: Sequence[RejectedAncestorWindow] = (),
     ) -> ScreeningDecision:
         """Screen one agent end-to-end; never raises.
 
@@ -1423,7 +1426,8 @@ class BuildGate:
                 # elevated lead with the inert L2/L3 harness before deciding
                 # whether untrusted build execution may start.
                 try:
-                    preflight = TarSourceRepository(tmp_path).malicious_preflight(
+                    repository = TarSourceRepository(tmp_path)
+                    preflight = repository.malicious_preflight(
                         artifact_sha256=sha256.lower(),
                         mode=self._config.static_preflight_v2_mode,
                         policy_version=policy_version,
@@ -1435,6 +1439,14 @@ class BuildGate:
                                 payload=payload,
                             )
                         ),
+                    )
+                    preflight = await asyncio.to_thread(
+                        ancestor_lead,
+                        repository,
+                        artifact_sha256=sha256.lower(),
+                        windows=rejected_ancestor_windows,
+                        paths=source_paths,
+                        preflight=preflight,
                     )
                 except StaticPreflightAuditError as error:
                     logger.exception(

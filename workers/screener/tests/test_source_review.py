@@ -420,6 +420,25 @@ def _archive_with(tmp_path: Path, extra: dict[str, bytes]) -> Path:
     return path
 
 
+def test_attention_reader_ignores_link_aliases_and_never_reads_outside_archive(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "agent.tar.gz"
+    source = b"fn main() { dispatch(); }"
+    with tarfile.open(path, "w:gz") as archive:
+        regular = tarfile.TarInfo("src/main.rs")
+        regular.size = len(source)
+        archive.addfile(regular, io.BytesIO(source))
+        alias = tarfile.TarInfo("./src/main.rs")
+        alias.type = tarfile.SYMTYPE
+        alias.linkname = "/etc/passwd"
+        archive.addfile(alias)
+    repository = TarSourceRepository(str(path))
+    assert repository.attention_texts(["src/main.rs"]) == {
+        "src/main.rs": source.decode()
+    }
+
+
 def _varint(value: int) -> bytes:
     encoded = bytearray()
     while value > 0x7F:

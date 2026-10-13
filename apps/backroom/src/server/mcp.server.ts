@@ -1418,7 +1418,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening submission',
       description:
-        'Get one exact SN118 submission by agent UUID with its complete screening attempt history. Returns metadata only: source files, source contents, and artifact download URLs remain available exclusively through separately scoped artifact tools.',
+        'Get an exact SN118 submission, screening history and latest artifact-bound ancestor lookup. Null means unrecorded; available describes historical lookup completion only. Source and download URLs require separately scoped artifact tools.',
       inputSchema: screeningSubmissionLookupInputSchema,
       annotations: toolAnnotations('read'),
     },

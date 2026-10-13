@@ -61,7 +61,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
-    ArtifactResponse,
     EffectiveScreenerNodeChannelSettings,
     EffectiveScreenerProviderSettings,
     ScreenedImageAbortRequest,
@@ -157,6 +156,7 @@ from ditto.api_server.endpoints.validator import (
 )
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
+from ditto.api_server.rejected_ancestor_leads import rejected_ancestor_windows
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
 from ditto.api_server.screener_policy_activation import (
@@ -241,6 +241,7 @@ from ditto.db.queries.screening_review_events import append_automated_review_eve
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     AdjudicationCompletionReceipt,
+    ArtifactResponse,
     ScoredRuntimeEvidenceLease,
     ScreenResultOutcome,
     SourceReviewFinding,
@@ -3974,6 +3975,11 @@ async def agent_artifact(
     # SCREENER_HOTKEY is one shared string across an autoscaled fleet, so the
     # attempt lease is the sharpest attribution available until callers start
     # sending instance_id.
+    ancestor_windows, ancestor_unavailable = (
+        ([], [])
+        if attempt.build_only
+        else await rejected_ancestor_windows(session, storage, candidate=agent)
+    )
     await record_artifact_fetch(
         session,
         agent_id=agent_id,
@@ -3984,13 +3990,28 @@ async def agent_artifact(
         lease_id=attempt.attempt_id,
         artifact_sha256=agent.sha256,
         source_ip=client_ip(request),
-        detail=request_detail(request),
+        detail=request_detail(
+            request,
+            rejected_ancestor_lookup={
+                "status": (
+                    "mechanical_only"
+                    if attempt.build_only
+                    else "partial"
+                    if ancestor_unavailable
+                    else "available"
+                ),
+                "window_count": len(ancestor_windows),
+                "unavailable": [str(value) for value in ancestor_unavailable],
+            },
+        ),
     )
     return ArtifactResponse(
         agent_id=agent_id,
         sha256=agent.sha256,
         download_url=url,
         expires_at=datetime.now(UTC) + _ARTIFACT_URL_TTL,
+        rejected_ancestor_windows=ancestor_windows,
+        rejected_ancestor_unavailable=ancestor_unavailable,
     )
 
 

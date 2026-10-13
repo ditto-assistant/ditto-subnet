@@ -9,6 +9,7 @@ import json
 import logging
 import secrets
 from collections import defaultdict
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
@@ -60,6 +61,7 @@ from ditto.api_models.admin_quarantine import (
     AdminQuarantineResolveRequest,
     AdminQuarantineResolveResponse,
     AdminQuarantineTerminalRuling,
+    AdminRejectedAncestorLookup,
     AdminRejectScreeningRequest,
     AdminRejectScreeningResponse,
     AdminScreenedImageRebuildDetail,
@@ -155,6 +157,7 @@ from ditto.api_server.starter_kit import (
 from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
 from ditto.db.models import (
     Agent,
+    ArtifactFetchAudit,
     BenchmarkDataset,
     BenchmarkRollout,
     BenchmarkRolloutMember,
@@ -182,6 +185,7 @@ from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_ADMIN_SOURCE_FILE,
     ENDPOINT_ADMIN_SOURCE_FILES,
     ENDPOINT_ADMIN_SOURCE_SEARCH,
+    ENDPOINT_SCREENER_ARTIFACT,
     record_artifact_fetch,
 )
 from ditto.db.queries.audit import (
@@ -2849,9 +2853,34 @@ async def get_screening_submission(
         )
         for row in builds
     ]
-    return _screening_submission(
+    submission = _screening_submission(
         agent, attempts_by_agent[agent_id], coldkey, image_builds
     )
+    latest_fetch = await session.scalar(
+        select(ArtifactFetchAudit)
+        .where(
+            ArtifactFetchAudit.agent_id == agent_id,
+            ArtifactFetchAudit.artifact_sha256 == agent.sha256,
+            ArtifactFetchAudit.endpoint == ENDPOINT_SCREENER_ARTIFACT,
+        )
+        .order_by(ArtifactFetchAudit.seq.desc())
+        .limit(1)
+    )
+    if latest_fetch is not None and latest_fetch.detail:
+        lookup = latest_fetch.detail.get("rejected_ancestor_lookup")
+        if isinstance(lookup, dict):
+            # A legacy/malformed observation is unknown, never clearance.
+            with suppress(ValidationError):
+                submission.rejected_ancestor_lookup = (
+                    AdminRejectedAncestorLookup.model_validate(
+                        {
+                            **lookup,
+                            "fetched_at": latest_fetch.fetched_at,
+                            "attempt_id": latest_fetch.lease_id,
+                        }
+                    )
+                )
+    return submission
 
 
 @router.get(

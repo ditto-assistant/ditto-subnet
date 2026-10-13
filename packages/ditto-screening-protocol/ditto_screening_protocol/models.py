@@ -17,6 +17,11 @@ from pydantic import (
     model_validator,
 )
 
+from ditto_screening_protocol.rejected_ancestor import (
+    MAX_ANCESTOR_WINDOWS,
+    RejectedAncestorWindow,
+)
+
 SCREENING_POLICY_VERSION = 13
 STRICT_TWO_OUTCOME_POLICY_VERSION = 13
 # The highest policy version the scheduling API will present as
@@ -80,6 +85,14 @@ class ArtifactResponse(BaseModel):
     expires_at: Annotated[
         datetime, Field(description="When the download URL expires (UTC).")
     ]
+    # Optional on older Platform versions. These hashes disclose no source and
+    # can only direct review, never reject an artifact or certify a violation.
+    rejected_ancestor_windows: Annotated[
+        list[RejectedAncestorWindow], Field(max_length=MAX_ANCESTOR_WINDOWS)
+    ] = Field(default_factory=list)
+    rejected_ancestor_unavailable: Annotated[list[UUID], Field(max_length=3)] = Field(
+        default_factory=list
+    )
 
 
 SubmissionImageBuildStatus = Literal[

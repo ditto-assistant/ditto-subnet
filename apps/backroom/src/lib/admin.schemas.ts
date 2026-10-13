@@ -5319,6 +5319,13 @@ export const screeningSubmissionSchema = z.object({
   submitted_at: z.string(),
   attempts: z.array(screeningAttemptSchema),
   image_builds: z.array(screeningImageBuildSchema).optional().default([]),
+  rejected_ancestor_lookup: z.object({
+    fetched_at: z.string(),
+    attempt_id: z.string().uuid().nullable(),
+    status: z.enum(['available', 'partial', 'mechanical_only']),
+    window_count: z.number().int().min(0).max(32),
+    unavailable: z.array(z.string().uuid()).max(3),
+  }).nullish(),
 })
 
 export const screeningSubmissionListSchema = z.object({
