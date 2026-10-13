@@ -75,6 +75,9 @@ platform_uv_tool_dir: /opt/uv-tools
 # repurpose it for the relay pool below — moving it would silently point the
 # deploy verifier at the wrong process.
 platform_api_port: 8000
+# A warm, HTTP-identical standby for rolling Python API deploys. Zero disables
+# it on development hosts. Production sets a distinct loopback port.
+platform_api_standby_port: 0
 
 # --- Go request-plane pool (inference plus narrow upload admission) ----------
 # Local ports of the DITTO_ROLE=relay pm2 processes. Must mirror RELAY_PORTS

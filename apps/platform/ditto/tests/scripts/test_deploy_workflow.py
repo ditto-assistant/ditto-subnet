@@ -51,6 +51,26 @@ def test_public_proxy_denies_operator_metrics() -> None:
     assert "handle @operatorMetrics {\n        respond 404\n    }" in template
 
 
+def test_production_api_has_a_passive_health_standby() -> None:
+    template = CADDYFILE_TEMPLATE.read_text()
+    env = (
+        MONOREPO_ROOT / "infra/ansible/roles/platform_app/templates/platform.env.j2"
+    ).read_text()
+    production = yaml.safe_load(
+        (MONOREPO_ROOT / "infra/ansible/host_vars/ditto-platform-prod.yml").read_text()
+    )
+
+    assert production["platform_api_standby_port"] == 8002
+    assert "DITTO_PLATFORM_STANDBY_PORT={{ platform_api_standby_port }}" in env
+    proxy = (
+        "reverse_proxy localhost:{{ platform_api_port }} "
+        "localhost:{{ platform_api_standby_port }} {"
+    )
+    assert proxy in template
+    for match in ("lb_policy first", "fail_duration 10s", "lb_try_duration 5s"):
+        assert match in template.split(proxy, 1)[1].split("}", 1)[0]
+
+
 def test_public_proxy_denials_precede_every_proxy_route() -> None:
     """A site-level `respond` would never run under the relay pool.
 
