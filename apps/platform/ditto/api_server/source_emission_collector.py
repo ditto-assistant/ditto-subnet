@@ -28,6 +28,7 @@ from ditto.chain.models import (
 )
 from ditto.chain.source_emission_verifier import (
     SourceEmissionBlock,
+    SourceEmissionReadCache,
     VotingStake,
     WinnerBacking,
     evaluate_winner_payout,
@@ -183,7 +184,7 @@ class SourceEmissionCollector:
 
     def _sweep_timeout_seconds(self) -> float:
         """Scale the sweep budget with the batch a deep backlog will scan."""
-        return 120.0 if self._backlog_deep else 600.0
+        return 600.0 if self._backlog_deep else 120.0
 
     async def _sweep_provider(self, substrate: Any) -> None:
         finalized_hash = await substrate.get_chain_finalised_head()
@@ -215,10 +216,15 @@ class SourceEmissionCollector:
             # Keep archive verification and provider fallback on the same path.
             await self.resolve_pending_payouts(substrate)
         batch = _SWEEP_CATCHUP_BATCH_BLOCKS if catchup else _SWEEP_BATCH_BLOCKS
+        reads = SourceEmissionReadCache()
         try:
             for block in range(current + 1, min(finalized, current + batch) + 1):
                 observed = await read_source_emission_block(
-                    substrate, netuid=self.netuid, block=block
+                    substrate,
+                    netuid=self.netuid,
+                    block=block,
+                    finalized_block=finalized,
+                    cache=reads,
                 )
                 payout = None
                 payout_blocked_reason = None

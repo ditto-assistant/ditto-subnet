@@ -39,6 +39,13 @@ name: Deploy Platform
 #       shown as the dashboard's "full telemetry" link, e.g.
 #       https://wandb.ai/<entity>/ditto-sn118. Upserted into .env.deploy by
 #       update.sh; unset just leaves the SPA's default link.
+#     SUBTENSOR_ARCHIVE_RPC_URL     (variable, optional) paid Finney archive
+#       endpoint, without its credential. The key stays in Secret Manager
+#       (`platform-subtensor-archive-rpc-api-key`) and is read on the VM. Unset
+#       leaves the rate-limited free archives as the only providers, which the
+#       source-emission collector cannot keep pace with.
+#     SUBTENSOR_ARCHIVE_RPC_AUTH_MODE (variable, optional) `query`, `path` or
+#       `none`; how the key is attached to the URL above.
 
 on:
   workflow_call:
@@ -320,6 +327,8 @@ jobs:
         env:
           DITTO_UPLOAD_PAYMENT_ADDRESS: ${{ secrets.DITTO_UPLOAD_PAYMENT_ADDRESS }}
           DITTO_DASHBOARD_WANDB_URL: ${{ vars.DITTO_DASHBOARD_WANDB_URL }}
+          SUBTENSOR_ARCHIVE_RPC_URL: ${{ vars.SUBTENSOR_ARCHIVE_RPC_URL }}
+          SUBTENSOR_ARCHIVE_RPC_AUTH_MODE: ${{ vars.SUBTENSOR_ARCHIVE_RPC_AUTH_MODE }}
         run: |
           set -euo pipefail
 
@@ -329,14 +338,16 @@ jobs:
           max_attempts=3
           while :; do
             rc=0
-            printf '%s\n%s\n' "$DITTO_UPLOAD_PAYMENT_ADDRESS" "$DITTO_DASHBOARD_WANDB_URL" | \
+            printf '%s\n%s\n%s\n%s\n' "$DITTO_UPLOAD_PAYMENT_ADDRESS" "$DITTO_DASHBOARD_WANDB_URL" \
+              "$SUBTENSOR_ARCHIVE_RPC_URL" "$SUBTENSOR_ARCHIVE_RPC_AUTH_MODE" | \
               env -u DITTO_UPLOAD_PAYMENT_ADDRESS -u DITTO_DASHBOARD_WANDB_URL \
+              -u SUBTENSOR_ARCHIVE_RPC_URL -u SUBTENSOR_ARCHIVE_RPC_AUTH_MODE \
               gcloud compute ssh "${{ steps.target.outputs.vm }}" \
               --zone "$GCP_ZONE" \
               --tunnel-through-iap \
               --quiet \
               --ssh-flag="-T" \
-              --command "sudo -iu deploy bash -lc 'IFS= read -r DITTO_UPLOAD_PAYMENT_ADDRESS || exit 78; IFS= read -r DITTO_DASHBOARD_WANDB_URL || exit 78; export DITTO_UPLOAD_PAYMENT_ADDRESS DITTO_DASHBOARD_WANDB_URL; if [ ! -d /opt/ditto-subnet/.git ]; then echo \"ERROR: /opt/ditto-subnet is not a monorepo checkout on this host, so this workflow cannot deploy it.\" >&2; if [ -d /opt/ditto-platform/.git ]; then echo \"This host still serves the platform from the PRE-CUTOVER /opt/ditto-platform checkout (ditto-assistant/ditto-platform). Merging to this monorepo does NOT reach production until the cutover completes.\" >&2; fi; echo \"Provision the monorepo checkout with the platform_app role: infra/ansible/playbooks/gcp-platform-app.yml (platform_checkout_root).\" >&2; exit 78; fi; if [ ! -s /opt/ditto-subnet/apps/platform/.env ]; then echo \"ERROR: /opt/ditto-subnet exists but apps/platform/.env is missing or empty, so this host is HALF provisioned.\" >&2; echo \"A converge that aborts between cloning the checkout and rendering .env leaves exactly this state, and it looks deployable. Re-run infra/ansible/playbooks/gcp-platform-app.yml to completion.\" >&2; exit 78; fi; cd /opt/ditto-subnet && git fetch --prune origin && git checkout --detach $DEPLOY_REVISION && git reset --hard $DEPLOY_REVISION && cd apps/platform && DITTO_DEPLOY_BRANCH=main DITTO_DEPLOY_COMMIT=$DEPLOY_REVISION ./scripts/update.sh'" \
+              --command "sudo -iu deploy bash -lc 'IFS= read -r DITTO_UPLOAD_PAYMENT_ADDRESS || exit 78; IFS= read -r DITTO_DASHBOARD_WANDB_URL || exit 78; IFS= read -r SUBTENSOR_ARCHIVE_RPC_URL || exit 78; IFS= read -r SUBTENSOR_ARCHIVE_RPC_AUTH_MODE || exit 78; export DITTO_UPLOAD_PAYMENT_ADDRESS DITTO_DASHBOARD_WANDB_URL SUBTENSOR_ARCHIVE_RPC_URL SUBTENSOR_ARCHIVE_RPC_AUTH_MODE; if [ ! -d /opt/ditto-subnet/.git ]; then echo \"ERROR: /opt/ditto-subnet is not a monorepo checkout on this host, so this workflow cannot deploy it.\" >&2; if [ -d /opt/ditto-platform/.git ]; then echo \"This host still serves the platform from the PRE-CUTOVER /opt/ditto-platform checkout (ditto-assistant/ditto-platform). Merging to this monorepo does NOT reach production until the cutover completes.\" >&2; fi; echo \"Provision the monorepo checkout with the platform_app role: infra/ansible/playbooks/gcp-platform-app.yml (platform_checkout_root).\" >&2; exit 78; fi; if [ ! -s /opt/ditto-subnet/apps/platform/.env ]; then echo \"ERROR: /opt/ditto-subnet exists but apps/platform/.env is missing or empty, so this host is HALF provisioned.\" >&2; echo \"A converge that aborts between cloning the checkout and rendering .env leaves exactly this state, and it looks deployable. Re-run infra/ansible/playbooks/gcp-platform-app.yml to completion.\" >&2; exit 78; fi; cd /opt/ditto-subnet && git fetch --prune origin && git checkout --detach $DEPLOY_REVISION && git reset --hard $DEPLOY_REVISION && cd apps/platform && DITTO_DEPLOY_BRANCH=main DITTO_DEPLOY_COMMIT=$DEPLOY_REVISION ./scripts/update.sh'" \
               2>&1 | tee /tmp/deploy.log || rc=$?
             if [ "$rc" -eq 0 ]; then
               break
