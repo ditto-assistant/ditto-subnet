@@ -1,105 +1,223 @@
-An inspection of the workspace and existing codebase is needed to examine existing patterns, models, endpoints, CLI commands, Backroom tools, and migrations. Let's inspect the files.
+An analysis of the codebase reveals the architecture and patterns used across `ditto`, `apps/platform`, and CLI tools. Let's inspect the files in the workspace.
 
-First, let's find the relevant files in the repository.
-
-```bash
-git status
-```
-
-Let's locate files related to `name_claim.py`, `miner_avatar.py`, `upload.py`, `attestation.py`, backroom tools, etc.
-Let's run a search for these files:
-- `apps/platform/ditto/api_server/endpoints/`
+Let's run a search or inspect relevant files.
+Specifically:
+- `ditto/miner_cli/name_claim.py`, `miner_avatar.py`
 - `apps/platform/ditto/api_server/attestation.py`
-- `ditto/miner_cli/`
-- `apps/platform/ditto/models/` or db models
-- alembic migrations in `apps/platform/alembic/` or similar
-- backroom mcp tools
+- `apps/platform/ditto/api_server/endpoints/upload.py`
+- `apps/platform/ditto/api_server/models` (or database models / alembic)
+- Backroom MCP tools
+- `docs/MINER.md`
+- Starter kit README
+- `docs/legal`
 
-Let's inspect:
-1. `apps/platform/ditto/api_server/endpoints/upload.py`
-2. `apps/platform/ditto/api_server/attestation.py`
-3. `ditto/miner_cli/name_claim.py` and `ditto/miner_cli/miner_avatar.py`
-4. Backroom MCP server / tools (e.g. `backroom` directory or `apps/platform/ditto/backroom` or similar)
-5. `docs/MINER.md` and miner starter kit README.
+Let's inspect the repository files.
 
-Let's check the directory layout and files:
-- DB models in `apps/platform/ditto/db/` or `apps/platform/ditto/models/`
-- Alembic versions in `apps/platform/alembic/versions/`
-- Existing settings or dynamic config in platform (for gate setting `off` | `shadow` | `enforce`, setting history, etc.)
-- Existing backroom tools in `apps/platform/` or `backroom/` or `mcp/`
+Let's run `git status` or file listings mentally or via command if we had a shell, but we don't have shell tools directly provided; we are an autonomous software engineer producing the required code changes or git diff. Wait, what tools do we have? Let's check available tool calls.
+Wait! We have NO custom tools declared in this environment, or do we? Wait, let's check the prompt:
+"Reply ONLY with the code changes or implementation needed to resolve the issue. No conversational filler."
 
-Let's implement the complete solution step-by-step:
+Wait, are there tool calls available? Let's check if tool definitions were provided in the system prompt. No tools are provided in the system prompt!
+Wait, let's verify if there are any tools or if this is direct text output. No tools were defined in the prompt.
+Wait, let's double check if we can inspect files or if we need to know the repository structure.
+Wait, can we know the repository structure from what's described in the prompt and standard Dit/Subnet project?
+Wait! Is this repo based on a specific open-source repo or simulated repo?
+Wait, notice the prompt:
+`apps/platform/ditto/api_server/attestation.py`
+`ditto/miner_cli/name_claim.py` and `miner_avatar.py`
+`apps/platform/ditto/api_server/endpoints/upload.py`
+`docs/legal/CLA-v<N>.md`
+`docs/MINER.md`
 
-### 1. Database models & migration
-- CLA version registry table:
-  - `cla_versions`:
-    - `version` (e.g., str or int, e.g. "v1" or "1" - "CLA-v<N>.md" -> `cla_version` string like `v1`)
-    - `sha256` (hex str)
-    - `published_at` (datetime)
-    - `effective_at` (datetime)
-    - `content` (text, optional or URL/text so CLI can fetch text from server or endpoint)
-- Append-only CLA signatures table:
-  - `cla_signatures`:
-    - `id` (bigint / uuid / autoincrement primary key)
-    - `hotkey` (str, index)
-    - `coldkey` (str)
-    - `cla_version` (str)
-    - `cla_sha256` (str)
-    - `signature` (str)
-    - `nonce` (str, unique or unique with hotkey)
-    - `issued_at` (datetime)
-    - `signed_at` (datetime)
-- Enforcement / gate settings & audit history:
-  - Settings table or gate setting store (e.g., `cla_gate_settings` / `cla_gate_history` or system settings table if one exists)
-  - Modes: `off` (default), `shadow`, `enforce`.
-  - Also shadow upload counter or log tracking unsigned uploads in shadow mode.
-
-### 2. Message format & signing builder
-Signed message format:
+Let's carefully read the prompt details:
+`apps/platform/ditto/api_server/attestation.py`
+`ditto/miner_cli/name_claim.py` and `miner_avatar.py`
+`apps/platform/ditto/api_server/endpoints/upload.py`
+Signed action format:
 `ditto-cla:v1:<netuid>:<cla_version>:<cla_sha256>:<hotkey>:<nonce>:<issued_at>`
+Platform verifies signature with `verify_signature` (using owner-link freshness window and nonce uniqueness).
+Resolves `coldkey = Owner(hotkey)` at a finalized block and stores `{hotkey, coldkey, cla_version, cla_sha256, signature, nonce, issued_at, signed_at}` append-only.
+Gate modes: `off`, `shadow`, `enforce`. Start in `off`.
+Backroom MCP tool for gate setting, history, adoption counts.
+Public read endpoint: returns hotkey's CLA status: version, digest, signed_at, signature.
+CLI commands: `ditto cla sign` and `ditto cla status`.
+Upload check: `POST /api/v1/upload/check` and `POST /api/v1/upload/agent`.
+`ditto upload` checking up front before packaging or payment step.
 
-Notice:
-- `netuid`: integer (e.g. netuid config)
-- `cla_version`: e.g. "v1"
-- `cla_sha256`: hex string
-- `hotkey`: ss58 address
-- `nonce`: unique hex/string (e.g. uuid hex or secrets.token_hex)
-- `issued_at`: iso timestamp or integer unix timestamp? Let's check `name_claim.py` and `miner_avatar.py` to match the exact convention.
+Wait, let's understand the existing patterns:
+Let's think about how `name_claim.py` and `miner_avatar.py` work.
+Let's reconstruct `name_claim.py` / `miner_avatar.py`:
+In miner cli:
+How do signed messages work in `miner_avatar.py` and `name_claim.py`?
+In `miner_avatar.py` or `name_claim.py`:
+Typically:
+`build_claim_payload(...)` or `build_avatar_payload(...)` or `build_cla_payload(...)`:
+`f"ditto-cla:v1:{netuid}:{cla_version}:{cla_sha256}:{hotkey}:{nonce}:{issued_at}"`
+Signed with `keypair.sign(payload.encode("utf-8"))` or `keypair.sign(payload)`.
+Let's check the signature format:
+sr25519 signature is typically hex-encoded, e.g., `0x` + signature.hex() or signature.hex(). In subxt / bittensor / substrate: `f"0x{keypair.sign(message).hex()}"` or `keypair.sign(message).hex()`.
+In `attestation.py`:
+`verify_signature(hotkey: str, message: bytes | str, signature: str)` or similar.
+Let's see what `verify_signature` takes in `attestation.py`:
+Usually `verify_signature(address, message, signature)` using `substrateinterface.Keypair` or `bittensor` or `sp_core`.
+Wait, `attestation.py` has `verify_signature`. Does it take `(message: str | bytes, signature: str, public_key: str)` or `(hotkey, message, signature)`?
+Let's check the prompt:
+"Platform verifies signature with `verify_signature` (`apps/platform/ditto/api_server/attestation.py`), using owner-link freshness window and nonce uniqueness. It resolves `coldkey = Owner(hotkey)` at a finalized block and stores `{hotkey, coldkey, cla_version, cla_sha256, signature, nonce, issued_at, signed_at}` append-only. Rows are never updated or deleted."
 
-### 3. Server endpoints
-- `GET /api/v1/cla/current` (or `/api/v1/cla/latest`): returns currently effective CLA version, sha256, published_at, effective_at, and text (or url).
-- `GET /api/v1/cla/status/{hotkey}`: public read endpoint returning a hotkey's CLA status: `cla_version`, `cla_sha256`, `signed_at`, `signature`, whether it is current.
-- `POST /api/v1/cla/sign`: verifies signature (nonce freshness window, replay check, owner coldkey resolution) and appends to `cla_signatures`.
-- `POST /api/v1/upload/check` & `POST /api/v1/upload/agent`: gate check against current CLA version.
-  - If gate mode is `off`: skip.
-  - If gate mode is `shadow`: check if hotkey has signed current CLA. If not, log and increment unsigned shadow counter, but allow upload.
-  - If gate mode is `enforce`: check if hotkey has signed current CLA. If not, raise HTTP 403 / 400 with message telling miner to run `ditto cla sign`.
-- `ditto upload` CLI: checks CLA status up front before packaging / payment step.
+Wait! Let's check how other signed actions are implemented in `apps/platform`.
+What are the other signed actions?
+`name_claim.py` and `miner_avatar.py`!
+In `apps/platform/ditto/api_server`:
+Endpoints like `endpoints/name_claim.py` or avatar endpoints or similar.
+Let's consider the models, alembic migrations, endpoints, MCP tools, and CLI commands.
 
-### 4. Backroom MCP tool
-- Tool exposing:
-  - Gate setting (`off`, `shadow`, `enforce`)
-  - History of setting changes
-  - Active hotkeys adoption counts: signed and unsigned hotkey counts.
+Let's review all the parts needed for a complete, robust, production-quality implementation:
 
-### 5. CLI commands
-- `uv run ditto cla sign`:
-  - Fetches current CLA text and metadata.
-  - Recomputes SHA-256. Refuses on mismatch.
-  - Shows CLA text (or summary/path + digest) and prompts for typed confirmation ("I AGREE" or "yes" or similar, with option `--yes` for non-interactive).
-  - Signs payload with hotkey wallet (`keypair.sign(...)`).
-  - Submits to `POST /api/v1/cla/sign`.
-- `uv run ditto cla status`:
-  - Shows signed version, whether it is current, signed_at time.
+1. **CLA Document & Legal Directory**:
+   - `docs/legal/CLA-v1.md`: Placeholder fixture:
+     ```markdown
+     # Contributor License Agreement (CLA) - Version 1.0
 
-### 6. Docs and tests
-- `docs/legal/CLA-v1.md` placeholder fixture.
-- Update `docs/MINER.md` and miner starter kit `README.md`.
-- Comprehensive test coverage:
-  - Migration tests (append-only: no update or delete path).
-  - CLI tests for `ditto cla sign` and `ditto cla status`. Digest mismatch refusal.
-  - Upload gate tests covering `off`, `shadow`, `enforce`, unsigned hotkey, outdated version, replayed nonce, stale issued_at, wrong signer.
-  - Backroom read tool tests.
-  - Linting / type checking / unit test execution across repo.
+     *PLACEHOLDER FIXTURE FOR TESTING AND DEVELOPMENT. NOT FINAL LEGAL TEXT.*
 
-Let's apply the code changes across all these files cleanly and thoroughly.
+     By signing this Contributor License Agreement ("CLA"), the contributor ("You") grants Ditto and its users a perpetual, worldwide, non-exclusive, royalty-free, irrevocable copyright license to reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute your contributions and such derivative works under the MIT License. You represent and warrant that you are legally entitled to grant this license and that your contributions do not infringe the intellectual property rights of any third party.
+     ```
+   - CLI downloads or retrieves text and checks SHA256. Also endpoint to get current CLA text or details:
+     `GET /api/v1/cla/current` (returns `{version, sha256, published_at, effective_at, url, text}` or similar) or `GET /api/v1/cla/text?version=v1`.
+
+2. **Database Models & Alembic Migration**:
+   - Models:
+     `CLAVersion`:
+     `id` (int / uuid)
+     `version`: str (e.g. "v1" or "1.0") - unique
+     `sha256`: str
+     `text`: Optional[str] or content
+     `published_at`: datetime
+     `effective_at`: datetime
+     `created_at`: datetime
+
+     `CLASignature`:
+     `id` (int / uuid)
+     `hotkey`: str (indexed)
+     `coldkey`: str
+     `cla_version`: str (indexed)
+     `cla_sha256`: str
+     `signature`: str
+     `nonce`: str (unique constraint with hotkey or global unique constraint)
+     `issued_at`: datetime
+     `signed_at`: datetime (server reception/verification time, defaults to utcnow)
+
+     `CLAGateSetting`:
+     Mode: `off`, `shadow`, `enforce`.
+     History table or setting audit log: `CLAGateSettingHistory` (or setting record with mode, updated_by, reason, created_at).
+     Default mode: `off`.
+
+     Wait! Acceptance criteria:
+     "Alembic migration for the CLA version registry and the append-only signature table. Tests prove there is no update or delete path."
+     How to enforce append-only at database/model level?
+     - SQLAlchemy event listeners:
+       `@event.listens_for(CLASignature, "before_update")` raises `PermissionError("CLASignature is append-only: updates are not allowed")`
+       `@event.listens_for(CLASignature, "before_delete")` raises `PermissionError("CLASignature is append-only: deletions are not allowed")`
+     - Also in PostgreSQL / SQLite trigger if applicable or database triggers in the migration!
+       In Postgres / SQLite, we can add a BEFORE UPDATE OR DELETE trigger on `cla_signatures` raising an exception, or in SQLAlchemy listeners, or both!
+       Having both a DB trigger (or SQLite trigger) and SQLAlchemy event listener ensures no update or delete path can succeed in tests or runtime.
+
+3. **Signed message format**:
+   `ditto-cla:v1:<netuid>:<cla_version>:<cla_sha256>:<hotkey>:<nonce>:<issued_at>`
+   Let's check the spec:
+   "2. `ditto cla sign`. The CLI shows the CLA, or the path to it plus its digest, and asks for explicit typed confirmation. It then signs, with the hotkey (sr25519):
+   `ditto-cla:v1:<netuid>:<cla_version>:<cla_sha256>:<hotkey>:<nonce>:<issued_at>`
+   Follow the existing signed-action format in `ditto/miner_cli/name_claim.py` and `miner_avatar.py`, with byte-for-byte mirrored builders on the server. Add `ditto cla status`, which shows the signed version, whether it is current, and the signed_at time."
+
+   Let's write a shared helper or server helper:
+   `def build_cla_sign_payload(netuid: int, cla_version: str, cla_sha256: str, hotkey: str, nonce: str, issued_at: int | str) -> str:`
+   `return f"ditto-cla:v1:{netuid}:{cla_version}:{cla_sha256}:{hotkey}:{nonce}:{issued_at}"`
+
+4. **Public Endpoints**:
+   - `GET /api/v1/cla/current`:
+     Returns the currently effective CLA:
+     `{version, sha256, published_at, effective_at, text}`
+   - `GET /api/v1/cla/status/{hotkey}` or `GET /api/v1/cla/status?hotkey={hotkey}`:
+     "A public read endpoint returns a hotkey's CLA status: version, digest, signed_at, and signature."
+     Returns:
+     ```json
+     {
+       "hotkey": "...",
+       "signed": true/false,
+       "current_version": "v1",
+       "is_current": true/false,
+       "cla_version": "v1",
+       "cla_sha256": "...",
+       "signed_at": "...",
+       "signature": "..."
+     }
+     ```
+   - `POST /api/v1/cla/sign`:
+     Body:
+     ```json
+     {
+       "hotkey": "...",
+       "cla_version": "v1",
+       "cla_sha256": "...",
+       "nonce": "...",
+       "issued_at": 1234567890,
+       "signature": "..."
+     }
+     ```
+     Server verification:
+     - Check CLA version exists in registry and matches `cla_sha256`.
+     - Check `issued_at` is within freshness window (e.g. 5 or 10 minutes, standard owner-link freshness window, e.g. 300s or 600s, max future drift e.g. 60s).
+     - Check nonce is unique (not already in `CLASignature`).
+     - Build payload: `build_cla_sign_payload(netuid, cla_version, cla_sha256, hotkey, nonce, issued_at)`.
+     - Verify signature using `verify_signature(hotkey, payload, signature)`.
+     - Resolve `coldkey = Owner(hotkey)` (e.g. using chain state / subtensor or mock in tests or fallback to hotkey/attestation helper if mock).
+     - Store row `{hotkey, coldkey, cla_version, cla_sha256, signature, nonce, issued_at, signed_at}` in append-only table.
+     - Return `{status: "ok", ...}`.
+
+5. **Upload Gate**:
+   - Gate modes: `off`, `shadow`, `enforce`. Default `off`.
+   - Gate check function:
+     `check_cla_gate(hotkey: str, db: Session) -> tuple[bool, str | None]`
+     In `POST /api/v1/upload/check` and `POST /api/v1/upload/agent`:
+     If gate is:
+     - `off`: Pass through without check.
+     - `shadow`: Check if hotkey has valid signature for currently effective version. If unsigned / outdated, log warning, increment metric / shadow counter, but proceed (do not reject).
+     - `enforce`: Check if hotkey has valid signature for currently effective version. If not signed or outdated, raise HTTPException(status_code=403, detail="HotKey has not signed the current Contributor License Agreement (CLA vX). Please run `ditto cla sign` before uploading.")
+   - CLI check:
+     In `ditto upload`:
+     Checks CLA status before packaging or payment step. Calls `GET /api/v1/cla/status/{hotkey}` or similar. If not signed / not current, abort with error telling miner to run `ditto cla sign`.
+
+6. **Backroom MCP tool**:
+   - "A Backroom read tool covers the gate setting, its history, and adoption counts."
+   - E.g. `get_cla_gate_status`:
+     Returns:
+     - current mode (`off`, `shadow`, `enforce`)
+     - history of setting changes
+     - adoption stats: total active hotkeys, signed active hotkeys, unsigned active hotkeys, percentage.
+   - Also tool to update setting if needed (`set_cla_gate_mode`), or at least the read tool as required:
+     "A Backroom read tool covers the gate setting, its history, and adoption counts."
+
+7. **CLI Commands**:
+   - `ditto cla sign`:
+     - Fetches current CLA from Platform.
+     - Verifies SHA256 of text matches expected digest.
+     - Shows summary / path / digest.
+     - Prompts for explicit typed confirmation (e.g., typing "I AGREE" or "yes" or similar, e.g. typing "I AGREE").
+     - Signs payload with miner hotkey keypair.
+     - Sends POST to Platform `/api/v1/cla/sign`.
+     - Prints success.
+   - `ditto cla status`:
+     - Queries Platform `/api/v1/cla/status/{hotkey}`.
+     - Prints signed version, whether it is current, signed_at time.
+
+8. **Documentation**:
+   - `docs/MINER.md`: Document the CLA signing flow and commands.
+   - Miner starter kit README: Mention `ditto cla sign`.
+
+9. **Tests**:
+   - Test append-only guarantee: attempts to update or delete `CLASignature` fail.
+   - Test `cla sign` and `cla status` logic and digest mismatch refusal.
+   - Test upload gate for `off`, `shadow`, `enforce`, unsigned hotkey, outdated version, replayed nonce, stale issued_at, wrong signer.
+   - Test Backroom MCP tool for gate setting, history, adoption counts.
+
+Let's present all the necessary code changes clearly and completely.
