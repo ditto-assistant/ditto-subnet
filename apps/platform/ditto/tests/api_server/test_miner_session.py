@@ -156,3 +156,24 @@ def test_login_signature_round_trip() -> None:
             signature="00" * 64,
             bound_coldkey=None,
         )
+
+
+def test_logout_all_message_binds_reach() -> None:
+    from ditto.api_server.miner_session import logout_all_message
+
+    nonce = uuid4()
+    issued = datetime(2026, 10, 12, 9, 30, 0, tzinfo=UTC)
+    hotkey = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+    common = {
+        "netuid": 118,
+        "miner_hotkey": hotkey,
+        "nonce": nonce,
+        "issued_at": issued,
+        "key_kind": "coldkey",
+        "signer": hotkey,
+    }
+    narrow = logout_all_message(reach="hotkey", **common)  # type: ignore[arg-type]
+    wide = logout_all_message(reach="coldkey", **common)  # type: ignore[arg-type]
+    assert narrow.startswith(b"ditto-miner-logout-all:v1:118:")
+    assert narrow != wide
+    assert b":coldkey:" + str(nonce).encode() in wide

@@ -6,6 +6,13 @@ and stored only as a SHA-256 digest. Session-scoped writes (profile
 socials, avatar upload) do not re-ask for a hotkey signature. Upload,
 handle reservation, and other one-shot signed actions stay CLI-signed;
 the hosted MCP returns those commands instead of performing them.
+
+Sessions are also manageable after the fact. A session holding the
+``sessions`` scope can list the hotkey's live sessions and sign any of them
+out. Signing out *everywhere* is deliberately not a bearer action: it is a
+CLI-signed ``ditto-miner-logout-all:v1`` proof, so a miner whose bearer has
+leaked -- or who has no live session left at all -- can still cut every
+session off with the key that minted them.
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from ditto.api_server.miner_avatar import MinerAvatarRejected
 from ditto.api_server.name_claim import KeyKind
 
 LOGIN_DOMAIN: Final = "ditto-miner-login:v1"
+LOGOUT_ALL_DOMAIN: Final = "ditto-miner-logout-all:v1"
 TOKEN_PREFIX: Final = "ditto_ms_"
 MIN_TTL_SECONDS: Final = 3600
 MAX_TTL_SECONDS: Final = 30 * 24 * 3600
@@ -34,7 +42,9 @@ GRANT_TTL: Final = timedelta(minutes=15)
 OAUTH_CODE_TTL: Final = timedelta(minutes=5)
 USER_CODE_ALPHABET: Final = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
-Scope = Literal["read", "profile", "download", "upload", "handle", "challenges"]
+Scope = Literal[
+    "read", "profile", "download", "upload", "handle", "challenges", "sessions"
+]
 ALL_SCOPES: Final[tuple[Scope, ...]] = (
     "read",
     "profile",
@@ -42,6 +52,7 @@ ALL_SCOPES: Final[tuple[Scope, ...]] = (
     "upload",
     "handle",
     "challenges",
+    "sessions",
 )
 DEFAULT_SCOPES: Final[tuple[Scope, ...]] = ("read",)
 OAUTH_DEFAULT_SCOPES: Final[tuple[Scope, ...]] = ("read",)
@@ -150,6 +161,33 @@ def login_message(
     return (
         f"{LOGIN_DOMAIN}:{netuid}:{miner_hotkey}:{code}:{grant_id}:{ttl_seconds}"
         f":{csv}:{nonce}:{issued}:{key_kind}:{signer}:{client}:{redirect}"
+    ).encode()
+
+
+LogoutAllReach = Literal["hotkey", "coldkey"]
+
+
+def logout_all_message(
+    *,
+    netuid: int,
+    miner_hotkey: str,
+    reach: LogoutAllReach,
+    nonce: UUID,
+    issued_at: datetime,
+    key_kind: KeyKind,
+    signer: str,
+) -> bytes:
+    """Canonical bytes for a signed sign-out-everywhere request.
+
+    ``reach`` is part of the signed bytes so a hotkey-wide proof can never be
+    replayed as the wider coldkey-wide one: ``hotkey`` signs out only
+    ``miner_hotkey``; ``coldkey`` also signs out the other hotkeys that coldkey
+    funds.
+    """
+    issued = _issued_stamp(issued_at)
+    return (
+        f"{LOGOUT_ALL_DOMAIN}:{netuid}:{miner_hotkey}:{reach}:{nonce}:{issued}"
+        f":{key_kind}:{signer}"
     ).encode()
 
 

@@ -293,3 +293,50 @@ def test_start_without_code_prints_url() -> None:
         rc = run(_args(user_code=None, print_only=True))
     assert rc == 0
     client.start_miner_device.assert_called_once()
+
+
+def test_logout_everywhere_signs_and_clears(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DITTO_CLI_CONFIG_PATH", str(tmp_path / "config.json"))
+    from ditto.api_models.miner_session import MinerSessionRevokeResponse
+    from ditto.miner_cli.miner_session import logout_all_message
+    from ditto.miner_cli.preferences import load_miner_session, save_miner_session
+
+    save_miner_session(
+        network="local",
+        token="ditto_ms_" + "ab" * 32,
+        hotkey=HOTKEY,
+        scopes=["read"],
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+    handle, wallet = _wallet()
+    client = MagicMock()
+    client.logout_all_miner_sessions.return_value = MinerSessionRevokeResponse(
+        revoked=3, miner_hotkeys=[HOTKEY]
+    )
+    ctor = MagicMock()
+    ctor.return_value.__enter__.return_value = client
+    ctor.return_value.__exit__.return_value = False
+    with (
+        patch(
+            "ditto.miner_cli.commands.login.load_wallet",
+            return_value=(handle, wallet),
+        ),
+        patch("ditto.miner_cli.commands.login.ApiClient", ctor),
+    ):
+        rc = run(_args(login_command="logout", user_code=None, everywhere=True))
+    assert rc == 0
+    client.revoke_miner_session.assert_not_called()
+    sent = client.logout_all_miner_sessions.call_args.args[0]
+    assert sent.miner_hotkey == HOTKEY
+    assert sent.all_funded_hotkeys is False
+    signed = wallet.hotkey.sign.call_args.args[0]
+    assert signed == logout_all_message(
+        netuid=118,
+        miner_hotkey=HOTKEY,
+        all_funded_hotkeys=False,
+        nonce=sent.nonce,
+        issued_at=sent.issued_at,
+        key_kind="hotkey",
+        signer=HOTKEY,
+    )
+    assert load_miner_session(network="local") is None

@@ -53,6 +53,8 @@ from ditto.api_models.miner_session import (
     MinerDeviceStartResponse,
     MinerDeviceStatusResponse,
     MinerLoginApproveRequest,
+    MinerLogoutAllRequest,
+    MinerSessionRevokeResponse,
     MinerSessionView,
 )
 from ditto.api_models.name_claim import (
@@ -97,6 +99,8 @@ __all__ = [
     "MinerDeviceStartResponse",
     "MinerDeviceStatusResponse",
     "MinerLoginApproveRequest",
+    "MinerLogoutAllRequest",
+    "MinerSessionRevokeResponse",
     "MinerSessionView",
     "NameClaimEndorsementView",
     "NameClaimListResponse",

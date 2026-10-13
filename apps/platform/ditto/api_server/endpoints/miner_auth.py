@@ -1,4 +1,4 @@
-"""Device-code miner login and session inspection."""
+"""Device-code miner login, session inspection, and session sign-out."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from urllib.parse import urlencode
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,10 @@ from ditto.api_models.miner_session import (
     MinerDeviceStartResponse,
     MinerDeviceStatusResponse,
     MinerLoginApproveRequest,
+    MinerLogoutAllRequest,
+    MinerSessionListResponse,
+    MinerSessionRevokeResponse,
+    MinerSessionSummary,
     MinerSessionView,
 )
 from ditto.api_server.dependencies import get_session
@@ -30,6 +35,7 @@ from ditto.api_server.miner_session import (
     login_clone_command,
     login_command,
     login_message,
+    logout_all_message,
     new_token,
     new_user_code,
     normalize_user_code,
@@ -50,8 +56,11 @@ from ditto.db.queries.miner_sessions import (
     get_device_grant_by_code,
     get_oauth_client,
     issue_session_token,
+    list_hotkeys_funded_by_coldkey,
+    list_live_sessions_for_hotkey,
     lookup_session_token,
     record_login_nonce,
+    revoke_live_sessions,
     revoke_session,
     session_remaining,
 )
@@ -104,6 +113,21 @@ def _session_view(row, *, now: datetime) -> MinerSessionView:
         created_at=row.created_at,
         expires_at=row.expires_at,
         expires_in=session_remaining(expires_at=row.expires_at, now=now),
+    )
+
+
+def _session_summary(
+    row: MinerSession, *, now: datetime, current_id: UUID
+) -> MinerSessionSummary:
+    return MinerSessionSummary(
+        session_id=row.session_id,
+        scopes=list(parse_scopes(row.scopes)),
+        label=row.label,  # type: ignore[arg-type]
+        created_at=row.created_at,
+        last_used_at=row.last_used_at,
+        expires_at=row.expires_at,
+        expires_in=session_remaining(expires_at=row.expires_at, now=now),
+        current=row.session_id == current_id,
     )
 
 
@@ -442,3 +466,127 @@ async def revoke_current_session(request: Request, session: SessionDep) -> None:
     async with session.begin():
         row, _token = await resolve_miner_session(request, session)
         await revoke_session(session, row=row, now=now)
+
+
+@router.get("/sessions", response_model=MinerSessionListResponse)
+async def list_sessions(
+    request: Request, session: SessionDep
+) -> MinerSessionListResponse:
+    """Every live session of the signed-in hotkey, the caller's own flagged."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        row, _token = await resolve_miner_session(request, session)
+        require_scope(row, "sessions")
+        rows = await list_live_sessions_for_hotkey(
+            session, hotkey=row.miner_hotkey, now=now
+        )
+        summaries = [
+            _session_summary(item, now=now, current_id=row.session_id) for item in rows
+        ]
+        hotkey = row.miner_hotkey
+    return MinerSessionListResponse(
+        miner_hotkey=hotkey,
+        generated_at=now,
+        sessions=summaries,
+    )
+
+
+@router.post("/sessions/{session_id}/revoke", status_code=204)
+async def revoke_listed_session(
+    session_id: UUID, request: Request, session: SessionDep
+) -> None:
+    now = datetime.now(UTC)
+    async with session.begin():
+        row, _token = await resolve_miner_session(request, session)
+        require_scope(row, "sessions")
+        target = await get_session_row(session, session_id=session_id)
+        # Another hotkey's session answers exactly like a missing one, so this
+        # route cannot be used to learn which session ids exist.
+        if target is None or target.miner_hotkey != row.miner_hotkey:
+            raise HTTPException(status_code=404, detail="unknown miner session")
+        await revoke_session(session, row=target, now=now)
+
+
+@router.post("/sessions/revoke-others", response_model=MinerSessionRevokeResponse)
+async def revoke_other_sessions(
+    request: Request, session: SessionDep
+) -> MinerSessionRevokeResponse:
+    """Sign out every other session of this hotkey, keeping the caller's."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        row, _token = await resolve_miner_session(request, session)
+        require_scope(row, "sessions")
+        hotkey = row.miner_hotkey
+        revoked = await revoke_live_sessions(
+            session,
+            hotkeys=[hotkey],
+            now=now,
+            keep_session_id=row.session_id,
+        )
+    return MinerSessionRevokeResponse(revoked=revoked, miner_hotkeys=[hotkey])
+
+
+@router.post("/sessions/logout-all", response_model=MinerSessionRevokeResponse)
+async def logout_everywhere(
+    session: SessionDep, body: MinerLogoutAllRequest
+) -> MinerSessionRevokeResponse:
+    """Revoke every live session under a hotkey (or coldkey) signature.
+
+    No bearer is required, by design: this is the recovery path for a leaked
+    or lost session, so it is authenticated by the key that approved the
+    sessions in the first place, with the same freshness window and replay log
+    as a login approval.
+    """
+    now = datetime.now(UTC)
+    try:
+        check_freshness(issued_at=body.issued_at, now=now)
+    except MinerSessionRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if body.netuid != expected_netuid():
+        raise HTTPException(
+            status_code=400, detail="netuid does not match this deployment"
+        )
+    if body.all_funded_hotkeys and body.proof.key_kind != "coldkey":
+        raise HTTPException(
+            status_code=400,
+            detail="signing out every funded hotkey requires a coldkey proof",
+        )
+    reach = "coldkey" if body.all_funded_hotkeys else "hotkey"
+    async with session.begin():
+        bound = await get_bound_coldkey_for_hotkey(session, hotkey=body.miner_hotkey)
+        try:
+            verify_signed_action(
+                payload=logout_all_message(
+                    netuid=body.netuid,
+                    miner_hotkey=body.miner_hotkey,
+                    reach=reach,
+                    nonce=body.nonce,
+                    issued_at=body.issued_at,
+                    key_kind=body.proof.key_kind,
+                    signer=body.proof.signer,
+                ),
+                hotkey=body.miner_hotkey,
+                key_kind=body.proof.key_kind,
+                signer=body.proof.signer,
+                signature=body.proof.signature,
+                bound_coldkey=bound,
+            )
+        except MinerSessionRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            await record_login_nonce(
+                session,
+                nonce=body.nonce,
+                miner_hotkey=body.miner_hotkey,
+                now=now,
+            )
+        except MinerGrantConflictError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        hotkeys = [body.miner_hotkey]
+        if body.all_funded_hotkeys:
+            funded = await list_hotkeys_funded_by_coldkey(
+                session, coldkey=body.proof.signer
+            )
+            hotkeys = sorted({body.miner_hotkey, *funded})
+        revoked = await revoke_live_sessions(session, hotkeys=hotkeys, now=now)
+    return MinerSessionRevokeResponse(revoked=revoked, miner_hotkeys=hotkeys)

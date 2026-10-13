@@ -1,4 +1,4 @@
-"""Mint a signed miner login approval.
+"""Mint a signed miner login approval or sign-out-everywhere request.
 
 Byte-for-byte mirror of ``apps/platform/ditto/api_server/miner_session.py``
 payload construction. Signing does not move funds.
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     import bittensor
 
 LOGIN_DOMAIN: Final = "ditto-miner-login:v1"
+LOGOUT_ALL_DOMAIN: Final = "ditto-miner-logout-all:v1"
 KNOWN_SCOPES: Final[tuple[str, ...]] = (
     "read",
     "profile",
@@ -67,6 +68,24 @@ def login_message(
     return (
         f"{LOGIN_DOMAIN}:{netuid}:{miner_hotkey}:{code}:{grant_id}:{ttl_seconds}"
         f":{ordered}:{nonce}:{issued}:{key_kind}:{signer}:{client}:{redirect}"
+    ).encode()
+
+
+def logout_all_message(
+    *,
+    netuid: int,
+    miner_hotkey: str,
+    all_funded_hotkeys: bool,
+    nonce: UUID,
+    issued_at: datetime,
+    key_kind: KeyKind,
+    signer: str,
+) -> bytes:
+    issued = _issued_stamp(issued_at)
+    reach = "coldkey" if all_funded_hotkeys else "hotkey"
+    return (
+        f"{LOGOUT_ALL_DOMAIN}:{netuid}:{miner_hotkey}:{reach}:{nonce}:{issued}"
+        f":{key_kind}:{signer}"
     ).encode()
 
 

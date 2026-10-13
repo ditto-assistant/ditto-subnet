@@ -298,6 +298,31 @@ def confirm_avatar_action(
     print(f"avatar {action} confirmed", file=sys.stderr)
 
 
+def confirm_logout_all(
+    *,
+    hotkey_ss58: str,
+    key_kind: str,
+    all_hotkeys: bool,
+    skip: bool,
+) -> None:
+    """Preview a sign-out-everywhere before submitting it."""
+    reach = "every hotkey this coldkey funds" if all_hotkeys else "this hotkey"
+    print(f"\nSign out everywhere: {hotkey_ss58} ({key_kind}, {reach})")
+    print("Every session stops working now. Signing does NOT transfer any TAO.\n")
+
+    if skip:
+        logger.debug("logout-all confirmation bypassed via --yes")
+        return
+
+    try:
+        response = input("Sign out everywhere? [y/N]: ").strip().lower()
+    except EOFError as e:
+        raise LoginCancelledError("logout cancelled: EOF on stdin") from e
+
+    if response != "y":
+        raise LoginCancelledError(f"logout cancelled (response={response!r})")
+
+
 def confirm_login_action(
     *,
     user_code: str,

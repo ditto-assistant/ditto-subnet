@@ -10,7 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ditto.api_models.name_claim import NameClaimProof, PublicNameHandle
 
-MinerScope = Literal["read", "profile", "download", "upload", "handle", "challenges"]
+MinerScope = Literal[
+    "read", "profile", "download", "upload", "handle", "challenges", "sessions"
+]
 
 
 class MinerDeviceStartRequest(BaseModel):
@@ -77,6 +79,57 @@ class MinerSessionView(BaseModel):
     created_at: datetime
     expires_at: datetime
     expires_in: int
+
+
+class MinerSessionSummary(BaseModel):
+    """One live session of the signed-in hotkey, as the sessions list shows it.
+
+    Never carries a bearer or its digest: listing is for recognising and
+    signing out a device, not for reusing one.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    session_id: UUID
+    scopes: list[MinerScope]
+    label: Literal["dashboard", "mcp", "cli"]
+    created_at: datetime
+    last_used_at: datetime | None = None
+    expires_at: datetime
+    expires_in: int
+    current: bool = False
+
+
+class MinerSessionListResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    miner_hotkey: str
+    generated_at: datetime
+    sessions: list[MinerSessionSummary]
+
+
+class MinerLogoutAllRequest(BaseModel):
+    """A key-signed request to sign out every live session.
+
+    ``all_funded_hotkeys`` widens the reach from ``miner_hotkey`` to every
+    hotkey the signing coldkey funds, and therefore needs a coldkey proof.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    netuid: int = Field(ge=1)
+    miner_hotkey: str = Field(min_length=47, max_length=48)
+    all_funded_hotkeys: bool = False
+    nonce: UUID
+    issued_at: datetime
+    proof: NameClaimProof
+
+
+class MinerSessionRevokeResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    revoked: int
+    miner_hotkeys: list[str]
 
 
 class MinerDeviceStatusResponse(BaseModel):

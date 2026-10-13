@@ -13,13 +13,15 @@ from uuid import uuid4
 from ditto.api_models.miner_session import (
     MinerDeviceStartRequest,
     MinerLoginApproveRequest,
+    MinerLogoutAllRequest,
 )
 from ditto.api_models.name_claim import NameClaimProof
 from ditto.miner_cli.api_client import ApiClient
-from ditto.miner_cli.confirm import confirm_login_action
+from ditto.miner_cli.confirm import confirm_login_action, confirm_logout_all
 from ditto.miner_cli.errors import LoginRequiredError
 from ditto.miner_cli.miner_session import (
     login_message,
+    logout_all_message,
     sign_payload,
     signer_address,
 )
@@ -72,8 +74,30 @@ def add_subparser(
     _wallet_flags(parser)
     status = login_subs.add_parser("status", help="Show the saved local session.")
     status.set_defaults(func=run, login_command="status")
-    logout = login_subs.add_parser("logout", help="Forget the saved local session.")
+    logout = login_subs.add_parser(
+        "logout",
+        help="Forget the saved local session, or sign out everywhere.",
+        description=(
+            "With --everywhere, sign a request that revokes every live session "
+            "for the hotkey. Wallet flags go before the subcommand: "
+            "ditto login --hotkey NAME logout --everywhere."
+        ),
+    )
     logout.set_defaults(func=run, login_command="logout")
+    logout.add_argument(
+        "--everywhere",
+        action="store_true",
+        help="Sign out every session for this hotkey, not just this machine's.",
+    )
+    logout.add_argument(
+        "--all-hotkeys",
+        dest="all_hotkeys",
+        action="store_true",
+        help=(
+            "With --everywhere and --key-kind coldkey: also sign out every "
+            "other hotkey this coldkey funds."
+        ),
+    )
     return parser
 
 
@@ -154,6 +178,11 @@ def _status(args: argparse.Namespace) -> int:
 def _logout(args: argparse.Namespace) -> int:
     from ditto.miner_cli.preferences import load_miner_session
 
+    if getattr(args, "everywhere", False):
+        return _logout_everywhere(args)
+    if getattr(args, "all_hotkeys", False):
+        print("--all-hotkeys only applies with --everywhere", file=sys.stderr)
+        return 2
     network = resolve_network(args.network)
     saved = load_miner_session(network=network.name)
     token = saved.get("token") if isinstance(saved, dict) else None
@@ -170,6 +199,71 @@ def _logout(args: argparse.Namespace) -> int:
             return 1
     clear_miner_session(network=network.name)
     print("signed out", file=sys.stderr)
+    return 0
+
+
+def _logout_everywhere(args: argparse.Namespace) -> int:
+    network = resolve_network(args.network)
+    key_kind: KeyKind = args.key_kind
+    all_hotkeys = bool(getattr(args, "all_hotkeys", False))
+    if all_hotkeys and key_kind != "coldkey":
+        print("--all-hotkeys needs --key-kind coldkey", file=sys.stderr)
+        return 2
+    coldkey_name, hotkey_name = resolve_wallet_names(
+        coldkey_name=args.coldkey_name,
+        hotkey_name=args.hotkey_name,
+        interactive=sys.stdin.isatty() and not bool(args.yes),
+    )
+    handle, wallet = load_wallet(
+        coldkey_name=coldkey_name,
+        hotkey_name=hotkey_name,
+    )
+    signer = signer_address(live_wallet=wallet, key_kind=key_kind)
+    nonce = uuid4()
+    issued_at = datetime.now(UTC)
+    payload = logout_all_message(
+        netuid=args.netuid,
+        miner_hotkey=handle.hotkey_ss58,
+        all_funded_hotkeys=all_hotkeys,
+        nonce=nonce,
+        issued_at=issued_at,
+        key_kind=key_kind,
+        signer=signer,
+    )
+    signature = sign_payload(live_wallet=wallet, key_kind=key_kind, payload=payload)
+    body = MinerLogoutAllRequest(
+        netuid=args.netuid,
+        miner_hotkey=handle.hotkey_ss58,
+        all_funded_hotkeys=all_hotkeys,
+        nonce=nonce,
+        issued_at=issued_at,
+        proof=NameClaimProof(
+            key_kind=key_kind,
+            signer=signer,
+            signature=signature,
+        ),
+    )
+    if args.print_only:
+        print(body.model_dump_json(indent=2))
+        return 0
+    confirm_logout_all(
+        hotkey_ss58=handle.hotkey_ss58,
+        key_kind=key_kind,
+        all_hotkeys=all_hotkeys,
+        skip=bool(args.yes),
+    )
+    with ApiClient(base_url=network.api_url) as client:
+        result = client.logout_all_miner_sessions(body)
+    from ditto.miner_cli.preferences import load_miner_session
+
+    saved = load_miner_session(network=network.name)
+    if saved is not None and saved.get("hotkey") in result.miner_hotkeys:
+        clear_miner_session(network=network.name)
+    noun = "session" if result.revoked == 1 else "sessions"
+    print(
+        f"signed out {result.revoked} {noun} across "
+        f"{len(result.miner_hotkeys)} hotkey(s)"
+    )
     return 0
 
 

@@ -24,6 +24,7 @@ const SCOPES: Array<{ id: string; label: string; hint: string }> = [
   { id: "upload", label: "Upload", hint: "Returns a ditto upload command" },
   { id: "handle", label: "Username", hint: "Returns a ditto name claim command" },
   { id: "challenges", label: "Challenges", hint: "Returns dispute / appeal commands" },
+  { id: "sessions", label: "Sessions", hint: "See where you are signed in and sign devices out" },
 ];
 
 const POLL_STORAGE_KEY = "ditto.miner.poll.v1";
@@ -81,6 +82,23 @@ interface MinerMe {
   avatar_url?: string | null;
   profile_url: string;
   commands: Array<{ action: string; command: string; reason: string }>;
+}
+
+interface MinerSessionSummary {
+  session_id: string;
+  scopes: string[];
+  label: "dashboard" | "mcp" | "cli";
+  created_at: string;
+  last_used_at?: string | null;
+  expires_at: string;
+  expires_in: number;
+  current: boolean;
+}
+
+interface MinerSessionList {
+  miner_hotkey: string;
+  generated_at: string;
+  sessions: MinerSessionSummary[];
 }
 
 interface DittoLinkView {
@@ -322,7 +340,7 @@ export function ReviewsPage(): JSX.Element {
 
 function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.Element {
   const [hours, setHours] = createSignal(24);
-  const [scopes, setScopes] = createSignal<string[]>(["read", "profile"]);
+  const [scopes, setScopes] = createSignal<string[]>(["read", "profile", "sessions"]);
   const [pending, setPending] = createSignal<DeviceStart | null>(null);
   const [status, setStatus] = createSignal("idle");
   const [error, setError] = createSignal("");
@@ -559,7 +577,12 @@ function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.
 
 function AccountPanel(): JSX.Element {
   const [me, setMe] = createSignal<MinerMe | null>(null);
-  const [tab, setTab] = createSignal<"profile" | "submissions" | "reviews" | "mcp">("profile");
+  const [tab, setTab] = createSignal<"profile" | "submissions" | "reviews" | "mcp" | "sessions">(
+    "profile",
+  );
+  const [sessions, setSessions] = createSignal<MinerSessionSummary[]>([]);
+  const [sessionsError, setSessionsError] = createSignal("");
+  const canManageSessions = createMemo(() => (me()?.session.scopes || []).includes("sessions"));
   const [subs, setSubs] = createSignal<MinerSubmission[]>([]);
   const [reviews, setReviews] = createSignal<MinerReview[]>([]);
   const [logAgent, setLogAgent] = createSignal<string | null>(null);
@@ -689,6 +712,47 @@ function AccountPanel(): JSX.Element {
       setError(err instanceof Error ? err.message : "Could not unlink the Ditto account.");
     } finally {
       setDittoBusy(false);
+    }
+  }
+
+  async function loadSessions(): Promise<void> {
+    setSessionsError("");
+    try {
+      const body = await authJSON<MinerSessionList>("/miner-auth/sessions", {
+        headers: sessionAuthHeader(),
+      });
+      setSessions(body.sessions);
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : "Could not load sessions.");
+    }
+  }
+
+  async function revokeSession(item: MinerSessionSummary): Promise<void> {
+    if (item.current) {
+      clearMinerSession();
+      return;
+    }
+    try {
+      await authJSON<unknown>(
+        "/miner-auth/sessions/" + encodeURIComponent(item.session_id) + "/revoke",
+        { method: "POST", headers: sessionAuthHeader() },
+      );
+      await loadSessions();
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : "Could not sign that session out.");
+    }
+  }
+
+  async function revokeOtherSessions(): Promise<void> {
+    try {
+      const result = await authJSON<{ revoked: number }>("/miner-auth/sessions/revoke-others", {
+        method: "POST",
+        headers: sessionAuthHeader(),
+      });
+      setSaved("Signed out other sessions: " + result.revoked + ".");
+      await loadSessions();
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : "Could not sign other sessions out.");
     }
   }
 
@@ -843,12 +907,15 @@ function AccountPanel(): JSX.Element {
         </div>
       </header>
       <nav class="account-tabs">
-        <For each={["profile", "submissions", "reviews", "mcp"] as const}>
+        <For each={["profile", "submissions", "reviews", "mcp", "sessions"] as const}>
           {(item) => (
             <button
               class="btn ghost"
               classList={{ active: tab() === item }}
-              onClick={() => setTab(item)}
+              onClick={() => {
+                setTab(item);
+                if (item === "sessions" && canManageSessions()) void loadSessions();
+              }}
             >
               {item}
             </button>
@@ -1240,6 +1307,46 @@ function AccountPanel(): JSX.Element {
               )}
             </For>
           </ul>
+        </div>
+      </Show>
+      <Show when={tab() === "sessions"}>
+        <div class="account-card">
+          <h3>Sessions</h3>
+          <Show
+            when={canManageSessions()}
+            fallback={
+              <p class="muted">
+                Sign in again with the Sessions scope, or run{" "}
+                <code>ditto login logout --everywhere</code>.
+              </p>
+            }
+          >
+            <ul class="account-list">
+              <For each={sessions()}>
+                {(item) => (
+                  <li>
+                    <strong>
+                      {item.label}
+                      {item.current ? " (this browser)" : ""}
+                    </strong>
+                    <span class="muted">
+                      {item.scopes.join(", ")} · last used{" "}
+                      {item.last_used_at || item.created_at} · expires {item.expires_at}
+                    </span>
+                    <button class="btn ghost" onClick={() => void revokeSession(item)}>
+                      Sign out
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <button class="btn ghost" onClick={() => void revokeOtherSessions()}>
+              Sign out all other sessions
+            </button>
+            <Show when={sessionsError()}>
+              <p class="account-error">{sessionsError()}</p>
+            </Show>
+          </Show>
         </div>
       </Show>
       <Show when={saved()}>

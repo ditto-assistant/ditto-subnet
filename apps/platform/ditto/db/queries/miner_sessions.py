@@ -6,13 +6,14 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 
 from ditto.db.models import (
     Agent,
     AthReview,
+    EvaluationPayment,
     MinerDeviceGrant,
     MinerLoginNonce,
     MinerOauthClient,
@@ -24,7 +25,14 @@ from ditto.db.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sqlalchemy.ext.asyncio import AsyncSession
+
+#: Ceiling on rows the sessions list returns. A hotkey that has minted more
+#: live sessions than this is better served by signing out everywhere than by
+#: paging through them.
+MAX_LISTED_SESSIONS = 100
 
 
 class MinerGrantConflictError(Exception):
@@ -237,6 +245,85 @@ async def revoke_session(
         row.revoked_at = now
         await session.flush()
     return row
+
+
+async def list_live_sessions_for_hotkey(
+    session: AsyncSession,
+    *,
+    hotkey: str,
+    now: datetime,
+    limit: int = MAX_LISTED_SESSIONS,
+) -> list[MinerSession]:
+    """Unrevoked, unexpired sessions for ``hotkey``, most recently used first.
+
+    "Live" matches :func:`lookup_session_token` exactly -- a session whose
+    ``expires_at`` has been reached no longer authenticates, so it is not
+    listed either.
+    """
+    stmt = (
+        select(MinerSession)
+        .where(
+            MinerSession.miner_hotkey == hotkey,
+            MinerSession.revoked_at.is_(None),
+            MinerSession.expires_at > now,
+        )
+        .order_by(
+            MinerSession.last_used_at.desc().nulls_last(),
+            MinerSession.created_at.desc(),
+        )
+        .limit(limit)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def revoke_live_sessions(
+    session: AsyncSession,
+    *,
+    hotkeys: Sequence[str],
+    now: datetime,
+    keep_session_id: UUID | None = None,
+) -> int:
+    """Revoke every live session of ``hotkeys`` in one statement.
+
+    ``keep_session_id`` spares exactly one session (the caller's own, for
+    "sign out other sessions"). Already-revoked rows keep their original
+    ``revoked_at``, so repeating the call is a no-op rather than rewriting
+    the audit trail. Returns how many sessions this call revoked.
+    """
+    if not hotkeys:
+        return 0
+    stmt = (
+        update(MinerSession)
+        .where(
+            MinerSession.miner_hotkey.in_(list(hotkeys)),
+            MinerSession.revoked_at.is_(None),
+            MinerSession.expires_at > now,
+        )
+        .values(revoked_at=now)
+        .returning(MinerSession.session_id)
+        .execution_options(synchronize_session=False)
+    )
+    if keep_session_id is not None:
+        stmt = stmt.where(MinerSession.session_id != keep_session_id)
+    rows = (await session.execute(stmt)).scalars().all()
+    return len(rows)
+
+
+async def list_hotkeys_funded_by_coldkey(
+    session: AsyncSession, *, coldkey: str
+) -> list[str]:
+    """Hotkeys whose evaluations ``coldkey`` has paid for, sorted.
+
+    The payment row records the coldkey that owned the hotkey when it paid,
+    which is the same evidence a coldkey-signed proof is checked against for a
+    single hotkey.
+    """
+    rows = await session.scalars(
+        select(EvaluationPayment.miner_hotkey)
+        .where(EvaluationPayment.miner_coldkey == coldkey)
+        .distinct()
+    )
+    return sorted(hotkey for hotkey in rows.all() if hotkey)
 
 
 async def create_oauth_code(

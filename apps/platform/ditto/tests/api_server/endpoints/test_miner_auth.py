@@ -238,3 +238,141 @@ async def test_oauth_complete_requires_complete_token(
     )
     assert tokened.status_code == 200, tokened.text
     assert tokened.json()["scope"] == "read"
+
+
+async def _approved_token(
+    client: httpx.AsyncClient, keypair: bittensor.Keypair, scopes: list[str]
+) -> str:
+    started = await client.post(
+        "/api/v1/miner-auth/device",
+        json={"scopes": scopes, "ttl_seconds": 3600},
+    )
+    assert started.status_code == 200, started.text
+    user_code = started.json()["user_code"]
+    public = await client.get(f"/api/v1/miner-auth/device/{user_code}")
+    grant_id = public.json()["grant_id"]
+    nonce = uuid4()
+    issued_at = datetime.now(UTC)
+    payload = login_message(
+        netuid=118,
+        miner_hotkey=keypair.ss58_address,
+        user_code=user_code,
+        grant_id=grant_id,
+        ttl_seconds=3600,
+        scopes=",".join(scopes),
+        nonce=nonce,
+        issued_at=issued_at,
+        key_kind="hotkey",
+        signer=keypair.ss58_address,
+    )
+    approved = await client.post(
+        f"/api/v1/miner-auth/device/{user_code}/approve",
+        json={
+            "netuid": 118,
+            "miner_hotkey": keypair.ss58_address,
+            "nonce": str(nonce),
+            "issued_at": issued_at.astimezone(UTC).isoformat(timespec="microseconds"),
+            "proof": {
+                "key_kind": "hotkey",
+                "signer": keypair.ss58_address,
+                "signature": keypair.sign(payload).hex(),
+            },
+        },
+    )
+    assert approved.status_code == 200, approved.text
+    return approved.json()["access_token"]
+
+
+async def test_sessions_list_and_sign_out_others(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    alice = _kp()
+    laptop = await _approved_token(client, alice, ["read", "sessions"])
+    phone = await _approved_token(client, alice, ["read", "profile"])
+    read_only = await _approved_token(client, alice, ["read"])
+
+    denied = await client.get(
+        "/api/v1/miner-auth/sessions",
+        headers={"authorization": f"Bearer {read_only}"},
+    )
+    assert denied.status_code == 403
+
+    listed = await client.get(
+        "/api/v1/miner-auth/sessions",
+        headers={"authorization": f"Bearer {laptop}"},
+    )
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert body["miner_hotkey"] == alice.ss58_address
+    assert len(body["sessions"]) >= 3
+    assert [item["current"] for item in body["sessions"]].count(True) == 1
+    assert all("token" not in key for item in body["sessions"] for key in item)
+
+    others = await client.post(
+        "/api/v1/miner-auth/sessions/revoke-others",
+        headers={"authorization": f"Bearer {laptop}"},
+    )
+    assert others.status_code == 200, others.text
+    assert others.json()["revoked"] >= 2
+    gone = await client.get("/api/v1/me", headers={"authorization": f"Bearer {phone}"})
+    assert gone.status_code == 401
+    kept = await client.get(
+        "/api/v1/miner-auth/session",
+        headers={"authorization": f"Bearer {laptop}"},
+    )
+    assert kept.status_code == 200
+
+
+async def test_logout_all_needs_a_fresh_hotkey_signature(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.api_server.miner_session import logout_all_message
+
+    _install(app, session_maker)
+    alice = _kp()
+    token = await _approved_token(client, alice, ["read"])
+    nonce = uuid4()
+    issued_at = datetime.now(UTC)
+    payload = logout_all_message(
+        netuid=118,
+        miner_hotkey=alice.ss58_address,
+        reach="hotkey",
+        nonce=nonce,
+        issued_at=issued_at,
+        key_kind="hotkey",
+        signer=alice.ss58_address,
+    )
+    body = {
+        "netuid": 118,
+        "miner_hotkey": alice.ss58_address,
+        "nonce": str(nonce),
+        "issued_at": issued_at.astimezone(UTC).isoformat(timespec="microseconds"),
+        "proof": {
+            "key_kind": "hotkey",
+            "signer": alice.ss58_address,
+            "signature": alice.sign(payload).hex(),
+        },
+    }
+    widened = await client.post(
+        "/api/v1/miner-auth/sessions/logout-all",
+        json={**body, "all_funded_hotkeys": True},
+    )
+    assert widened.status_code == 400
+
+    done = await client.post("/api/v1/miner-auth/sessions/logout-all", json=body)
+    assert done.status_code == 200, done.text
+    assert done.json()["miner_hotkeys"] == [alice.ss58_address]
+    assert done.json()["revoked"] >= 1
+    after = await client.get(
+        "/api/v1/miner-auth/session",
+        headers={"authorization": f"Bearer {token}"},
+    )
+    assert after.status_code == 401
+
+    replay = await client.post("/api/v1/miner-auth/sessions/logout-all", json=body)
+    assert replay.status_code == 400

@@ -38,6 +38,8 @@ from ditto.api_models import (
     MinerDeviceStartResponse,
     MinerDeviceStatusResponse,
     MinerLoginApproveRequest,
+    MinerLogoutAllRequest,
+    MinerSessionRevokeResponse,
     NameClaimListResponse,
     NameClaimRequest,
     NameClaimResponse,
@@ -446,6 +448,23 @@ class ApiClient:
             raise LoginRequiredError("miner session is invalid or expired")
         if response.status_code not in (200, 204):
             raise LoginRejectedError(_format_error(response, prefix="miner-logout"))
+
+    def logout_all_miner_sessions(
+        self, body: MinerLogoutAllRequest
+    ) -> MinerSessionRevokeResponse:
+        """Revoke every live session under a hotkey/coldkey signature.
+
+        Needs no bearer: the signature is the credential, which is what makes
+        this usable after a session token has leaked or been lost.
+        """
+        response = self._request(
+            "POST",
+            "/api/v1/miner-auth/sessions/logout-all",
+            json=body.model_dump(mode="json"),
+        )
+        if response.status_code != 200:
+            raise LoginRejectedError(_format_error(response, prefix="miner-logout"))
+        return MinerSessionRevokeResponse.model_validate(response.json())
 
     # ---- /me/ditto-link (Sign in with Ditto) -----------------------------
 

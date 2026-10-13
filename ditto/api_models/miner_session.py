@@ -1,4 +1,4 @@
-"""Wire models for miner device-code login. Mirror of Platform models."""
+"""Wire models for miner device-code login and sign-out. Mirror of Platform models."""
 
 from __future__ import annotations
 
@@ -87,3 +87,27 @@ class MinerDeviceStatusResponse(BaseModel):
     token_type: str | None = None
     continue_url: str | None = None
     oauth: bool = False
+
+
+class MinerLogoutAllRequest(BaseModel):
+    """Key-signed sign-out of every live session for a hotkey.
+
+    ``all_funded_hotkeys`` widens the reach to every hotkey the signing
+    coldkey funds and is only accepted with a coldkey proof.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    netuid: int = Field(ge=1)
+    miner_hotkey: str = Field(min_length=47, max_length=48)
+    all_funded_hotkeys: bool = False
+    nonce: UUID
+    issued_at: datetime
+    proof: NameClaimProof
+
+
+class MinerSessionRevokeResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    revoked: int
+    miner_hotkeys: list[str]
