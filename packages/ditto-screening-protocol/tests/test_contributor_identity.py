@@ -1,0 +1,64 @@
+from datetime import UTC, datetime
+from uuid import UUID
+
+import pytest
+
+from ditto_screening_protocol.contributor_identity import (
+    cla_message,
+    github_link_message,
+    github_unlink_message,
+)
+
+
+@pytest.mark.parametrize("kind", ["cla", "link", "unlink"])
+def test_signing_helpers_reject_naive_timestamps(kind):
+    issued = datetime(2026, 10, 13)
+    nonce = UUID(int=1)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        if kind == "cla":
+            cla_message(
+                netuid=118,
+                cla_version=1,
+                cla_sha256="a" * 64,
+                hotkey="fixture",
+                nonce=nonce,
+                issued_at=issued,
+            )
+        elif kind == "link":
+            github_link_message(
+                netuid=118,
+                hotkey="fixture",
+                github_user_id=1,
+                github_login="fixture",
+                link_attempt_id=nonce,
+                nonce=nonce,
+                issued_at=issued,
+                key_kind="hotkey",
+                signer="fixture",
+            )
+        else:
+            github_unlink_message(
+                netuid=118,
+                hotkey="fixture",
+                link_id=nonce,
+                nonce=nonce,
+                issued_at=issued,
+                key_kind="hotkey",
+                signer="fixture",
+            )
+
+
+def test_aware_signing_bytes_remain_pinned():
+    payload = cla_message(
+        netuid=118,
+        cla_version=1,
+        cla_sha256="a" * 64,
+        hotkey="fixture",
+        nonce=UUID(int=1),
+        issued_at=datetime(2026, 10, 13, tzinfo=UTC),
+    )
+    assert payload == (
+        b"ditto-cla:v1:118:1:"
+        + b"a" * 64
+        + b":fixture:00000000-0000-0000-0000-000000000001:2026-10-13T00:00:00.000000+00:00"
+    )

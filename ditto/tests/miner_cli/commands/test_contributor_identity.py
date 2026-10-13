@@ -147,6 +147,24 @@ def test_github_omitted_wallet_names_without_tty_never_prompt(capsys):
     api.start_github_link.assert_not_called()
 
 
+@pytest.mark.parametrize("after_unlink", [False, True])
+def test_unlink_signing_options_work_before_and_after_subcommand(after_unlink):
+    options = ["--coldkey", "W", "--hotkey", "H", "--key-kind", "coldkey", "--yes"]
+    argv = (
+        ["link-github", "unlink", *options]
+        if after_unlink
+        else ["link-github", *options, "unlink"]
+    )
+    parsed = _build_parser().parse_args(argv)
+    assert parsed.github_command == "unlink"
+    assert (parsed.coldkey_name, parsed.hotkey_name, parsed.key_kind, parsed.yes) == (
+        "W",
+        "H",
+        "coldkey",
+        True,
+    )
+
+
 @pytest.mark.parametrize("case", ["digest", "confirmation", "missing"])
 def test_cla_refuses_to_sign_unverified_or_unconfirmed_text(tmp_path, case):
     api = client()

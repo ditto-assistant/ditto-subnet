@@ -8,7 +8,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -272,28 +272,25 @@ async def control(
         .distinct()
         .subquery()
     )
-    active_count = int(
-        await session.scalar(select(func.count()).select_from(active)) or 0
-    )
-    signed_count = 0
-    if version:
-        signed_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(active)
-                .where(
-                    select(ClaSignature.signature_id)
-                    .where(
-                        ClaSignature.hotkey == active.c.hotkey,
-                        ClaSignature.netuid == request.app.state.config.chain.netuid,
-                        ClaSignature.cla_version == version.version,
-                        ClaSignature.cla_sha256 == version.sha256,
-                    )
-                    .exists()
-                )
-            )
-            or 0
+    signed = (
+        select(ClaSignature.signature_id)
+        .where(
+            ClaSignature.hotkey == active.c.hotkey,
+            ClaSignature.netuid == request.app.state.config.chain.netuid,
+            ClaSignature.cla_version == version.version,
+            ClaSignature.cla_sha256 == version.sha256,
         )
+        .exists()
+        if version
+        else false()
+    )
+    # One statement snapshot keeps signed <= total even during new uploads.
+    counts = (
+        await session.execute(
+            select(func.count(), func.count().filter(signed)).select_from(active)
+        )
+    ).one()
+    active_count, signed_count = map(int, counts)
     shadow_count = int(
         await session.scalar(
             select(func.count())

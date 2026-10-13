@@ -151,6 +151,7 @@ def upgrade() -> None:
         sa.Column("cla_version", sa.Integer(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
+    op.create_index("cla_shadow_uploads_netuid_idx", "cla_shadow_uploads", ["netuid"])
     op.create_table(
         "agent_cla_bindings",
         sa.Column("agent_id", sa.UUID(), primary_key=True),

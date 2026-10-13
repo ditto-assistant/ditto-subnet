@@ -1671,7 +1671,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool('set_cla_policy', {
     title: 'Set CLA rollout mode',
     description: 'Append a CLA policy revision using the exact expectedRevision, operator reason, and confirmation SET CLA GATE OFF, SET CLA GATE SHADOW or SET CLA GATE ENFORCE. Enforce requires published currently effective maintainer-approved text. Start off, measure adoption in shadow and announce the date before enforcing. Existing scored agents remain unchanged. Requires backroom:write.',
-    inputSchema: claPolicyWriteInputSchema, annotations: toolAnnotations('write'),
+    inputSchema: claPolicyWriteInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => updateClaPolicy(props.session.email, input)))
 
   registerTool('publish_cla_version', {

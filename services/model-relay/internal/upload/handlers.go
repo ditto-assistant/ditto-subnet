@@ -383,6 +383,10 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if signatureValid && !banned {
+		if d.Cfg.Chain.Netuid < 0 || int(int32(d.Cfg.Chain.Netuid)) != d.Cfg.Chain.Netuid {
+			d.dbError(w, r, "CLA gate lookup", errors.New("configured netuid is outside nonnegative int32 range"))
+			return
+		}
 		consent, qerr := d.Queries.GetClaUploadGate(r.Context(), postgres.GetClaUploadGateParams{
 			Netuid: int32(d.Cfg.Chain.Netuid), Hotkey: *payload.Hotkey,
 			ObservedAt: pgtype.Timestamptz{Time: d.now(), Valid: true},

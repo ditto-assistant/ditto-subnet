@@ -11902,6 +11902,7 @@ class ClaShadowUpload(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
+    __table_args__ = (Index("cla_shadow_uploads_netuid_idx", "netuid"),)
 
 
 class AgentClaBinding(Base):

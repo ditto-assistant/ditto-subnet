@@ -70,6 +70,17 @@ def add_subparser(
     unlink = subs.add_parser(
         "unlink", help="Sign a revocation of the exact active link."
     )
+    # Suppressed child defaults preserve values supplied before the subcommand.
+    unlink.add_argument(
+        "--wallet.name", "--coldkey", dest="coldkey_name", default=argparse.SUPPRESS
+    )
+    unlink.add_argument(
+        "--wallet.hotkey", "--hotkey", dest="hotkey_name", default=argparse.SUPPRESS
+    )
+    unlink.add_argument(
+        "--key-kind", choices=("hotkey", "coldkey"), default=argparse.SUPPRESS
+    )
+    unlink.add_argument("--yes", action="store_true", default=argparse.SUPPRESS)
     unlink.set_defaults(func=run, github_command="unlink")
     return parser
 

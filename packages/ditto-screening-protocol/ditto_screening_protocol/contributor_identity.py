@@ -173,6 +173,12 @@ class ClaPublishRequest(WireModel):
     confirmation: str
 
 
+def _issued_stamp(issued_at: datetime) -> str:
+    if issued_at.utcoffset() is None:
+        raise ValueError("issued_at must be timezone-aware")
+    return issued_at.astimezone(UTC).isoformat(timespec="microseconds")
+
+
 def github_link_message(
     *,
     netuid: int,
@@ -185,7 +191,7 @@ def github_link_message(
     key_kind: KeyKind,
     signer: str,
 ) -> bytes:
-    issued = issued_at.astimezone(UTC).isoformat(timespec="microseconds")
+    issued = _issued_stamp(issued_at)
     return (
         f"ditto-github-link:v1:{netuid}:{hotkey}:{github_user_id}:{github_login}:{link_attempt_id}:{nonce}:{issued}:{key_kind}:{signer}"
     ).encode()
@@ -201,7 +207,7 @@ def github_unlink_message(
     key_kind: KeyKind,
     signer: str,
 ) -> bytes:
-    issued = issued_at.astimezone(UTC).isoformat(timespec="microseconds")
+    issued = _issued_stamp(issued_at)
     return (
         f"ditto-github-unlink:v1:{netuid}:{hotkey}:{link_id}:{nonce}:{issued}:{key_kind}:{signer}"
     ).encode()
@@ -216,7 +222,7 @@ def cla_message(
     nonce: UUID,
     issued_at: datetime,
 ) -> bytes:
-    issued = issued_at.astimezone(UTC).isoformat(timespec="microseconds")
+    issued = _issued_stamp(issued_at)
     return (
         f"ditto-cla:v1:{netuid}:{cla_version}:{cla_sha256}:{hotkey}:{nonce}:{issued}"
     ).encode()

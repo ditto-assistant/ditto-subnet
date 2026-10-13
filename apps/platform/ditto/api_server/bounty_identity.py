@@ -1,12 +1,14 @@
-"""Mandatory identity/consent guard for the proposed bounty-claim engine.
+"""Mandatory two-phase identity/consent guard for the proposed claim engine.
 
-This module does not choose a payee. The claim's signed coldkey and its
-finalized Owner(hotkey) binding remain the payment authority.
+Prepare GitHub evidence without an acceptance transaction, then revalidate it
+under locks in the transaction that records the claim. Neither phase chooses a
+payee; the signed coldkey and finalized Owner(hotkey) remain payment authority.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -17,13 +19,28 @@ from ditto.db.queries.contributor_identity import (
 )
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from ditto.api_server.github_link import GithubLinkClient
+
+_PREPARED = object()
+_MAX_EVIDENCE_AGE = timedelta(minutes=2)
 
 
 class BountyIdentityRejected(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class PreparedBountyIdentity:
+    netuid: int
+    hotkey: str
+    github_link_id: UUID
+    github_user_id: int
+    recorded_login: str
+    github_login: str
+    verified_at: datetime
+    _seal: object = field(repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -35,41 +52,77 @@ class VerifiedBountyContributor:
     cla_signature_id: UUID | None
 
 
+async def prepare_bounty_identity(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    netuid: int,
+    hotkey: str,
+    github_login: str,
+    github: GithubLinkClient,
+) -> PreparedBountyIdentity:
+    """Read the immutable proof, release its connection, then query GitHub."""
+    async with session_maker() as session:
+        link = await active_github_link(session, netuid=netuid, hotkey=hotkey)
+        if link is None or link.github_login.casefold() != github_login.casefold():
+            raise BountyIdentityRejected(
+                "github_login must match the hotkey's active verified link; "
+                "run `ditto link-github`"
+            )
+        link_id, user_id, recorded_login = (
+            link.link_id,
+            link.github_user_id,
+            link.github_login,
+        )
+    identity = await github.public_identity(recorded_login)
+    if (
+        identity.user_id != user_id
+        or identity.login.casefold() != github_login.casefold()
+    ):
+        raise BountyIdentityRejected(
+            "GitHub login was renamed or reassigned; re-link before claiming"
+        )
+    return PreparedBountyIdentity(
+        netuid=netuid,
+        hotkey=hotkey,
+        github_link_id=link_id,
+        github_user_id=user_id,
+        recorded_login=recorded_login,
+        github_login=identity.login,
+        verified_at=datetime.now(UTC),
+        _seal=_PREPARED,
+    )
+
+
 async def require_verified_bounty_contributor(
     session: AsyncSession,
     *,
     netuid: int,
     hotkey: str,
     github_login: str,
-    github: GithubLinkClient,
+    evidence: PreparedBountyIdentity,
 ) -> VerifiedBountyContributor:
-    link = await active_github_link(session, netuid=netuid, hotkey=hotkey)
-    if link is None or link.github_login.casefold() != github_login.casefold():
-        raise BountyIdentityRejected(
-            "github_login must match the hotkey's active verified link; "
-            "run `ditto link-github`"
-        )
-    identity = await github.public_identity(link.github_login)
+    """Use only locally prepared evidence, never a client-supplied JSON object."""
+    now = datetime.now(UTC)
     if (
-        identity.user_id != link.github_user_id
-        or identity.login.casefold() != github_login.casefold()
+        evidence._seal is not _PREPARED
+        or evidence.netuid != netuid
+        or evidence.hotkey != hotkey
+        or evidence.github_login.casefold() != github_login.casefold()
+        or evidence.verified_at.utcoffset() is None
+        or evidence.verified_at > now
+        or now - evidence.verified_at > _MAX_EVIDENCE_AGE
     ):
-        raise BountyIdentityRejected(
-            "GitHub login was renamed or reassigned; re-link before claiming"
-        )
-    # Do not block link writers on the external request. Caller records the
-    # claim in this transaction, after revalidating the exact proof under lock.
+        raise BountyIdentityRejected("prepare fresh GitHub evidence for this claim")
     await lock_identity_writes(session, namespace="github-link")
-    current_link = await active_github_link(session, netuid=netuid, hotkey=hotkey)
-    if current_link is None or (
-        current_link.link_id,
-        current_link.github_user_id,
-        current_link.github_login,
-    ) != (link.link_id, link.github_user_id, link.github_login):
+    link = await active_github_link(session, netuid=netuid, hotkey=hotkey)
+    if link is None or (
+        link.link_id,
+        link.github_user_id,
+        link.github_login,
+    ) != (evidence.github_link_id, evidence.github_user_id, evidence.recorded_login):
         raise BountyIdentityRejected(
             "verified GitHub link changed during verification; re-link or retry"
         )
-    link = current_link
     await lock_identity_writes(session, namespace="cla-policy")
     consent = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
     if not consent.allowed:
@@ -78,6 +131,6 @@ async def require_verified_bounty_contributor(
         hotkey=hotkey,
         github_link_id=link.link_id,
         github_user_id=link.github_user_id,
-        github_login=identity.login,
+        github_login=evidence.github_login,
         cla_signature_id=consent.signature_id,
     )

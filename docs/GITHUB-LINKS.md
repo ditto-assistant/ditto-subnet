@@ -70,9 +70,13 @@ Backroom provides `get_miner_github_link` and `get_github_contributor_status`
 with `backroom:read`. The latter combines the linked hotkey with its CLA status.
 
 Bounty claiming remains a proposed subsystem (#2045 / #2074). Its acceptance
-transaction must call `require_verified_bounty_contributor` from
+flow must call `prepare_bounty_identity` from
 `apps/platform/ditto/api_server/bounty_identity.py` after verifying the signed
-claim and before recording it. This guard rejects absent links, mismatched
+claim, before opening its acceptance transaction. This releases the temporary
+proof-read connection before contacting GitHub. Pass that helper's in-process
+evidence to `require_verified_bounty_contributor` inside the transaction that
+records the claim; never construct evidence from client JSON. Evidence expires
+after two minutes. The guard rejects absent links, mismatched
 logins, renamed/reassigned logins, unavailable GitHub evidence and missing
 current consent when CLA enforcement is enabled. It checks the public login's
 current numeric id against the OAuth-proven id. Call it in the same transaction

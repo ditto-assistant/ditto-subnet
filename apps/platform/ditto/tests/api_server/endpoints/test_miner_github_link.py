@@ -536,6 +536,7 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
 ):
     from ditto.api_server.bounty_identity import (
         BountyIdentityRejected,
+        prepare_bounty_identity,
         require_verified_bounty_contributor,
     )
 
@@ -549,35 +550,60 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
         json=signed_link(alice, started["attempt_id"]),
     )
     assert linked.status_code == 200, linked.text
-    async with session_maker() as session, session.begin():
-        verified = await require_verified_bounty_contributor(
-            session,
+    original = app.state.github_link.public_identity
+
+    async def lookup_without_connection(login):
+        assert session_maker.kw["bind"].sync_engine.pool.checkedout() == 0
+        return await original(login)
+
+    app.state.github_link.public_identity = lookup_without_connection
+
+    async def verify(login):
+        evidence = await prepare_bounty_identity(
+            session_maker,
             netuid=118,
             hotkey=alice.ss58_address,
-            github_login=provider.login,
+            github_login=login,
             github=app.state.github_link,
         )
-        assert verified.github_user_id == 100 and verified.hotkey == alice.ss58_address
-        assert not hasattr(verified, "coldkey")  # Identity never selects a payee.
-    async with session_maker() as session, session.begin():
-        with pytest.raises(BountyIdentityRejected, match="active verified link"):
-            await require_verified_bounty_contributor(
+        async with session_maker() as session, session.begin():
+            return await require_verified_bounty_contributor(
                 session,
                 netuid=118,
                 hotkey=alice.ss58_address,
-                github_login="victim",
-                github=app.state.github_link,
+                github_login=login,
+                evidence=evidence,
             )
-    provider.user_id = 200  # Someone else has re-registered the recorded login.
-    async with session_maker() as session, session.begin():
-        with pytest.raises(BountyIdentityRejected, match="renamed or reassigned"):
-            await require_verified_bounty_contributor(
-                session,
-                netuid=118,
-                hotkey=alice.ss58_address,
-                github_login=provider.login,
-                github=app.state.github_link,
-            )
+
+    verified = await verify(provider.login)
+    assert verified.github_user_id == 100 and verified.hotkey == alice.ss58_address
+    assert not hasattr(verified, "coldkey")
+    evidence = await prepare_bounty_identity(
+        session_maker,
+        netuid=118,
+        hotkey=alice.ss58_address,
+        github_login=provider.login,
+        github=app.state.github_link,
+    )
+    for invalid in (
+        replace(evidence, _seal=object()),
+        replace(evidence, verified_at=datetime.now(UTC) - timedelta(minutes=3)),
+        replace(evidence, netuid=119),
+    ):
+        async with session_maker() as session, session.begin():
+            with pytest.raises(BountyIdentityRejected, match="fresh GitHub evidence"):
+                await require_verified_bounty_contributor(
+                    session,
+                    netuid=118,
+                    hotkey=alice.ss58_address,
+                    github_login=provider.login,
+                    evidence=invalid,
+                )
+    with pytest.raises(BountyIdentityRejected, match="active verified link"):
+        await verify("victim")
+    provider.user_id = 200
+    with pytest.raises(BountyIdentityRejected, match="renamed or reassigned"):
+        await verify(provider.login)
 
 
 async def test_concurrent_starts_cannot_exceed_five_pending_attempts(
@@ -688,6 +714,7 @@ async def test_bounty_identity_rechecks_link_after_network_io(
 ):
     from ditto.api_server.bounty_identity import (
         BountyIdentityRejected,
+        prepare_bounty_identity,
         require_verified_bounty_contributor,
     )
 
@@ -714,13 +741,20 @@ async def test_bounty_identity_rechecks_link_after_network_io(
     monkeypatch.setattr(app.state.github_link, "public_identity", slow_identity)
 
     async def accept_claim():
+        evidence = await prepare_bounty_identity(
+            session_maker,
+            netuid=118,
+            hotkey=alice.ss58_address,
+            github_login="miner-fixture",
+            github=app.state.github_link,
+        )
         async with session_maker() as session, session.begin():
             return await require_verified_bounty_contributor(
                 session,
                 netuid=118,
                 hotkey=alice.ss58_address,
                 github_login="miner-fixture",
-                github=app.state.github_link,
+                evidence=evidence,
             )
 
     task = asyncio.create_task(accept_claim())

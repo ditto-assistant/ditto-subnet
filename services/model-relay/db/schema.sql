@@ -9279,6 +9279,13 @@ CREATE UNIQUE INDEX burn_settings_scope_revision_idx ON public.burn_settings_rev
 
 
 --
+-- Name: cla_shadow_uploads_netuid_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX cla_shadow_uploads_netuid_idx ON public.cla_shadow_uploads USING btree (netuid);
+
+
+--
 -- Name: cla_signatures_hotkey_version_idx; Type: INDEX; Schema: public; Owner: -
 --
 

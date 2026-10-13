@@ -90,7 +90,7 @@ opt in by renewing against it.
   label. The acceptance guard revalidates that label against the numeric id,
   rejecting renamed or reassigned logins until the contributor re-links.
   Use `ditto link-github` first; see [GitHub links](GITHUB-LINKS.md) and its
-  `require_verified_bounty_contributor` integration contract. The claim engine
+  `prepare_bounty_identity` / `require_verified_bounty_contributor` integration contract. The claim engine
   records the verified link id and user id, never a self-asserted label alone.
   CLA consent follows the effective rollout mode. Neither identity nor consent
   changes the signed payee coldkey. A PR opened by another account remains
