@@ -4381,7 +4381,7 @@ func (b *inferenceBroker) proxy(
 		// on 5CFtzzb4's intermittent skew; it is infrastructure, and the
 		// unattributed branch already lands on model_relay_unavailable, which
 		// every deployed validator retries without fault.
-		staleRefusal := trustedChatHandler == nil &&
+		staleRefusal := legacyGateway == "" && trustedChatHandler == nil &&
 			admissionCode(responseStatus, platformRejectionMessage(responseBody)) == "stale_session"
 		agentAttributedRejection := (trustedChatHandler == nil || preReservationReaderRejection) && !staleRefusal
 		session.mu.Lock()
