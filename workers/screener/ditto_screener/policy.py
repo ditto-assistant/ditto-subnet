@@ -297,6 +297,23 @@ class SourceReviewObservation:
     """Typed in-progress determinations (SourceReviewNote shape). Recorded
     DURING review so a budget- or fault-terminated attempt still ships the
     evidence it accumulated; at exhaustion they decide the gradient verdict."""
+    failure_subcode: str | None = None
+    """Bounded slug naming why a failed review stopped (for example the
+    provider's own error code behind ``l3-adjudicator-model-provider-fault``).
+    Private diagnostics only; it never changes the outcome."""
+
+
+_FAILURE_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.:-]{0,79}")
+
+
+def _failure_subcode_suffix(subcode: str | None) -> str:
+    """Render a failure subcode for the private detail, or nothing if unsafe."""
+    if subcode is None:
+        return ""
+    normalized = subcode.strip().lower()
+    if not _FAILURE_SUBCODE_RE.fullmatch(normalized):
+        return ""
+    return f" (subcode={normalized})"
 
 
 def source_review_low_clearance_allowed(
@@ -353,6 +370,7 @@ class ModuleResult:
     review_audit: Mapping[str, object] | None = None
     adjudication: Mapping[str, object] | None = None
     review_notes: tuple[Mapping[str, object], ...] = ()
+    failure_subcode: str | None = None
 
 
 class PolicyModule(Protocol):
@@ -821,6 +839,7 @@ class AgenticSourceReviewModule(_BaseModule):
                 ),
                 review_audit=observation.review_audit,
                 review_notes=review_notes,
+                failure_subcode=observation.failure_subcode,
             )
         if observation.risk_level == "low" and set(observation.categories) <= (
             {"none"} | _ADVISORY_SOURCE_CATEGORIES
@@ -1307,6 +1326,7 @@ class PolicyEngine:
                             if result.evidence
                             else f"policy-{terminal.value.replace('_', '-')}"
                         ),
+                        failure_subcode=result.failure_subcode,
                     )
                 if result.disposition == ModuleDisposition.TRIPWIRE:
                     selected = True
@@ -1478,6 +1498,7 @@ class PolicyEngine:
         review_notes: tuple[Mapping[str, object], ...] = (),
         policy_version: int = SCREENING_POLICY_VERSION,
         reason_code: str | None = None,
+        failure_subcode: str | None = None,
     ) -> ScreeningDecision:
         bounded = _bounded_reason_evidence(evidence, reason_code=reason_code)
         detail = ""
@@ -1489,6 +1510,11 @@ class PolicyEngine:
             detail = "private policy audit inconclusive"
         elif outcome == ScreeningOutcome.PASS_INCONCLUSIVE:
             detail = "bounded source review inconclusive; admitted for scoring"
+        if detail and outcome != ScreeningOutcome.QUARANTINE:
+            # A parked review otherwise reaches Platform with no hint of why
+            # it stopped, so a deterministic provider rejection and a transient
+            # outage both read as the same opaque code.
+            detail += _failure_subcode_suffix(failure_subcode)
         # An enforced source adjudication may clear its module before a later,
         # independent module selects a different terminal outcome.  In that
         # case the adjudication is no longer the authority for the overall
@@ -1622,6 +1648,7 @@ class PolicyEngine:
                 review_notes=observation.notes,
                 policy_version=policy_version,
                 reason_code=observation.error_code or "source-review-inconclusive",
+                failure_subcode=observation.failure_subcode,
             )
         if observation.risk_level == "low" and not source_review_low_clearance_allowed(
             observation, policy_version=policy_version

@@ -147,6 +147,49 @@ async def test_v13_terminal_l2_inconclusive_preserves_bounded_audit() -> None:
 
 
 @pytest.mark.parametrize(
+    ("subcode", "expected_detail"),
+    [
+        (
+            "context_length_exceeded",
+            "private policy audit inconclusive (subcode=context_length_exceeded)",
+        ),
+        ("free text with spaces", "private policy audit inconclusive"),
+        (None, "private policy audit inconclusive"),
+    ],
+)
+async def test_parked_provider_fault_names_its_bounded_subcode(
+    subcode: str | None, expected_detail: str
+) -> None:
+    """A parked L3 fault must say why it stopped, not only that it did."""
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l3-adjudicator-model-provider-fault",
+            failure_disposition="inconclusive",
+            failure_subcode=subcode,
+        )
+
+    async def challenge(*_args: object) -> ChallengeObservation:
+        raise AssertionError("inconclusive source review must stop before challenge")
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="l3-provider-fault-subcode",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+    decision = await engine.evaluate(_context(challenge, review))
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert decision.reason_code == "l3-adjudicator-model-provider-fault"
+    assert decision.detail == expected_detail
+
+
+@pytest.mark.parametrize(
     ("exhausted", "expected_outcome", "expected_reason"),
     [
         (True, ScreeningOutcome.INCONCLUSIVE, "source-review-inconclusive"),

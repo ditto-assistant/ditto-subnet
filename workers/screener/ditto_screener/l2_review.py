@@ -4865,7 +4865,8 @@ class TerraSolSourceReviewAgent:
                 raise failure(
                     "model-provider-fault"
                     if _relayed_provider_fault(payload)
-                    else "model-response-contract"
+                    else "model-response-contract",
+                    _response_fault_subcode(payload),
                 ) from error
             usage = _add_usage(usage, turn_usage)
             if self._terminal_verdict_required:
@@ -6283,11 +6284,18 @@ class LayeredSourceReviewAgent:
             self._shadow_results[attempt_id] = result
             report(10)
             return l1
-        if result.observation.failure_disposition == "pass_inconclusive":
+        observation = result.observation
+        if (
+            not observation.ok
+            and result.failure_subcode
+            and observation.failure_subcode is None
+        ):
+            observation = replace(observation, failure_subcode=result.failure_subcode)
+        if observation.failure_disposition == "pass_inconclusive":
             # Preserve the original bounded L1 lead as partial evidence; the
             # exhausted L2 trajectory has no safe replacement finding.
             carried = replace(
-                result.observation,
+                observation,
                 finding_digest=l1.finding_digest,
                 categories=l1.categories,
                 finding=l1.finding,
@@ -6297,7 +6305,7 @@ class LayeredSourceReviewAgent:
         return await settle(
             _carry_l1_notes(
                 _enforce_causal_authority(
-                    result.observation, clearance_path=result.clearance_path
+                    observation, clearance_path=result.clearance_path
                 ),
                 l1,
             )
@@ -7354,6 +7362,42 @@ def _relayed_provider_fault(payload: object) -> bool:
     return isinstance(payload, dict) and bool(
         payload.get("error") or payload.get("error_type")
     )
+
+
+_RESPONSE_FAULT_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
+
+
+def _response_fault_subcode(payload: object) -> str | None:
+    """Name the provider's own fault code from an unusable 200 body.
+
+    Only a bounded slug survives (``server_error``, ``429``,
+    ``context_length_exceeded``); provider messages, model names and request
+    content never do. It tells a deterministic rejection that recurs on every
+    retry apart from a transient outage.
+    """
+    if not isinstance(payload, dict):
+        return None
+    candidates: list[object] = []
+    error = payload.get("error")
+    if isinstance(error, Mapping):
+        candidates.extend(
+            (error.get("code"), error.get("type"), error.get("error_type"))
+        )
+    elif isinstance(error, str):
+        candidates.append(error)
+    candidates.append(payload.get("error_type"))
+    details = payload.get("incomplete_details")
+    if isinstance(details, Mapping):
+        candidates.append(details.get("reason"))
+    present = False
+    for candidate in candidates:
+        if isinstance(candidate, bool) or candidate is None or candidate == "":
+            continue
+        present = True
+        normalized = str(candidate).strip().lower()
+        if _RESPONSE_FAULT_SUBCODE_RE.fullmatch(normalized):
+            return normalized
+    return "unrecognized" if present else None
 
 
 def _response_contract_detail(payload: object) -> str:
