@@ -61,7 +61,12 @@ Production uses Taostats. Its configuration needs no separate archive secret:
    health; absence means a Platform release that predates the field.
 3. Compare successive `collector_cursor_block` readings and
    `collector_blocked_reason`. Catch-up requires sustained advancement faster
-   than the chain, without rate-limit blocking reasons.
+   than the chain, without rate-limit blocking reasons. The reason is cleared
+   by each successful sweep, so read it several times. `server rejected
+   WebSocket connection: HTTP 401` from the first provider, while Taostats
+   validator-name enrichment still refreshes, means the key is valid but its
+   plan does not include archive RPC (a paid tier); the collector then falls
+   through to the throttled public archives.
 4. Once the cursor passes a champion's completed payout, verify the exact
    agent ID and artifact SHA in the payout receipt rows, then the agent's
    public artifact status. Release time remains the verified payout timestamp
