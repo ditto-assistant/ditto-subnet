@@ -21,7 +21,7 @@ Each attempt has a configurable 10-second connection-plus-query deadline via
 | Try-list role | Provider | Free archive result | Paid/archive option | Auth mode |
 | --- | --- | --- | --- | --- |
 | Public fallback 1 | [OTF](https://www.bittensor.com/docs/guides/running-a-node) | Verified; documented for occasional historical reads | Self-hosted node | `none` |
-| Public fallback 2 / configured | [OnFinality](https://onfinality.io/en/networks/bittensor-finney) | Verified public WSS; rate-limited | Authenticated archive endpoint | `apikey` |
+| Public fallback 2 / configured | [OnFinality](https://onfinality.io/en/networks/bittensor-finney) | Verified public WSS; rate-limited | Authenticated archive endpoint | provider-issued URL |
 | Configured | [Taostats](https://docs.taostats.io/reference/hosted-rpc-connectivity) | API key required | Hosted Finney archive RPC | `query` |
 | Configured | [Dwellir](https://www.dwellir.com/networks/bittensor) | Published test endpoint was rate-limited during the probe | Authenticated Bittensor endpoint | `path` |
 | Configured | [Blockmachine](https://blockmachine.io/bittensor-rpc) | Public endpoint returned pruned state for the probe block | Standard and higher advertise archive guarantees | provider-issued URL |
@@ -38,47 +38,35 @@ API key directly from Secret Manager secret
 the secret is absent or the configured provider fails, the same request falls
 through to the credential-free archives.
 
-`query` attaches the key as `authorization=...` (the existing Taostats
-convention); `apikey` attaches it as `apikey=...`, as documented by
-[OnFinality's Enhanced API Service](https://onfinality.atlassian.net/wiki/spaces/SUPPORT/pages/1648525360/).
-Both modes encode the key and remove existing `authorization` and `apikey`
-parameters while preserving unrelated query pairs in their original encoded
-form. `path` appends an
-encoded segment; `none` does not attach a key. Keep the configured URL keyless.
-
 ## Recovering stalled champion source releases
 
-The source-emission collector uses the same archive provider configuration.
-Historical payout proofs need sufficient archive capacity to replay faster
-than finalized blocks arrive. Merely configuring a credential does not prove
-that the provider supports the needed history or throughput. See #2850 for the
-backlog and #2851 for provisioning; #2852 supplies catch-up batching and shared
-reads.
+The source-emission collector reads the same try list. It needs an archive
+that replays historical blocks faster than Finney finalizes them (roughly five
+per minute); the free public archives throttle long before that. See #2850 for
+the backlog and #2851 for provider selection.
 
-1. Provision an archive plan with adequate historical-read capacity. Store
-   its key in `platform-subtensor-archive-rpc-api-key`; do not put it in a
-   GitHub variable or the provider URL.
-2. Set the existing GitHub repository variables `SUBTENSOR_ARCHIVE_RPC_URL`
-   to the provider-issued keyless WSS endpoint and
-   `SUBTENSOR_ARCHIVE_RPC_AUTH_MODE` to the provider's mode (`apikey` for
-   OnFinality). The Platform deployment forwards both settings and loads the
-   key from Secret Manager on the VM.
-3. Deploy the Platform and Backroom changes together. Read
-   `get_source_release_policy` through the authenticated Backroom MCP. Its
-   `release_gate.archive_provider` reports the running configuration's host,
-   auth mode, `configured`, and `credential_configured` without returning a
-   URL or key. Absence on an older release means unknown. These fields describe
-   configuration, not provider health or successful authentication.
-4. Compare successive durable `collector_cursor_block` values and blocking
-   reasons. During catch-up it must sustain advancement faster than the chain
-   (roughly five blocks per minute), then reach the relevant completed payout.
-   Verify the exact agent ID and artifact SHA in the payout receipt rows;
-   same-hotkey submissions do not share eligibility.
-5. Check the exact agent's public `source_artifact` status and artifact
-   endpoint after proof resolution. Eligibility remains the verified completed
-   payout timestamp plus the configured embargo. Crown age and positive
-   weights alone never substitute for that proof; delayed collection does not
-   restart the embargo at the collection time.
+Production uses Taostats. Its configuration needs no separate archive secret:
 
-This configuration does not reset the durable cursor, synthesize a payout, or
-change source-disclosure policy.
+1. In the `prod` GitHub Environment, set `SUBTENSOR_ARCHIVE_RPC_URL` to
+   `wss://api.taostats.io/api/v1/rpc/ws/finney_archive` and leave
+   `SUBTENSOR_ARCHIVE_RPC_AUTH_MODE` unset or `query`. For that exact URL,
+   Platform reuses `DITTO_TAOSTATS_API_KEY`, which deploys already load from
+   `platform-taostats-api-key`. Do not create
+   `platform-subtensor-archive-rpc-api-key` for Taostats; an explicit archive
+   key takes precedence over the reused one.
+2. Deploy Platform, then read `get_source_release_policy` through Backroom.
+   `release_gate.archive_provider` should report host `api.taostats.io`, auth
+   mode `query`, and `credential_configured: true`. It never returns the URL
+   or key, and it describes the served configuration rather than provider
+   health; absence means a Platform release that predates the field.
+3. Compare successive `collector_cursor_block` readings and
+   `collector_blocked_reason`. Catch-up requires sustained advancement faster
+   than the chain, without rate-limit blocking reasons.
+4. Once the cursor passes a champion's completed payout, verify the exact
+   agent ID and artifact SHA in the payout receipt rows, then the agent's
+   public artifact status. Release time remains the verified payout timestamp
+   plus the configured embargo; collection delay does not restart it, and
+   crown age or positive weights never substitute for the proof.
+
+Configuring a provider does not reset the durable cursor, synthesize a payout,
+or change source-disclosure policy.

@@ -7,7 +7,7 @@ import logging
 import time
 from contextlib import asynccontextmanager, nullcontext
 from typing import TYPE_CHECKING, Any, Literal
-from urllib.parse import quote, unquote_plus, urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit
 
 from ditto.chain.errors import (
     ChainAuthError,
@@ -1573,18 +1573,8 @@ class ChainClient:
             return url
         if auth_mode == "path":
             return f"{url.rstrip('/')}/{quote(api_key, safe='')}"
-        parameter = "apikey" if auth_mode == "apikey" else "authorization"
-        parts = urlsplit(url)
-        # Remove both credential conventions when switching modes. Preserve
-        # other pairs verbatim: re-encoding can break provider-specific values.
-        query = [
-            pair
-            for pair in parts.query.split("&")
-            if pair
-            and unquote_plus(pair.partition("=")[0]) not in {"authorization", "apikey"}
-        ]
-        query.append(f"{parameter}={quote(api_key, safe='')}")
-        return urlunsplit(parts._replace(query="&".join(query)))
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}authorization={quote(api_key, safe='')}"
 
     def _historical_substrate_urls(self) -> tuple[str, ...]:
         """Return configured archive first, then credential-free fallbacks.

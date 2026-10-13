@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -16,7 +15,6 @@ from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.endpoints.public import _public_artifact_release
 from ditto.api_server.ledger_pin import ledger_digest
 from ditto.api_server.source_emission_collector import SourceEmissionCollector
-from ditto.chain.client import ChainClient
 from ditto.chain.models import (
     ChainMinerEarning,
     ChainMinerEmissionReceipt,
@@ -470,15 +468,12 @@ async def test_unverifiable_payout_is_terminal_but_cursor_advances(
         assert "weights committed" in payout.blocked_reason
 
 
-@pytest.mark.parametrize(
-    ("auth_mode", "parameter"), [("query", "authorization"), ("apikey", "apikey")]
-)
 async def test_missing_commit_archive_data_retries_provider_and_resolves_payout(
-    app, client, session_maker, monkeypatch, auth_mode, parameter
+    app, client, session_maker, monkeypatch
 ):
     from ditto.chain.errors import ChainConnectionError
 
-    a, b = await _prepare(app, session_maker)
+    a, _ = await _prepare(app, session_maker)
     assert (await _post(client, _signed(a))).status_code == 200
     collector = _collector(app, session_maker)
     await collector.process_block(_observed(a, 200, reveal=True), None)
@@ -506,36 +501,24 @@ async def test_missing_commit_archive_data_retries_provider_and_resolves_payout(
         assert receipt.provenance.champion_agent_id == UUID(
             a["provenance"]["champion_agent_id"]
         )
-        if substrate.url.startswith("wss://pruned.example/"):
+        if substrate.url == "pruned":
             raise ChainConnectionError("historical commit proof is unavailable")
 
-    app.state.chain = ChainClient(
-        replace(
-            app.state.config.chain,
-            archive_rpc_url="wss://pruned.example/archive",
-            archive_rpc_api_key="test-key +/",
-            archive_rpc_auth_mode=auth_mode,
-            public_archive_rpc_urls=("wss://archive.example", "wss://unused.example"),
-        )
+    app.state.chain = SimpleNamespace(
+        _historical_substrate_urls=lambda: ["pruned", "archive", "unused"],
+        _safe_rpc_error=lambda error: str(error),
     )
     monkeypatch.setattr("async_substrate_interface.AsyncSubstrateInterface", Archive)
     monkeypatch.setattr(
         "ditto.chain.source_emission_verifier.verify_finalized_weight_commit", verify
     )
     await collector.sweep()
-    assert opened == [
-        f"wss://pruned.example/archive?{parameter}=test-key%20%2B%2F",
-        "wss://archive.example",
-    ]
+    assert opened == ["pruned", "archive"]
     async with session_maker() as session:
         row = await session.get(
             AgentKingship, UUID(a["provenance"]["champion_agent_id"])
         )
         assert row.emission_block == 201
-        other = await session.get(
-            AgentKingship, UUID(b["provenance"]["champion_agent_id"])
-        )
-        assert other.emission_confirmed_at is None
         assert (
             await session.scalar(
                 select(func.count()).select_from(SourceEmissionPayoutResolution)

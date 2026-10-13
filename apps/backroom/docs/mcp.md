@@ -122,7 +122,7 @@ burn.
 `get_source_release_policy` reads the public source policy and completed-payout
 gate diagnostics. `release_gate.archive_provider`, when present, reports the
 running Platform's configured archive host, authentication mode (`none`,
-`query`, `path`, or `apikey`), and credential presence. It never returns the
+`query`, or `path`), and credential presence. It never returns the
 provider URL or key. This is configuration evidence, not a provider health or
 authentication result; older responses without the field mean unknown. Use
 the durable collector cursor and exact-agent payout receipts to verify source

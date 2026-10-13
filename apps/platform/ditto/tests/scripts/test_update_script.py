@@ -10,8 +10,6 @@ from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).parents[3]
 
 # The revision the fake checkout resolves to, and the (older) revision the
@@ -334,10 +332,8 @@ def test_update_keeps_existing_enrichment_when_secret_is_unavailable(
     assert "Taostats key unavailable" in result.stderr
 
 
-@pytest.mark.parametrize("auth_mode", ["query", "apikey"])
 def test_update_loads_optional_archive_key_without_logging_value(
     tmp_path: Path,
-    auth_mode: str,
 ) -> None:
     api_key = "archive-test:key-must-stay-secret"
     result, base_env, deploy_env, deploy_mode = _run_update(
@@ -351,7 +347,7 @@ def test_update_loads_optional_archive_key_without_logging_value(
         ),
         deploy_env_vars={
             "SUBTENSOR_ARCHIVE_RPC_URL": "wss://paid.example/archive",
-            "SUBTENSOR_ARCHIVE_RPC_AUTH_MODE": auth_mode,
+            "SUBTENSOR_ARCHIVE_RPC_AUTH_MODE": "query",
         },
     )
 
@@ -360,7 +356,7 @@ def test_update_loads_optional_archive_key_without_logging_value(
     assert deploy_mode == 0o600
     assert f"SUBTENSOR_ARCHIVE_RPC_API_KEY={api_key}" in deploy_env
     assert "SUBTENSOR_ARCHIVE_RPC_URL=wss://paid.example/archive" in deploy_env
-    assert f"SUBTENSOR_ARCHIVE_RPC_AUTH_MODE={auth_mode}" in deploy_env
+    assert "SUBTENSOR_ARCHIVE_RPC_AUTH_MODE=query" in deploy_env
     assert api_key not in result.stdout
     assert api_key not in result.stderr
 

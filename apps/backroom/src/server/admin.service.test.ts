@@ -1665,7 +1665,7 @@ describe('artifact release administration', () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const release_gate = {
       version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false,
-      archive_provider: { configured: true, host: 'archive.example', auth_mode: 'apikey', credential_configured: true },
+      archive_provider: { configured: true, host: 'api.taostats.io', auth_mode: 'query', credential_configured: true },
       receipt_diagnostics: [{ report: {
         schema_version: schemaVersion, validator_hotkey: 'validator', netuid: 118, timestamp: 100,
         observation: { submission_status: 'accepted', submission_observed_at: 90,

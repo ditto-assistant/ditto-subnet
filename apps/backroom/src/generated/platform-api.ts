@@ -32624,7 +32624,7 @@ export interface components {
              * Auth Mode
              * @enum {string}
              */
-            auth_mode: "none" | "query" | "path" | "apikey";
+            auth_mode: "none" | "query" | "path";
             /** Configured */
             configured: boolean;
             /** Credential Configured */

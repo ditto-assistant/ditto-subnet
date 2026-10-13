@@ -1194,7 +1194,7 @@ export const sourceReleaseGateSchema = z.object({
   archive_provider: z.object({
     configured: z.boolean(),
     host: z.string().nullable(),
-    auth_mode: z.enum(['none', 'query', 'path', 'apikey']),
+    auth_mode: z.enum(['none', 'query', 'path']),
     credential_configured: z.boolean(),
   }).nullish(),
   collector_cursor_block: z.number().nullable().optional(),

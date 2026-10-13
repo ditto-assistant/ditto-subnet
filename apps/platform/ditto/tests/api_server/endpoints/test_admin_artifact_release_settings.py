@@ -47,11 +47,17 @@ def _payload(hours: int, expected: int = 0) -> dict[str, object]:
     ("url", "key", "mode", "expected_host"),
     [
         (None, None, "query", None),
-        ("wss://archive.example/rpc", None, "apikey", "archive.example"),
+        (
+            "wss://api.taostats.io/api/v1/rpc/ws/finney_archive",
+            "private-api-key",
+            "query",
+            "api.taostats.io",
+        ),
+        ("wss://archive.example/rpc", None, "query", "archive.example"),
         (
             "wss://private-user:private-password@archive.example/private-path?private-query=value",
             "private-api-key",
-            "apikey",
+            "query",
             "archive.example",
         ),
         ("wss://archive.example/rpc", "private-api-key", "none", "archive.example"),

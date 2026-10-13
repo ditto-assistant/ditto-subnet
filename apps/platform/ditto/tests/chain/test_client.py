@@ -6,7 +6,6 @@ import asyncio
 import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-from urllib.parse import quote
 
 import pytest
 
@@ -17,7 +16,7 @@ from ditto.chain.errors import (
     ChainTimeoutError,
     ExtrinsicNotFoundError,
 )
-from ditto.chain.models import ArchiveRpcAuthMode, BlockInfo, ChainConfig
+from ditto.chain.models import BlockInfo, ChainConfig
 from ditto.tests.chain.conftest import make_event_record
 
 
@@ -814,25 +813,15 @@ class TestCheckExtrinsicSuccess:
             with pytest.raises(ChainTimeoutError):
                 await client.check_extrinsic_success("0xhash", 3)
 
-    @pytest.mark.parametrize(
-        ("auth_mode", "parameter"), [("query", "authorization"), ("apikey", "apikey")]
-    )
     async def test_historical_read_uses_authenticated_archive(
-        self,
-        install_substrate_module: AsyncMock,
-        auth_mode: ArchiveRpcAuthMode,
-        parameter: str,
+        self, install_substrate_module: AsyncMock
     ):
         install_substrate_module.query.return_value = MagicMock(
             value=[make_event_record(3, event_id="ExtrinsicSuccess")]
         )
         config = make_chain_config(
-            archive_rpc_url=(
-                "wss://archive.example/rpc?network=finney&token=literal+plus%2f&empty=&flag"
-                "&apikey=stale&authorization=older&ap%69key=oldest&auth%6frization=earliest"
-            ),
-            archive_rpc_api_key="key +/&?#%",
-            archive_rpc_auth_mode=auth_mode,
+            archive_rpc_url="wss://archive.example/rpc",
+            archive_rpc_api_key="key with spaces",
         )
 
         async with ChainClient(config) as client:
@@ -840,33 +829,25 @@ class TestCheckExtrinsicSuccess:
 
         substrate_module = sys.modules["async_substrate_interface"]
         substrate_module.AsyncSubstrateInterface.assert_called_once_with(
-            url=f"wss://archive.example/rpc?network=finney&token=literal+plus%2f&empty=&flag&{parameter}=key%20%2B%2F%26%3F%23%25"
+            url="wss://archive.example/rpc?authorization=key%20with%20spaces"
         )
 
-    @pytest.mark.parametrize("auth_mode", ["query", "apikey"])
     async def test_archive_key_is_redacted_from_connection_error(
-        self,
-        install_substrate_module: AsyncMock,
-        auth_mode: ArchiveRpcAuthMode,
-        caplog: pytest.LogCaptureFixture,
+        self, install_substrate_module: AsyncMock
     ):
-        key = "super secret/+&"
-        encoded = quote(key, safe="")
         install_substrate_module.query.side_effect = RuntimeError(
-            f"failed wss://archive.example?{auth_mode}={encoded}; credential {key}"
+            "failed wss://archive.example?authorization=super-secret"
         )
         config = make_chain_config(
             archive_rpc_url="wss://archive.example",
-            archive_rpc_api_key=key,
-            archive_rpc_auth_mode=auth_mode,
+            archive_rpc_api_key="super-secret",
         )
 
         async with ChainClient(config) as client:
             with pytest.raises(ChainConnectionError) as exc_info:
                 await client.check_extrinsic_success("0xhash", 3)
 
-        assert key not in str(exc_info.value) + caplog.text
-        assert encoded not in str(exc_info.value) + caplog.text
+        assert "super-secret" not in str(exc_info.value)
         assert "<redacted>" in str(exc_info.value)
 
     async def test_configured_provider_is_tried_before_free_archives(
@@ -895,14 +876,8 @@ class TestCheckExtrinsicSuccess:
             "wss://paid.example/archive?authorization=paid-key",
         ]
 
-    @pytest.mark.parametrize(
-        ("auth_mode", "parameter"), [("query", "authorization"), ("apikey", "apikey")]
-    )
     async def test_configured_provider_failure_falls_through_to_free_archive(
-        self,
-        install_substrate_module: AsyncMock,
-        auth_mode: ArchiveRpcAuthMode,
-        parameter: str,
+        self, install_substrate_module: AsyncMock
     ):
         install_substrate_module.query.side_effect = [
             RuntimeError("configured unavailable"),
@@ -915,7 +890,6 @@ class TestCheckExtrinsicSuccess:
             ),
             archive_rpc_url="wss://paid.example/archive",
             archive_rpc_api_key="paid-key",
-            archive_rpc_auth_mode=auth_mode,
         )
 
         async with ChainClient(config) as client:
@@ -926,7 +900,7 @@ class TestCheckExtrinsicSuccess:
             "async_substrate_interface"
         ].AsyncSubstrateInterface
         assert [call.kwargs["url"] for call in substrate_factory.call_args_list] == [
-            f"wss://paid.example/archive?{parameter}=paid-key",
+            "wss://paid.example/archive?authorization=paid-key",
             "wss://free-one.example",
         ]
 

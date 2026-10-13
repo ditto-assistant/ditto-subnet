@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
-ArchiveRpcAuthMode = Literal["none", "query", "path", "apikey"]
+ArchiveRpcAuthMode = Literal["none", "query", "path"]
 
 _FINNEY_PUBLIC_ARCHIVE_RPC_URLS = (
     "wss://archive.chain.opentensor.ai:443",
@@ -82,8 +82,7 @@ class ChainConfig:
     """Optional archive RPC API key, excluded from dataclass representations."""
 
     archive_rpc_auth_mode: ArchiveRpcAuthMode = "query"
-    """Credential attachment: ``query`` uses ``authorization``, ``apikey``
-    uses ``apikey``, ``path`` appends a path segment, and ``none`` omits it."""
+    """How ``archive_rpc_api_key`` is attached to the configured endpoint."""
 
     public_archive_rpc_urls: tuple[str, ...] = ()
     """Credential-free fallbacks used when the configured provider is absent
@@ -105,10 +104,8 @@ class ChainConfig:
                 "ChainConfig requires either open_access_token or "
                 "(identity_name + identity_token); none provided"
             )
-        if self.archive_rpc_auth_mode not in {"none", "query", "path", "apikey"}:
-            raise ValueError(
-                "archive_rpc_auth_mode must be one of: none, query, path, apikey"
-            )
+        if self.archive_rpc_auth_mode not in {"none", "query", "path"}:
+            raise ValueError("archive_rpc_auth_mode must be one of: none, query, path")
         if self.archive_rpc_timeout_seconds <= 0:
             raise ValueError("archive_rpc_timeout_seconds must be positive")
 

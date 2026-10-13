@@ -44,9 +44,8 @@ name: Deploy Platform
 #       (`platform-subtensor-archive-rpc-api-key`) and is read on the VM. Unset
 #       leaves the rate-limited free archives as the only providers, which the
 #       source-emission collector cannot keep pace with.
-#     SUBTENSOR_ARCHIVE_RPC_AUTH_MODE (variable, optional) `query` (authorization
-#       parameter), `apikey` (apikey parameter), `path` or `none`; how the key
-#       is attached to the URL above.
+#     SUBTENSOR_ARCHIVE_RPC_AUTH_MODE (variable, optional) `query`, `path` or
+#       `none`; how the key is attached to the URL above.
 
 on:
   workflow_call:
