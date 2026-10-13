@@ -856,6 +856,7 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
             return {"header": {"number": 15000}}
 
     timeouts = []
+    rescheduled = []
 
     import ditto.api_server.source_emission_collector as collector_module
 
@@ -868,7 +869,13 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
             self._inner = real_timeout(seconds)
 
         async def __aenter__(self):
-            return await self._inner.__aenter__()
+            await self._inner.__aenter__()
+            return self
+
+        def reschedule(self, when):
+            loop = collector_module.asyncio.get_running_loop()
+            rescheduled.append(round(when - loop.time()))
+            self._inner.reschedule(when)
 
         async def __aexit__(self, *args):
             return await self._inner.__aexit__(*args)
@@ -885,10 +892,14 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
         _historical_substrate_urls=lambda: ["archive"],
         _safe_rpc_error=lambda error: str(error),
     )
-    # The first sweep has not measured the backlog yet, so it gets the
-    # steady-state budget. Once it finds a deep backlog, the next sweep must
-    # get the wide budget its 128-block batch needs, not the narrow one.
+    # The first sweep opens with the steady-state budget because it has not
+    # measured the backlog yet. Finding a deep one must extend that same sweep
+    # to the catch-up budget its 128-block batch needs, and later sweeps start
+    # there.
     await collector.sweep()
     assert collector._backlog_deep is True
+    assert timeouts == [120.0]
+    assert rescheduled == [600]
     await collector.sweep()
     assert timeouts == [120.0, 600.0]
+    assert rescheduled == [600, 600]

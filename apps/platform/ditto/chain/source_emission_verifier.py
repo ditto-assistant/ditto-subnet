@@ -348,7 +348,7 @@ async def read_source_emission_block(
 
     controls = await asyncio.gather(
         *(
-            cache.get((name, at), functools.partial(read, name, at, [netuid]))
+            cache.get((netuid, name, at), functools.partial(read, name, at, [netuid]))
             for at in (parent_hash, block_hash)
             for name in ("MechanismCountCurrent", "CommitRevealWeightsEnabled")
         )
@@ -359,7 +359,7 @@ async def read_source_emission_block(
         raise ValueError("unsupported direct/manual weights mode")
     key_maps = await asyncio.gather(
         *(
-            cache.get(("Keys", at), functools.partial(mapping, "Keys", at))
+            cache.get((netuid, "Keys", at), functools.partial(mapping, "Keys", at))
             for at in (parent_hash, block_hash)
         )
     )

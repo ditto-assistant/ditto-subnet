@@ -172,9 +172,9 @@ class SourceEmissionCollector:
         failures: list[str] = []
         for url in self.state.chain._historical_substrate_urls()[:3]:
             try:
-                async with asyncio.timeout(self._sweep_timeout_seconds()):
+                async with asyncio.timeout(self._sweep_timeout_seconds()) as budget:
                     async with AsyncSubstrateInterface(url=url) as substrate:
-                        await self._sweep_provider(substrate)
+                        await self._sweep_provider(substrate, budget=budget)
                 return
             except Exception as error:
                 failures.append(self.state.chain._safe_rpc_error(error)[:200])
@@ -186,7 +186,9 @@ class SourceEmissionCollector:
         """Scale the sweep budget with the batch a deep backlog will scan."""
         return 600.0 if self._backlog_deep else 120.0
 
-    async def _sweep_provider(self, substrate: Any) -> None:
+    async def _sweep_provider(
+        self, substrate: Any, *, budget: asyncio.Timeout | None = None
+    ) -> None:
         finalized_hash = await substrate.get_chain_finalised_head()
         header = await substrate.get_block_header(block_hash=finalized_hash)
         number = header.get("header", header)["number"]
@@ -211,6 +213,13 @@ class SourceEmissionCollector:
         backlog = finalized - current
         catchup = backlog > _SWEEP_CATCHUP_MIN_BACKLOG
         self._backlog_deep = catchup
+        if budget is not None:
+            # The budget was chosen before the backlog was measured, so a sweep
+            # that just discovered a deep backlog must not inherit the
+            # steady-state deadline for its first wide batch.
+            budget.reschedule(
+                asyncio.get_running_loop().time() + self._sweep_timeout_seconds()
+            )
         if not catchup:
             # Durable payouts must not wait for a full scan batch to succeed.
             # Keep archive verification and provider fallback on the same path.
