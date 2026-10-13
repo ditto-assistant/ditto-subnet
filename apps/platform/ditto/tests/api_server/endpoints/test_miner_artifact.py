@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -15,12 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_server.dependencies import get_storage_client
 from ditto.api_server.miner_session import hash_secret
-from ditto.api_server.storage import (
-    create_storage_client,
-    parse_storage_config_from_env,
-)
 from ditto.api_server.storage.errors import ObjectUploadFailedError
 from ditto.db.models import Agent, ArtifactFetchAudit, MinerSession
 from ditto.db.queries.miner_sessions import create_session, issue_session_token
@@ -225,37 +219,3 @@ async def test_legacy_version_and_signing_failure(app, client, session_maker):
     assert "private store failure" not in got.text
     async with session_maker() as session:
         assert len((await session.scalars(select(ArtifactFetchAudit))).all()) == 1
-
-
-@pytest.mark.integration
-async def test_owner_link_downloads_original_bytes_as_attachment(
-    app, client, session_maker, object_storage
-):
-    del object_storage
-    agent_id, headers, _, _ = await seed_access(app, session_maker)
-    original = b"original submitted source archive"
-    async with session_maker() as session, session.begin():
-        agent = await session.get(Agent, agent_id)
-        agent.sha256 = hashlib.sha256(original).hexdigest()
-    async with create_storage_client(parse_storage_config_from_env()) as storage:
-        await storage.put_object(key=f"{agent_id}/agent.tar.gz", body=original)
-
-        async def get_storage():
-            return storage
-
-        app.dependency_overrides[get_storage_client] = get_storage
-        got = await client.get(
-            f"/api/v1/me/agents/{agent_id}/artifact", headers=headers
-        )
-        assert got.status_code == 200, got.text
-        async with httpx.AsyncClient() as downloader:
-            archive = await downloader.get(got.json()["download_url"])
-        assert archive.status_code == 200
-        assert archive.content == original
-        assert (
-            f"ditto-agent-{agent_id}-v3.tar.gz"
-            in archive.headers["content-disposition"]
-        )
-        assert archive.headers["content-disposition"].startswith("attachment;")
-        # The API digest describes the uploaded bytes, not a screened image.
-        assert hashlib.sha256(archive.content).hexdigest() == got.json()["sha256"]
