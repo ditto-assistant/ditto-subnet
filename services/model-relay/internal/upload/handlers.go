@@ -344,6 +344,9 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if recovery {
+		// Python owns payment-proof recovery, including the current CLA gate
+		// and the exact accepted-artifact retry exception. Forward unchanged;
+		// do not duplicate or skip those authoritative checks here.
 		if d.Legacy == nil {
 			relayhttp.WriteHTTPError(w, r, http.StatusServiceUnavailable, "upload payment recovery unavailable; retry shortly", nil)
 			return

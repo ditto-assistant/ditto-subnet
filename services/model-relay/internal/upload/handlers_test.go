@@ -532,3 +532,18 @@ func TestCLARejectsNetuidNarrowingBeforeAdmission(t *testing.T) {
 		t.Fatalf("netuid overflow did not fail closed: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestRecoveryPreservesPythonCLARefusal(t *testing.T) {
+	// Recovery is delegated to the Python handler that owns payment lookup
+	// and CLA enforcement. The relay must not turn its refusal into success.
+	d := &Deps{Legacy: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":false,"error_codes":[1106],"messages":["run ditto cla sign"],"payment_required":false}`))
+	})}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/upload/check", strings.NewReader(validCheckJSON(`"payment_block_hash":"0x`+strings.Repeat("1", 64)+`","payment_block_number":123,"payment_extrinsic_index":0`)))
+	d.handleCheck(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"error_codes":[1106]`) || !strings.Contains(w.Body.String(), `"payment_required":false`) {
+		t.Fatalf("legacy CLA refusal changed: %d %s", w.Code, w.Body.String())
+	}
+}

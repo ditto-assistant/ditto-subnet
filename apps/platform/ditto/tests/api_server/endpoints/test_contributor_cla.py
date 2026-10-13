@@ -19,6 +19,7 @@ from ditto.api_server.dependencies import (
     get_payment_verifier,
     get_storage_client,
 )
+from ditto.chain import ChainConnectionError, ExtrinsicNotFoundError
 from ditto.chain.models import BlockInfo
 from ditto.db.models import Agent, AgentStatus, ClaShadowUpload, ClaSignature
 from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
@@ -39,6 +40,34 @@ async def test_missing_policy_seed_cannot_silently_disable_consent(session_maker
         await session.execute(text("TRUNCATE cla_settings_revisions"))
         with pytest.raises(RuntimeError, match="migration seed is missing"):
             await evaluate_cla_gate(session, netuid=118, hotkey="fixture")
+
+
+@pytest.mark.parametrize("failure", ["owner_missing", "finalized_missing", "rpc"])
+async def test_owner_absence_and_chain_unavailability_are_distinct(
+    app, client, session_maker, failure
+):
+    setup(app, session_maker)
+    version = await publish(client)
+    if failure == "owner_missing":
+        app.state.chain.get_coldkey_for_hotkey.side_effect = ExtrinsicNotFoundError(
+            "no Owner entry"
+        )
+        expected = 400
+    elif failure == "finalized_missing":
+        app.state.chain.get_finalized_block.side_effect = ExtrinsicNotFoundError(
+            "finalized chain unavailable"
+        )
+        expected = 503
+    else:
+        app.state.chain.get_coldkey_for_hotkey.side_effect = ChainConnectionError(
+            "temporary RPC unavailable"
+        )
+        expected = 503
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    response = await client.post("/api/v1/cla/sign", json=signed(alice, version))
+    assert response.status_code == expected, response.text
+    if expected == 400:
+        assert "register ownership" in response.text
 
 
 def setup(app, maker):

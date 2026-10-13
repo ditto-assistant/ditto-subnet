@@ -20,7 +20,7 @@ from ditto.api_server.storage import (
     create_storage_client,
     parse_storage_config_from_env,
 )
-from ditto.db.models import Agent, AgentClaBinding
+from ditto.db.models import Agent, AgentClaBinding, EvaluationPayment
 from ditto.tests.api_server.conftest import make_api_server_config
 from ditto.tests.api_server.endpoints.test_contributor_cla import (
     policy,
@@ -95,6 +95,52 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
             await client.get(f"/api/v1/public/cla/status/{alice.ss58_address}")
         ).json()
         assert not stale["is_current"]
+        fresh_data, _ = _build_form(keypair=alice, block_hash=block_hash)
+        recovery = {
+            "hotkey": alice.ss58_address,
+            "sha256": _TAR_SHA,
+            "signature": fresh_data["signature"],
+            "signature_timestamp": fresh_data["signature_timestamp"],
+            "signature_nonce": fresh_data["signature_nonce"],
+            "file_size_bytes": 100,
+            "payment_block_hash": block_hash,
+            "payment_block_number": 123,
+            "payment_extrinsic_index": 0,
+        }
+        exact_check = await client.post("/api/v1/upload/check", json=recovery)
+        assert exact_check.status_code == 200 and exact_check.json()["ok"], (
+            exact_check.text
+        )
+        credit_block = "0x" + "32" * 32
+        async with session_maker() as session, session.begin():
+            session.add(
+                EvaluationPayment(
+                    block_hash=credit_block,
+                    extrinsic_index=0,
+                    agent_id=None,
+                    credit_for_agent_id=agent_id,
+                    miner_hotkey=alice.ss58_address,
+                    miner_coldkey=owner,
+                    amount_rao=40_000_000,
+                    dest_address=app.state.config.upload_payment_address,
+                    timestamp=datetime.now(UTC),
+                )
+            )
+        credit_check = await client.post(
+            "/api/v1/upload/check",
+            json={**recovery, "payment_block_hash": credit_block},
+        )
+        assert credit_check.status_code == 200, credit_check.text
+        assert not credit_check.json()["ok"]
+        assert 1106 in credit_check.json()["error_codes"]
+        assert not credit_check.json()["payment_required"]
+        renamed_data, renamed_files = _build_form(keypair=alice, block_hash=block_hash)
+        renamed_data["name"] = "different-name"
+        renamed = await client.post(
+            "/api/v1/upload/agent", data=renamed_data, files=renamed_files
+        )
+        assert renamed.status_code == 402, renamed.text
+        assert renamed.json()["error_code"] == 3207
         retry_data, retry_files = _build_form(keypair=alice, block_hash=block_hash)
         retried = await client.post(
             "/api/v1/upload/agent", data=retry_data, files=retry_files

@@ -12,6 +12,7 @@ from ditto.api_server.attestation import (
     MAX_ISSUED_AT_SKEW,
     verify_signature,
 )
+from ditto.chain import ExtrinsicNotFoundError
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
@@ -52,7 +53,15 @@ def check_contributor_proof(
 
 async def finalized_owner(chain: ChainClient, hotkey: str) -> FinalizedOwner:
     block = await chain.get_finalized_block()
-    coldkey = await chain.get_coldkey_for_hotkey(hotkey, block.hash)
+    try:
+        coldkey = await chain.get_coldkey_for_hotkey(hotkey, block.hash)
+    except ExtrinsicNotFoundError as exc:
+        # At this lookup boundary the client uses this error only for an
+        # empty Owner entry. get_finalized_block errors remain retryable.
+        raise ContributorProofRejected(
+            "hotkey has no finalized Owner entry; register ownership on "
+            "chain first (an SN118 mining UID is not required)"
+        ) from exc
     # The zero AccountId is the storage default for a nonexistent owner.
     import bittensor
 
