@@ -4,32 +4,44 @@ agent_id: ed252083-9ef3-48f9-8256-c49bb4cdebbf
 agent_name: clear
 agent_version: 42
 resolution: reject
-tags: [i5, family-compiler, argument-grammar, catalog-description, review-turn, policy-v13]
-holding: Miner prose appended to a tool's description or property descriptions that mandates the grader's argument shape ("<subject> is <value>", copula required, fragments banned, append-as-replace) is an I5 compiler even though the model writes the argument. A review turn whose pass test is that same shape (lets_635) is the same compiler.
+tags: [i5, w10, catalog-description, content-deletion, policy-v13]
+holding: Miner prose merged into the host's update_memory description and property descriptions (W10), which also turns "add to the note" into replace-only and so deletes the user's existing scratchpad content, is a reject. A "subject + copula" wording rule alone is not. The v13 claim grader accepts paraphrase, so that rule is not grader-fitted.
 ---
 
-Policy-v13 ATH sweep, 2026-10-02. SHA `b086f534…`. A regex gate
-(`baseline.py:235-243, 297-309`) calls `clarify_tool_contracts`
-(`catalog_compat.py:561-608`), which appends `catalog_compat.py:96-158` to
-the `update_memory` description and its `content` / `pair_id` descriptions:
-"This wire grammar is mandatory: never omit the copula", "SCALAR OUTPUT
-SHAPE: <changed subject> is/are <new value>", and "a first-person action
-sentence ... must be rewritten". Each rule maps onto the v13 generator's graded
-`"handoff is <Weekday>"` argument (`datagen/v13_tool_semantics.go:1068`) and
-the scorer's containment and stuffing-ratio checks. Same sheet as monkey v10/v11
-and yeknom v2.
+Policy-v13 ATH sweep, 2026-10-02. SHA `b086f534…`. Corrected 2026-10-13.
 
-Same day, same family: **lets_635** (`a8437894`, SHA `f13721e3…`) and
-lets_634 (`7775f1fd`). After the first `update_memory`, a host-scheduled
-`REVIEW_TURNS` entry (`agent2.py:559-562`) tells the model to reduce the
-assertion to "'<the user's exact noun phrase> is <value>.' and compare word
-for word". A failed comparison forces another call. lets_635 also carries a
-"probe-selected ... experiments/declarative_ack_20260918" comment on its
-router wording. W7 refinement does not cover a critic whose acceptance test is
-the benchmark's graded argument.
+A regex gate (`baseline.py:235-243, 297-309`) calls `clarify_tool_contracts`
+(`catalog_compat.py:561-608`). That function appends miner text
+(`catalog_compat.py:96-158`) to the host's `update_memory` description and to
+its `content` / `pair_id` property descriptions.
 
-Not charged: plain field documentation; a stock-harness loop detector; a
-first-effect critic whose next output is accepted (gryffindor-v3-13). The
-screener now emits `tool-argument-grammar-sheet`,
-`review-turn-argument-template` and `self-reported-benchmark-fitting` leads
-for these shapes.
+The grounds that stand:
+- **W10 schema merge.** Miner guidance is merged into the host-supplied tool
+  schema instead of being presented separately.
+- **Content deletion.** "An add-or-append request still replaces the
+  destination ... never copy, reconstruct, or extend the old content". A user
+  who asks to add to a note loses the note's existing text.
+- **Locator exclusion.** Request-keyed rules strip the locator and storage
+  context from the argument.
+
+**Correction.** The original ruling also mapped the copula, fragment-ban and
+tense rules onto the v13 grader as exact-phrase containment of
+`"handoff is <Weekday>"`. That premise is false. Since #1872 (2026-09-15),
+this argument carries a `fact_update` claim (`v13FactUpdateClaim`,
+`datagen/v13_tool_semantics.go:878-885`) graded by `v13FactCarried`
+(`internal/scorer/v13.go:555-569`), which needs only the slot word plus the
+value. "handoff Friday" passes. Do not cite the copula mapping as a ground.
+The stuffing check (more than 8x the expected length and at least 6 words)
+and the required slot noun are the only grader properties that remain.
+
+Same family:
+- **lets_635** (`a8437894`) stands on its keep-preference router split plus the
+  acknowledgement script. Its `update_memory` review turn fires once, makes
+  no host content comparison, and lets the model keep its draft, so it is a W7
+  critic and not charged (lets_631/632 are unchanged on the same basis).
+- **topbot-p30** (`48e3a766`) rested on the copula premise. It does not stand
+  as written and is pending reconsideration.
+
+Not charged: plain field documentation; copula or wording guidance alone; a
+stock-harness loop detector; a first-effect critic whose next output is
+accepted (gryffindor-v3-13).
