@@ -107,7 +107,7 @@ def run(args: argparse.Namespace) -> int:
             names = resolve_wallet_names(
                 coldkey_name=args.coldkey_name,
                 hotkey_name=args.hotkey_name,
-                interactive=not args.yes,
+                interactive=sys.stdin.isatty() and not args.yes,
             )
             if args.github_command == "unlink":
                 linked = client.get_github_link(token=token).link

@@ -20,7 +20,7 @@ from ditto.api_server.dependencies import (
     get_storage_client,
 )
 from ditto.chain.models import BlockInfo
-from ditto.db.models import Agent, AgentStatus, ClaSignature
+from ditto.db.models import Agent, AgentStatus, ClaShadowUpload, ClaSignature
 from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
     _HEADERS,
     _install,
@@ -276,6 +276,65 @@ async def test_upload_agent_enforces_before_payment_verification_or_storage(
     assert "ditto cla sign" in response.json()["message"]
     verifier.verify_payment.assert_not_awaited()
     storage.put_object.assert_not_awaited()
+
+
+@pytest.mark.parametrize("has_consent", [False, True])
+async def test_shadow_counts_only_unsigned_uploads_despite_later_archive_failure(
+    app, client, session_maker, has_consent
+):
+    setup(app, session_maker)
+    version = await publish(client)
+    await policy(client, "shadow")
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    if has_consent:
+        signed_response = await client.post(
+            "/api/v1/cla/sign", json=signed(alice, version)
+        )
+        assert signed_response.status_code == 200, signed_response.text
+    verifier = SimpleNamespace(verify_payment=AsyncMock())
+    storage = SimpleNamespace(put_object=AsyncMock())
+    app.dependency_overrides[get_payment_verifier] = lambda: verifier
+    app.dependency_overrides[get_storage_client] = lambda: storage
+    raw = b"TEST FIXTURE: not a gzip archive"
+    digest = hashlib.sha256(raw).hexdigest()
+    response = await client.post(
+        "/api/v1/upload/agent",
+        data={
+            "hotkey": alice.ss58_address,
+            "sha256": digest,
+            "name": "fixture",
+            **_signed_upload_auth(alice, hotkey=alice.ss58_address, sha256=digest),
+            "payment_block_hash": "0x" + "12" * 32,
+            "payment_block_number": 123,
+            "payment_extrinsic_index": 0,
+        },
+        files={"agent_tar": ("agent.tgz", raw, "application/gzip")},
+    )
+    assert response.status_code == 400, response.text
+    verifier.verify_payment.assert_not_awaited()
+    storage.put_object.assert_not_awaited()
+    async with session_maker() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(ClaShadowUpload)
+        ) == (0 if has_consent else 1)
+
+
+async def test_cla_ownership_lookup_does_not_hold_a_database_connection(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    version = await publish(client)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+
+    async def owner_lookup(*_args):
+        assert session_maker.kw["bind"].sync_engine.pool.checkedout() == 0
+        return bittensor.Keypair.create_from_uri("//Bob").ss58_address
+
+    owner_rpc = AsyncMock(side_effect=owner_lookup)
+    app.state.chain.get_coldkey_for_hotkey = owner_rpc
+    response = await client.post("/api/v1/cla/sign", json=signed(alice, version))
+    assert response.status_code == 200, response.text
+    owner_rpc.assert_awaited_once()
 
 
 async def test_future_version_publication_hash_guards_policy_cas_and_adoption(

@@ -125,6 +125,28 @@ def test_cla_signs_exact_verified_bytes_after_explicit_typed_confirmation(
     api.sign_cla.assert_called_once()
 
 
+def test_github_omitted_wallet_names_without_tty_never_prompt(capsys):
+    api = client()
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture-session", "hotkey": KEY.ss58_address},
+        ),
+        patch("sys.stdin.isatty", return_value=False),
+        patch(
+            "builtins.input", side_effect=AssertionError("must not prompt")
+        ) as prompt,
+    ):
+        assert (
+            link_github.run(args(coldkey_name=None, hotkey_name=None, yes=False)) == 1
+        )
+    assert "wallet name and hotkey are required" in capsys.readouterr().err
+    prompt.assert_not_called()
+    api.start_github_link.assert_not_called()
+
+
 @pytest.mark.parametrize("case", ["digest", "confirmation", "missing"])
 def test_cla_refuses_to_sign_unverified_or_unconfirmed_text(tmp_path, case):
     api = client()

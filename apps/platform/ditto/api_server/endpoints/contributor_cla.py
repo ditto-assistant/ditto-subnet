@@ -167,13 +167,13 @@ async def sign_cla(
             issued_at=body.issued_at,
             now=now,
         )
+        owner = await finalized_owner(request.app.state.chain, body.hotkey)
         async with session.begin():
             version = await session.get(ClaVersion, body.cla_version)
             if version is None or version.sha256 != body.cla_sha256:
                 raise HTTPException(
                     409, "CLA version or digest is not the published document"
                 )
-            owner = await finalized_owner(request.app.state.chain, body.hotkey)
             row = ClaSignature(
                 netuid=body.netuid,
                 hotkey=body.hotkey,

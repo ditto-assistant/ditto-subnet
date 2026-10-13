@@ -71,7 +71,9 @@ def link_view(row: MinerGithubLink) -> GithubLinkView:
     )
 
 
-def _page(title: str, content: str, *, status: int = 200) -> HTMLResponse:
+def _page(
+    title: str, content: str, *, status: int = 200, script_nonce: str | None = None
+) -> HTMLResponse:
     return HTMLResponse(
         f'<!doctype html><html lang="en"><meta charset="utf-8"><meta '
         'name="viewport" content="width=device-width">'
@@ -84,6 +86,7 @@ def _page(title: str, content: str, *, status: int = 200) -> HTMLResponse:
             "Content-Security-Policy": (
                 "default-src 'none'; form-action 'self'; "
                 "frame-ancestors 'none'; base-uri 'none'"
+                + (f"; script-src 'nonce-{script_nonce}'" if script_nonce else "")
             ),
             "X-Content-Type-Options": "nosniff",
         },
@@ -204,17 +207,46 @@ async def start_link(request: Request, session: SessionDep) -> GithubLinkStart:
     return GithubLinkStart(
         netuid=request.app.state.config.chain.netuid,
         attempt_id=attempt_id,
-        authorize_url=f"{client.config.origin}/api/v1/miner-auth/github/authorize/{attempt_id}?launch={launch}",
+        authorize_url=f"{client.config.origin}/api/v1/miner-auth/github/authorize/{attempt_id}#launch={launch}",
         expires_in=ATTEMPT_TTL_SECONDS,
     )
 
 
 @router.get("/miner-auth/github/authorize/{attempt_id}", include_in_schema=False)
+async def launch_page(attempt_id: UUID) -> Response:
+    del attempt_id  # GET validates the UUID but never reads or changes an attempt.
+    # Fragments are never sent in HTTP request URLs. Clear browser history
+    # immediately, then submit the one-use capability in a form body.
+    nonce = secrets.token_urlsafe(24)
+    script = (
+        "const token = new URLSearchParams(location.hash.slice(1)).get('launch');"
+        "history.replaceState(null, '', location.pathname);"
+        "if (!token || !/^[A-Za-z0-9_-]{20,128}$/.test(token)) {"
+        "document.getElementById('launch-status').textContent = "
+        "'This launch link is missing or invalid. Start a new link from the CLI.';"
+        "} else {"
+        "const form = document.createElement('form');"
+        "form.method = 'POST'; form.action = location.pathname;"
+        "const input = document.createElement('input');"
+        "input.type = 'hidden'; input.name = 'launch'; input.value = token;"
+        "form.append(input); document.body.append(form); form.submit();"
+        "}"
+    )
+    return _page(
+        "Starting GitHub sign-in",
+        '<p id="launch-status">Opening GitHub sign-in…</p>'
+        "<noscript>Enable JavaScript to open this one-use sign-in link.</noscript>"
+        f'<script nonce="{nonce}">{script}</script>',
+        script_nonce=nonce,
+    )
+
+
+@router.post("/miner-auth/github/authorize/{attempt_id}", include_in_schema=False)
 async def authorize(
     attempt_id: UUID,
     request: Request,
     session: SessionDep,
-    launch: Annotated[str, Query(min_length=20, max_length=128)],
+    launch: Annotated[str, Form(min_length=20, max_length=128)],
 ) -> Response:
     client = _client(request)
     async with session.begin():
@@ -332,8 +364,8 @@ async def callback(
             f"(account ID {identity.user_id}).</p>"
             f"<p>Link this account to hotkey "
             f"<code>{html.escape(attempt.hotkey)}</code>?</p>"
-            "<p>This records contributor identity. It does not change payments "
-            "or grant access to repositories.</p>"
+            "<p>This records a public contributor identity link. It does not "
+            "change payments or grant access to repositories.</p>"
             '<form method="post" action="/api/v1/miner-auth/github/accept">'
             f'<input type="hidden" name="attempt_id" value="{attempt.attempt_id}">'
             f'<input type="hidden" name="accept_token" value="{accept}">'

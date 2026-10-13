@@ -20,6 +20,11 @@ server-side, reads GitHub's public profile, and discards its access token. The
 CLI receives no GitHub access token, OAuth state, PKCE verifier or app secret.
 No PAT is required.
 
+The launch capability travels in a URL fragment, which is not sent in HTTP
+URLs or access logs. The browser clears that fragment from history immediately
+and submits it in a same-origin POST body. JavaScript must be enabled. Visiting
+the clean launch URL alone cannot start or consume an attempt.
+
 In the browser, review the GitHub login, numeric id and full hotkey, then approve
 that exact pairing. Back in the CLI, the verified account is shown before the
 wallet is loaded and the hotkey (or its owner coldkey with `--key-kind coldkey`)

@@ -91,18 +91,30 @@ def setup(app, maker):
     return provider
 
 
+async def launch_in_browser(client, started):
+    url = urlsplit(started["authorize_url"])
+    assert not url.query
+    launch = parse_qs(url.fragment)["launch"][0]
+    page = await client.get(url.path)
+    assert page.status_code == 200, page.text
+    assert launch not in page.text
+    assert "history.replaceState" in page.text
+    assert "script-src 'nonce-" in page.headers["content-security-policy"]
+    # Simulate the page's fragment-clearing script: only the POST body carries
+    # the capability. The GET URL alone cannot consume or start an attempt.
+    launched = await client.post(url.path, data={"launch": launch})
+    assert launched.status_code == 302, launched.text
+    return parse_qs(
+        urlsplit(launched.headers["location"]).query, keep_blank_values=True
+    )
+
+
 async def browser_flow(client, token, *, accept=True):
     auth = {"authorization": f"Bearer {token}"}
     started = await client.post("/api/v1/me/github-link/start", headers=auth)
     assert started.status_code == 200, started.text
     body = started.json()
-    url = urlsplit(body["authorize_url"])
-    assert "state" not in parse_qs(url.query)
-    launched = await client.get(url.path + "?" + url.query)
-    assert launched.status_code == 302, launched.text
-    params = parse_qs(
-        urlsplit(launched.headers["location"]).query, keep_blank_values=True
-    )
+    params = await launch_in_browser(client, body)
     assert params["scope"] == [""]
     assert params["code_challenge_method"] == ["S256"]
     assert params["state"][0] not in started.text
@@ -461,9 +473,7 @@ async def test_oauth_broad_scope_errors_do_not_leak_tokens(
     started = await client.post(
         "/api/v1/me/github-link/start", headers={"authorization": f"Bearer {token}"}
     )
-    url = urlsplit(started.json()["authorize_url"])
-    launched = await client.get(url.path + "?" + url.query)
-    state = parse_qs(urlsplit(launched.headers["location"]).query)["state"][0]
+    state = (await launch_in_browser(client, started.json()))["state"][0]
     denied = await client.get(
         "/api/v1/miner-auth/github/callback",
         params={"state": state, "code": "fixture-code"},
@@ -597,6 +607,36 @@ async def test_concurrent_starts_cannot_exceed_five_pending_attempts(
         )
 
 
+async def test_clean_launch_url_cannot_consume_capability(app, client, session_maker):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    started = (
+        await client.post(
+            "/api/v1/me/github-link/start",
+            headers={"authorization": f"Bearer {token}"},
+        )
+    ).json()
+    url = urlsplit(started["authorize_url"])
+    assert not url.query
+    for _ in range(2):
+        page = await client.get(url.path)
+        assert (
+            page.status_code == 200 and page.headers["referrer-policy"] == "no-referrer"
+        )
+    assert (await client.post(url.path)).status_code == 422
+    assert (await client.post(url.path, data={"launch": "x" * 43})).status_code == 400
+    async with session_maker() as session:
+        row = await session.get(MinerGithubLinkAttempt, UUID(started["attempt_id"]))
+        assert row.state_hash is None and row.code_verifier is None
+    params = await launch_in_browser(client, started)
+    assert "state" in params
+    replay = await client.post(
+        url.path, data={"launch": parse_qs(url.fragment)["launch"][0]}
+    )
+    assert replay.status_code == 409
+
+
 @pytest.mark.parametrize("expire_during_exchange", [False, True])
 async def test_slow_callback_is_single_use_and_does_not_block_status_polling(
     app, client, session_maker, monkeypatch, expire_during_exchange
@@ -606,9 +646,7 @@ async def test_slow_callback_is_single_use_and_does_not_block_status_polling(
     token = await _sign_in(client, alice)
     auth = {"authorization": f"Bearer {token}"}
     started = (await client.post("/api/v1/me/github-link/start", headers=auth)).json()
-    launch = urlsplit(started["authorize_url"])
-    redirected = await client.get(launch.path + "?" + launch.query)
-    state = parse_qs(urlsplit(redirected.headers["location"]).query)["state"][0]
+    state = (await launch_in_browser(client, started))["state"][0]
     entered, release = asyncio.Event(), asyncio.Event()
     original = app.state.github_link.exchange
 
