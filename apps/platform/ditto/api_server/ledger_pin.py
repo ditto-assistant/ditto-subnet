@@ -350,7 +350,7 @@ def pin_expected_treasury_vector(pin: Any, *, burn_hotkey: str) -> dict[str, flo
     shares = _pin_competitive_shares(pin)
     return service_first_weights(
         shares or {},
-        service_bps=treasury.policy.service_bps,
+        service_bps=treasury.service_bps,
         burn_share=pin.context["served"]["burn_share"],
         paid_miner_fraction=sum(shares.values()) if shares else 0,
         collector_hotkey=treasury.policy.collector_hotkey,
@@ -671,7 +671,11 @@ class LedgerPinMaterializer:
         now: datetime,
     ) -> LedgerPin | None:
         netuid = schedule.netuid
-        from ditto.api_server.treasury_runtime import lock_runtime, treasury_runtime
+        from ditto.api_server.treasury_runtime import (
+            lock_runtime,
+            pinned_allocations,
+            treasury_runtime,
+        )
 
         self._stage("runtime")
         async with session_maker() as session:
@@ -760,6 +764,14 @@ class LedgerPinMaterializer:
                     if await treasury_runtime(session, app_state.config) != runtime:
                         raise ValueError(
                             "Gamma control changed during epoch materialization"
+                        )
+                    if isinstance(
+                        treasury, EnforcingTreasuryPin
+                    ) and treasury.allocations != await pinned_allocations(
+                        session, treasury.policy
+                    ):
+                        raise ValueError(
+                            "Gamma allocation changed during epoch materialization"
                         )
                     row = await insert_pin(session, draft)
                 await session.refresh(row)

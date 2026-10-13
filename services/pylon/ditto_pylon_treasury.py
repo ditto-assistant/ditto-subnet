@@ -129,11 +129,11 @@ def validate_service_vector(
         raise ValueError("treasury vector must conserve the complete emission")
     if not math.isclose(
         weights.get(pin.policy.collector_hotkey, 0),
-        pin.policy.service_bps / 10_000,
+        pin.service_bps / 10_000,
         rel_tol=0,
         abs_tol=1e-12,
     ):
-        raise ValueError("treasury vector differs from fixed service allocation")
+        raise ValueError("treasury vector differs from pinned service allocation")
 
 
 def validate_normalized_service_vector(
@@ -147,11 +147,11 @@ def validate_normalized_service_vector(
     # pool has no rounding allowance: it must receive exactly zero weight.
     if (
         not total
-        or (pin.policy.service_bps == 0 and collector_weight != 0)
-        or (pin.policy.service_bps > 0 and collector_weight <= 0)
+        or (pin.service_bps == 0 and collector_weight != 0)
+        or (pin.service_bps > 0 and collector_weight <= 0)
         or not math.isclose(
             collector_weight / total,
-            pin.policy.service_bps / 10_000,
+            pin.service_bps / 10_000,
             rel_tol=0,
             abs_tol=1e-4,
         )

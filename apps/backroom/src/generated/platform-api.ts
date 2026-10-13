@@ -20297,6 +20297,8 @@ export interface components {
         };
         /** EnforcingTreasuryPin */
         EnforcingTreasuryPin: {
+            /** Allocations */
+            allocations?: components["schemas"]["TreasuryBucketAllocation"][] | null;
             approval: components["schemas"]["TreasuryPolicyApproval"];
             /** Epoch Index */
             epoch_index: number;
@@ -33640,6 +33642,16 @@ export interface components {
             managed_validator_hotkeys: string[];
         };
         /**
+         * TreasuryBucketAllocation
+         * @description One epoch's operator-chosen allocation inside a signed bucket range.
+         */
+        TreasuryBucketAllocation: {
+            /** Allocation Bps */
+            allocation_bps: number;
+            /** Bucket Id */
+            bucket_id: string;
+        };
+        /**
          * TreasuryChainReadDiagnostic
          * @description Completed read counts and safe last-failure evidence, never authority.
          */
@@ -33741,6 +33753,10 @@ export interface components {
             bucket_id: string;
             /** Holding Coldkey */
             holding_coldkey: string;
+            /** Max Allocation Bps */
+            max_allocation_bps?: number | null;
+            /** Min Allocation Bps */
+            min_allocation_bps?: number | null;
         };
         /**
          * TreasuryEmissionPolicy
@@ -34241,9 +34257,9 @@ export interface components {
             /**
              * Weight Effect
              * @default none
-             * @constant
+             * @enum {string}
              */
-            weight_effect: "none";
+            weight_effect: "none" | "next_epoch";
         };
         /** TreasurySettingsRevision */
         TreasurySettingsRevision: {

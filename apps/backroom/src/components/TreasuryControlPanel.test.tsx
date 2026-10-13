@@ -147,3 +147,20 @@ it('keeps read-only users out of the wallet mutation', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Record wallet policy' }))
   expect(save).not.toHaveBeenCalled()
 })
+
+it('shows the signed Gamma range and flags a value outside it', () => {
+  render(
+    <TreasuryControlPanel
+      initialState={control}
+      readOnly={false}
+      signed={{
+        mode: 'enforce',
+        buckets: [{ bucket_id: 'gm_credits', allocation_bps: 1000, holding_coldkey: '5' + 'c'.repeat(47), min_allocation_bps: 0, max_allocation_bps: 7500 }],
+      }}
+    />,
+  )
+  expect(screen.getByText('Signed range 0%–75%')).toBeTruthy()
+  expect(screen.getByText(/changes live emissions from the next epoch/)).toBeTruthy()
+  fireEvent.change(screen.getByLabelText('Allocation (% of miner emissions)'), { target: { value: '80' } })
+  expect(screen.getByRole('alert').textContent).toContain('outside the signed policy')
+})

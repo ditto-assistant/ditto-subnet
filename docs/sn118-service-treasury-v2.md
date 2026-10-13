@@ -42,7 +42,9 @@ service buckets to zero, and `burn_share = 0`. A 25% burn with the same Gamma
 allocation instead yields 75% Gamma, 18.75% miners and 6.25% burn. A 100% Gamma
 allocation leaves no miner or burn remainder, including with an empty miner pool.
 
-Saving a shadow proposal changes no live weights. The new emission policy needs
+Saving a shadow proposal changes no live weights, except that an in-range Gamma %
+under an enforcing coldkey-signed range applies from the next epoch
+([sn118-gamma-signed-range.md](sn118-gamma-signed-range.md)). The new emission policy needs
 its own coldkey approval and matching immutable digests on Platform and managed
 validator/Pylon guards before a future epoch can activate it. Deploy consumers
 that accept the wider range first; old consumers refuse the new policy. Historical

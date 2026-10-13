@@ -196,7 +196,9 @@ class TreasurySettingsControl(BaseModel):
     revision: int
     miner_bps: int
     history: list[TreasurySettingsRevision]
-    weight_effect: Literal["none"] = "none"
+    # "next_epoch": Gamma is enforcing a coldkey-signed range, so the bucket
+    # allocation here is folded into the next epoch pin (like burn).
+    weight_effect: Literal["none", "next_epoch"] = "none"
 
 
 class AdminTreasurySettingsRequest(BaseModel):

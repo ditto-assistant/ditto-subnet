@@ -916,7 +916,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_treasury_runtime: 'Read durable Gamma control; not dispatch proof.',
   record_treasury_runtime: 'Control Gamma with CAS, policy and managed roster; no transfers. See tool help.',
   get_treasury_ledger_readiness: 'Read epoch/policy readiness; no activation.',
-  record_treasury_settings: 'Record shadow buckets with CAS/confirmation; no weights or funds.',
+  record_treasury_settings: 'Record buckets with CAS; in-range Gamma % under signed range moves next epoch.',
   get_treasury_receipts: 'Read treasury receipt history/publication.',
   get_treasury_manual_transfers: 'Read manual custody readiness, requests and public receipts; no funds.',
   get_treasury_receipt_preflight: 'Read exact receipt readiness/archive checkpoint; no writes.',
@@ -3524,7 +3524,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'record_treasury_settings',
     {
       title: 'Record SN118 treasury shadow policy',
-      description: 'Append a shadow treasury proposal with expectedRevision, reason and exact confirmation RECORD TREASURY SHADOW POLICY. V1 retains its 500 bps cap and released-miner-share denominator. V2 uses one collector and distinct holding wallets under a combined 10000 bps service pool reserved before burn; billing references are optional for manual purchases. Wallet/rule changes enter public admin activity, excluding private billing references. Public addresses only; never provide seeds. Recording settings cannot change weights, sign transfers or activate observation. Requires backroom:write.',
+      description: 'Append a shadow treasury proposal with expectedRevision, reason and exact confirmation RECORD TREASURY SHADOW POLICY. V1 retains its 500 bps cap and released-miner-share denominator. V2 uses one collector and distinct holding wallets under a combined 10000 bps service pool reserved before burn; billing references are optional for manual purchases. Wallet/rule changes enter public admin activity, excluding private billing references. Public addresses only; never provide seeds. While Gamma enforces a coldkey-signed range, an in-range Gamma % change applies from the next epoch (weight_effect next_epoch); settings never sign transfers or activate observation. Requires backroom:write.',
       inputSchema: recordTreasurySettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },

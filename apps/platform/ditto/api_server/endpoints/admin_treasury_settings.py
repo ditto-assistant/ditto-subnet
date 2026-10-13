@@ -303,7 +303,21 @@ async def get_treasury_settings(
         revision=latest.revision if latest else 0,
         miner_bps=effective.miner_bps,
         history=[_revision(row) for row in history],
+        weight_effect="next_epoch" if await _gamma_is_live_knob(session) else "none",
     )
+
+
+async def _gamma_is_live_knob(session: AsyncSession) -> bool:
+    from ditto.api_server.treasury_runtime import latest_runtime_row, runtime_revision
+
+    row = await latest_runtime_row(session)
+    if row is None:
+        return False
+    try:
+        settings = runtime_revision(row).settings
+    except ValueError:
+        return False
+    return settings.mode == "enforce" and settings.approval.policy.ranged
 
 
 @router.post("", response_model=TreasurySettingsRevision)
@@ -313,24 +327,41 @@ async def record_treasury_settings(
     session: SessionDep,
 ) -> TreasurySettingsRevision:
     from ditto.api_server.treasury_runtime import (
+        gamma_only_change,
         latest_runtime_row,
         lock_runtime,
         runtime_revision,
+        settings_match_policy,
     )
 
     await lock_runtime(session)
     runtime_row = await latest_runtime_row(session)
+    runtime = None
     if runtime_row is not None:
         try:
             runtime = runtime_revision(runtime_row)
         except ValueError:
             raise HTTPException(409, "Gamma runtime control is invalid") from None
-        if runtime.settings.mode == "enforce":
-            raise HTTPException(409, "Pause Gamma before changing treasury settings")
     latest = await _latest(session)
     current = latest.revision if latest else 0
     if payload.expected_revision != current:
         raise HTTPException(status_code=409, detail="treasury policy changed; refresh")
+    if runtime is not None and runtime.settings.mode == "enforce":
+        # Enforcing epochs fold this allocation, like burn: only the Gamma %
+        # may move, and only inside the range the collector coldkey signed.
+        policy = runtime.settings.approval.policy
+        if (
+            latest is None
+            or not policy.ranged
+            or not gamma_only_change(
+                TreasurySettings.model_validate(latest.settings), payload.settings
+            )
+        ):
+            raise HTTPException(409, "Pause Gamma before changing treasury settings")
+        if not settings_match_policy(payload.settings, policy):
+            raise HTTPException(
+                409, "Gamma allocation is outside the signed policy range"
+            )
     canonical = json.dumps(
         payload.settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
     )

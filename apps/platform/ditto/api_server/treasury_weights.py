@@ -220,6 +220,8 @@ async def enforcing_pin_from_observation(
         collector_digest=policy.collector_policy_digest,
         required_hotkeys=required_hotkeys,
     )
+    from ditto.api_server.treasury_runtime import pinned_allocations
+
     return EnforcingTreasuryPin(
         epoch_index=schedule.subnet_epoch_index,
         first_block=schedule.last_epoch_block,
@@ -230,6 +232,7 @@ async def enforcing_pin_from_observation(
         identity=shadow.identity,
         approval=approval,
         fleet=fleet,
+        allocations=await pinned_allocations(session, policy),
     )
 
 

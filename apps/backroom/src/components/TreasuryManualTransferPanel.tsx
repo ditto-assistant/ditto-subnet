@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import type { z } from 'zod'
-import { alphaDisplay, alphaRao, manualRequestId, manualTransferConfirmation, manualControlSchema, manualPreviewSchema } from '../lib/treasury-manual.schemas'
+import { alphaDisplay, alphaRao, fundable, manualRequestId, manualTransferConfirmation, manualControlSchema, manualPreviewSchema } from '../lib/treasury-manual.schemas'
 import { getManualTransfers, previewManualTransfer, queueManualTransfer } from '../server/treasury-manual.functions'
 
 type Control = z.infer<typeof manualControlSchema>
@@ -20,7 +20,7 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
   const previewTransfer = useServerFn(previewManualTransfer)
   const queue = useServerFn(queueManualTransfer)
   const [state, setState] = useState(initialState)
-  const [bucket, setBucket] = useState(initialState.destinations.find(d => d.allocation_bps > 0)?.bucket_id ?? '')
+  const [bucket, setBucket] = useState(initialState.destinations.find(fundable)?.bucket_id ?? '')
   const [amount, setAmount] = useState('')
   const [reserve, setReserve] = useState('')
   const [reason, setReason] = useState('')
@@ -50,7 +50,7 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
   const blocked = readOnly || busy || !!state.blocked_reason || !!refreshError
   const previewDestinationEnabled = !!preview && state.destinations.some(d =>
     d.bucket_id === preview.envelope.request.bucket_id &&
-    d.holding_coldkey === preview.envelope.destination && d.allocation_bps > 0)
+    d.holding_coldkey === preview.envelope.destination && fundable(d))
   return <section className="mt-8 space-y-4 border-t border-[var(--line)] pt-6" aria-label="Manual collector transfers">
     <h2 className="text-lg font-semibold">Transfer to a service wallet</h2>
     <p className="text-sm text-[var(--muted-strong)]">Send SN118 alpha once from the collector to an approved holding wallet. Keep a minimum stake reserve. Recurring transfers are off. A wallet transfer does not prove purchased service credits.</p>
@@ -59,12 +59,12 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
     {state.readiness && <p className="text-sm">Collector stake: {alphaDisplay(state.readiness.available_alpha_rao)} alpha · observed finalized block {state.readiness.finalized_block}</p>}
     <fieldset disabled={blocked} className="grid gap-4 md:grid-cols-2">
       <label>Destination wallet<select aria-label="Destination wallet" className={inputClass} value={bucket} onChange={e => { setBucket(e.target.value); invalidate() }}>
-        {state.destinations.map(d => <option key={d.bucket_id} value={d.bucket_id} disabled={d.allocation_bps === 0}>{d.bucket_id.toUpperCase()}{d.allocation_bps === 0 ? ' — allocation off' : ''}</option>)}
+        {state.destinations.map(d => <option key={d.bucket_id} value={d.bucket_id} disabled={!fundable(d)}>{d.bucket_id.toUpperCase()}{fundable(d) ? '' : ' — allocation off'}</option>)}
       </select></label>
       <label>Amount (SN118 alpha)<input className={inputClass} inputMode="decimal" value={amount} onChange={e => { setAmount(e.target.value); invalidate() }} /></label>
       <label>Minimum alpha to retain staked<input className={inputClass} inputMode="decimal" value={reserve} onChange={e => { setReserve(e.target.value); invalidate() }} /></label>
       <label>Audit reason<input className={inputClass} maxLength={240} value={reason} onChange={e => { setReason(e.target.value); invalidate() }} /></label>
-      <button className={inputClass} disabled={!alphaRao(amount) || !alphaRao(reserve) || reason.trim().length < 8 || !state.destinations.some(d => d.bucket_id === bucket && d.allocation_bps > 0)} onClick={async () => {
+      <button className={inputClass} disabled={!alphaRao(amount) || !alphaRao(reserve) || reason.trim().length < 8 || !state.destinations.some(d => d.bucket_id === bucket && fundable(d))} onClick={async () => {
         setBusy(true); setActionError(''); setMessage('')
         try { setPreview(await previewTransfer({ data: { request_id: requestId, bucket_id: bucket, amount_rao: alphaRao(amount)!, retained_alpha_rao: alphaRao(reserve)!, reason: reason.trim() } })); setConfirmation('') }
         catch (cause) { setActionError(cause instanceof Error ? cause.message : 'Transfer preview unavailable') }

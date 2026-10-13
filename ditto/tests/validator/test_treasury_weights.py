@@ -18,21 +18,22 @@ from ditto_screening_protocol.treasury_enforcement import (
 )
 
 
-def fixture(*, service_bps=1000):
+def fixture(*, service_bps=1000, signed_range=None, pinned_bps=None):
     coldkey = Keypair.create_from_uri("//Alice")
+    bucket = {
+        "bucket_id": "gamma",
+        "allocation_bps": service_bps,
+        "holding_coldkey": Keypair.create_from_uri("//Charlie").ss58_address,
+    }
+    if signed_range is not None:
+        bucket["min_allocation_bps"], bucket["max_allocation_bps"] = signed_range
     policy = TreasuryEmissionPolicy(
         revision=1,
         genesis_hash="0x" + "11" * 32,
         collector_hotkey=Keypair.create_from_uri("//Bob").ss58_address,
         collector_coldkey=coldkey.ss58_address,
         collector_policy_digest="c" * 64,
-        buckets=[
-            {
-                "bucket_id": "gamma",
-                "allocation_bps": service_bps,
-                "holding_coldkey": Keypair.create_from_uri("//Charlie").ss58_address,
-            }
-        ],
+        buckets=[bucket],
     )
     approval = TreasuryPolicyApproval(
         policy=policy,
@@ -55,6 +56,9 @@ def fixture(*, service_bps=1000):
         policy_digest=policy.digest,
         approval=approval,
         fleet=[member],
+        allocations=None
+        if pinned_bps is None
+        else [{"bucket_id": "gamma", "allocation_bps": pinned_bps}],
         identity={
             "genesis_hash": policy.genesis_hash,
             "finalized_block": 101,
@@ -109,6 +113,29 @@ def test_larger_allocation_cannot_reuse_previous_policy_signature(allocation):
         update={
             "approval": pin.approval.model_copy(
                 update={"signature": previous.approval.signature}
+            )
+        }
+    )
+    with pytest.raises(ValueError):
+        fold_treasury_weights({"miner": 1}, **args)
+
+
+@pytest.mark.parametrize("pinned_bps", [0, 2500, 7500])
+def test_signed_range_folds_the_epoch_pinned_gamma_not_the_default(pinned_bps):
+    pin, args = fixture(signed_range=(0, 7500), pinned_bps=pinned_bps)
+    result = fold_treasury_weights({"miner": 1}, **args)
+    assert pin.policy.service_bps == 1000
+    assert result.get(pin.policy.collector_hotkey, 0) == pinned_bps / 10_000
+    assert result.get("miner", 0) == pytest.approx(1 - pinned_bps / 10_000)
+
+
+def test_signed_range_cannot_reuse_a_fixed_policy_signature():
+    fixed, _ = fixture()
+    pin, args = fixture(signed_range=(0, 7500), pinned_bps=5000)
+    args["pin"] = pin.model_copy(
+        update={
+            "approval": pin.approval.model_copy(
+                update={"signature": fixed.approval.signature}
             )
         }
     )

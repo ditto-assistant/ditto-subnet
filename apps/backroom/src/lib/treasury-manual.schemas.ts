@@ -47,9 +47,17 @@ export const manualControlSchema = z.object({
       bucket_id: bucket, holding_coldkey: address, alpha_rao: integer,
     })).max(20) })).max(100),
   }).nullable(),
-  destinations: z.array(z.object({ bucket_id: bucket, holding_coldkey: address, allocation_bps: z.number().int().min(0).max(10000) })).max(20),
+  destinations: z.array(z.object({
+    bucket_id: bucket, holding_coldkey: address, allocation_bps: z.number().int().min(0).max(10000),
+    min_allocation_bps: z.number().int().min(0).max(10000).nullish(),
+    max_allocation_bps: z.number().int().min(0).max(10000).nullish(),
+  })).max(20),
   requests: z.array(manualTransferSchema).max(20),
 })
+
+// Platform accepts a ranged bucket whenever its signed ceiling is positive.
+export const fundable = (d: { allocation_bps: number, max_allocation_bps?: number | null }) =>
+  (d.max_allocation_bps ?? d.allocation_bps) > 0
 
 export function alphaRao(value: string): number | null {
   if (!/^(0|[1-9]\d*)(\.\d{1,9})?$/.test(value)) return null

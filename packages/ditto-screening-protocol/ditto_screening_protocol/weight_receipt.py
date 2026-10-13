@@ -132,7 +132,7 @@ class FinalizedWeightReceipt(BaseModel):
             )
             or not math.isclose(
                 self.weights.get(self.treasury_pin.policy.collector_hotkey, 0),
-                self.treasury_pin.policy.service_bps / 10_000,
+                self.treasury_pin.service_bps / 10_000,
                 abs_tol=1e-12,
                 rel_tol=0,
             )

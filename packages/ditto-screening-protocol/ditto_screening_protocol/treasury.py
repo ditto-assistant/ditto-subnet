@@ -9,9 +9,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 Hash = Annotated[str, Field(pattern=r"^0x[0-9a-f]{64}$")]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -27,6 +36,50 @@ class TreasuryEmissionBucket(BaseModel):
     bucket_id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,47}$")]
     allocation_bps: Annotated[int, Field(ge=0, le=10000)]
     holding_coldkey: Address
+    # Optional signed operating range. Without both bounds the bucket is fixed
+    # at ``allocation_bps``; with them, ``allocation_bps`` is the signed default
+    # and each enforcing epoch pins an operator-chosen value inside the range.
+    min_allocation_bps: Annotated[int, Field(ge=0, le=10000)] | None = None
+    max_allocation_bps: Annotated[int, Field(ge=0, le=10000)] | None = None
+
+    @model_validator(mode="after")
+    def bounded_default(self) -> TreasuryEmissionBucket:
+        if (self.min_allocation_bps is None) != (self.max_allocation_bps is None):
+            raise ValueError("allocation range requires both bounds")
+        if not self.minimum_bps <= self.allocation_bps <= self.maximum_bps:
+            raise ValueError("signed default allocation is outside its range")
+        return self
+
+    @model_serializer(mode="wrap")
+    def omit_fixed_bounds(self, handler: SerializerFunctionWrapHandler):
+        # No return annotation: it would replace the published OpenAPI schema.
+        # A fixed bucket serializes exactly as before ranges existed, so every
+        # historical digest, signature and stored epoch pin stays byte-stable.
+        data = handler(self)
+        if self.min_allocation_bps is None:
+            data.pop("min_allocation_bps", None)
+            data.pop("max_allocation_bps", None)
+        return data
+
+    @property
+    def ranged(self) -> bool:
+        return self.min_allocation_bps is not None
+
+    @property
+    def minimum_bps(self) -> int:
+        return (
+            self.allocation_bps
+            if self.min_allocation_bps is None
+            else self.min_allocation_bps
+        )
+
+    @property
+    def maximum_bps(self) -> int:
+        return (
+            self.allocation_bps
+            if self.max_allocation_bps is None
+            else self.max_allocation_bps
+        )
 
 
 class TreasuryEmissionPolicy(BaseModel):
@@ -71,13 +124,31 @@ class TreasuryEmissionPolicy(BaseModel):
             self.collector_coldkey,
         }.intersection(wallets):
             raise ValueError("holding coldkeys must be distinct from collector")
-        if self.service_bps > 10000:
+        # Every in-range choice must fit, not only the signed default.
+        if self.maximum_service_bps > 10000:
             raise ValueError("combined service allocation exceeds 10000 bps")
         return self
 
     @property
     def service_bps(self) -> int:
+        """Signed default; enforcing folds use ``EnforcingTreasuryPin.service_bps``."""
         return sum(bucket.allocation_bps for bucket in self.buckets)
+
+    @property
+    def maximum_service_bps(self) -> int:
+        return sum(bucket.maximum_bps for bucket in self.buckets)
+
+    @property
+    def ranged(self) -> bool:
+        return any(bucket.ranged for bucket in self.buckets)
+
+    def admits(self, allocations: Mapping[str, int]) -> bool:
+        """Whether an operator allocation names every bucket inside its signed range."""
+        bounds = {b.bucket_id: (b.minimum_bps, b.maximum_bps) for b in self.buckets}
+        return set(allocations) == set(bounds) and all(
+            type(value) is int and bounds[key][0] <= value <= bounds[key][1]
+            for key, value in allocations.items()
+        )
 
     @property
     def digest(self) -> str:

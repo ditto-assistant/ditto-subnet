@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import type { z } from 'zod'
 import { treasuryControlSchema, treasurySettingsSchema } from '../lib/treasury.schemas'
+import { bucketMaximumBps, bucketMinimumBps, type TreasuryPolicyBucket } from '../lib/treasury-ledger.schemas'
 import { getTreasurySettings, saveTreasurySettings } from '../server/treasury.functions'
 
 type Settings = z.infer<typeof treasurySettingsSchema>
@@ -38,12 +39,17 @@ function editable(settings: Settings): Settings {
   }
 }
 
+/** The recorded coldkey-signed policy, when one exists. */
+export type SignedGammaPolicy = { mode: 'observe' | 'enforce' | 'pause', buckets: TreasuryPolicyBucket[] }
+
 export function TreasuryControlPanel({
   initialState,
   readOnly,
+  signed = null,
 }: {
   initialState: Control
   readOnly: boolean
+  signed?: SignedGammaPolicy | null
 }) {
   const refresh = useServerFn(getTreasurySettings)
   const save = useServerFn(saveTreasurySettings)
@@ -58,6 +64,9 @@ export function TreasuryControlPanel({
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const total = settings.service_buckets.reduce((sum, bucket) => sum + bucket.allocation_bps, 0)
+  const signedBucket = (id: string) => signed?.buckets.find((b) => b.bucket_id === id)
+  // Enforcing a ranged policy makes this % the live knob, folded next epoch.
+  const liveKnob = signed?.mode === 'enforce' && signed.buckets.some((b) => b.min_allocation_bps != null)
   const parsed = treasurySettingsSchema.safeParse(settings)
   const validDrafts = allocationDrafts.every(validAllocationText)
   const updateBucket = (index: number, change: Partial<Bucket>) => {
@@ -99,7 +108,9 @@ export function TreasuryControlPanel({
           },
         }),
       )
-      setMessage('Wallet policy recorded. Live emissions still require a matching signed policy and activation. Transfers are controlled separately.')
+      setMessage(liveKnob
+        ? 'Gamma allocation recorded. Enforcing epochs fold it from the next epoch, inside the signed range. Transfers are controlled separately.'
+        : 'Wallet policy recorded. Live emissions still require a matching signed policy and activation. Transfers are controlled separately.')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to record treasury policy')
     } finally {
@@ -116,8 +127,10 @@ export function TreasuryControlPanel({
           <h2 className="text-lg font-semibold">Service treasury wallets</h2>
           <p className="mt-2 max-w-[70ch] text-sm text-[var(--muted-strong)]">
             Allocate up to 100% of miner emissions to Gamma service wallets. The remainder goes to
-            miners before burn. Recording this proposal does not change live emissions; a matching
-            signed policy and activation are required.
+            miners before burn.{' '}
+            {liveKnob
+              ? 'Gamma is enforcing a coldkey-signed range: saving a % inside that range changes live emissions from the next epoch, like burn, with no new signature. Wallet changes still require pausing Gamma.'
+              : 'Recording this proposal does not change live emissions; a matching signed policy and activation are required.'}
           </p>
         </div>
         <button
@@ -231,23 +244,26 @@ export function TreasuryControlPanel({
                   onChange={(event) => updateBucket(index, { purpose: event.target.value })}
                 />
               </label>
-              <label>
-                Allocation (% of miner emissions)
-                <input
-                  className={inputClass}
-                  type="text"
-                  inputMode="decimal"
-                  value={allocationDrafts[index]}
-                  onChange={(event) => {
-                    const value = event.target.value
-                    setAllocationDrafts((current) => current.map((draft, i) => i === index ? value : draft))
-                    setConfirmation('')
-                    if (validAllocationText(value)) {
-                      updateBucket(index, { allocation_bps: Math.round(Number(value) * 100) })
-                    }
-                  }}
-                />
-              </label>
+              <div>
+                <label>
+                  Allocation (% of miner emissions)
+                  <input
+                    className={inputClass}
+                    type="text"
+                    inputMode="decimal"
+                    value={allocationDrafts[index]}
+                    onChange={(event) => {
+                      const value = event.target.value
+                      setAllocationDrafts((current) => current.map((draft, i) => i === index ? value : draft))
+                      setConfirmation('')
+                      if (validAllocationText(value)) {
+                        updateBucket(index, { allocation_bps: Math.round(Number(value) * 100) })
+                      }
+                    }}
+                  />
+                </label>
+                <SignedRange bucket={signedBucket(bucket.bucket_id)} allocationBps={bucket.allocation_bps} />
+              </div>
               <label>
                 Holding coldkey
                 <input
@@ -442,5 +458,18 @@ export function TreasuryControlPanel({
         </button>
       </fieldset>
     </section>
+  )
+}
+
+function SignedRange({ bucket, allocationBps }: { bucket?: TreasuryPolicyBucket, allocationBps: number }) {
+  if (!bucket) return null
+  const low = bucketMinimumBps(bucket)
+  const high = bucketMaximumBps(bucket)
+  const inside = low <= allocationBps && allocationBps <= high
+  return (
+    <span className={`mt-1 block text-xs ${inside ? 'text-[var(--muted-strong)]' : 'text-[var(--red)]'}`} role={inside ? undefined : 'alert'}>
+      {low === high ? `Signed fixed at ${low / 100}%` : `Signed range ${low / 100}%–${high / 100}%`}
+      {inside ? '' : ' · outside the signed policy; Platform refuses it while Gamma is enforcing'}
+    </span>
   )
 }

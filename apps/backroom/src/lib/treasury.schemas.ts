@@ -191,7 +191,7 @@ export const treasuryControlSchema = z.object({
   revision: z.number().int().nonnegative(),
   miner_bps: z.number().int().min(0).max(10000),
   history: z.array(treasuryRevisionSchema),
-  weight_effect: z.literal('none'),
+  weight_effect: z.enum(['none', 'next_epoch']).default('none'),
 })
 
 export const recordTreasurySettingsInputSchema = z.object({

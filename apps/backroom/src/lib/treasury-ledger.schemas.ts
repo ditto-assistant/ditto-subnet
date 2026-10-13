@@ -6,6 +6,24 @@ import type { components } from '../generated/platform-api'
 const address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{47,48}$/)
 const hash = z.string().regex(/^0x[0-9a-f]{64}$/)
 const digest = z.string().regex(/^[0-9a-f]{64}$/)
+const bps = z.number().int().min(0).max(10000)
+// The signed range must survive parsing: dropping it would change the digest
+// Platform verifies, so a ranged approval could never be recorded.
+const bucket = z.object({
+  bucket_id: z.string().regex(/^[a-z][a-z0-9_]{1,47}$/),
+  allocation_bps: bps,
+  holding_coldkey: address,
+  min_allocation_bps: bps.nullish(),
+  max_allocation_bps: bps.nullish(),
+}).refine((value) => (value.min_allocation_bps == null) === (value.max_allocation_bps == null), {
+  message: 'allocation range requires both bounds',
+}).refine((value) => value.min_allocation_bps == null
+  || (value.min_allocation_bps <= value.allocation_bps && value.allocation_bps <= (value.max_allocation_bps ?? 0)), {
+  message: 'signed default allocation is outside its range',
+})
+export type TreasuryPolicyBucket = z.infer<typeof bucket>
+export const bucketMaximumBps = (b: TreasuryPolicyBucket) => b.max_allocation_bps ?? b.allocation_bps
+export const bucketMinimumBps = (b: TreasuryPolicyBucket) => b.min_allocation_bps ?? b.allocation_bps
 const policy = z.object({
   version: z.literal(1),
   revision: z.number().int().min(1),
@@ -14,12 +32,8 @@ const policy = z.object({
   collector_hotkey: address,
   collector_coldkey: address,
   collector_policy_digest: digest,
-  buckets: z.array(z.object({
-    bucket_id: z.string().regex(/^[a-z][a-z0-9_]{1,47}$/),
-    allocation_bps: z.number().int().min(0).max(10000),
-    holding_coldkey: address,
-  })).min(1).max(20),
-}).refine((value) => value.buckets.reduce((total, bucket) => total + bucket.allocation_bps, 0) <= 10000, {
+  buckets: z.array(bucket).min(1).max(20),
+}).refine((value) => value.buckets.reduce((total, b) => total + bucketMaximumBps(b), 0) <= 10000, {
   path: ['buckets'], message: 'combined service allocation exceeds 10000 bps',
 }) satisfies z.ZodType<components['schemas']['TreasuryEmissionPolicy']>
 
@@ -67,6 +81,10 @@ const enforcingPin = z.object({
     signature: z.string().regex(/^0x[0-9a-f]{128}$/),
   }),
   fleet: z.array(fleetMember).min(1).max(4096),
+  allocations: z.array(z.object({
+    bucket_id: z.string().regex(/^[a-z][a-z0-9_]{1,47}$/),
+    allocation_bps: bps,
+  })).min(1).max(20).nullish(),
 }) satisfies z.ZodType<components['schemas']['EnforcingTreasuryPin']>
 
 export const treasuryLedgerReadinessSchema = z.object({

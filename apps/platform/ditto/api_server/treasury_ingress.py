@@ -18,6 +18,7 @@ from ditto.api_models.treasury_ingress import (
 )
 from ditto.api_models.treasury_settings import TreasurySettings
 from ditto.api_server.ledger_pin import LedgerPin, treasury_pin_from_context
+from ditto.api_server.treasury_runtime import settings_match_policy
 from ditto.db.models import (
     LedgerEpochSnapshot,
     TreasuryPublicEvent,
@@ -135,23 +136,14 @@ async def _receipt(
     if revision is None or digest(revision.settings) != revision.checksum:
         raise ValueError("historical settings checksum invalid or absent")
     settings = TreasurySettings.model_validate(revision.settings)
-    expected = sorted(
-        (b.bucket_id, b.allocation_bps, b.holding_coldkey) for b in policy.buckets
-    )
-    actual = sorted(
-        (b.bucket_id, b.allocation_bps, b.holding_coldkey)
-        for b in settings.service_buckets
-    )
-    if (
-        settings.allocation_version != 2
-        or (settings.treasury_hotkey, settings.treasury_coldkey)
-        != (policy.collector_hotkey, policy.collector_coldkey)
-        or actual != expected
-    ):
+    if not settings_match_policy(settings, policy):
         raise ValueError("historical destination settings differ from signed policy")
     buckets = [b for b in settings.service_buckets if b.bucket_id == selector.bucket_id]
+    # The epoch pin, not the settings row, records the allocation it folded.
+    allocation = {b.bucket_id: b.allocation_bps for b in pin.effective_buckets}
     if len(buckets) != 1 or (
-        selector.stage == "service_distribution" and not buckets[0].allocation_bps
+        selector.stage == "service_distribution"
+        and not allocation[buckets[0].bucket_id]
     ):
         raise ValueError("active historical service bucket absent")
     bucket = buckets[0]
@@ -276,7 +268,7 @@ async def _receipt(
             collector_coldkey=policy.collector_coldkey,
             destinations=tuple(
                 ServiceDestination(b.bucket_id, b.allocation_bps, b.holding_coldkey)
-                for b in policy.buckets
+                for b in pin.effective_buckets
             ),
         )
         amounts = {item.bucket_id: item.alpha_rao for item in split}
@@ -345,7 +337,7 @@ async def _receipt(
             else "not_attributed",
             maintenance_bps=0,
             gm_bps=0,
-            allocation_bps=bucket.allocation_bps if distribution else 0,
+            allocation_bps=allocation[bucket.bucket_id] if distribution else 0,
             allocated_alpha_rao=proof.amount_atomic if distribution else 0,
             source_alpha_rao=proof.source_amount_rao if distribution else 0,
             route="alpha_transfer" if asset == "SN118_ALPHA" else "tao_transfer",
