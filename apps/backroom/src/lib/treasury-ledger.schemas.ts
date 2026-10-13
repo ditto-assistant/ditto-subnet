@@ -66,7 +66,7 @@ const fleetMember = z.object({
   collector_policy_digest: digest,
 })
 
-const enforcingPin = z.object({
+export const enforcingTreasuryPinSchema = z.object({
   version: z.literal(2),
   mode: z.literal('enforce'),
   epoch_index: z.number().int().nonnegative(),
@@ -85,6 +85,24 @@ const enforcingPin = z.object({
     bucket_id: z.string().regex(/^[a-z][a-z0-9_]{1,47}$/),
     allocation_bps: bps,
   })).min(1).max(20).nullish(),
+}).superRefine((pin, context) => {
+  // Mirror the protocol: allocations exist exactly for a ranged policy and
+  // name every signed bucket once, sorted, inside its signed bounds.
+  const ranged = pin.policy.buckets.some((b) => b.min_allocation_bps != null)
+  if (ranged !== (pin.allocations != null)) {
+    context.addIssue({ code: 'custom', message: 'pinned allocation must match the signed policy shape' })
+    return
+  }
+  if (pin.allocations == null) return
+  const ids = pin.allocations.map((a) => a.bucket_id)
+  const signed = new Map(pin.policy.buckets.map((b) => [b.bucket_id, b]))
+  if (ids.some((id, i) => i > 0 && ids[i - 1] >= id) || ids.length !== signed.size
+    || pin.allocations.some((a) => {
+      const b = signed.get(a.bucket_id)
+      return !b || a.allocation_bps < bucketMinimumBps(b) || a.allocation_bps > bucketMaximumBps(b)
+    })) {
+    context.addIssue({ code: 'custom', message: 'pinned allocation is outside the signed range' })
+  }
 }) satisfies z.ZodType<components['schemas']['EnforcingTreasuryPin']>
 
 export const treasuryLedgerReadinessSchema = z.object({
@@ -141,7 +159,7 @@ export const treasuryLedgerReadinessSchema = z.object({
   latest_stored_epoch_index: z.number().int().nonnegative().nullable(),
   latest_stored_ledger_digest: digest.nullable(),
   stored_shadow_pin: pin.nullable(),
-  stored_enforcing_pin: enforcingPin.nullable().default(null),
+  stored_enforcing_pin: enforcingTreasuryPinSchema.nullable().default(null),
   enforcement_configured: z.boolean().default(false),
   fleet_gate: z.enum(['not_checked', 'ready', 'not_ready']).default('not_checked'),
   blocking_reasons: z.array(z.enum([

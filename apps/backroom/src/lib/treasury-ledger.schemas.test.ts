@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { publicTreasuryApprovalSchema } from './treasury-ledger.schemas'
+import { enforcingTreasuryPinSchema, publicTreasuryApprovalSchema } from './treasury-ledger.schemas'
 
 const approval = {
   signature: `0x${'a'.repeat(128)}`,
@@ -60,4 +60,30 @@ it('bounds the aggregate by every bucket ceiling, not only the signed default', 
   const wide = structuredClone(ranged)
   wide.policy.buckets.push({ bucket_id: 'bitsec', allocation_bps: 0, holding_coldkey: '5' + 'd'.repeat(47), min_allocation_bps: 0, max_allocation_bps: 2501 })
   expect(publicTreasuryApprovalSchema.safeParse(wide).success).toBe(false)
+})
+
+const enforcing = (allocations: unknown) => ({
+  version: 2, mode: 'enforce', epoch_index: 9, first_block: 100, pinned_block: 101,
+  pinned_block_hash: `0x${'e'.repeat(64)}`, policy: ranged.policy, policy_digest: 'd'.repeat(64),
+  identity: {
+    genesis_hash: `0x${'b'.repeat(64)}`, netuid: 118, finalized_block: 101, finalized_block_hash: `0x${'e'.repeat(64)}`,
+    uid: 4, hotkey: '5' + 'a'.repeat(47), owner_coldkey: '5' + 'b'.repeat(47), uid_hotkey: '5' + 'a'.repeat(47),
+    subnet_owner_coldkey: '5' + 'f'.repeat(47),
+  },
+  approval: ranged,
+  fleet: [{
+    validator_hotkey: '5' + 'e'.repeat(47), protocol_version: 30, treasury_pin_version: 2,
+    treasury_dispatch_version: 2, approved_policy_digest: 'd'.repeat(64), collector_policy_digest: 'c'.repeat(64),
+  }],
+  allocations,
+})
+
+it.each([
+  [[{ bucket_id: 'gm', allocation_bps: 6000 }], true],
+  [null, false],
+  [[{ bucket_id: 'gm', allocation_bps: 7501 }], false],
+  [[{ bucket_id: 'other', allocation_bps: 10 }], false],
+  [[{ bucket_id: 'gm', allocation_bps: 10 }, { bucket_id: 'gm', allocation_bps: 10 }], false],
+])('accepts only an in-range pinned allocation for a ranged policy %#', (allocations, ok) => {
+  expect(enforcingTreasuryPinSchema.safeParse(enforcing(allocations)).success).toBe(ok)
 })

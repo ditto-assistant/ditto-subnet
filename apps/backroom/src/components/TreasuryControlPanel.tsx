@@ -42,6 +42,13 @@ function editable(settings: Settings): Settings {
 /** The recorded coldkey-signed policy, when one exists. */
 export type SignedGammaPolicy = { mode: 'observe' | 'enforce' | 'pause', buckets: TreasuryPolicyBucket[] }
 
+function withoutAllocations(settings: Settings): string {
+  return JSON.stringify({
+    ...settings,
+    service_buckets: settings.service_buckets.map((bucket) => ({ ...bucket, allocation_bps: 0 })),
+  })
+}
+
 export function TreasuryControlPanel({
   initialState,
   readOnly,
@@ -64,9 +71,13 @@ export function TreasuryControlPanel({
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const total = settings.service_buckets.reduce((sum, bucket) => sum + bucket.allocation_bps, 0)
-  const signedBucket = (id: string) => signed?.buckets.find((b) => b.bucket_id === id)
+  // A signed range applies only to the exact signed wallet, as on Platform.
+  const signedBucket = (bucket: Bucket) =>
+    signed?.buckets.find((b) => b.bucket_id === bucket.bucket_id && b.holding_coldkey === bucket.holding_coldkey)
   // Enforcing a ranged policy makes this % the live knob, folded next epoch.
   const liveKnob = signed?.mode === 'enforce' && signed.buckets.some((b) => b.min_allocation_bps != null)
+  // While it is, Platform accepts only allocation changes; anything else needs a pause.
+  const mixedEdit = liveKnob && withoutAllocations(settings) !== withoutAllocations(editable(state.effective))
   const parsed = treasurySettingsSchema.safeParse(settings)
   const validDrafts = allocationDrafts.every(validAllocationText)
   const updateBucket = (index: number, change: Partial<Bucket>) => {
@@ -159,6 +170,12 @@ export function TreasuryControlPanel({
         {' · '}Revision {state.revision}
       </p>
       {total > 10000 && <p role="alert">Combined Gamma allocation must be 100% or less.</p>}
+      {mixedEdit && (
+        <p role="alert">
+          While Gamma enforces a signed range, only the Gamma % can change. Pause Gamma to change
+          wallets, collector or payment rules.
+        </p>
+      )}
       {total === 10000 && <p className="text-sm">This proposal leaves 0% for miners.</p>}
       <p className="text-sm text-[var(--muted-strong)]">
         Burn reduces only the miner remainder; it does not fund Gamma. For a 75% Gamma / 25% miner
@@ -262,7 +279,7 @@ export function TreasuryControlPanel({
                     }}
                   />
                 </label>
-                <SignedRange bucket={signedBucket(bucket.bucket_id)} allocationBps={bucket.allocation_bps} />
+                <SignedRange bucket={signedBucket(bucket)} allocationBps={bucket.allocation_bps} />
               </div>
               <label>
                 Holding coldkey
@@ -450,7 +467,7 @@ export function TreasuryControlPanel({
         <button
           className={inputClass}
           disabled={
-            !validDrafts || !parsed.success || reason.trim().length < 8 || confirmation !== 'RECORD TREASURY SHADOW POLICY'
+            mixedEdit || !validDrafts || !parsed.success || reason.trim().length < 8 || confirmation !== 'RECORD TREASURY SHADOW POLICY'
           }
           onClick={submit}
         >

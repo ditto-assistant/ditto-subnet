@@ -164,3 +164,22 @@ it('shows the signed Gamma range and flags a value outside it', () => {
   fireEvent.change(screen.getByLabelText('Allocation (% of miner emissions)'), { target: { value: '80' } })
   expect(screen.getByRole('alert').textContent).toContain('outside the signed policy')
 })
+
+it('refuses a mixed edit while Gamma enforces a signed range and ignores a re-walleted bucket', () => {
+  render(
+    <TreasuryControlPanel
+      initialState={control}
+      readOnly={false}
+      signed={{
+        mode: 'enforce',
+        buckets: [{ bucket_id: 'gm_credits', allocation_bps: 1000, holding_coldkey: '5' + 'c'.repeat(47), min_allocation_bps: 0, max_allocation_bps: 7500 }],
+      }}
+    />,
+  )
+  fireEvent.change(screen.getByLabelText('Holding coldkey'), { target: { value: '5' + 'd'.repeat(47) } })
+  expect(screen.queryByText('Signed range 0%–75%')).toBeNull()
+  expect(screen.getByRole('alert').textContent).toContain('only the Gamma % can change')
+  fireEvent.change(screen.getByLabelText('Reason for change'), { target: { value: 'operator requested emission split' } })
+  fireEvent.change(screen.getByLabelText('Type RECORD TREASURY SHADOW POLICY'), { target: { value: 'RECORD TREASURY SHADOW POLICY' } })
+  expect((screen.getByRole('button', { name: 'Record wallet policy' }) as HTMLButtonElement).disabled).toBe(true)
+})
