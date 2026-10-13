@@ -5384,6 +5384,7 @@ async def public_miner_profile(
             PublicMinerSubmission(
                 agent_id=agent.agent_id,
                 name=display,
+                version=agent.version,
                 status=_public_agent_status(str(agent.status)),
                 created_at=agent.created_at,
                 avatar_url=avatar_url,

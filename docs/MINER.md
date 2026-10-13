@@ -785,6 +785,21 @@ one-shot signed actions still happen in the CLI. The hosted MCP at
 `https://dittobench.ai/mcp` returns those `ditto` commands instead of
 signing remotely.
 
+The **Submissions** tab shows each upload's submission version (`v1`, `v2`,
+and so on), status, and time. Older submissions without a stored version show
+**Unversioned**. With the `download` scope, use **Download** to recover the
+original submitted archive, including rejected or held submissions. The link
+expires after five minutes and only your hotkey's submissions are accessible.
+Existing sessions without `download` must sign in again with Download enabled.
+New dashboard sign-ins and MCP authorizations request that permission by default.
+For read-only access, disable Download in a new dashboard sign-in or have the
+MCP client request only the `read` scope.
+
+The miner MCP exposes the same download as `get_my_submission_artifact` with
+an `agent_id`, and `list_my_submissions` includes each submission's version.
+The authenticated HTTP route is `GET /api/v1/me/agents/{agent_id}/artifact`.
+These owner downloads do not change the public source release policy.
+
 Public miner profiles are `/miner/<hotkey>` and `/h/<handle>`. X, GitHub,
 and Discord are optional.
 

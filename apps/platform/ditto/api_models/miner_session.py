@@ -123,6 +123,7 @@ class PublicMinerSubmission(BaseModel):
 
     agent_id: UUID
     name: str
+    version: int | None = Field(default=None, ge=1)
     status: str
     created_at: datetime
     avatar_url: str | None = None
@@ -168,3 +169,15 @@ class MinerMeReviewsResponse(BaseModel):
 
     generated_at: datetime
     reviews: list[PublicMinerReview]
+
+
+class MinerArtifactDownload(BaseModel):
+    """A private download of the signed-in miner's original submission."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    version: int | None = Field(default=None, ge=1)
+    sha256: str
+    download_url: str
+    expires_at: datetime

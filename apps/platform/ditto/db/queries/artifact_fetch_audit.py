@@ -50,10 +50,12 @@ logger = logging.getLogger(__name__)
 # only signal that an artifact was served without leaving a record.
 AUDIT_WRITE_FAILED = "artifact fetch audit write failed"
 
-RequesterKind = Literal["validator", "screener", "admin", "public"]
+RequesterKind = Literal["validator", "screener", "admin", "public", "miner"]
 
 # Route names, not request paths. Paths carry ids and get reshaped; the question
 # this identifier answers is "which door did the fetcher come through".
+ENDPOINT_MINER_ARTIFACT = "miner_me.my_artifact"
+ENDPOINT_MINER_MCP_ARTIFACT = "miner_mcp.get_my_submission_artifact"
 ENDPOINT_PUBLIC_ARTIFACT = "public.agent_artifact"
 ENDPOINT_VALIDATOR_ARTIFACT = "validator.agent_artifact"
 ENDPOINT_VALIDATOR_CODING_HARNESS = "validator.coding_harness_launch"
