@@ -316,7 +316,8 @@ async def _gamma_is_live_knob(session: AsyncSession) -> bool:
     try:
         settings = runtime_revision(row).settings
     except ValueError:
-        return False
+        # The save path refuses this state too; never report it as inert.
+        raise HTTPException(409, "Gamma runtime control is invalid") from None
     return settings.mode == "enforce" and settings.approval.policy.ranged
 
 

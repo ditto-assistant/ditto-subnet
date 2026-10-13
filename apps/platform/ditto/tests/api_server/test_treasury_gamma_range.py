@@ -309,3 +309,16 @@ async def test_epoch_insert_refuses_a_gamma_change_during_materialization(
         rows = list(await s.scalars(select(LedgerEpochSnapshot)))
     assert (result is not None) is stored
     assert len(rows) == int(stored)
+
+
+async def test_settings_read_refuses_invalid_runtime_like_the_save_path(
+    app, client, session_maker, monkeypatch
+):
+    guard_signatures(app, session_maker, monkeypatch)
+    await enforce_runtime(session_maker, ranged_pin())
+    monkeypatch.setattr(
+        "ditto.api_server.treasury_runtime.verify_public_signature", lambda *_: False
+    )
+    control = await client.get(URL, headers=_HEADERS)
+    assert control.status_code == 409
+    assert control.json()["message"] == "Gamma runtime control is invalid"
