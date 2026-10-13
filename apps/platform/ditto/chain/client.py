@@ -7,7 +7,7 @@ import logging
 import time
 from contextlib import asynccontextmanager, nullcontext
 from typing import TYPE_CHECKING, Any, Literal
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from ditto.chain.errors import (
     ChainAuthError,
@@ -1573,8 +1573,16 @@ class ChainClient:
             return url
         if auth_mode == "path":
             return f"{url.rstrip('/')}/{quote(api_key, safe='')}"
-        separator = "&" if "?" in url else "?"
-        return f"{url}{separator}authorization={quote(api_key, safe='')}"
+        parameter = "apikey" if auth_mode == "apikey" else "authorization"
+        parts = urlsplit(url)
+        # Replace stale credentials rather than sending ambiguous duplicates.
+        query = [
+            (name, value)
+            for name, value in parse_qsl(parts.query, keep_blank_values=True)
+            if name != parameter
+        ]
+        query.append((parameter, api_key))
+        return urlunsplit(parts._replace(query=urlencode(query, quote_via=quote)))
 
     def _historical_substrate_urls(self) -> tuple[str, ...]:
         """Return configured archive first, then credential-free fallbacks.

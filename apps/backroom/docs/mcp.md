@@ -119,6 +119,15 @@ disputes, validator queue/slot/inference policy, the scoring lease TTL,
 benchmark rollouts, scoring policy, scores and leaderboards, and the emission
 burn.
 
+`get_source_release_policy` reads the public source policy and completed-payout
+gate diagnostics. `release_gate.archive_provider`, when present, reports the
+running Platform's configured archive host, authentication mode (`none`,
+`query`, `path`, or `apikey`), and credential presence. It never returns the
+provider URL or key. This is configuration evidence, not a provider health or
+authentication result; older responses without the field mean unknown. Use
+the durable collector cursor and exact-agent payout receipts to verify source
+release recovery. Requires `backroom:read` and changes nothing.
+
 `get_scoring_lease_settings` / `set_scoring_lease_settings` (#1156) read and
 revise the deadline stamped on new canonical and score-retest replacement
 tickets (default 180 minutes, bounded 60-240 so it stays inside the validator

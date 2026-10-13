@@ -425,7 +425,10 @@ class TestParseChainConfigFromEnv:
         assert config.archive_rpc_url == "wss://rpc.example/archive"
         assert config.archive_rpc_api_key == "provider-key"
 
-    def test_explicit_path_authenticated_archive(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize("auth_mode", ["path", "apikey"])
+    def test_explicit_authenticated_archive(
+        self, monkeypatch: pytest.MonkeyPatch, auth_mode: str
+    ):
         monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "tok")
         monkeypatch.setenv("SUBTENSOR_NETWORK", "finney")
         monkeypatch.setenv(
@@ -433,11 +436,11 @@ class TestParseChainConfigFromEnv:
             "wss://api-bittensor-mainnet.n.dwellir.com",
         )
         monkeypatch.setenv("SUBTENSOR_ARCHIVE_RPC_API_KEY", "provider-key")
-        monkeypatch.setenv("SUBTENSOR_ARCHIVE_RPC_AUTH_MODE", "path")
+        monkeypatch.setenv("SUBTENSOR_ARCHIVE_RPC_AUTH_MODE", auth_mode)
 
         config = parse_chain_config_from_env()
 
-        assert config.archive_rpc_auth_mode == "path"
+        assert config.archive_rpc_auth_mode == auth_mode
 
     def test_invalid_archive_auth_mode_raises(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "tok")
