@@ -893,11 +893,26 @@ jobs:
 
       - run: pnpm build
 
+      # Keep a profile of the exact release bundle so startup CPU failures can
+      # be investigated even when an unchanged-head deployment retry succeeds.
+      # This command builds with --dry-run and profiles a local workerd isolate.
+      - name: Profile Backroom startup
+        run: pnpm exec wrangler check startup --outfile worker-startup.cpuprofile
+
       - name: Deploy the subnet-only worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm exec wrangler deploy
+
+      - name: Retain Backroom startup profile
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backroom-startup-${{ needs.release.outputs.commit_sha }}-${{ github.run_attempt }}
+          path: apps/backroom/worker-startup.cpuprofile
+          if-no-files-found: warn
+          retention-days: 14
 
   build-submission-builder:
     needs: [plan, release, deploy_platform]

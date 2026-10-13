@@ -1,6 +1,6 @@
 import '@tanstack/react-start/server-only'
 
-import type { BackroomEnv } from './mcp.server'
+import type { BackroomEnv } from './mcp-contract.server'
 
 const TOKEN_KEY_PREFIX = 'token:'
 const TOKEN_CACHE_PATH = '/__backroom/oauth-token-cache/'

@@ -1,16 +1,14 @@
 import '@tanstack/react-start/server-only'
 import { observerGrant, observerRequestAllowed } from './treasury-observer-access.server'
 
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { accessLevelForEmail } from '../lib/auth.policy'
 import {
   BACKROOM_CHALLENGE_SCOPE,
   BACKROOM_READ_SCOPE,
-  createBackroomMcpServer,
   type BackroomEnv,
   type McpGrantProps,
-} from './mcp.server'
+} from './mcp-contract.server'
 import {
   insufficientScopeResponse,
   requiredScopesForRequest,
@@ -89,6 +87,14 @@ export class BackroomMcpHandler extends WorkerEntrypoint<
       }
     }
 
+    // Import the SDK and large schema/tool registry only after the live staff
+    // entitlement, session and OAuth scope checks have passed. Loading them at
+    // Worker initialization consumed startup CPU even for discovery and OAuth.
+    const [{ createBackroomMcpServer }, { WebStandardStreamableHTTPServerTransport }] =
+      await Promise.all([
+        import('./mcp.server'),
+        import('@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'),
+      ])
     const server = createBackroomMcpServer(props)
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
