@@ -19,7 +19,8 @@ def test_contract_matches_season_decisions() -> None:
     assert CONTRACT.contract_id == CONTRACT_ID == "reranker-season-v1"
     assert CONTRACT.latency.budget_ms_p50 == 50.0
     assert CONTRACT.scoring.pool_size == 20
-    assert CONTRACT.scoring.max_len == 256
+    assert CONTRACT.scoring.max_len == 128
+    assert CONTRACT.latency.max_ratio_to_incumbent == 3.5
     assert CONTRACT.scoring.rrf_k == 60.0
     assert CONTRACT.scoring.ce_weight == 0.7
     assert CONTRACT.scoring.ndcg_k == 10

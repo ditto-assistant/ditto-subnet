@@ -8,13 +8,29 @@ version = "0.1.0"
 description = "SN118 Season 2 reranker competition: contract, evaluation pools and deterministic scorer."
 requires-python = ">=3.11,<3.14"
 license = "MIT"
+# The contract module has no dependencies, so Platform and the miner CLI can
+# import it without pulling an inference runtime. Scoring needs the extra.
 dependencies = []
+
+[project.optional-dependencies]
+score = [
+    "numpy>=1.26",
+    # Pinned to the product's ONNX Runtime (backend crossencoder export.sh).
+    "onnxruntime==1.22.0",
+    "onnx>=1.17,<2",
+]
+
+[project.scripts]
+dittobench-reranker = "dittobench_reranker.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["dittobench_reranker"]
+
+[tool.pytest.ini_options]
+pythonpath = ["tests"]
 
 [tool.ruff]
 line-length = 88

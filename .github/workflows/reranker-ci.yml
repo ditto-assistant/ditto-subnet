@@ -39,11 +39,11 @@ jobs:
 
       - name: Lint and format
         run: |
-          uv run --group dev ruff check .
-          uv run --group dev ruff format --check .
+          uv run --group dev --extra score ruff check .
+          uv run --group dev --extra score ruff format --check .
 
       - name: Test
-        run: uv run --group dev pytest -q
+        run: uv run --group dev --extra score pytest -q
 
   pools:
     runs-on: ubuntu-24.04
