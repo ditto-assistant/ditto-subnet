@@ -447,3 +447,178 @@ class TestTheWorkerActsOnTheRoster:
 
         assert report.composite == 0.5
         assert not slot.revoked.is_set()
+
+
+def _retest_job(*, slot_id: str = "slot-0") -> Any:
+    """A continual-retest (top-five confirmation) lease with one pinned seed."""
+    from ditto.tests.validator.test_worker import (  # noqa: PLC0415
+        _confirmation_pins,
+        _job,
+    )
+
+    job = _job("5MinerR" + "x" * 41, slot_id=slot_id)
+    return job.model_copy(
+        update={
+            "confirmation_datasets": _confirmation_pins(job.agent_id, count=1),
+            "deadline": datetime.now(UTC) + timedelta(hours=3),
+        }
+    )
+
+
+class TestTheRetestLaneActsOnTheRoster:
+    """The continual-retest lane honours revocation exactly like canonical work.
+
+    Before this, ``_run_top5_confirmation_lane`` ran its evaluation with no
+    revocation watchdog. An operator reject that force-expired a retest lease
+    set ``slot.revoked`` and nothing listened: the run went on until its own
+    poll budget (hours), the sweep's ``asyncio.gather`` never returned, and once
+    an updater drain landed every idle sibling slot had stopped polling -- a
+    whole cohort issued nothing while heartbeats still said ``accepting``.
+    """
+
+    async def test_a_revoked_retest_lease_cancels_its_run_and_frees_the_slot(
+        self,
+    ) -> None:
+        job = _retest_job()
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def hang(*_args: object, **_kwargs: object) -> Any:
+            started.set()
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                # Where ``DittobenchClient._poll`` kills the scorer container.
+                cancelled.set()
+                raise
+
+        worker, platform, _ = _worker_with_scorer(
+            AsyncMock(), heartbeat=_RosterHeartbeat().mock, jobs=[]
+        )
+        platform.request_top5_confirmation_job = AsyncMock(side_effect=[job, None])
+        worker._evaluate = AsyncMock(side_effect=hang)  # type: ignore[method-assign]
+
+        lane = asyncio.create_task(worker._run_top5_confirmation_lane())
+        await asyncio.wait_for(started.wait(), timeout=20)
+        assert worker._slots[job.slot_id].active_agent_id == job.agent_id
+
+        # The platform force-expired the lease: its roster now omits it.
+        worker._apply_lease_roster(
+            _response([]), advertised=worker._capacity_snapshot()
+        )
+
+        claimed = await asyncio.wait_for(lane, timeout=20)
+
+        # The lease was claimed, so the sweep polls once more for real work.
+        assert claimed is True
+        assert cancelled.is_set()
+        # Silence on the wire, exactly like a revoked canonical lease.
+        platform.report_ticket_failed.assert_not_awaited()
+        platform.submit_top5_confirmation_score.assert_not_awaited()
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
+
+    async def test_a_revoked_retest_lease_lets_the_sweep_end(self) -> None:
+        """The incident shape: the sweep must not be held by a revoked retest.
+
+        The canonical queue is empty, so the sweep dispatches the retest lane,
+        which claims a lease whose run never returns on its own. The roster
+        answering the run's own heartbeat omits that lease, and the whole sweep
+        completes promptly instead of at the poll budget.
+        """
+        job = _retest_job()
+        heartbeat = _RosterHeartbeat(evict={job.agent_id})
+        worker, platform, _ = _worker_with_scorer(
+            AsyncMock(), heartbeat=heartbeat.mock, jobs=[]
+        )
+        platform.request_job = AsyncMock(return_value=None)
+        platform.request_top5_confirmation_job = AsyncMock(side_effect=[job, None])
+
+        async def advertise_then_hang(*_args: object, **_kwargs: object) -> Any:
+            # Stand in for the active-run heartbeat a real scorer emits.
+            await worker._report_heartbeat("running_benchmark")
+            await asyncio.sleep(3600)
+
+        worker._evaluate = AsyncMock(  # type: ignore[method-assign]
+            side_effect=advertise_then_hang
+        )
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        # The roster really did see (and drop) the retest lease.
+        assert any(
+            slot.agent_id == job.agent_id
+            for request in heartbeat.requests
+            if request.benchmark_capacity is not None
+            for slot in request.benchmark_capacity.active
+        )
+        platform.report_ticket_failed.assert_not_awaited()
+        platform.submit_top5_confirmation_score.assert_not_awaited()
+        assert all(slot.active_agent_id is None for slot in worker._slots.values())
+
+    async def test_a_held_retest_lease_is_submitted_normally(self) -> None:
+        """The control: a roster that lists the retest lease changes nothing."""
+        from ditto.tests.validator.test_worker import _report  # noqa: PLC0415
+
+        job = _retest_job()
+        seed = job.confirmation_datasets[0].seed
+        worker, platform, _ = _worker_with_scorer(
+            AsyncMock(), heartbeat=_RosterHeartbeat().mock, jobs=[]
+        )
+        platform.request_top5_confirmation_job = AsyncMock(side_effect=[job, None])
+
+        async def evaluate(*_args: object, **_kwargs: object) -> Any:
+            await worker._report_heartbeat("running_benchmark")
+            return _report("run-retest", 0.7).model_copy(update={"seed": seed})
+
+        worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
+
+        assert await asyncio.wait_for(worker._run_top5_confirmation_lane(), 20)
+
+        platform.submit_top5_confirmation_score.assert_awaited_once()
+        platform.report_ticket_failed.assert_not_awaited()
+        assert not worker._slots[job.slot_id].revoked.is_set()
+
+    async def test_a_stale_revocation_does_not_cancel_the_next_retest(self) -> None:
+        """A revocation left over from a previous lease is not inherited."""
+        from ditto.tests.validator.test_worker import _report  # noqa: PLC0415
+
+        job = _retest_job()
+        seed = job.confirmation_datasets[0].seed
+        worker, platform, _ = _worker_with_scorer(
+            AsyncMock(), heartbeat=_RosterHeartbeat().mock, jobs=[]
+        )
+        worker._slots[job.slot_id].revoked.set()
+        platform.request_top5_confirmation_job = AsyncMock(side_effect=[job, None])
+        worker._evaluate = AsyncMock(  # type: ignore[method-assign]
+            return_value=_report("run-retest", 0.7).model_copy(update={"seed": seed})
+        )
+
+        assert await asyncio.wait_for(worker._run_top5_confirmation_lane(), 20)
+
+        platform.submit_top5_confirmation_score.assert_awaited_once()
+        platform.report_ticket_failed.assert_not_awaited()
+
+
+class TestDrainAdvertisesImmediately:
+    async def test_a_drain_requested_mid_sweep_stops_advertising_accepting(
+        self,
+    ) -> None:
+        """Heartbeats say ``draining`` as soon as the updater asks.
+
+        Idle slots stop polling the moment a drain is requested, so a sweep
+        held open by a long run must not keep advertising ``accepting``.
+        """
+        heartbeat = _RosterHeartbeat()
+        worker, _, _ = _worker_with_scorer(AsyncMock(), heartbeat=heartbeat.mock)
+        drain = asyncio.Event()
+        worker._drain_requested = drain
+
+        await worker._report_heartbeat("polling")
+        assert heartbeat.requests[-1].benchmark_capacity.admission == "accepting"
+
+        drain.set()
+        await worker._report_heartbeat("running_benchmark")
+
+        capacity = heartbeat.requests[-1].benchmark_capacity
+        assert capacity.admission == "draining"
+        assert capacity.healthy_slots == []

@@ -825,6 +825,10 @@ class ValidatorWorker:
         self._sweep_failures_with_log_tail = 0
         self._resource_blocked_until: dict[str, float] = {}
         self._admission: BenchmarkAdmission = "accepting"
+        # The updater's drain request, remembered so every heartbeat -- not just
+        # the next sweep boundary -- can stop advertising ``accepting`` the
+        # moment a drain is asked for. See ``_note_drain_requested``.
+        self._drain_requested: asyncio.Event | None = None
         # Host-resource self-gate. A ``MagicMock`` config (the unit-test double)
         # would otherwise hand us a mock in place of the ceilings and every
         # comparison below would be meaningless, so accept only the real type
@@ -951,6 +955,20 @@ class ValidatorWorker:
             self._constrained_resources = exceeded
         self._admission = "resource_constrained" if exceeded else "accepting"
 
+    def _note_drain_requested(self) -> None:
+        """Advertise ``draining`` as soon as the updater asks for a drain.
+
+        Admission was otherwise re-decided only at a sweep boundary and when the
+        drain was finally acknowledged. A sweep held open by a long run kept
+        heartbeating ``accepting`` while every idle slot had already stopped
+        polling for work, so the fleet view showed capacity that would never
+        claim anything. The flip back to ``accepting`` stays where it was: the
+        next sweep start, or the drain acknowledgement's resume.
+        """
+        drain = self._drain_requested
+        if drain is not None and drain.is_set() and self._admission != "paused":
+            self._admission = "draining"
+
     def _capacity_snapshot(self) -> BenchmarkCapacity:
         active = []
         for slot in self._slots.values():
@@ -1011,6 +1029,8 @@ class ValidatorWorker:
         # counter that accumulated across sweeps would report every failure the
         # process had ever seen against this sweep's failure total.
         self._sweep_failures_with_log_tail = 0
+        if drain_requested is not None:
+            self._drain_requested = drain_requested
         self._admission = (
             "draining"
             if drain_requested is not None and drain_requested.is_set()
@@ -1502,6 +1522,7 @@ class ValidatorWorker:
     ) -> bool:
         """Best-effort signed build + runtime report; never gate validator work."""
         del active_snapshot  # v10+ always signs one atomic all-slot snapshot.
+        self._note_drain_requested()
         capacity = self._capacity_snapshot()
         primary = sorted(capacity.active, key=lambda slot: slot.slot_id)
         active_agent_id = primary[0].agent_id if primary else None
@@ -3005,7 +3026,11 @@ class ValidatorWorker:
                         job.agent_id,
                         job.bench_version,
                     )
-            datasets = job.confirmation_datasets
+            slot = self._slot_state()
+            # A revocation belongs to the lease that provoked it. Cleared before
+            # the slot is published as occupied, exactly like the canonical
+            # path, so a roster answer that lands while this run starts sticks.
+            slot.revoked.clear()
             # Set before the claim, not after: ``_begin_active_ticket`` occupies
             # the slot first, so a partial failure must still clear it below.
             ticket_claimed = True
@@ -3014,30 +3039,17 @@ class ValidatorWorker:
                 job.deadline,
                 job.bench_version or DEFAULT_BENCH_VERSION,
             )
-            broker = await self._activate_ticket_inference(job)
-            try:
-                report = await self._evaluate_confirmation_report(
-                    job.agent_id,
-                    job.sha256,
-                    datasets=datasets,
-                    bench_version=job.bench_version,
-                    inference_session_id=(
-                        broker.session_id if broker is not None else None
-                    ),
-                    inference_grant_id=(
-                        job.inference.grant_id
-                        if broker is not None and job.inference is not None
-                        else None
-                    ),
-                    inference_slot_id=(job.slot_id if broker is not None else None),
-                    inference_ticket_deadline=(
-                        job.deadline if broker is not None else None
-                    ),
-                    ticket_deadline=job.deadline,
-                )
-            finally:
-                if broker is not None:
-                    await self._dittobench.cancel_inference_session(broker.session_id)
+            # Bounded by the lease and by the roster, like canonical scoring. An
+            # unwatched retest ignored ``slot.revoked``: an operator reject that
+            # force-expired the lease left the run going until its own poll
+            # budget, holding the sweep's ``asyncio.gather`` -- and with it every
+            # sibling slot's issuance -- for hours.
+            leased = job
+            report = await self._run_within_lease(
+                lambda: self._evaluate_confirmation_lease(leased),
+                job=job,
+                slot=slot,
+            )
             if report is None:
                 await self._report_ticket_failed(
                     job, "scoring_error", "confirmation_run_produced_no_report"
@@ -3049,6 +3061,20 @@ class ValidatorWorker:
                 ticket_deadline=job.deadline,
             )
             self._resolve_ticket_deadline(job.agent_id, job.deadline)
+        except LeaseRevokedError as exc:
+            # Same wire rule as the canonical lane: the platform took this lease
+            # back itself, so nothing is handed back. ``scoring_error`` would
+            # charge an attempt the platform already withdrew and
+            # ``infrastructure`` would mint a no-fault re-lease. The ``finally``
+            # below frees the slot.
+            logger.warning(
+                "top-five confirmation lease for agent %s on %s was revoked by "
+                "the platform; slot freed immediately instead of at the lease "
+                "TTL: %s",
+                job.agent_id if job is not None else None,
+                job.slot_id if job is not None else _slot_id,
+                exc,
+            )
         except LeaseDeadlineError as exc:
             logger.warning(
                 "top-five confirmation reached the lease deadline agent=%s: %s",
@@ -3117,6 +3143,35 @@ class ValidatorWorker:
             if slot_token is not None:
                 _CURRENT_SLOT.reset(slot_token)
         return ticket_claimed
+
+    async def _evaluate_confirmation_lease(
+        self, job: JobResponse
+    ) -> ScoreReport | None:
+        """Activate the lease's inference grant and evaluate its pinned seeds."""
+        broker = await self._activate_ticket_inference(job)
+        try:
+            return await self._evaluate_confirmation_report(
+                job.agent_id,
+                job.sha256,
+                datasets=job.confirmation_datasets,
+                bench_version=job.bench_version,
+                inference_session_id=(
+                    broker.session_id if broker is not None else None
+                ),
+                inference_grant_id=(
+                    job.inference.grant_id
+                    if broker is not None and job.inference is not None
+                    else None
+                ),
+                inference_slot_id=(job.slot_id if broker is not None else None),
+                inference_ticket_deadline=(
+                    job.deadline if broker is not None else None
+                ),
+                ticket_deadline=job.deadline,
+            )
+        finally:
+            if broker is not None:
+                await self._dittobench.cancel_inference_session(broker.session_id)
 
     async def _evaluate_confirmation_report(
         self,
@@ -3861,6 +3916,27 @@ class ValidatorWorker:
         # one this slot picks up. If the new lease is also gone the very next
         # heartbeat says so again.
         slot.revoked.clear()
+        return await self._run_within_lease(
+            lambda: self._score_job(job), job=job, slot=slot
+        )
+
+    async def _run_within_lease[T](
+        self,
+        operation: Callable[[], Awaitable[T]],
+        *,
+        job: JobResponse,
+        slot: _SlotState,
+    ) -> T:
+        """Bound leased work by its own lease and by the platform's roster.
+
+        Every lane that executes a lease on a slot goes through here: the
+        canonical queue and the continual-retest (top-five confirmation) lane.
+        The deadline bound converts an over-long run into
+        :class:`LeaseDeadlineError`; the revocation watchdog converts a lease
+        the platform stopped listing into :class:`LeaseRevokedError`. Callers
+        clear ``slot.revoked`` *before* they publish the slot as occupied, so a
+        roster answer that lands while the run starts is never lost.
+        """
         budget = lease_budget_seconds(job.deadline)
         if budget <= 0:
             raise LeaseDeadlineError(
@@ -3869,7 +3945,7 @@ class ValidatorWorker:
             )
         try:
             async with asyncio.timeout(budget):
-                return await self._score_until_revoked(job, slot)
+                return await self._run_until_revoked(operation, job=job, slot=slot)
         except TimeoutError as error:
             raise LeaseDeadlineError(
                 f"scoring agent {job.agent_id} did not resolve within the "
@@ -3877,10 +3953,20 @@ class ValidatorWorker:
                 f"{job.deadline.isoformat()}"
             ) from error
 
-    async def _score_until_revoked(
-        self, job: JobResponse, slot: _SlotState
-    ) -> ScoreReport:
-        """Score, but stop the moment the platform says the lease is gone.
+    async def _run_until_revoked[T](
+        self,
+        operation: Callable[[], Awaitable[T]],
+        *,
+        job: JobResponse,
+        slot: _SlotState,
+    ) -> T:
+        """Run leased work, but stop the moment the platform says it is gone.
+
+        Shared by every lane that holds a lease on ``slot``: canonical scoring
+        and the continual-retest (top-five confirmation) lane. A lane that runs
+        outside this watchdog ignores ``slot.revoked`` and keeps its slot -- and,
+        through ``asyncio.gather`` in the sweep, the whole host -- until its own
+        poll budget runs out, hours after the platform took the lease back.
 
         Cancellation works exactly the way ``asyncio.timeout`` already makes it
         work here: a watchdog cancels *this* task, so the ``CancelledError``
@@ -3904,7 +3990,7 @@ class ValidatorWorker:
 
         watchdog = asyncio.create_task(watch_for_revocation())
         try:
-            return await self._score_job(job)
+            return await operation()
         except asyncio.CancelledError:
             if not slot.revoked.is_set() or lease_budget_seconds(job.deadline) <= 0:
                 raise
@@ -4441,6 +4527,8 @@ class ValidatorWorker:
         cooperative updater drain stops both loops from starting new work and
         is acknowledged only after their current work has completed.
         """
+        if drain_requested is not None:
+            self._drain_requested = drain_requested
         write_update_state(
             "ready",
             platform_accepted=self._platform_accepted,
