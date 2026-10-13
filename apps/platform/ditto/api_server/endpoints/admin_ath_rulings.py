@@ -597,7 +597,10 @@ async def _preview_ruling(
     elif ruling.action == "clear":
         if held:
             steps = ["clear"]
-        elif resolved_as == "clear" and scored_or_live:
+        elif resolved_as == "clear" and (
+            # A cleared below-quorum reject goes back to evaluating.
+            scored_or_live or agent.status == AgentStatus.EVALUATING
+        ):
             return _blocked(
                 **base,
                 ok=True,

@@ -1316,10 +1316,18 @@ async def test_reconsidered_below_quorum_reject_returns_to_the_queue(
     )
     assert reopened.status_code == 200, reopened.text
     assert reopened.json()["reopened"] is True
-    cleared = await client.post(
-        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Reconsidered: no violation"},
-        headers=_HEADERS,
+    clear = _ruling(
+        "clear",
+        agent_id,
+        sha256,
+        score_count=2,
+        reason="Reconsidered: no violation",
+        refs=(),
     )
-    assert cleared.status_code == 200, cleared.text
+    _preview, cleared = await _preview_and_execute(client, [clear])
+    assert cleared["items"][0]["status"] == "applied", cleared
     assert await _status(maker, agent_id) == "evaluating"
+    # Replaying the same clear is idempotent, not a conflict.
+    replay = await client.post(_PREVIEW, json={"rulings": [clear]}, headers=_HEADERS)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["items"][0]["disposition"] == "already_applied"
