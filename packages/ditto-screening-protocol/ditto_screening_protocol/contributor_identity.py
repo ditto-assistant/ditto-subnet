@@ -8,7 +8,8 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
-Address = Annotated[str, Field(pattern=r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")]
+ADDRESS_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
+Address = Annotated[str, Field(pattern=ADDRESS_PATTERN)]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Signature = Annotated[str, Field(pattern=r"^[0-9a-fA-F]{128}$")]
 GithubLogin = Annotated[

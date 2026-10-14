@@ -750,6 +750,10 @@ async def test_exchange_failure_is_terminal_and_redacts_unexpected_details(
     assert polled.json()["error"] == expected
     assert TOKEN not in response.text + polled.text + caplog.text
     assert SECRET not in response.text + polled.text + caplog.text
+    # Unexpected faults leave a sanitized operator diagnostic; expected
+    # provider rejections are ordinary outcomes and are not logged as errors.
+    diagnostic = f"attempt_id={body['attempt_id']} error_type=RuntimeError"
+    assert (diagnostic in caplog.text) is unexpected
     async with session_maker() as session:
         attempt = await session.get(MinerGithubLinkAttempt, UUID(body["attempt_id"]))
         assert attempt.status == "failed" and attempt.code_verifier is None

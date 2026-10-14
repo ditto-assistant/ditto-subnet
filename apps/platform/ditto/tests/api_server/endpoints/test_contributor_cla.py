@@ -851,3 +851,40 @@ async def test_enabling_enforcement_requires_notice_for_scheduled_versions(
         assert datetime.fromisoformat(
             control["earliest_enforcement_at"]
         ) == datetime.fromisoformat(scheduled["published_at"]) + timedelta(hours=24)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/public/cla/versions/2147483648",
+        "/api/v1/public/cla/versions/0",
+        "/api/v1/public/cla/versions/2147483648/text",
+        "/api/v1/public/cla/status/not-a-hotkey",
+        "/api/v1/public/cla/status/%00",
+        "/api/v1/public/github-link/not-a-hotkey",
+        "/api/v1/public/github-account/99999999999999999999",
+        "/api/v1/public/github-account/0",
+    ],
+)
+async def test_public_identity_paths_reject_out_of_range_values(
+    app, client, session_maker, path
+):
+    setup(app, session_maker)
+    response = await client.get(path)
+    # Malformed public input is a client error, never a database error.
+    assert response.status_code == 422, response.text
+    assert HttpErrorEnvelope.model_validate(response.json()).error_code != 3000
+
+
+async def test_public_identity_paths_accept_valid_values(app, client, session_maker):
+    setup(app, session_maker)
+    hotkey = bittensor.Keypair.create_from_uri("//Alice").ss58_address
+    for path in (
+        f"/api/v1/public/cla/status/{hotkey}",
+        f"/api/v1/public/github-link/{hotkey}",
+        "/api/v1/public/github-account/9223372036854775807",
+    ):
+        assert (await client.get(path)).status_code == 200, path
+    assert (
+        await client.get("/api/v1/public/cla/versions/2147483647")
+    ).status_code == 404

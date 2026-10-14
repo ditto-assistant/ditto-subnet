@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
@@ -14,6 +15,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Path,
     Request,
     Response,
 )
@@ -62,7 +64,9 @@ from ditto.db.queries.contributor_identity import (
     active_github_link,
     lock_identity_writes,
 )
+from ditto_screening_protocol.contributor_identity import ADDRESS_PATTERN
 
+logger = logging.getLogger(__name__)
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 # Private handlers declare Authorization for OpenAPI; resolve_miner_session
@@ -169,7 +173,9 @@ async def my_link(
 
 @router.get("/public/github-link/{hotkey}", response_model=GithubLinkStatus)
 async def public_link(
-    hotkey: str, request: Request, session: SessionDep
+    hotkey: Annotated[str, Path(pattern=ADDRESS_PATTERN)],
+    request: Request,
+    session: SessionDep,
 ) -> GithubLinkStatus:
     link = await active_github_link(session, hotkey=hotkey)
     return GithubLinkStatus(
@@ -181,7 +187,9 @@ async def public_link(
 
 @router.get("/public/github-account/{github_user_id}", response_model=GithubLinkStatus)
 async def account_link(
-    github_user_id: int, request: Request, session: SessionDep
+    github_user_id: Annotated[int, Path(ge=1, le=9223372036854775807)],
+    request: Request,
+    session: SessionDep,
 ) -> GithubLinkStatus:
     link = await active_github_link(
         session,
@@ -382,9 +390,15 @@ async def callback(
         identity = await client.exchange(code=code, verifier=verifier)
     except GithubLinkRejected as exc:
         failure = str(exc)
-    except Exception:
+    except Exception as exc:
         # The verifier is consumed; persist a terminal failure without leaking
-        # unexpected provider exception bodies, tokens or credentials.
+        # unexpected provider exception bodies, tokens or credentials. Operators
+        # still get the attempt and exception type to diagnose provider faults.
+        logger.error(
+            "GitHub identity exchange failed: attempt_id=%s error_type=%s",
+            attempt_id,
+            type(exc).__name__,
+        )
         failure = "GitHub identity verification failed; start again"
     async with session.begin():
         attempt = await session.get(

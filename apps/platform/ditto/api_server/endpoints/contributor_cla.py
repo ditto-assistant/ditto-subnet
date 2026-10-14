@@ -6,7 +6,16 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+)
 from sqlalchemy import false, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,11 +58,16 @@ from ditto.db.queries.contributor_identity import (
     current_cla_version,
     lock_identity_writes,
 )
+from ditto_screening_protocol.contributor_identity import ADDRESS_PATTERN
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 router = APIRouter(tags=["contributor-cla"], dependencies=[Depends(no_store)])
 ENFORCED_CLA_NOTICE = timedelta(hours=24)
+# Public path values are validated before they reach integer/text columns, so
+# malformed input is a 422 rather than a database error.
+HotkeyPath = Annotated[str, Path(pattern=ADDRESS_PATTERN)]
+VersionPath = Annotated[int, Path(ge=1, le=2147483647)]
 
 
 def enforced_cla_notice_deadline(mode: str, *, now: datetime) -> datetime | None:
@@ -139,7 +153,7 @@ async def current_document(request: Request, session: SessionDep) -> ClaStatus:
 
 @router.get("/public/cla/status/{hotkey}", response_model=ClaStatus)
 async def public_status(
-    hotkey: str, request: Request, session: SessionDep
+    hotkey: HotkeyPath, request: Request, session: SessionDep
 ) -> ClaStatus:
     return await cla_status(
         session, netuid=request.app.state.config.chain.netuid, hotkey=hotkey
@@ -156,7 +170,7 @@ async def public_status(
         }
     },
 )
-async def public_version(version: int, session: SessionDep) -> ClaVersionView:
+async def public_version(version: VersionPath, session: SessionDep) -> ClaVersionView:
     row = await session.get(ClaVersion, version)
     if row is None:
         raise HTTPException(404, "CLA version is not published")
@@ -179,7 +193,7 @@ async def public_version(version: int, session: SessionDep) -> ClaVersionView:
     },
 )
 async def public_text(
-    version: int,
+    version: VersionPath,
     session: SessionDep,
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> Response:
