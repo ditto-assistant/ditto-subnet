@@ -43,6 +43,10 @@ previous link. Signed unlinking names the exact active
 link; it preserves all proof/history rows. Proof fields cannot be edited, and
 revocation cannot be undone.
 
+The action ledger records the netuid used by each signature, including a
+revocation signed on a different netuid from the original link proof. This
+keeps both signed messages independently reconstructible from stored history.
+
 The signing contracts are canonical shared code in
 `ditto_screening_protocol.contributor_identity`. Payloads bind the domain,
 netuid, hotkey, exact numeric id/login, attempt id, nonce, timestamp, key kind

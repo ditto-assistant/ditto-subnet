@@ -547,6 +547,7 @@ async def confirm(
             session.add(
                 MinerGithubActionNonce(
                     nonce=body.nonce,
+                    netuid=body.netuid,
                     hotkey=body.hotkey,
                     action="link",
                     issued_at=body.issued_at,
@@ -641,6 +642,7 @@ async def unlink(
             session.add(
                 MinerGithubActionNonce(
                     nonce=body.nonce,
+                    netuid=body.netuid,
                     hotkey=body.hotkey,
                     action="unlink",
                     issued_at=body.issued_at,

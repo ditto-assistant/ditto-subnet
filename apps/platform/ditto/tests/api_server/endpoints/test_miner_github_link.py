@@ -214,6 +214,8 @@ async def test_roundtrip_uses_verified_numeric_id_and_never_stores_or_serves_tok
     async with session_maker() as session:
         attempt = await session.get(MinerGithubLinkAttempt, UUID(started["attempt_id"]))
         assert attempt.code_verifier is None
+        action = await session.get(MinerGithubActionNonce, UUID(body["nonce"]))
+        assert action.netuid == linked.json()["netuid"] == 118
         rows = (
             (
                 await session.execute(
@@ -452,6 +454,18 @@ async def test_signed_unlink_of_global_identity_preserves_original_proof_netuid(
         row = await session.get(MinerGithubLink, link_id)
         assert row.revoked_at is not None and row.netuid == 118
         assert row.signature == response.json()["signature"]
+        action = await session.get(MinerGithubActionNonce, nonce)
+        assert action.netuid == 119 and action.action == "unlink"
+        recorded_message = github_unlink_message(
+            netuid=action.netuid,
+            hotkey=action.hotkey,
+            link_id=action.link_id,
+            nonce=action.nonce,
+            issued_at=action.issued_at,
+            key_kind=action.key_kind,
+            signer=action.signer,
+        )
+        assert alice.verify(recorded_message, bytes.fromhex(action.signature))
 
 
 async def test_unique_account_relink_rename_nonce_replay_and_signed_unlink(

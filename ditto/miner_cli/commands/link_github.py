@@ -122,9 +122,14 @@ def run(args: argparse.Namespace) -> int:
                 interactive=sys.stdin.isatty() and not args.yes,
             )
             if args.github_command == "unlink":
-                linked = client.get_github_link(token=token).link
+                status = client.get_github_link(token=token)
+                linked = status.link
                 if linked is None:
-                    print("no active GitHub link to revoke")
+                    print(
+                        json.dumps({"link_id": None, "revoked": False})
+                        if args.json
+                        else "no active GitHub link to revoke"
+                    )
                     return 0
                 print(
                     f"Revoke @{linked.github_login} (id "
@@ -151,7 +156,7 @@ def run(args: argparse.Namespace) -> int:
                 )
                 nonce, issued = uuid4(), datetime.now(UTC)
                 payload = github_unlink_message(
-                    netuid=linked.netuid,
+                    netuid=status.netuid,
                     hotkey=hotkey,
                     link_id=linked.link_id,
                     nonce=nonce,
@@ -161,7 +166,7 @@ def run(args: argparse.Namespace) -> int:
                 )
                 key = wallet.hotkey if args.key_kind == "hotkey" else wallet.coldkey
                 body = GithubUnlinkRequest(
-                    netuid=linked.netuid,
+                    netuid=status.netuid,
                     hotkey=hotkey,
                     link_id=linked.link_id,
                     nonce=nonce,
@@ -173,7 +178,11 @@ def run(args: argparse.Namespace) -> int:
                     ),
                 )
                 client.unlink_github(token=token, body=body)
-                print("GitHub link revoked; its signed history is retained")
+                print(
+                    json.dumps({"link_id": str(linked.link_id), "revoked": True})
+                    if args.json
+                    else "GitHub link revoked; its signed history is retained"
+                )
                 return 0
             started = client.start_github_link(token=token)
             print(

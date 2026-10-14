@@ -11756,6 +11756,7 @@ class MinerGithubLinkAttempt(Base):
 class MinerGithubActionNonce(Base):
     __tablename__ = "miner_github_action_nonces"
     nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
     hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     action: Mapped[str] = mapped_column(Text, nullable=False)
     issued_at: Mapped[datetime] = mapped_column(

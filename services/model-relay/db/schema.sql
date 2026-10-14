@@ -3686,6 +3686,7 @@ CREATE TABLE public.miner_ditto_links (
 
 CREATE TABLE public.miner_github_action_nonces (
     nonce uuid NOT NULL,
+    netuid integer NOT NULL,
     hotkey text NOT NULL,
     action text NOT NULL,
     issued_at timestamp with time zone NOT NULL,

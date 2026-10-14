@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -19,6 +20,7 @@ from ditto.api_models.contributor_identity import (
     GithubLinkAttemptStatus,
     GithubLinkStart,
     cla_message,
+    github_unlink_message,
 )
 from ditto.miner_cli.__main__ import _build_parser, main
 from ditto.miner_cli.commands import cla, link_github
@@ -173,6 +175,53 @@ def test_unlink_signing_options_work_before_and_after_subcommand(after_unlink):
         "coldkey",
         True,
     )
+
+
+@pytest.mark.parametrize("has_link", [True, False])
+def test_json_unlink_signs_current_context_for_a_global_link(capsys, has_link):
+    api = client()
+    handle, live = wallet()
+    link_id = uuid4()
+    api.get_github_link.return_value = SimpleNamespace(
+        netuid=119,
+        link=SimpleNamespace(
+            netuid=118, link_id=link_id, github_login="fixture", github_user_id=100
+        )
+        if has_link
+        else None,
+    )
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(link_github, "load_wallet", return_value=(handle, live)),
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture-session", "hotkey": KEY.ss58_address},
+        ),
+    ):
+        assert link_github.run(args(github_command="unlink", json=True)) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "link_id": str(link_id) if has_link else None,
+        "revoked": has_link,
+    }
+    if has_link:
+        body = api.unlink_github.call_args.kwargs["body"]
+        assert body.netuid == 119 and body.link_id == link_id
+        assert KEY.verify(
+            github_unlink_message(
+                netuid=body.netuid,
+                hotkey=body.hotkey,
+                link_id=body.link_id,
+                nonce=body.nonce,
+                issued_at=body.issued_at,
+                key_kind=body.proof.key_kind,
+                signer=body.proof.signer,
+            ),
+            bytes.fromhex(body.proof.signature),
+        )
+    else:
+        api.unlink_github.assert_not_called()
+        live.hotkey.sign.assert_not_called()
 
 
 @pytest.mark.parametrize("case", ["digest", "confirmation", "missing"])

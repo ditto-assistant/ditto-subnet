@@ -51,6 +51,7 @@ def upgrade() -> None:
     op.create_table(
         "miner_github_action_nonces",
         sa.Column("nonce", sa.UUID(), primary_key=True),
+        sa.Column("netuid", sa.Integer(), nullable=False),
         sa.Column("hotkey", sa.Text(), nullable=False),
         sa.Column("action", sa.Text(), nullable=False),
         sa.Column("issued_at", sa.DateTime(timezone=True), nullable=False),
