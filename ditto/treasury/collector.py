@@ -173,9 +173,70 @@ class ManualTransfer:
             raise ValueError("bounded manual operator reason required")
 
 
+def historical_policy_matches(journal, policy, digest, event_id):
+    """Only a cold-approved runtime migration admits earlier intent pins.
+
+    Retain original ledger bytes. A prior policy can identify historical intent
+    only before its migration event; it never authorizes a new request. Runtime
+    migrations cannot change destinations, keys, limits or cadence.
+    """
+    if digest == policy.digest:
+        return True
+    from ditto.treasury.collector_migration import policy_transition
+    from ditto_screening_protocol.treasury_approval import verify_public_signature
+
+    current = policy
+    rows = journal.db.execute(
+        "SELECT id,payload FROM events "
+        "WHERE event='offline_approved_runtime_migration' "
+        "ORDER BY id DESC LIMIT 17"
+    ).fetchall()
+    if len(rows) > 16:
+        raise ValueError("runtime migration ancestry exceeds bound")
+    for row in rows:
+        body = json.loads(row["payload"])
+        if set(body) != {"manifest", "signature", "from_policy", "to_policy"}:
+            raise ValueError("invalid runtime migration ancestry")
+
+        def decode(raw):
+            values = dict(raw)
+            values["destinations"] = tuple(
+                ServiceDestination(**d) for d in values["destinations"]
+            )
+            return CollectorPolicy(**values)
+
+        old, new = decode(body["from_policy"]), decode(body["to_policy"])
+        proof = body["manifest"]
+        if (
+            new != current
+            or old.runtime_code_hash == new.runtime_code_hash
+            or proof["schema"] != "ditto-collector-custody-migration-v1"
+            or proof["role"] != "transfer"
+            or proof["from_policy_digest"] != old.digest
+            or proof["to_policy_digest"] != new.digest
+            or proof["counts"]["events"] != row["id"] - 1
+        ):
+            raise ValueError("runtime migration ancestry differs from current pin")
+        policy_transition(old, new)
+        message = (
+            "ditto-collector-custody-migration-v1:"
+            + hashlib.sha256(canonical(proof).encode()).hexdigest()
+        ).encode()
+        if not verify_public_signature(
+            current.collector_coldkey,
+            message,
+            bytes.fromhex(body["signature"].removeprefix("0x")),
+        ):
+            raise ValueError("runtime migration ancestry lacks cold approval")
+        if digest == old.digest and event_id < row["id"]:
+            return True
+        current = old
+    return False
+
+
 def manual_transfer_history(journal, policy):
     rows = journal.db.execute(
-        "SELECT payload FROM events WHERE event='manual_transfer_armed' ORDER BY id"
+        "SELECT payload,id FROM events WHERE event='manual_transfer_armed' ORDER BY id"
     ).fetchall()
     if len(rows) > 100000:
         raise ValueError("manual history exceeds explicit bound")
@@ -184,7 +245,9 @@ def manual_transfer_history(journal, policy):
     previous = 0
     for row in rows:
         body = json.loads(row[0])
-        if body.pop("policy", None) != policy.digest:
+        if not historical_policy_matches(
+            journal, policy, body.pop("policy", None), row[1]
+        ):
             raise ValueError("manual transfer policy changed")
         request = ManualTransfer(**body)
         if request.request_id in ids or request.after_operation <= previous:
@@ -442,7 +505,7 @@ def transfer_canary(
     """Keep a canary armed even if a later invocation omits CLI flags."""
     db = journal.db
     rows = db.execute(
-        "SELECT payload FROM events WHERE event='transfer_canary_armed'"
+        "SELECT payload,id FROM events WHERE event='transfer_canary_armed'"
     ).fetchall()
     if len(rows) > 1:
         raise ValueError("ambiguous transfer canary history")
@@ -452,7 +515,7 @@ def transfer_canary(
         body = json.loads(rows[0][0])
         if set(body) != {"policy", "max_alpha_rao", "after_operation"}:
             raise ValueError("invalid transfer canary history")
-        if body["policy"] != policy.digest:
+        if not historical_policy_matches(journal, policy, body["policy"], rows[0][1]):
             raise ValueError("transfer canary policy changed")
         existing = TransferCanary(body["max_alpha_rao"], body["after_operation"])
         replacement = canary_replacement(journal, policy)
@@ -518,7 +581,7 @@ def canary_replacement(
     journal: CollectorJournal, policy: CollectorPolicy
 ) -> dict | None:
     rows = journal.db.execute(
-        "SELECT payload FROM events WHERE event='transfer_canary_replaced'"
+        "SELECT payload,id FROM events WHERE event='transfer_canary_replaced'"
     ).fetchall()
     if not rows:
         return None
@@ -535,7 +598,7 @@ def canary_replacement(
             "proof",
             "reason",
         }
-        or body["policy"] != policy.digest
+        or not historical_policy_matches(journal, policy, body["policy"], rows[0][1])
         or not isinstance(body["proof"], dict)
         or body["proof"].get("status") != "failed"
         or type(body["proof"].get("extrinsic_index")) is not int

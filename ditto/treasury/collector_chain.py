@@ -26,6 +26,7 @@ from ditto.treasury.service_allocation import ServiceDestination
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
     AUDITED_COLLECTOR_RECEIPT_HASHES,
+    COLLECTOR_POW_REGISTRATION_HASHES,
     FINNEY_GENESIS,
     collector_gross_incentive,
     collector_receipt_runtime,
@@ -33,9 +34,23 @@ from ditto_screening_protocol.collector_receipts import (
     liquid_collector_credit,
 )
 
-# Exact v473 official artifact and reviewed source. Historical receipt hashes
+# Exact v478 official artifact and reviewed source. Historical receipt hashes
 # are accepted only on the observation path, never for preparation/broadcast.
 AUDITED_CODE_HASH = AUDITED_COLLECTOR_CODE_HASH
+
+
+class CollectorRuntimeRefused(ValueError):
+    """Fixed public diagnostic; never carries RPC payloads or credentials."""
+
+    def __init__(self, code, message, expected, observed=None):
+        super().__init__(message)
+        self.code = code
+        self.expected = expected
+        self.observed = (
+            observed
+            if isinstance(observed, str) and re.fullmatch(r"0x[0-9a-f]{64}", observed)
+            else None
+        )
 
 
 class NoCredentialRedirect(HTTPRedirectHandler):
@@ -119,7 +134,11 @@ class PublicCollectorChain:
             FINNEY_GENESIS,
             AUDITED_CODE_HASH,
         ):
-            raise ValueError("runtime policy lacks independent byte/source audit")
+            raise CollectorRuntimeRefused(
+                "policy_runtime_unreviewed",
+                "runtime policy lacks independent byte/source audit",
+                policy.runtime_code_hash,
+            )
         if s.get_block_hash(0) != policy.genesis_hash:
             raise ValueError("wrong chain genesis")
         code_hash = s.rpc_request(
@@ -131,7 +150,18 @@ class PublicCollectorChain:
             else {policy.runtime_code_hash}
         )
         if code_hash not in allowed:
-            raise ValueError("runtime changed; stop for independent contract audit")
+            raise CollectorRuntimeRefused(
+                "runtime_changed",
+                "runtime changed; stop for independent contract audit",
+                policy.runtime_code_hash,
+                code_hash,
+            )
+        if (
+            code_hash in COLLECTOR_POW_REGISTRATION_HASHES
+            and self.query("SubtensorModule", "SubnetEpochConsensus", [118], block_hash)
+            != "Yuma"
+        ):
+            raise ValueError("collector requires audited Yuma consensus")
         # SDK 10.5.0's singular helper does not match the audited plural API.
         filters = unwrap(
             s.runtime_call(
@@ -155,6 +185,8 @@ class PublicCollectorChain:
                 ("SubtensorModule", "transfer_stake_and_hotkey"),
             },
         }
+        if code_hash in COLLECTOR_POW_REGISTRATION_HASHES:
+            expected["Registration"].add(("SubtensorModule", "pow_register"))
         for name, allowed in expected.items():
             entries = [e for e in filters if e.get("name") == name]
             if len(entries) != 1 or entries[0].get("deprecated") is not False:

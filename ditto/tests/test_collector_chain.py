@@ -1022,6 +1022,12 @@ def runtime_adapter(code):
             ("SubtensorModule", "transfer_stake_and_hotkey"),
         ],
     }
+    from ditto_screening_protocol.collector_receipts import (
+        COLLECTOR_POW_REGISTRATION_HASHES,
+    )
+
+    if code in COLLECTOR_POW_REGISTRATION_HASHES:
+        expected["Registration"].append(("SubtensorModule", "pow_register"))
     filters = [
         {
             "name": name,
@@ -1041,6 +1047,7 @@ def runtime_adapter(code):
         rpc_request=lambda *_: {"result": code},
         runtime_call=lambda *_args, **_kwargs: filters,
     )
+    c.query = lambda *_: "Yuma"
     return c, filters
 
 
@@ -1142,8 +1149,11 @@ def test_activity_and_epoch_readers_use_historical_guards_only(parent, post, all
         return {"result": {"block": {"extrinsics": []}}}
 
     s.rpc_request = rpc
+    s.runtime_call = lambda *_args, **kw: runtime_adapter(
+        hashes[parent] if kw["block_hash"] == "b100" else hashes[post]
+    )[1]
     s.get_events = lambda _: []
-    c.query = lambda *_: 7
+    c.query = lambda _module, name, *_: "Yuma" if name == "SubnetEpochConsensus" else 7
     p = policy(runtime_code_hash=AUDITED_CODE_HASH)
     scripts = Path(__file__).resolve().parents[2] / "scripts"
     cls = runpy.run_path(str(scripts / "treasury_activity_observer.py"))[
@@ -1170,3 +1180,56 @@ def test_activity_and_epoch_readers_use_historical_guards_only(parent, post, all
     if post == "historic":
         with pytest.raises(ValueError, match="runtime changed"):
             c.guard_runtime(p, "b101")  # Default signing guard did not widen.
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_v473_approval_cannot_authorize_v478_even_for_receipts(historical):
+    from ditto_screening_protocol.collector_receipts import V473_COLLECTOR_CODE_HASH
+
+    c, _ = runtime_adapter(AUDITED_CODE_HASH)
+    with pytest.raises(ValueError, match="runtime policy"):
+        c.guard_runtime(
+            policy(runtime_code_hash=V473_COLLECTOR_CODE_HASH),
+            "finalized",
+            historical=historical,
+        )
+
+
+@pytest.mark.parametrize("consensus", ["Null", None, 0, {"Yuma": None}])
+def test_v478_non_yuma_or_unknown_consensus_refuses(consensus):
+    c, _ = runtime_adapter(AUDITED_CODE_HASH)
+    c.query = lambda *_: consensus
+    with pytest.raises(ValueError, match="Yuma"):
+        c.guard_runtime(policy(), "finalized")
+
+
+def test_v478_requires_exact_new_registration_scope_and_unchanged_transfer_scope():
+    c, filters = runtime_adapter(AUDITED_CODE_HASH)
+    assert c.guard_runtime(policy(), "finalized") == AUDITED_CODE_HASH
+    calls = filters[0]["filter_mode"]["Allow"]
+    pow_call = calls.pop()
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(policy(), "finalized")
+    calls.append(pow_call)
+    filters[1]["filter_mode"]["Allow"].append(
+        {"pallet_name": "Utility", "call_name": "batch", "constraint": None}
+    )
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(policy(), "finalized")
+
+
+def test_all_audited_receipt_hashes_are_forward_only():
+    from ditto_screening_protocol.collector_receipts import (
+        COLLECTOR_RUNTIME_ORDER,
+        collector_receipt_runtime,
+    )
+
+    for i, parent in enumerate(COLLECTOR_RUNTIME_ORDER):
+        for j, post in enumerate(COLLECTOR_RUNTIME_ORDER):
+            if i <= j:
+                assert collector_receipt_runtime(parent, post) == parent
+            else:
+                with pytest.raises(ValueError, match="transition"):
+                    collector_receipt_runtime(parent, post)
+    with pytest.raises(ValueError, match="not audited"):
+        collector_receipt_runtime(COLLECTOR_RUNTIME_ORDER[-1], "0x" + "aa" * 32)

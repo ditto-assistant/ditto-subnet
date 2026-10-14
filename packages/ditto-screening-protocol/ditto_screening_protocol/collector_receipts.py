@@ -1,4 +1,4 @@
-"""Canonical audited v472/v473 effect decoders, without money authority.
+"""Canonical audited collector effect decoders, without money authority.
 
 Both the signer journal and Platform's receipt reader must independently bind
 the block, runtime fingerprint and historical identities before using these
@@ -19,19 +19,40 @@ FINNEY_GENESIS = "0x2f0555cc76fc2840a25a6ea3b9637146806f1f44b090c175ffde2a7e5ab3
 HISTORICAL_COLLECTOR_CODE_HASH = (
     "0x43bc67be9df30636d7e948e7bdb1ed065f2fb92029458cc939abf89d76d8ada3"
 )
-AUDITED_COLLECTOR_CODE_HASH = (
+V473_COLLECTOR_CODE_HASH = (
     "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08"
 )
-AUDITED_COLLECTOR_RECEIPT_HASHES = frozenset(
-    (HISTORICAL_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH)
+V475_COLLECTOR_CODE_HASH = (
+    "0x557634c8c31bc639ea6552e297dcfb781cd7d9bdd491a5352c151305db33d3a0"
 )
+V476_COLLECTOR_CODE_HASH = (
+    "0x12a5ec0b0d4d1f72281a4e41a926ccce6c4cfda6134adf40eeb13847b6a8cd12"
+)
+V477_COLLECTOR_CODE_HASH = (
+    "0x18b52484d9c5d7523f704c86b17b2ab959fffbc6edb6766a77e9877f0ad19387"
+)
+AUDITED_COLLECTOR_CODE_HASH = (
+    "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1"
+)
+# Official artifacts/source reviewed in docs/audits/collector-finney-v478.
+# No official v474 fingerprint was established; unknown states still refuse.
+COLLECTOR_RUNTIME_ORDER = (
+    HISTORICAL_COLLECTOR_CODE_HASH,
+    V473_COLLECTOR_CODE_HASH,
+    V475_COLLECTOR_CODE_HASH,
+    V476_COLLECTOR_CODE_HASH,
+    V477_COLLECTOR_CODE_HASH,
+    AUDITED_COLLECTOR_CODE_HASH,
+)
+AUDITED_COLLECTOR_RECEIPT_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER)
+COLLECTOR_POW_REGISTRATION_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER[2:])
 
 
 def collector_receipt_runtime(parent: str, post: str) -> str:
-    """Return execution runtime for known states and the reviewed forward upgrade.
+    """Return execution runtime for known states and reviewed forward upgrades.
 
     The code-changing block executes under its parent's runtime. Its collector
-    event contracts are unchanged in v473; reverse or unknown transitions refuse.
+    event contracts are unchanged on the reviewed path; reverse/unknown refuse.
     This is read-only receipt interpretation, never signing authorization.
     """
     if (
@@ -39,10 +60,7 @@ def collector_receipt_runtime(parent: str, post: str) -> str:
         or post not in AUDITED_COLLECTOR_RECEIPT_HASHES
     ):
         raise ValueError("receipt runtime is not audited")
-    if parent != post and (parent, post) != (
-        HISTORICAL_COLLECTOR_CODE_HASH,
-        AUDITED_COLLECTOR_CODE_HASH,
-    ):
+    if COLLECTOR_RUNTIME_ORDER.index(parent) > COLLECTOR_RUNTIME_ORDER.index(post):
         raise ValueError("receipt crosses an unaudited runtime transition")
     return parent
 

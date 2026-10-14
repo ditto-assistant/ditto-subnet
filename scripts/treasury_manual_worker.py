@@ -2,12 +2,17 @@
 """Explicitly staged manual-only consumer. No recurring distribution tick."""
 
 import argparse
+import contextlib
 import json
 import time
 
 from ditto.treasury.collector import CollectorJournal, observe_earnings
 from ditto.treasury.collector_chain import PublicCollectorChain, load_policy
-from ditto.treasury.manual_worker import consume_manual, publish_readiness
+from ditto.treasury.manual_worker import (
+    consume_manual,
+    publish_observation_blocker,
+    publish_readiness,
+)
 from ditto_screening_protocol.treasury_pubsub import TreasuryMailbox
 
 
@@ -68,6 +73,8 @@ def main():
                     chain = PublicCollectorChain(subtensor.substrate, role="transfer")
                     consume_iteration(mailbox, journal, policy, chain)
             except Exception as error:
+                with contextlib.suppress(Exception):
+                    publish_observation_blocker(mailbox, policy, error)
                 # No payloads, tokens, signed bytes or raw provider errors.
                 print(
                     json.dumps(

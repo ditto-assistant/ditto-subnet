@@ -88,6 +88,14 @@ class ManualSettlement(Wire):
     extrinsic_hash: Hash
 
 
+class ManualBlocker(Wire):
+    code: Literal[
+        "runtime_changed", "policy_runtime_unreviewed", "observation_unavailable"
+    ]
+    expected_runtime_hash: Hash | None = None
+    observed_runtime_hash: Hash | None = None
+
+
 class ManualReport(Wire):
     version: Literal[1] = 1
     collector_policy_digest: Digest
@@ -96,11 +104,28 @@ class ManualReport(Wire):
     readiness: ManualReadiness | None = None
     request_id: str | None = None
     request_digest: Digest | None = None
-    status: Literal["readiness", "pending", "finalized", "failed", "refused"]
+    status: Literal["readiness", "blocked", "pending", "finalized", "failed", "refused"]
     settlement: ManualSettlement | None = None
+    blocker: ManualBlocker | None = None
 
     @model_validator(mode="after")
     def report_shape(self):
+        if self.status == "blocked":
+            if self.blocker is None or any(
+                x is not None
+                for x in (
+                    self.readiness,
+                    self.request_id,
+                    self.request_digest,
+                    self.settlement,
+                )
+            ):
+                raise ValueError(
+                    "Blocked observation cannot carry readiness or a claim"
+                )
+            return self
+        if self.blocker is not None:
+            raise ValueError("Only blocked observations carry a blocker")
         if self.status == "readiness":
             if (
                 self.readiness is None

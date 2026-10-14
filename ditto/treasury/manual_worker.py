@@ -13,6 +13,7 @@ from ditto.treasury.collector import (
     tick,
 )
 from ditto_screening_protocol.treasury_manual import (
+    ManualBlocker,
     ManualEnvelope,
     ManualReadiness,
     ManualReport,
@@ -20,6 +21,28 @@ from ditto_screening_protocol.treasury_manual import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def publish_observation_blocker(mailbox, policy, error):
+    from ditto.treasury.collector_chain import CollectorRuntimeRefused
+
+    blocker = (
+        ManualBlocker(
+            code=error.code,
+            expected_runtime_hash=error.expected,
+            observed_runtime_hash=error.observed,
+        )
+        if isinstance(error, CollectorRuntimeRefused)
+        else ManualBlocker(code="observation_unavailable")
+    )
+    mailbox.publish(
+        ManualReport(
+            collector_policy_digest=policy.digest,
+            observed_at=int(time.time()),
+            status="blocked",
+            blocker=blocker,
+        ).model_dump()
+    )
 
 
 class InvalidManualRequest(ValueError):

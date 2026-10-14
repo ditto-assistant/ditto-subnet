@@ -19,6 +19,15 @@ from ditto_screening_protocol.treasury_manual import (
 )
 
 ACTIVE = ("queued", "dispatched", "pending", "audit_pending")
+OBSERVATION_BLOCKERS = {
+    "runtime_changed": (
+        "Finney runtime changed; custody audit and offline approval required"
+    ),
+    "policy_runtime_unreviewed": (
+        "Custody policy requires a renewed offline runtime approval"
+    ),
+    "observation_unavailable": "Custody cannot verify its current observation",
+}
 
 
 def readiness_is_fresh(observed_at):
@@ -58,6 +67,14 @@ async def state(session, config, *, enabled):
         blocked = "Waiting for a fresh custody observation"
         if bridge:
             report = ManualReport.model_validate(bridge.report)
+            if (
+                report.status == "blocked"
+                and report.blocker
+                and readiness_is_fresh(report.observed_at)
+                and report.collector_policy_digest
+                == runtime.treasury_approved_collector_policy_digest
+            ):
+                blocked = OBSERVATION_BLOCKERS[report.blocker.code]
             if (
                 report.readiness
                 and readiness_is_fresh(report.observed_at)
@@ -235,13 +252,13 @@ async def accept_report(session, config, body):
     await lock_runtime(session)
     runtime = await treasury_runtime(session, config)
     await lock_manual(session)
-    if report.status == "readiness":
+    if report.status in {"readiness", "blocked"}:
         if (
             report.collector_policy_digest
             != runtime.treasury_approved_collector_policy_digest
         ):
             raise InvalidManualReport("Custody readiness policy differs")
-        if (
+        if report.status == "readiness" and (
             not report.readiness
             or report.readiness.policy != report.collector_policy_digest
         ):

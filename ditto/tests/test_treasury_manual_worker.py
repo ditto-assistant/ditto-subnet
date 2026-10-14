@@ -41,8 +41,9 @@ class Mailbox:
         self.acks.append(value)
 
 
-def setup(tmp_path):
+def setup(tmp_path, **policy_changes):
     p = policy(destinations=(ServiceDestination("gm", 1000, GM),))
+    p = replace(p, **policy_changes)
     c = Chain()
     c.observation = replace(c.observation, uid=14)
     c.income = {10: 501}
@@ -530,3 +531,122 @@ def test_readiness_publish_failure_still_pulls_and_reconciles_exact_request(
     logs = capsys.readouterr().out
     assert "readiness_publish_failed" in logs and "TimeoutError" in logs
     assert "raw provider detail" not in logs
+
+
+def test_cold_approved_runtime_migration_preserves_used_manual_history(tmp_path):
+    import hashlib
+    import json
+
+    from bittensor_wallet import Keypair
+
+    from ditto.treasury import collector_migration as migration
+    from ditto.treasury.collector import (
+        CollectorJournal,
+        manual_transfer_history,
+        transfer_canary,
+    )
+    from ditto_screening_protocol.collector_receipts import (
+        AUDITED_COLLECTOR_CODE_HASH,
+        V473_COLLECTOR_CODE_HASH,
+    )
+
+    key = Keypair.create_from_seed("0x" + "22" * 32)
+    old, c, journal, env, mailbox = setup(
+        tmp_path,
+        collector_coldkey=key.ss58_address,
+        runtime_code_hash=V473_COLLECTOR_CODE_HASH,
+        gcp_project="sn118-gamma-custody",
+        registration_service_account="sn118-collector-registration@sn118-gamma-custody.iam.gserviceaccount.com",
+        transfer_service_account="sn118-collector-transfer@sn118-gamma-custody.iam.gserviceaccount.com",
+    )
+    process_manual(mailbox, journal, old, c, "first", env.model_dump())
+    process_manual(mailbox, journal, old, c, "second", env.model_dump())
+    assert (
+        journal.db.execute(
+            "SELECT state FROM operations ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+        == "finalized"
+    )
+    source = tmp_path / "snapshot.db"
+    journal.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    journal.db.execute("PRAGMA journal_mode=DELETE")
+    import sqlite3
+
+    snapshot_db = sqlite3.connect(source)
+    journal.db.backup(snapshot_db)
+    snapshot_db.close()
+    source.chmod(0o600)
+    journal.close()
+    new = replace(
+        old, revision=old.revision + 1, runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH
+    )
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    proof = migration.manifest(source, old, new, "transfer", source_sha)
+    signature = key.sign(
+        (
+            "ditto-collector-custody-migration-v1:"
+            + hashlib.sha256(migration.canonical(proof).encode()).hexdigest()
+        ).encode()
+    ).hex()
+    target = tmp_path / "migrated.db"
+    migration.migrate(source, target, old, new, proof, signature)
+    current = CollectorJournal(target, new, "transfer")
+    assert manual_transfer_history(current, new)[0].request_id == env.request.request_id
+    assert (
+        transfer_canary(current, new, "transfer", None).max_alpha_rao
+        == env.request.amount_rao
+    )
+    publish_readiness(mailbox, current, new, c)
+    assert mailbox.reports[-1]["readiness"]["bounded_claim_available"] is True
+    assert len(c.sent) == 2  # No migration or readiness signing.
+    raw = current.db.execute(
+        "SELECT payload FROM events WHERE event='manual_transfer_armed'"
+    ).fetchone()[0]
+    assert json.loads(raw)["policy"] == old.digest  # Original bytes preserved.
+    # An old-policy intent appended after the migration cannot gain authority.
+    current.event("manual_transfer_armed", json.loads(raw))
+    with pytest.raises(ValueError, match="policy changed"):
+        manual_transfer_history(current, new)
+    current.db.execute("DELETE FROM events WHERE id=(SELECT max(id) FROM events)")
+    row = current.db.execute(
+        "SELECT id,payload FROM events WHERE event='offline_approved_runtime_migration'"
+    ).fetchone()
+    body = json.loads(row[1])
+    body["signature"] = "00" * 64
+    current.db.execute(
+        "UPDATE events SET payload=? WHERE id=?", (json.dumps(body), row[0])
+    )
+    with pytest.raises(ValueError, match="cold approval"):
+        manual_transfer_history(current, new)
+    current.close()
+
+
+def test_runtime_blocker_reports_only_fixed_public_diagnostics(tmp_path):
+    from ditto.treasury.collector_chain import CollectorRuntimeRefused
+    from ditto.treasury.manual_worker import publish_observation_blocker
+    from ditto_screening_protocol.treasury_manual import ManualReport
+
+    p, c, journal, _, mailbox = setup(tmp_path)
+    before = list(journal.db.iterdump())
+    error = CollectorRuntimeRefused(
+        "runtime_changed",
+        "fixed local diagnostic",
+        p.runtime_code_hash,
+        "0x" + "ab" * 32,
+    )
+    publish_observation_blocker(mailbox, p, error)
+    report = ManualReport.model_validate(mailbox.reports[-1])
+    assert report.status == "blocked" and report.readiness is None
+    assert report.blocker.observed_runtime_hash == "0x" + "ab" * 32
+    publish_observation_blocker(mailbox, p, ValueError("private-provider-token"))
+    assert "private-provider-token" not in str(mailbox.reports)
+    assert mailbox.reports[-1]["blocker"]["code"] == "observation_unavailable"
+    assert list(journal.db.iterdump()) == before and len(c.sent) == 1
+    for patch in [
+        {"readiness": mailbox.reports[0]["readiness"] or {}},
+        {"request_id": str(uuid4())},
+        {"blocker": None},
+    ]:
+        with pytest.raises(ValueError):
+            ManualReport.model_validate({**report.model_dump(), **patch})
+    journal.close()
