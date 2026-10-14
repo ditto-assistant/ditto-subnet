@@ -134,7 +134,7 @@ def render(snapshot: dict[str, Any], hotkey: str | None) -> None:
         for recipient in emissions.get("recipients") or []:
             share = recipient.get("share_of_miner_pool")
             of_all = (
-                f" = {pct(share * miner_share)} of the miner pool (41% of emission)"
+                f" = {pct(share * miner_share)} of the miner pool"
                 if number(share) and number(miner_share)
                 else ""
             )
