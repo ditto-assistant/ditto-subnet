@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.363.0 (2026-10-14)
+
+### Bug Fixes
+
+- **treasury**: Refresh manual readiness during receipt catch-up
+  ([#2920](https://github.com/ditto-assistant/ditto-subnet/pull/2920),
+  [`b989fea`](https://github.com/ditto-assistant/ditto-subnet/commit/b989fea368ec3ca8d7e97cabfce89c3e42cfa4af))
+
+### Features
+
+- **platform,backroom**: Record a per-epoch Gamma ledger from chain state
+  ([#2917](https://github.com/ditto-assistant/ditto-subnet/pull/2917),
+  [`cc184ec`](https://github.com/ditto-assistant/ditto-subnet/commit/cc184ec9fbd9e79ee72848f6e13081881a928eec))
+
+
 ## v0.362.2 (2026-10-14)
 
 ### Bug Fixes

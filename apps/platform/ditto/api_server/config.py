@@ -518,6 +518,9 @@ class ApiServerConfig:
     source_emission_confirmation_enabled: bool = True
     """Allow verified payout attribution to arm the embargo; collection stays on."""
 
+    treasury_ledger_sampler_enabled: bool = True
+    """Record one public Gamma collector reading per epoch (read-only chain state)."""
+
     public_rate_limit_per_minute: int = 0
     """Per-client-IP requests per minute on the unauthenticated upload,
     retrieval, and public read routes (``DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE``).
@@ -918,6 +921,10 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         in _TRUTHY,
         source_emission_confirmation_enabled=(
             os.environ.get("DITTO_SOURCE_EMISSION_CONFIRMATION_ENABLED", "true").lower()
+            in _TRUTHY
+        ),
+        treasury_ledger_sampler_enabled=(
+            os.environ.get("DITTO_TREASURY_LEDGER_SAMPLER_ENABLED", "true").lower()
             in _TRUTHY
         ),
         treasury_shadow_policy=treasury_policy,
