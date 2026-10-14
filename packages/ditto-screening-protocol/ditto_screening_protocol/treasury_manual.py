@@ -99,8 +99,11 @@ ManualEnvelopeWire = Annotated[
 ]
 
 
+_MANUAL_ENVELOPE_ADAPTER = TypeAdapter(ManualEnvelopeWire)
+
+
 def parse_manual_envelope(body):
-    return TypeAdapter(ManualEnvelopeWire).validate_python(body)
+    return _MANUAL_ENVELOPE_ADAPTER.validate_python(body)
 
 
 class ManualPart(Wire):

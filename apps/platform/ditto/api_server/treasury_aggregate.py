@@ -3,6 +3,31 @@
 from dataclasses import asdict, replace
 
 
+def parent_source_identity(proof, block):
+    from ditto.api_server.treasury_ingress import ReceiptConflict
+
+    if not isinstance(proof, dict):
+        raise ReceiptConflict("parent source proof is invalid")
+    source = proof
+    claims = proof.get("source_claims")
+    if claims:
+        if not isinstance(claims, list):
+            raise ReceiptConflict("parent aggregate source is invalid")
+        matches = [
+            c for c in claims if isinstance(c, dict) and c.get("source_block") == block
+        ]
+        if len(matches) != 1:
+            raise ReceiptConflict("parent aggregate source is ambiguous")
+        source = matches[0]
+    try:
+        return tuple(
+            source[k]
+            for k in ("source_block_hash", "source_event_digest", "source_amount_rao")
+        )
+    except KeyError as error:
+        raise ReceiptConflict("parent source identity is incomplete") from error
+
+
 def source_consumption(
     receipts,
     block,

@@ -99,6 +99,11 @@ def remaining_source(journal, policy, row, *, manual=False):
 
 
 def validate_batch(journal, policy, chain, request, observed):
+    # Revalidate at the spending boundary too: a frozen dataclass can contain
+    # mutable lists in an in-process caller, despite constructor validation.
+    checked = ManualBatchRequest.model_validate(
+        {k: v for k, v in asdict(request).items() if k != "manual_approval"}
+    )
     approved = ManualLimitApproval.model_validate(request.manual_approval)
     approved.verify(policy.digest, policy.collector_coldkey)
     active = getattr(chain, "manual_approval", None)
@@ -108,8 +113,16 @@ def validate_batch(journal, policy, chain, request, observed):
         raise ManualIntentRefused("manual amount exceeds cold-approved range")
     if request.amount_rao + request.retained_alpha_rao > observed.alpha_rao:
         raise ManualIntentRefused("manual request would consume retained stake")
-    for claim in request.sources:
-        block, amount = claim["source_block"], claim["amount_rao"]
+    destinations = [
+        d.holding_coldkey
+        for d in policy.destinations
+        if d.bucket_id == checked.bucket_id and d.allocation_bps > 0
+    ]
+    if len(destinations) != 1:
+        raise ManualIntentRefused("manual bucket must have one signed destination")
+    destination = destinations[0]
+    for claim in checked.sources:
+        block, amount = claim.source_block, claim.amount_rao
         if block < policy.start_block or (
             block + policy.distribution_interval_blocks > observed.block
         ):
@@ -125,12 +138,10 @@ def validate_batch(journal, policy, chain, request, observed):
             raise ValueError("aggregate source proof changed or unavailable")
         remaining = remaining_source(journal, policy, row, manual=True)
         if not any(
-            p.bucket_id == request.bucket_id and p.alpha_rao >= amount
+            p.bucket_id == checked.bucket_id
+            and p.holding_coldkey == destination
+            and p.alpha_rao >= amount
             for p in remaining
         ):
             raise ManualIntentRefused("aggregate source entitlement exceeded")
-    return next(
-        d.holding_coldkey
-        for d in policy.destinations
-        if d.bucket_id == request.bucket_id and d.allocation_bps > 0
-    )
+    return destination

@@ -347,3 +347,54 @@ def test_long_source_proof_refreshes_exact_signing_head_and_reserve(tmp_path):
     assert (
         j.db.execute("SELECT at_block FROM operations WHERE id=2").fetchone()[0] == 1167
     )
+
+
+def test_mutated_duplicate_sources_rejected_at_spending_boundary(tmp_path):
+    p, c, j, env = fixture(tmp_path)
+    request = intent(env)
+    request.sources[1]["source_block"] = request.sources[0]["source_block"]
+    with pytest.raises(ValueError):
+        arm_manual_transfer(j, p, c, request)
+    assert len(c.sent) == 1
+
+
+def test_remaining_entitlement_must_bind_exact_signed_recipient(tmp_path, monkeypatch):
+    from ditto.treasury import manual_batch
+
+    p, c, j, env = fixture(tmp_path)
+    remaining = manual_batch.remaining_source
+
+    def wrong_destination(*args, **kwargs):
+        return tuple(
+            replace(part, holding_coldkey="wrong-recipient")
+            for part in remaining(*args, **kwargs)
+        )
+
+    monkeypatch.setattr(manual_batch, "remaining_source", wrong_destination)
+    with pytest.raises(ValueError, match="entitlement"):
+        arm_manual_transfer(j, p, c, intent(env))
+    assert len(c.sent) == 1
+
+
+def test_recent_source_requires_pin_and_failure_preserves_catchup_budget(tmp_path):
+    from scripts.treasury_manual_worker import consume_iteration
+
+    p, c, j, _ = fixture(tmp_path)
+    cursor = j.db.execute("SELECT block FROM cursor").fetchone()[0]
+    c.recent_earning_candidates = lambda _: [200]
+    earnings = c.earnings
+
+    def unavailable(policy, block):
+        if block == 200:
+            raise TimeoutError()
+        return earnings(policy, block)
+
+    c.earnings = unavailable
+    mailbox = Mailbox()
+    mailbox.pull = lambda: None
+    consume_iteration(mailbox, j, p, c)
+    assert j.db.execute("SELECT block FROM cursor").fetchone()[0] == cursor + 32
+    assert len(c.sent) == 1
+    j.db.execute("DELETE FROM pin")
+    with pytest.raises(ValueError, match="pinned transfer"):
+        observe_earning_source(j, p, c, 200)

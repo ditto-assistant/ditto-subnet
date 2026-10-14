@@ -226,20 +226,10 @@ async def _receipt(
     public_proof["block"] = selector.block
     public_proof["source_block"] = selector.source_block
     if parent is not None:
-        parent_source = parent.proof
-        if parent.proof.get("source_claims"):
-            matches = [
-                c
-                for c in parent.proof["source_claims"]
-                if c["source_block"] == selector.source_block
-            ]
-            if len(matches) != 1:
-                raise ReceiptConflict("parent aggregate source is ambiguous")
-            parent_source = matches[0]
-        if tuple(
-            parent_source[k]
-            for k in ("source_block_hash", "source_event_digest", "source_amount_rao")
-        ) != (
+        from ditto.api_server.treasury_aggregate import parent_source_identity
+
+        parent_identity = parent_source_identity(parent.proof, selector.source_block)
+        if parent_identity != (
             proof.source_block_hash,
             proof.source_event_digest,
             proof.source_amount_rao,

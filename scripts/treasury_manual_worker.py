@@ -36,8 +36,8 @@ def consume_iteration(mailbox, journal, policy, chain):
             for block in chain.recent_earning_candidates(policy):
                 if block in proved or block in probed:
                     continue
-                recent += 1
                 observe_earning_source(journal, policy, chain, block)
+                recent += 1
                 publish_current_readiness(mailbox, journal, policy, chain)
                 if recent == 8:
                     break

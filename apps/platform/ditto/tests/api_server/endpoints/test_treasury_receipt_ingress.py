@@ -420,6 +420,47 @@ async def test_aggregate_receipt_preserves_sources_and_fences_legacy_reuse(
         }
         refusal = await client.post(URL, headers=HEADERS, json=reused)
         assert refusal.status_code == 409, refusal.text
+    # The stored aggregate proof enriches each claim with source identity;
+    # valid linked payments must remain usable rather than being all refused.
+    rpc.proxy_vendor = True
+    rpc.vendor_events = [
+        event("Proxy", "ProxyExecuted", {"result": {"Ok": []}}),
+        event("System", "ExtrinsicSuccess", {}),
+        event(
+            "SubtensorModule",
+            "StakeRemoved",
+            [
+                rpc.policy.buckets[0].holding_coldkey,
+                rpc.policy.collector_hotkey,
+                999,
+                15,
+                118,
+                0,
+            ],
+        ),
+        event(
+            "SubtensorModule",
+            "StakeAdded",
+            [
+                rpc.vendor,
+                rpc.policy.collector_hotkey,
+                999,
+                15,
+                118,
+                0,
+            ],
+        ),
+    ]
+    linked = {
+        **selection("vendor_payment"),
+        "source_block": 110,
+        "parent_receipt_id": response.json()["receipt_id"],
+        "payee_rule_id": "alpha_payee",
+        "amount_atomic": 15,
+    }
+    payment = await client.post(URL, headers=HEADERS, json=linked)
+    assert payment.status_code == 200, payment.text
+    assert payment.json()["provider_credit_status"] == "not_proven"
 
 
 @pytest.mark.parametrize("fault", ["duplicate", "sum", "missing_proof", "wrong_epoch"])

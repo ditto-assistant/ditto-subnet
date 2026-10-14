@@ -1284,10 +1284,8 @@ def observe_earning_source(journal, policy, chain, block):
     db = journal.db
     db.execute("BEGIN IMMEDIATE")
     try:
-        if tuple(db.execute("SELECT digest,role FROM pin").fetchone()) != (
-            policy.digest,
-            "transfer",
-        ):
+        pinned = db.execute("SELECT digest,role FROM pin").fetchone()
+        if pinned is None or tuple(pinned) != (policy.digest, "transfer"):
             raise ValueError("source proof requires pinned transfer journal")
         approval = getattr(chain, "manual_approval", None)
         if approval is None or not policy.enabled:
