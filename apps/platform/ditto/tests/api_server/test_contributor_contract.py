@@ -124,6 +124,16 @@ def test_oauth_config_rejects_unsafe_redirects(url):
         )
 
 
+@pytest.mark.parametrize(("raw", "expected"), [("", 10.0), ("  ", 10.0), ("2.5", 2.5)])
+def test_oauth_timeout_treats_empty_as_default(monkeypatch, raw, expected):
+    monkeypatch.delenv("GITHUB_LINK_ENABLED", raising=False)
+    monkeypatch.setenv("GITHUB_LINK_TIMEOUT_SECONDS", raw)
+    assert parse_github_link_config_from_env().timeout_seconds == expected
+    monkeypatch.setenv("GITHUB_LINK_TIMEOUT_SECONDS", "soon")
+    with pytest.raises(ApiServerConfigError, match="must be numeric"):
+        parse_github_link_config_from_env()
+
+
 def test_oauth_defaults_off_and_requires_secret_when_enabled(monkeypatch):
     for name in (
         "GITHUB_LINK_ENABLED",

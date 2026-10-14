@@ -1489,7 +1489,9 @@ def check_config(config: ApiServerConfig) -> None:
 
 def parse_github_link_config_from_env() -> GithubLinkConfig:
     try:
-        timeout = float(os.environ.get("GITHUB_LINK_TIMEOUT_SECONDS", "10"))
+        timeout = float(
+            os.environ.get("GITHUB_LINK_TIMEOUT_SECONDS", "").strip() or "10"
+        )
     except ValueError as error:
         raise ApiServerConfigError(
             "GITHUB_LINK_TIMEOUT_SECONDS must be numeric"
