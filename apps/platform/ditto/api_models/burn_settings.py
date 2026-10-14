@@ -48,9 +48,10 @@ already does and adding this surface changes no weights on deploy.
 """
 
 RANK_SHARES_SLOTS = 5
+"""Champion plus the four-runner tail the KOTH fold pays."""
+
 RANK_SHARES_PROTOCOL = 31
 """Validator heartbeat protocol that folds a served ``rank_shares`` curve."""
-"""Champion plus the four-runner tail the KOTH fold pays."""
 
 
 class BurnSettings(BaseModel):
