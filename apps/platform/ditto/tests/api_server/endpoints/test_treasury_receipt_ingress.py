@@ -409,6 +409,7 @@ async def test_aggregate_receipt_preserves_sources_and_fences_legacy_reuse(
         assert sum(c["amount_rao"] for c in rows[0].proof["source_claims"]) == 40
     # A different finalized payment cannot consume the aggregate's sources again.
     rpc.distribution_amounts[121] = 21
+    rpc.distribution_blocks.add(121)
     for source in (110, 111):
         reused = {
             **selection(),
