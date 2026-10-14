@@ -173,19 +173,18 @@ class ManualTransfer:
             raise ValueError("bounded manual operator reason required")
 
 
-def historical_policy_matches(journal, policy, digest, event_id):
+def historical_policy_limits(journal, policy):
     """Only a cold-approved runtime migration admits earlier intent pins.
 
     Retain original ledger bytes. A prior policy can identify historical intent
     only before its migration event; it never authorizes a new request. Runtime
     migrations cannot change destinations, keys, limits or cadence.
     """
-    if digest == policy.digest:
-        return True
     from ditto.treasury.collector_migration import policy_transition
     from ditto_screening_protocol.treasury_approval import verify_public_signature
 
     current = policy
+    limits: dict[str, int | None] = {policy.digest: None}
     rows = journal.db.execute(
         "SELECT id,payload FROM events "
         "WHERE event='offline_approved_runtime_migration' "
@@ -228,10 +227,16 @@ def historical_policy_matches(journal, policy, digest, event_id):
             bytes.fromhex(body["signature"].removeprefix("0x")),
         ):
             raise ValueError("runtime migration ancestry lacks cold approval")
-        if digest == old.digest and event_id < row["id"]:
-            return True
+        limits[old.digest] = row["id"]
         current = old
-    return False
+    return limits
+
+
+def historical_policy_matches(journal, policy, digest, event_id):
+    if digest == policy.digest:
+        return True
+    limit = historical_policy_limits(journal, policy).get(digest)
+    return limit is not None and event_id < limit
 
 
 def manual_transfer_history(journal, policy):
@@ -240,13 +245,20 @@ def manual_transfer_history(journal, policy):
     ).fetchall()
     if len(rows) > 100000:
         raise ValueError("manual history exceeds explicit bound")
+    records = [(json.loads(row[0]), row[1]) for row in rows]
+    # Invocation-local only: never reuse proofs across journal state or locks.
+    limits = (
+        historical_policy_limits(journal, policy)
+        if any(body.get("policy") != policy.digest for body, _ in records)
+        else {policy.digest: None}
+    )
     requests = []
     ids = set()
     previous = 0
-    for row in rows:
-        body = json.loads(row[0])
-        if not historical_policy_matches(
-            journal, policy, body.pop("policy", None), row[1]
+    for body, event_id in records:
+        digest = body.pop("policy", None)
+        if digest not in limits or (
+            limits[digest] is not None and event_id >= limits[digest]
         ):
             raise ValueError("manual transfer policy changed")
         request = ManualTransfer(**body)

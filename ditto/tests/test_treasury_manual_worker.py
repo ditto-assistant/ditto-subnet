@@ -533,7 +533,9 @@ def test_readiness_publish_failure_still_pulls_and_reconciles_exact_request(
     assert "raw provider detail" not in logs
 
 
-def test_cold_approved_runtime_migration_preserves_used_manual_history(tmp_path):
+def test_cold_approved_runtime_migration_preserves_used_manual_history(
+    tmp_path, monkeypatch
+):
     import hashlib
     import json
 
@@ -567,6 +569,15 @@ def test_cold_approved_runtime_migration_preserves_used_manual_history(tmp_path)
         ).fetchone()[0]
         == "finalized"
     )
+    next_env = env.model_copy(
+        update={
+            "request": env.request.model_copy(
+                update={"request_id": str(uuid4()), "after_operation": 2}
+            )
+        }
+    )
+    process_manual(mailbox, journal, old, c, "third", next_env.model_dump())
+    process_manual(mailbox, journal, old, c, "fourth", next_env.model_dump())
     source = tmp_path / "snapshot.db"
     journal.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     journal.db.execute("PRAGMA journal_mode=DELETE")
@@ -591,14 +602,26 @@ def test_cold_approved_runtime_migration_preserves_used_manual_history(tmp_path)
     target = tmp_path / "migrated.db"
     migration.migrate(source, target, old, new, proof, signature)
     current = CollectorJournal(target, new, "transfer")
-    assert manual_transfer_history(current, new)[0].request_id == env.request.request_id
+    from ditto_screening_protocol import treasury_approval
+
+    original_verify = treasury_approval.verify_public_signature
+    verifications = []
+
+    def counted_verify(*args):
+        verifications.append(1)
+        return original_verify(*args)
+
+    monkeypatch.setattr(treasury_approval, "verify_public_signature", counted_verify)
+    requests = manual_transfer_history(current, new)
+    assert len(requests) == 2 and len(verifications) == 1
+    assert requests[0].request_id == env.request.request_id
     assert (
         transfer_canary(current, new, "transfer", None).max_alpha_rao
         == env.request.amount_rao
     )
     publish_readiness(mailbox, current, new, c)
     assert mailbox.reports[-1]["readiness"]["bounded_claim_available"] is True
-    assert len(c.sent) == 2  # No migration or readiness signing.
+    assert len(c.sent) == 3  # No migration or readiness signing.
     raw = current.db.execute(
         "SELECT payload FROM events WHERE event='manual_transfer_armed'"
     ).fetchone()[0]
@@ -649,4 +672,47 @@ def test_runtime_blocker_reports_only_fixed_public_diagnostics(tmp_path):
     ]:
         with pytest.raises(ValueError):
             ManualReport.model_validate({**report.model_dump(), **patch})
+    journal.close()
+
+
+def test_request_refusal_after_healthy_readiness_is_not_observation_failure(
+    tmp_path, monkeypatch, capsys
+):
+    import runpy
+    from pathlib import Path
+
+    module = runpy.run_path(
+        str(Path(__file__).resolve().parents[2] / "scripts/treasury_manual_worker.py")
+    )
+    consume = module["consume_iteration"]
+    p, c, journal, env, mailbox = setup(tmp_path)
+    monkeypatch.setitem(consume.__globals__, "observe_earnings", lambda *_: None)
+    mailbox.pull = lambda: ("ack", env.model_dump())
+
+    def refused(*_):
+        raise ValueError("private request failure")
+
+    monkeypatch.setitem(consume.__globals__, "consume_manual", refused)
+    consume(mailbox, journal, p, c)
+    assert [x["status"] for x in mailbox.reports] == ["readiness"]
+    assert mailbox.acks == [] and len(c.sent) == 1
+    log = capsys.readouterr().out
+    assert (
+        "manual_request_processing_failed" in log
+        and "private request failure" not in log
+    )
+    journal.close()
+
+
+def test_malformed_expected_runtime_does_not_hide_public_blocker(tmp_path):
+    from ditto.treasury.collector_chain import CollectorRuntimeRefused
+    from ditto.treasury.manual_worker import publish_observation_blocker
+
+    p, _, journal, _, mailbox = setup(tmp_path)
+    error = CollectorRuntimeRefused(
+        "policy_runtime_unreviewed", "fixed", "0x" + "AA" * 32
+    )
+    publish_observation_blocker(mailbox, p, error)
+    assert mailbox.reports[-1]["blocker"]["expected_runtime_hash"] is None
+    assert mailbox.reports[-1]["blocker"]["code"] == "policy_runtime_unreviewed"
     journal.close()

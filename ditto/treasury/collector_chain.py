@@ -45,7 +45,11 @@ class CollectorRuntimeRefused(ValueError):
     def __init__(self, code, message, expected, observed=None):
         super().__init__(message)
         self.code = code
-        self.expected = expected
+        self.expected = (
+            expected
+            if isinstance(expected, str) and re.fullmatch(r"0x[0-9a-f]{64}", expected)
+            else None
+        )
         self.observed = (
             observed
             if isinstance(observed, str) and re.fullmatch(r"0x[0-9a-f]{64}", observed)

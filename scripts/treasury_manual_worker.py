@@ -33,9 +33,24 @@ def consume_iteration(mailbox, journal, policy, chain):
             ),
             flush=True,
         )
+        with contextlib.suppress(Exception):
+            publish_observation_blocker(mailbox, policy, error)
     message = mailbox.pull()
     if message:
-        consume_manual(mailbox, journal, policy, chain, *message)
+        try:
+            consume_manual(mailbox, journal, policy, chain, *message)
+        except Exception as error:
+            # Leave the exact message unacknowledged for normal reconciliation;
+            # a per-request failure does not invalidate the observed readiness.
+            print(
+                json.dumps(
+                    {
+                        "status": "manual_request_processing_failed",
+                        "error_type": type(error).__name__,
+                    }
+                ),
+                flush=True,
+            )
 
 
 def main():

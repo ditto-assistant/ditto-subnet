@@ -1195,12 +1195,13 @@ def test_v473_approval_cannot_authorize_v478_even_for_receipts(historical):
         )
 
 
+@pytest.mark.parametrize("historical", [False, True])
 @pytest.mark.parametrize("consensus", ["Null", None, 0, {"Yuma": None}])
-def test_v478_non_yuma_or_unknown_consensus_refuses(consensus):
+def test_v478_non_yuma_or_unknown_consensus_refuses(consensus, historical):
     c, _ = runtime_adapter(AUDITED_CODE_HASH)
     c.query = lambda *_: consensus
     with pytest.raises(ValueError, match="Yuma"):
-        c.guard_runtime(policy(), "finalized")
+        c.guard_runtime(policy(), "finalized", historical=historical)
 
 
 def test_v478_requires_exact_new_registration_scope_and_unchanged_transfer_scope():
@@ -1233,3 +1234,14 @@ def test_all_audited_receipt_hashes_are_forward_only():
                     collector_receipt_runtime(parent, post)
     with pytest.raises(ValueError, match="not audited"):
         collector_receipt_runtime(COLLECTOR_RUNTIME_ORDER[-1], "0x" + "aa" * 32)
+
+
+def test_v473_historical_receipt_does_not_require_new_consensus_storage():
+    from ditto_screening_protocol.collector_receipts import V473_COLLECTOR_CODE_HASH
+
+    c, _ = runtime_adapter(V473_COLLECTOR_CODE_HASH)
+    c.query = lambda *_: pytest.fail("v473 has no new consensus storage")
+    assert (
+        c.guard_runtime(policy(), "historical", historical=True)
+        == V473_COLLECTOR_CODE_HASH
+    )
