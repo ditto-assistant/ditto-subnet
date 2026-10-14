@@ -1472,3 +1472,14 @@ class TestCrownIncumbency:
         assert classic is not None and held is not None
         assert classic.champion.agent_id == UUID(int=1)
         assert held.champion.agent_id == UUID(int=2)
+
+
+def test_operator_rank_shares_replace_the_frozen_curve() -> None:
+    entries = [_entry(marker, 0.9 - marker / 100, minutes=marker) for marker in range(5)]
+    projection = project_koth(entries)
+    assert projection is not None
+    curve = (0.50, 0.20, 0.13, 0.10, 0.07)
+    assert emission_shares(projection) == (0.65, 0.14, 0.10, 0.07, 0.04)
+    assert emission_shares(projection, rank_shares=curve) == curve
+    allocation = emission_allocation(entries, projection, rank_shares=curve)
+    assert allocation.shares == curve

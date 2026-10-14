@@ -179,3 +179,23 @@ async def test_a_malformed_revision_degrades_to_no_burn() -> None:
 
 async def test_resolver_without_a_session_maker_returns_the_default() -> None:
     assert (await BurnSettingsResolver().resolve(None)).burn_share == 0.0
+
+
+def test_rank_shares_must_be_a_five_slot_curve_summing_to_one() -> None:
+    from pydantic import ValidationError
+
+    from ditto.api_models.burn_settings import BurnSettings
+
+    assert BurnSettings().rank_shares is None
+    curve = BurnSettings.model_validate(
+        {"burn_share": 0.0, "rank_shares": [0.5, 0.2, 0.13, 0.1, 0.07]}
+    )
+    assert curve.rank_shares == (0.5, 0.2, 0.13, 0.1, 0.07)
+    for bad in (
+        [0.5, 0.2, 0.3],
+        [0.5, 0.2, 0.13, 0.1, 0.0],
+        [0.5, 0.2, 0.13, 0.1, 0.08],
+        [0.6, 0.2, 0.13, 0.1, -0.03],
+    ):
+        with pytest.raises(ValidationError):
+            BurnSettings.model_validate({"burn_share": 0.0, "rank_shares": bad})

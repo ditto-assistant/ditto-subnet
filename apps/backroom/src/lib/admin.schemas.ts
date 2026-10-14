@@ -1612,8 +1612,21 @@ export const BURN_CONFIRMATION = 'APPLY BURN SETTINGS'
 export const MIN_BURN_SHARE = 0
 export const MAX_BURN_SHARE = 1
 
+// Protocol-31 operator payout curve: champion then the four tail slots,
+// positive and summing to one within the validator fold's 1e-12 tolerance.
+// Null keeps every validator on its frozen 65/14/10/7/4 curve.
+export const RANK_SHARES_SLOTS = 5
+const rankSharesSchema = z
+  .array(z.number().positive())
+  .length(RANK_SHARES_SLOTS)
+  .refine(
+    (shares) => Math.abs(shares.reduce((total, share) => total + share, 0) - 1) <= 1e-12,
+    'rank_shares must sum to 1',
+  )
+
 const burnSettingsBaseSchema = z.object({
   burn_share: z.number().min(MIN_BURN_SHARE).max(MAX_BURN_SHARE),
+  rank_shares: rankSharesSchema.nullable().optional(),
 })
 
 export const burnSettingsSchema = burnSettingsBaseSchema

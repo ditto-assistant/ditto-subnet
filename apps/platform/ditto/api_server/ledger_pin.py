@@ -24,6 +24,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -193,6 +194,27 @@ def ledger_digest(entries_json: list[dict], served_context: dict[str, Any]) -> s
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def served_rank_shares(served: dict[str, Any]) -> list[float] | None:
+    """The protocol-31 payout curve frozen with a pin, or ``None`` for the frozen one.
+
+    Anything other than five positive shares summing to one is treated as
+    absent, exactly as validators do, so the board never projects a curve the
+    fleet would refuse.
+    """
+    raw = served.get("rank_shares")
+    if not isinstance(raw, list) or len(raw) != 5:
+        return None
+    try:
+        shares = [float(share) for share in raw]
+    except (TypeError, ValueError):
+        return None
+    if any(not math.isfinite(share) or share <= 0.0 for share in shares):
+        return None
+    if not math.isclose(sum(shares), 1.0, rel_tol=0.0, abs_tol=1e-12):
+        return None
+    return shares
+
+
 def pin_provisional_incumbent(served: dict[str, Any]) -> LedgerEntry | None:
     """The crown-only incumbent a pin froze (protocol 28), or ``None``.
 
@@ -230,6 +252,7 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
         tie_weighting_mode=served.get("tie_weighting_mode"),
         dethrone_band_mode=served.get("dethrone_band_mode"),
         statistical_band_mode=served.get("statistical_band_mode"),
+        rank_shares=served_rank_shares(served),
         count=len(pin.entries),
         generated_at=pin.pinned_at,
         stale=stale,
@@ -402,6 +425,7 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
         tie_pooling=tie_pooling,
         ceiling_band_clamp=clamp,
         statistical_band_cap=statistical_cap,
+        rank_shares=served_rank_shares(served),
     )
     total = sum(allocation.shares)
     if total <= 0.0:
@@ -832,6 +856,11 @@ def build_pin_draft(
         served["treasury_pin"] = treasury.model_dump(mode="json")
     if getattr(snapshot, "statistical_band_mode", None) == "capped":
         served["statistical_band_mode"] = "capped"
+    # Keyed only when a fleet-ready operator curve is served, so every pin taken
+    # on the frozen curve keeps its digest byte for byte.
+    rank_shares = getattr(snapshot, "rank_shares", None)
+    if rank_shares is not None:
+        served["rank_shares"] = [float(share) for share in rank_shares]
     # Bench v13+: freeze the pinned confirmation seed anchors with the pin so a
     # validator re-deriving the champion-anchored family from a pin sees the
     # same binding a live read would have served. Keyed only when present, so
@@ -1058,6 +1087,7 @@ __all__ = [
     "pin_expected_burn",
     "pin_expected_shares",
     "pin_provisional_incumbent",
+    "served_rank_shares",
     "ledger_digest",
     "response_from_pin",
 ]

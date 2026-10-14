@@ -167,6 +167,10 @@ _CROWN_INCUMBENT_PROTOCOL = CROWN_INCUMBENT_PROTOCOL
 # or an older validator would crown and pay the held incumbent's runner-up.
 _PROVISIONAL_INCUMBENT_PROTOCOL = PROVISIONAL_INCUMBENT_PROTOCOL
 _STATISTICAL_BAND_CAP_PROTOCOL = 29
+# The first validator protocol whose fold reads the served ``rank_shares``
+# payout curve. Withheld until every recently-live weight setter reports it, or
+# a mixed fleet would fold two curves in one epoch.
+_RANK_SHARES_PROTOCOL = 31
 
 
 def _fleet_safe_efficiency_adjustments(
@@ -210,6 +214,9 @@ class _LedgerSnapshot:
     tie_weighting_mode: Literal["pool"] | None = None
     dethrone_band_mode: Literal["headroom_capped"] | None = None
     statistical_band_mode: Literal["capped"] | None = None
+    rank_shares: tuple[float, ...] | None = None
+    """The operator payout curve served to the fleet, or ``None`` for the frozen
+    curve. Replayed on the stale path like ``burn_share``."""
     continual_retest_cohort_size: int = 5
     requesting_validator_hotkey: str | None = None
     context: _LedgerContext | None = None
@@ -264,6 +271,7 @@ class _LedgerContext:
     statistical_band_cap_fleet_ready: bool = False
     crown_incumbent_fleet_ready: bool = False
     reward_eligibility_fleet_ready: bool = False
+    rank_shares_fleet_ready: bool = False
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -458,6 +466,9 @@ async def resolve_ledger_context(
     statistical_band_cap_fleet_ready = await live_weight_setter_fleet_supports_protocol(
         session, minimum_protocol=_STATISTICAL_BAND_CAP_PROTOCOL, now=now
     )
+    rank_shares_fleet_ready = await live_weight_setter_fleet_supports_protocol(
+        session, minimum_protocol=_RANK_SHARES_PROTOCOL, now=now
+    )
     crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
         minimum_protocol=_CROWN_INCUMBENT_PROTOCOL,
@@ -481,6 +492,7 @@ async def resolve_ledger_context(
         statistical_band_cap_fleet_ready=statistical_band_cap_fleet_ready,
         crown_incumbent_fleet_ready=crown_incumbent_fleet_ready,
         reward_eligibility_fleet_ready=reward_eligibility_fleet_ready,
+        rank_shares_fleet_ready=rank_shares_fleet_ready,
     )
 
 
@@ -560,6 +572,9 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         tie_weighting_mode=snapshot.tie_weighting_mode,
         dethrone_band_mode=snapshot.dethrone_band_mode,
         statistical_band_mode=snapshot.statistical_band_mode,
+        rank_shares=(
+            list(snapshot.rank_shares) if snapshot.rank_shares is not None else None
+        ),
         count=len(snapshot.entries),
         generated_at=snapshot.generated_at,
         stale=False,
@@ -1070,6 +1085,11 @@ async def materialize_ledger_snapshot(
             )
             else None
         ),
+        rank_shares=(
+            burn_settings.rank_shares
+            if ledger_context.rank_shares_fleet_ready
+            else None
+        ),
         continual_retest_cohort_size=continual_settings.retest_cohort_size,
         requesting_validator_hotkey=requesting_validator_hotkey,
         context=ledger_context,
@@ -1096,6 +1116,7 @@ async def materialize_ledger_snapshot(
             "statistical_band_cap": ledger_context.statistical_band_cap_fleet_ready,
             "crown_incumbent": ledger_context.crown_incumbent_fleet_ready,
             "reward_eligibility": ledger_context.reward_eligibility_fleet_ready,
+            "rank_shares": ledger_context.rank_shares_fleet_ready,
         },
     )
 
@@ -1641,6 +1662,9 @@ def _serve_last_known(
         tie_weighting_mode=snapshot.tie_weighting_mode,
         dethrone_band_mode=snapshot.dethrone_band_mode,
         statistical_band_mode=snapshot.statistical_band_mode,
+        rank_shares=(
+            list(snapshot.rank_shares) if snapshot.rank_shares is not None else None
+        ),
         count=len(entries),
         generated_at=snapshot.generated_at,
         stale=True,
