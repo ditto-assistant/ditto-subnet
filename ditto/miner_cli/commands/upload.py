@@ -298,12 +298,17 @@ def _run_upload(
             # authoritative pre-payment policy check below.
             consent = None
         if consent is not None and consent.mode == "enforce" and not consent.is_current:
+            register_hint = _btcli_register_hint(
+                args, subtensor_network, netuid=consent.netuid
+            )
             cla_error = (
                 "no effective contributor agreement is published; contact "
                 "the operator before uploading"
                 if consent.current is None
                 else "the current contributor agreement is required; run "
-                "`ditto cla sign` before upload"
+                "`ditto cla sign` before upload. Signing needs an on-chain "
+                "hotkey owner, so register a new hotkey first:\n"
+                f"{register_hint}"
             )
             if explicit_recovery_receipt is None:
                 saved_recovery_candidates = load_pending_payments_for_hotkey(
@@ -385,14 +390,15 @@ def _run_upload(
         )
         if receipt is not None:
             receipt_source = "saved"
+        elif cla_error is not None:
+            # Only an exact saved retry is exempt from current consent. A
+            # reassigned credit is a new contribution and would be refused, so
+            # report the consent requirement before any receipt selection.
+            raise MinerCliError(cla_error)
         else:
-            candidates = (
-                saved_recovery_candidates
-                if saved_recovery_candidates is not None
-                else load_pending_payments_for_hotkey(
-                    network=network_name,
-                    hotkey=handle.hotkey_ss58,
-                )
+            candidates = load_pending_payments_for_hotkey(
+                network=network_name,
+                hotkey=handle.hotkey_ss58,
             )
             if len(candidates) > 1:
                 raise MinerCliError(
@@ -403,11 +409,6 @@ def _run_upload(
                 reassigned_payment = candidates[0]
                 receipt = reassigned_payment.payment
                 receipt_source = "saved_reassigned"
-
-    if cla_error is not None and receipt_source == "saved_reassigned":
-        # Different names/digests represent a new contribution. Reassigning a
-        # credit does not waive its current-consent requirement.
-        raise MinerCliError(cla_error)
 
     with ApiClient(base_url=network_api_url) as client:
 

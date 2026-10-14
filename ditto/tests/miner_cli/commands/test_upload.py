@@ -398,6 +398,8 @@ class TestUploadHappyPath:
             assert run(make_args(good_tar)) == 1
         error = capsys.readouterr().err
         assert ("ditto cla sign" in error) == published
+        # Signing needs an on-chain owner, so the fix for a new hotkey is shown.
+        assert ("btcli subnets register --netuid 118" in error) == published
         assert ("contact the operator" in error) == (not published)
         preflight.assert_not_called()
         pay.assert_not_called()
@@ -531,9 +533,10 @@ class TestUploadHappyPath:
         pay.assert_not_called()
         register.assert_not_called()
 
+    @pytest.mark.parametrize("saved", [1, 2])
     @pytest.mark.parametrize("different", ["name", "digest"])
     def test_unsigned_reassigned_receipt_requires_current_consent(
-        self, good_tar: Path, different: str
+        self, good_tar: Path, capsys, different: str, saved: int
     ) -> None:
         client = MagicMock()
         client.get_cla_status.return_value = ClaStatus(netuid=118, mode="enforce")
@@ -558,12 +561,17 @@ class TestUploadHappyPath:
             ),
             patch(
                 "ditto.miner_cli.commands.upload.load_pending_payments_for_hotkey",
-                return_value=(pending,),
+                return_value=(pending,) * saved,
             ),
             patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
             patch("ditto.miner_cli.commands.upload._register_hotkey") as register,
         ):
             assert run(make_args(good_tar)) == 1
+        # Consent is the blocker even with several saved credits; proof flags
+        # would not help, so the CLI must not ask for them.
+        error = capsys.readouterr().err
+        assert "contributor agreement" in error
+        assert "multiple unconsumed payments" not in error
         client.post_upload_check.assert_not_called()
         client.post_upload_agent.assert_not_called()
         pay.assert_not_called()

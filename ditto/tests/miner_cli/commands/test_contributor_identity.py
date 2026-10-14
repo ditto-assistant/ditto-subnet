@@ -439,6 +439,31 @@ def test_json_unlink_signs_current_context_for_a_global_link(
         live.hotkey.sign.assert_not_called()
 
 
+def test_declined_unlink_explains_and_signs_nothing(capsys, monkeypatch):
+    api = client()
+    handle, live = wallet()
+    api.get_github_link.return_value = SimpleNamespace(
+        netuid=118,
+        link=SimpleNamespace(
+            netuid=118, link_id=uuid4(), github_login="fixture", github_user_id=100
+        ),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO("no\n"))
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(link_github, "load_wallet", return_value=(handle, live)) as load,
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture-session", "hotkey": KEY.ss58_address},
+        ),
+    ):
+        assert link_github.run(args(github_command="unlink", yes=False)) == 1
+    assert "not unlinked" in capsys.readouterr().err
+    load.assert_not_called()
+    api.unlink_github.assert_not_called()
+
+
 @pytest.mark.parametrize("case", ["digest", "confirmation", "missing"])
 def test_cla_refuses_to_sign_unverified_or_unconfirmed_text(tmp_path, case):
     api = client()
@@ -546,7 +571,10 @@ def test_transient_github_polling_obeys_original_deadline(
         patch.object(link_github, "time", clock),
     ):
         assert link_github.run(args(wait=wait)) == 1
-    assert "timed out" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "timed out" in err
+    # A persistent outage is reported as the cause, not hidden as a timeout.
+    assert "fixture temporary outage" in err
     api.get_github_link_attempt.assert_called_once()
     clock.sleep.assert_called_once_with(0.5)
     load_wallet.assert_not_called()

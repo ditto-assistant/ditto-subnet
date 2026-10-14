@@ -171,6 +171,7 @@ def run(args: argparse.Namespace) -> int:
                     and prompt_input("Type UNLINK to sign this revocation: ").strip()
                     != "UNLINK"
                 ):
+                    print("not unlinked", file=sys.stderr)
                     return 1
                 handle, wallet = load_wallet(
                     coldkey_name=names[0], hotkey_name=names[1]
@@ -222,16 +223,19 @@ def run(args: argparse.Namespace) -> int:
             deadline = time.monotonic() + max(
                 1, min(args.wait, 600, started.expires_in)
             )
+            last_transient: TransientApiError | None = None
             while time.monotonic() < deadline:
                 try:
                     attempt = client.get_github_link_attempt(
                         token=token, attempt_id=started.attempt_id
                     )
-                except TransientApiError:
+                except TransientApiError as exc:
+                    last_transient = exc
                     remaining = max(0, deadline - time.monotonic())
                     if remaining:
                         time.sleep(min(2, remaining))
                     continue
+                last_transient = None
                 if attempt.status == "linked":
                     link = client.get_github_link(token=token).link
                     if link is None or link.link_attempt_id != started.attempt_id:
@@ -303,6 +307,12 @@ def run(args: argparse.Namespace) -> int:
                     )
                     return 0
                 time.sleep(2)
+            if last_transient is not None:
+                # Polling never recovered; report the cause, not just a timeout.
+                raise MinerCliError(
+                    "timed out waiting for GitHub browser consent; Platform was "
+                    f"unavailable ({last_transient}); start again"
+                )
             raise MinerCliError(
                 "timed out waiting for GitHub browser consent; start again"
             )
