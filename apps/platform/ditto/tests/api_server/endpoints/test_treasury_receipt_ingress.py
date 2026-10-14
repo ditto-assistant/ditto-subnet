@@ -260,6 +260,7 @@ class RPC:
             else 0
         )
         return {
+            "SubnetEpochConsensus": "Yuma",
             "Owner": self.owner,
             "SubnetOwner": Keypair.create_from_uri("//Dave").ss58_address,
             "Uids": uid,
@@ -820,6 +821,9 @@ async def test_exact_historical_execution_runtime_and_forward_upgrade(
     parent, post, allowed
 ):
     class HistoricalRPC:
+        async def query(self, **_kwargs):
+            return "Yuma"
+
         async def get_chain_finalised_head(self):
             return h(200)
 

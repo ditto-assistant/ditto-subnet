@@ -17,6 +17,7 @@ from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
 from ditto.chain.errors import TreasuryReceiptReadProgress
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_RECEIPT_HASHES,
+    COLLECTOR_POW_REGISTRATION_HASHES,
     FINNEY_GENESIS,
     chain_uint,
     collector_gross_incentive,
@@ -112,6 +113,19 @@ async def finalized_block(
         code = response.get("result") if isinstance(response, dict) else None
         if code not in AUDITED_COLLECTOR_RECEIPT_HASHES:
             raise ValueError("receipt runtime is not audited")
+        if (
+            code in COLLECTOR_POW_REGISTRATION_HASHES
+            and value(
+                await substrate.query(
+                    module="SubtensorModule",
+                    storage_function="SubnetEpochConsensus",
+                    params=[118],
+                    block_hash=pinned,
+                )
+            )
+            != "Yuma"
+        ):
+            raise ValueError("receipt requires audited Yuma consensus")
         hashes.append(code)
     return at, parent, collector_receipt_runtime(*hashes)
 
