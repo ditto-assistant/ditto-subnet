@@ -24,6 +24,7 @@ from ditto.api_models.contributor_identity import (
 )
 from ditto.miner_cli.__main__ import _build_parser, main
 from ditto.miner_cli.commands import cla, link_github
+from ditto.miner_cli.errors import ApiResponseError
 
 TEXT = b"TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.\n"
 KEY = bittensor.Keypair.create_from_uri("//Alice")
@@ -147,6 +148,30 @@ def test_github_omitted_wallet_names_without_tty_never_prompt(capsys):
     assert "wallet name and hotkey are required" in capsys.readouterr().err
     prompt.assert_not_called()
     api.start_github_link.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["link", "status", "unlink"])
+def test_github_unavailable_error_exits_before_signing(command, capsys):
+    api = client()
+    failure = ApiResponseError("Ask the operator to upgrade Platform.")
+    api.get_github_link.side_effect = failure
+    api.start_github_link.side_effect = failure
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture-session", "hotkey": KEY.ss58_address},
+        ),
+        patch.object(link_github, "load_wallet") as load_wallet,
+        patch.object(link_github.webbrowser, "open") as open_browser,
+    ):
+        assert link_github.run(args(github_command=command)) == 1
+    output = capsys.readouterr()
+    assert "upgrade Platform" in output.err
+    assert not output.out
+    load_wallet.assert_not_called()
+    open_browser.assert_not_called()
 
 
 @pytest.mark.parametrize("after_unlink", [False, True])

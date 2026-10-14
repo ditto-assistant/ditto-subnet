@@ -105,6 +105,70 @@ class TestContributorAuthenticationErrors:
             client.get_github_link(token="fixture-token")
 
 
+class TestContributorAvailabilityErrors:
+    @pytest.mark.parametrize("operation", ["status", "start", "attempt"])
+    @pytest.mark.parametrize(
+        "body", [{"detail": "Not Found"}, {"error_code": 3002, "message": "Not Found"}]
+    )
+    def test_missing_github_routes_explain_platform_upgrade(
+        self, operation, body
+    ) -> None:
+        with (
+            make_client(lambda _request: httpx.Response(404, json=body)) as client,
+            pytest.raises(ApiResponseError, match="upgrade Platform"),
+        ):
+            if operation == "status":
+                client.get_github_link(token="fixture-token")
+            elif operation == "start":
+                client.start_github_link(token="fixture-token")
+            else:
+                client.get_github_link_attempt(
+                    token="fixture-token", attempt_id=UUID(int=1)
+                )
+
+    @pytest.mark.parametrize("field", ["detail", "message"])
+    def test_unknown_attempt_preserves_endpoint_error(self, field) -> None:
+        with (
+            make_client(
+                lambda _request: httpx.Response(
+                    404, json={field: "unknown GitHub link attempt"}
+                )
+            ) as client,
+            pytest.raises(
+                ApiResponseError, match="unknown GitHub link attempt"
+            ) as caught,
+        ):
+            client.get_github_link_attempt(
+                token="fixture-token", attempt_id=UUID(int=1)
+            )
+        assert "upgrade Platform" not in str(caught.value)
+
+    def test_empty_missing_route_explains_platform_upgrade(self) -> None:
+        with (
+            make_client(lambda _request: httpx.Response(404)) as client,
+            pytest.raises(ApiResponseError, match="upgrade Platform"),
+        ):
+            client.get_github_link(token="fixture-token")
+
+    def test_missing_cla_status_keeps_default_off_compatibility(self) -> None:
+        with make_client(
+            lambda _request: httpx.Response(404, json={"detail": "Not Found"})
+        ) as client:
+            assert client.get_cla_status() is None
+
+    def test_unknown_cla_version_preserves_endpoint_error(self) -> None:
+        with (
+            make_client(
+                lambda _request: httpx.Response(
+                    404, json={"detail": "unknown CLA version"}
+                )
+            ) as client,
+            pytest.raises(ApiResponseError, match="unknown CLA version") as caught,
+        ):
+            client.get_cla_version(version=1)
+        assert "upgrade Platform" not in str(caught.value)
+
+
 class TestClaTextStreaming:
     @pytest.mark.parametrize("status", [200, 503])
     def test_oversized_response_stops_transfer_and_closes(self, status):

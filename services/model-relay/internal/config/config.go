@@ -437,6 +437,9 @@ func Load(lookup Lookup) (*Config, error) {
 		IdentityToken:                r.str("PYLON_IDENTITY_TOKEN", ""),
 		DevAllowUnpermittedValidator: r.boolval("DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR", false),
 	}
+	if cfg.Chain.Netuid < 0 || cfg.Chain.Netuid > 2147483647 {
+		r.fail("NETUID must be between 0 and 2147483647, got %d", cfg.Chain.Netuid)
+	}
 	if (cfg.Chain.IdentityName == "") != (cfg.Chain.IdentityToken == "") {
 		r.fail("PYLON_IDENTITY_NAME and PYLON_IDENTITY_TOKEN must be provided together")
 	}

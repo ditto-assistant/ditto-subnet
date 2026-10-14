@@ -151,6 +151,27 @@ func TestUploadConfigValidation(t *testing.T) {
 	}
 }
 
+func TestNetuidValidation(t *testing.T) {
+	for _, value := range []string{"-1", "2147483648", "invalid"} {
+		t.Run("invalid_"+value, func(t *testing.T) {
+			env := minimalEnv()
+			env["NETUID"] = value
+			if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "NETUID") {
+				t.Fatalf("NETUID=%s must fail boot with an actionable error, got %v", value, err)
+			}
+		})
+	}
+	for _, value := range []string{"0", "118", "2147483647"} {
+		t.Run("valid_"+value, func(t *testing.T) {
+			env := minimalEnv()
+			env["NETUID"] = value
+			if _, err := Load(MapLookup(env)); err != nil {
+				t.Fatalf("NETUID=%s must be accepted: %v", value, err)
+			}
+		})
+	}
+}
+
 func TestMissingRequiredPostgresVarsFailBoot(t *testing.T) {
 	for _, missing := range []string{"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"} {
 		env := minimalEnv()

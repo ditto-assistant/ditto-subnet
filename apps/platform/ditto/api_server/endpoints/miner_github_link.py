@@ -185,13 +185,13 @@ async def start_link(
 ) -> GithubLinkStart:
     client = _client(request)
     launch = secrets.token_urlsafe(32)
-    now = datetime.now(UTC)
     async with session.begin():
         miner, _ = await resolve_miner_session(request, session)
         require_scope(miner, "profile")
         await lock_identity_writes(
             session, namespace=f"github-link-start:{miner.miner_hotkey}"
         )
+        now = datetime.now(UTC)
         pending = await session.scalar(
             select(func.count())
             .select_from(MinerGithubLinkAttempt)

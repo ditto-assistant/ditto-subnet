@@ -571,6 +571,17 @@ class ApiClient:
                 raise LoginRequiredError(
                     "miner session is invalid or expired; run `ditto login`"
                 )
+            if response.status_code == 404 and path.startswith(
+                "/api/v1/me/github-link"
+            ):
+                envelope = _safe_envelope(response)
+                message = envelope.get("message", envelope.get("detail"))
+                if message == "Not Found" or not response.content:
+                    raise ApiResponseError(
+                        "GitHub linking is unavailable on this Platform server "
+                        "(HTTP 404). Ask the operator to upgrade Platform to a "
+                        "release that supports `ditto link-github`."
+                    )
             raise ApiResponseError(_format_error(response, prefix="contributor"))
         return response
 

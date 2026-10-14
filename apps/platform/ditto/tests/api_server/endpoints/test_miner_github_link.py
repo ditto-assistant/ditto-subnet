@@ -1019,6 +1019,60 @@ async def test_concurrent_starts_cannot_exceed_five_pending_attempts(
         )
 
 
+async def test_start_refreshes_expiry_cutoff_after_lock_wait(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.api_server.endpoints import miner_github_link
+
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    before = datetime.now(UTC)
+    after = before + timedelta(seconds=2)
+
+    class Clock(datetime):
+        current = before
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current.astimezone(tz)
+
+    async with session_maker() as session, session.begin():
+        for _ in range(5):
+            session.add(
+                MinerGithubLinkAttempt(
+                    netuid=118,
+                    hotkey=alice.ss58_address,
+                    launch_hash=uuid4().hex,
+                    status="pending",
+                    created_at=before,
+                    expires_at=before + timedelta(seconds=1),
+                )
+            )
+
+    original_lock = miner_github_link.lock_identity_writes
+
+    async def delayed_lock(session, *, namespace):
+        await original_lock(session, namespace=namespace)
+        Clock.current = after
+
+    monkeypatch.setattr(miner_github_link, "datetime", Clock)
+    monkeypatch.setattr(miner_github_link, "lock_identity_writes", delayed_lock)
+    response = await client.post(
+        "/api/v1/me/github-link/start",
+        headers={"authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200, response.text
+    async with session_maker() as session:
+        attempt = await session.get(
+            MinerGithubLinkAttempt, UUID(response.json()["attempt_id"])
+        )
+        assert attempt.created_at == after
+        assert attempt.expires_at == after + timedelta(
+            seconds=miner_github_link.ATTEMPT_TTL_SECONDS
+        )
+
+
 async def test_clean_launch_url_cannot_consume_capability(app, client, session_maker):
     setup(app, session_maker)
     alice = bittensor.Keypair.create_from_uri("//Alice")
