@@ -4,6 +4,10 @@ A verified link binds one miner hotkey to one numeric GitHub user id. The login
 is a display label captured at linking; re-link after a rename. This identity
 never chooses a payment destination or changes a claim's signed payee.
 
+Legacy GitHub accounts can have consecutive or trailing hyphens in their login.
+Linking accepts these existing accounts; account-creation rules do not replace
+GitHub's OAuth-proven numeric identity.
+
 ## Miner CLI
 
 ```bash

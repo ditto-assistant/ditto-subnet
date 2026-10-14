@@ -542,18 +542,19 @@ SCHEMA_TABLE = "alembic_version"
 
 
 _TRUNCATE_GUARDS_SQL = (
-    "SELECT c.relname AS table_name, t.tgname AS trigger_name "
+    "SELECT c.relname AS table_name, t.tgname AS trigger_name, "
+    "t.tgenabled::text AS enable_mode "
     "FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
     "JOIN pg_namespace n ON n.oid = c.relnamespace "
     "WHERE n.nspname = 'public' AND NOT t.tgisinternal "
-    "AND t.tgenabled = 'O' AND (t.tgtype & 32) != 0 "
+    "AND t.tgenabled IN ('O', 'A') AND (t.tgtype & 32) != 0 "
     "ORDER BY c.relname, t.tgname"
 )
 
 
 def _truncate_fixture_body(
     tables: Sequence[str],
-    guards: Sequence[tuple[str, str]],
+    guards: Sequence[tuple[str, str, str]],
     *,
     restart_identity: bool = False,
 ) -> list[str]:
@@ -562,7 +563,7 @@ def _truncate_fixture_body(
 
     body = [
         f"  ALTER TABLE public.{quoted(table)} DISABLE TRIGGER {quoted(trigger)};"
-        for table, trigger in guards
+        for table, trigger, _mode in guards
     ]
     restart = " RESTART IDENTITY" if restart_identity else ""
     body.append(
@@ -572,8 +573,9 @@ def _truncate_fixture_body(
         + " CASCADE;"
     )
     body += [
-        f"  ALTER TABLE public.{quoted(table)} ENABLE TRIGGER {quoted(trigger)};"
-        for table, trigger in guards
+        f"  ALTER TABLE public.{quoted(table)} ENABLE "
+        f"{'ALWAYS ' if mode == 'A' else ''}TRIGGER {quoted(trigger)};"
+        for table, trigger, mode in guards
     ]
     return body
 
@@ -599,7 +601,7 @@ async def truncate_test_tables(
     ):
         raise ValueError("invalid fixture table names")
     rows = (await conn.execute(text(_TRUNCATE_GUARDS_SQL))).all()
-    guards = [(row[0], row[1]) for row in rows]
+    guards = [(row[0], row[1], row[2]) for row in rows]
     body = _truncate_fixture_body(tables, guards)
     await conn.execute(
         text("DO $ditto_reset$\nBEGIN\n" + "\n".join(body) + "\nEND\n$ditto_reset$")
@@ -647,7 +649,7 @@ async def _build_reset_sql(conn: asyncpg.Connection) -> str:
     guards = await conn.fetch(_TRUNCATE_GUARDS_SQL)
     body = _truncate_fixture_body(
         tables,
-        [(g["table_name"], g["trigger_name"]) for g in guards],
+        [(g["table_name"], g["trigger_name"], g["enable_mode"]) for g in guards],
         restart_identity=True,
     )
     for name in tables:

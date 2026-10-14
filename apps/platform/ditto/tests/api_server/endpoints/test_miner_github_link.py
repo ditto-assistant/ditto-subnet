@@ -192,10 +192,12 @@ def signed_link(
     }
 
 
+@pytest.mark.parametrize("login", ["miner-fixture", "A--A", "c--"])
 async def test_roundtrip_uses_verified_numeric_id_and_never_stores_or_serves_token(
-    app, client, session_maker, caplog
+    app, client, session_maker, caplog, login
 ):
     provider = setup(app, session_maker)
+    provider.login = login
     alice = bittensor.Keypair.create_from_uri("//Alice")
     token = await _sign_in(client, alice)
     started, _, _ = await browser_flow(client, token)
@@ -204,8 +206,8 @@ async def test_roundtrip_uses_verified_numeric_id_and_never_stores_or_serves_tok
         f"/api/v1/me/github-link/attempts/{started['attempt_id']}", headers=auth
     )
     assert status.json()["github_user_id"] == 100
-    assert status.json()["github_login"] == "miner-fixture"
-    body = signed_link(alice, started["attempt_id"])
+    assert status.json()["github_login"] == login
+    body = signed_link(alice, started["attempt_id"], login=login)
     linked = await client.post(
         "/api/v1/me/github-link/confirm", headers=auth, json=body
     )

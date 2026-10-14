@@ -13,7 +13,9 @@ Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Signature = Annotated[str, Field(pattern=r"^[0-9a-fA-F]{128}$")]
 GithubLogin = Annotated[
     str,
-    Field(pattern=r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$", max_length=39),
+    # Existing GitHub accounts can have consecutive or trailing hyphens.
+    # Server-side OAuth and numeric IDs prove account ownership.
+    Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$", max_length=39),
 ]
 KeyKind = Literal["hotkey", "coldkey"]
 ClaMode = Literal["off", "shadow", "enforce"]

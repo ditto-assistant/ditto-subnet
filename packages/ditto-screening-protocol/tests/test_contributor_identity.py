@@ -2,13 +2,26 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from pydantic import TypeAdapter
 
 from ditto_screening_protocol.contributor_identity import (
     ClaPublishRequest,
+    GithubLogin,
     cla_message,
     github_link_message,
     github_unlink_message,
 )
+
+
+@pytest.mark.parametrize("login", ["a", "miner-fixture", "A--A", "c--", "a" * 39])
+def test_github_login_preserves_valid_legacy_accounts(login):
+    assert TypeAdapter(GithubLogin).validate_python(login) == login
+
+
+@pytest.mark.parametrize("login", ["", "-miner", "miner_name", "a" * 40, "a/b", "a:b"])
+def test_github_login_rejects_unsafe_or_out_of_bounds_labels(login):
+    with pytest.raises(ValueError):
+        TypeAdapter(GithubLogin).validate_python(login)
 
 
 @pytest.mark.parametrize("text", ["a" * 262144, "猫" * (262144 // 3)])

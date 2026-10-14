@@ -15,7 +15,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ditto.db.models import Base
-from ditto.tests.pgharness import truncate_test_tables
+from ditto.tests.pgharness import _build_reset_sql, truncate_test_tables
 
 
 async def test_legacy_truncate_restores_append_only_guard(session_maker) -> None:
@@ -25,6 +25,41 @@ async def test_legacy_truncate_restores_append_only_guard(session_maker) -> None
         with pytest.raises(DBAPIError, match="append-only"):
             await session.execute(text("TRUNCATE agent_cla_bindings"))
         await session.rollback()
+
+
+@pytest.mark.parametrize("mode", ["O", "A"])
+@pytest.mark.parametrize("reset", ["legacy", "template"])
+async def test_reset_restores_original_truncate_guard_mode(
+    engine: AsyncEngine, mode: str, reset: str
+) -> None:
+    enable = {
+        "O": "ALTER TABLE agent_cla_bindings ENABLE TRIGGER "
+        "agent_cla_bindings_no_truncate",
+        "A": "ALTER TABLE agent_cla_bindings ENABLE ALWAYS TRIGGER "
+        "agent_cla_bindings_no_truncate",
+    }
+    async with engine.connect() as conn, conn.begin():
+        await conn.execute(text(enable[mode]))
+        if reset == "legacy":
+            await truncate_test_tables(conn, "agents")
+        else:
+            raw = await conn.get_raw_connection()
+            driver = raw.driver_connection
+            assert driver is not None
+            await driver.execute(await _build_reset_sql(driver))
+        assert (
+            await conn.scalar(
+                text(
+                    "SELECT tgenabled::text FROM pg_trigger "
+                    "WHERE tgrelid = 'agent_cla_bindings'::regclass "
+                    "AND tgname = 'agent_cla_bindings_no_truncate'"
+                )
+            )
+            == mode
+        )
+        with pytest.raises(DBAPIError, match="append-only"):
+            await conn.execute(text("TRUNCATE agent_cla_bindings"))
+        await conn.rollback()
 
 
 async def test_tests_run_on_postgres_not_sqlite(session: AsyncSession) -> None:
