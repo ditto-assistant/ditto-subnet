@@ -854,14 +854,14 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_inference_traces: 'Page trace archive objects by partition.',
   download_inference_trace: 'Presigned trace URL; artifact scope.',
   peek_inference_trace: 'Peek trace records; artifact scope.',
-  get_miner_github_link: 'Read the active OAuth-verified, signed GitHub link for a miner hotkey.',
-  get_github_link_revocation_preflight: 'Inspect an exact GitHub link and its immutable operator recovery audit before revocation.',
-  revoke_miner_github_link: 'Revoke an exact active GitHub link with operator attribution, reason and confirmation; preserves its signed proof.',
-  get_github_contributor_status: 'Resolve numeric GitHub account id to linked hotkey and current CLA receipt; never payee authority.',
-  get_miner_cla_status: 'Read current CLA version and the exact hotkey-signed consent receipt.',
-  get_cla_policy: 'Read audited off/shadow/enforce CLA rollout, history and adoption counts.',
-  set_cla_policy: 'Revise CLA rollout with CAS, actor, reason and exact confirmation.',
-  publish_cla_version: 'Publish maintainer-approved immutable CLA text by version and SHA-256; no gate activation.',
+  get_miner_github_link: 'Read active verified GitHub/hotkey proof. See help.',
+  get_github_link_revocation_preflight: 'Read exact-link revoke guard, audit and confirmation. See help.',
+  revoke_miner_github_link: 'Revoke exact link; actor, reason and confirmation. Write; see help.',
+  get_github_contributor_status: 'Numeric GitHub ID to hotkey and CLA; never payee authority. See help.',
+  get_miner_cla_status: 'Read effective CLA and hotkey consent receipt. See help.',
+  get_cla_policy: 'Read CLA mode, notice, history and adoption. See help.',
+  set_cla_policy: 'Set CLA mode with revision and confirmation. Write; see help.',
+  publish_cla_version: 'Publish approved pinned CLA; no activation. Write; see help.',
   get_owner_attestations:
     'Read signed direct owner links/revocations; non-transitive copy-review evidence.',
   list_lease_revocations:
@@ -1650,14 +1650,14 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
 
   registerTool('get_github_link_revocation_preflight', {
-    title: 'Inspect GitHub link recovery',
+    title: 'Inspect GitHub link',
     description: 'Read an exact linkId, its original signed identity proof, revocation blocker and exact confirmation. Returns the append-only operator audit after revocation. Use for a hostile or compromised link; no signing key or OAuth token is exposed. Requires backroom:read.',
     // The service still validates UUIDs; the catalog needs only their format.
     inputSchema: githubRevocationReadInputSchema.extend({ linkId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGithubRevocationPreflight(input)))
 
   registerTool('revoke_miner_github_link', {
-    title: 'Revoke compromised GitHub identity link',
+    title: 'Revoke GitHub link',
     description: 'Revoke exactly linkId using REVOKE GITHUB LINK {linkId} and an operator reason. Writes an immutable audit with the current signed-in operator and preserves the original miner signature. The preflight and mutation share the same active-link guard; stale or already-revoked links return 409. Frees the GitHub account for a new verified link and never changes payees or submissions. Requires backroom:write.',
     inputSchema: githubRevocationWriteInputSchema.extend({ linkId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => revokeMinerGithubLink(props.session.email, input)))
