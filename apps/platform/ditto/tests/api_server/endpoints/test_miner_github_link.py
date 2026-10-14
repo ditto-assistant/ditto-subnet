@@ -151,6 +151,46 @@ async def browser_flow(client, token, *, accept=True):
     return body, params, consent
 
 
+@pytest.mark.parametrize(
+    "url,origin",
+    [
+        ("https://example.com:443/callback", "https://example.com"),
+        ("http://localhost:80/callback", "http://localhost"),
+        ("http://localhost:8080/callback", "http://localhost:8080"),
+        ("https://[::1]:443/callback", "https://[::1]"),
+        ("http://[::1]:8080/callback", "http://[::1]:8080"),
+    ],
+)
+async def test_callback_origin_matches_browser_serialization(url, origin):
+    assert GithubLinkConfig(redirect_url=url).origin == origin
+
+
+async def test_default_https_port_accepts_browser_consent(app, session_maker):
+    provider = setup(app, session_maker)
+    config = replace(
+        app.state.github_link.config,
+        redirect_url="https://dittobench.ai:443/api/v1/miner-auth/github/callback",
+    )
+    app.state.config = replace(app.state.config, github_link=config)
+    app.state.github_link = GithubLinkClient(config, transport=provider.transport())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://dittobench.ai"
+    ) as browser:
+        token = await _sign_in(browser, bittensor.Keypair.create_from_uri("//Alice"))
+        started, _, consent = await browser_flow(browser, token, accept=False)
+        accepted = await browser.post(
+            "/api/v1/miner-auth/github/accept",
+            headers={"Origin": "https://dittobench.ai"},
+            data={
+                "attempt_id": started["attempt_id"],
+                "accept_token": consent,
+                "decision": "accept",
+            },
+        )
+    assert config.origin == "https://dittobench.ai"
+    assert accepted.status_code == 200, accepted.text
+
+
 def signed_link(
     key,
     attempt_id,

@@ -226,7 +226,7 @@ class TestClaTextStreaming:
         ):
             client.get_cla_text(version=1)
 
-    def test_stream_timeout_keeps_transport_error(self):
+    def test_stream_timeout_becomes_transient_api_error(self):
         class Timeout(httpx.SyncByteStream):
             def __iter__(self):
                 yield b"fixture"

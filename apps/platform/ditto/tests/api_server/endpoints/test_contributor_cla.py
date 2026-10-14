@@ -24,6 +24,7 @@ from ditto.api_server.dependencies import (
 from ditto.chain import ChainConnectionError, ExtrinsicNotFoundError
 from ditto.chain.models import BlockInfo
 from ditto.db.models import Agent, AgentStatus, ClaShadowUpload, ClaSignature
+from ditto.db.queries.contributor_identity import current_cla_version
 from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
     _HEADERS,
     _install,
@@ -167,6 +168,38 @@ async def policy(client, mode):
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+async def test_higher_version_can_supersede_same_future_activation_date(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    effective = datetime.now(UTC) + timedelta(days=1)
+    await publish(client, 1, effective=effective)
+    await publish(client, 2, effective=effective)
+    async with session_maker() as session:
+        assert (
+            await current_cla_version(session, now=effective - timedelta(seconds=1))
+            is None
+        )
+        current = await current_cla_version(session, now=effective)
+        assert current is not None and current.version == 2
+    content = FIXTURE.format(version=3)
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    rejected = await client.post(
+        "/api/v1/admin/cla/versions",
+        headers=_HEADERS,
+        json={
+            "version": 3,
+            "text": content,
+            "sha256": digest,
+            "effective_at": (effective - timedelta(seconds=1)).isoformat(),
+            "reason": "test backwards activation rejection",
+            "confirmation": f"PUBLISH CLA 3 {digest}",
+        },
+    )
+    assert rejected.status_code == 409
+    assert "effective dates must not move backwards" in rejected.text
 
 
 def signed(key, version, *, nonce=None, issued=None, signer=None):

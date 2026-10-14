@@ -265,7 +265,9 @@ async def publish(
             or body.effective_at < previous.effective_at
         ):
             raise HTTPException(
-                409, "CLA versions and effective dates must advance monotonically"
+                409,
+                "CLA versions must increase and effective dates "
+                "must not move backwards",
             )
         row = ClaVersion(
             version=body.version,

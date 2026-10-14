@@ -10,6 +10,7 @@ import sys
 import time
 import webbrowser
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from ditto.api_models.contributor_identity import (
@@ -111,6 +112,17 @@ def _wallet_names(args: argparse.Namespace) -> tuple[str, str]:
     )
 
 
+def _signing_key(wallet: Any, key_kind: str) -> tuple[str, Any]:
+    try:
+        key = wallet.hotkey if key_kind == "hotkey" else wallet.coldkey
+        return key.ss58_address, key
+    except Exception:
+        raise MinerCliError(
+            f"cannot load or unlock the {key_kind} signing key; "
+            "check the wallet keyfile and passphrase"
+        ) from None
+
+
 def run(args: argparse.Namespace) -> int:
     network = resolve_network(args.network)
     saved = load_miner_session(network=network.name)
@@ -154,11 +166,7 @@ def run(args: argparse.Namespace) -> int:
                     raise MinerCliError(
                         "selected wallet does not match the signed-in miner hotkey"
                     )
-                signer = (
-                    wallet.hotkey.ss58_address
-                    if args.key_kind == "hotkey"
-                    else wallet.coldkeypub.ss58_address
-                )
+                signer, key = _signing_key(wallet, args.key_kind)
                 nonce, issued = uuid4(), datetime.now(UTC)
                 payload = github_unlink_message(
                     netuid=status.netuid,
@@ -169,7 +177,6 @@ def run(args: argparse.Namespace) -> int:
                     key_kind=args.key_kind,
                     signer=signer,
                 )
-                key = wallet.hotkey if args.key_kind == "hotkey" else wallet.coldkey
                 body = GithubUnlinkRequest(
                     netuid=status.netuid,
                     hotkey=hotkey,
@@ -248,11 +255,7 @@ def run(args: argparse.Namespace) -> int:
                         raise MinerCliError(
                             "selected wallet does not match the signed-in miner hotkey"
                         )
-                    signer = (
-                        wallet.hotkey.ss58_address
-                        if args.key_kind == "hotkey"
-                        else wallet.coldkeypub.ss58_address
-                    )
+                    signer, key = _signing_key(wallet, args.key_kind)
                     nonce, issued = uuid4(), datetime.now(UTC)
                     payload = github_link_message(
                         netuid=started.netuid,
@@ -265,7 +268,6 @@ def run(args: argparse.Namespace) -> int:
                         key_kind=args.key_kind,
                         signer=signer,
                     )
-                    key = wallet.hotkey if args.key_kind == "hotkey" else wallet.coldkey
                     body = GithubLinkRequest(
                         netuid=started.netuid,
                         hotkey=hotkey,

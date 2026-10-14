@@ -25,7 +25,13 @@ class GithubLinkConfig:
     @property
     def origin(self) -> str:
         parts = urlsplit(self.redirect_url)
-        return f"{parts.scheme}://{parts.netloc}"
+        host = parts.hostname or ""
+        host = f"[{host}]" if ":" in host else host.encode("idna").decode("ascii")
+        if parts.port is not None and parts.port != {"http": 80, "https": 443}.get(
+            parts.scheme
+        ):
+            host = f"{host}:{parts.port}"
+        return f"{parts.scheme}://{host}"
 
 
 @dataclass(frozen=True)

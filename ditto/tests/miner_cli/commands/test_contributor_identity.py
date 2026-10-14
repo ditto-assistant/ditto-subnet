@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import bittensor
+import httpx
 import pytest
 
 from ditto.api_models.contributor_identity import (
@@ -152,6 +153,105 @@ def test_github_omitted_wallet_names_without_tty_never_prompt(capsys):
     assert "wallet name and hotkey are required" in capsys.readouterr().err
     prompt.assert_not_called()
     api.start_github_link.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["link", "unlink"])
+def test_github_coldkey_unlock_failure_is_actionable_without_traceback(command, capsys):
+    class KeyfileFailure(Exception):
+        pass
+
+    class LockedWallet:
+        hotkey = KEY
+
+        @property
+        def coldkey(self):
+            raise KeyfileFailure("private SDK error fixture")
+
+    api = client()
+    attempt = uuid4()
+    api.start_github_link.return_value = GithubLinkStart(
+        netuid=118,
+        attempt_id=attempt,
+        authorize_url="https://dittobench.ai/fixture",
+        expires_in=600,
+    )
+    api.get_github_link_attempt.return_value = GithubLinkAttemptStatus(
+        attempt_id=attempt,
+        status="accepted",
+        github_user_id=100,
+        github_login="miner-fixture",
+    )
+    api.get_github_link.return_value = SimpleNamespace(
+        netuid=118,
+        link=SimpleNamespace(
+            link_id=uuid4(), github_login="miner-fixture", github_user_id=100
+        ),
+    )
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture-session", "hotkey": KEY.ss58_address},
+        ),
+        patch.object(
+            link_github,
+            "load_wallet",
+            return_value=(
+                SimpleNamespace(hotkey_ss58=KEY.ss58_address),
+                LockedWallet(),
+            ),
+        ),
+    ):
+        assert link_github.run(args(github_command=command, key_kind="coldkey")) == 1
+    output = capsys.readouterr()
+    assert "cannot load or unlock the coldkey signing key" in output.err
+    assert "keyfile and passphrase" in output.err
+    assert "private SDK error" not in output.err
+    assert not output.out
+    api.confirm_github_link.assert_not_called()
+    api.unlink_github.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["connect", "stream_timeout"])
+def test_cla_transport_failure_is_handled_before_consent_or_signing(
+    failure, tmp_path, capsys
+):
+    class Timeout(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"fixture"
+            raise httpx.ReadTimeout("fixture timeout")
+
+    requests = []
+    status = ClaStatus(netuid=118, mode="off", current=version())
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path.endswith("/text"):
+            if failure == "connect":
+                raise httpx.ConnectError("fixture connection failure")
+            return httpx.Response(200, stream=Timeout())
+        return httpx.Response(200, json=status.model_dump(mode="json"))
+
+    api = cla.ApiClient(base_url="http://test")
+    api._client.close()
+    api._client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="http://test"
+    )
+    handle, live = wallet()
+    target = tmp_path / "CLA.md"
+    with (
+        patch.object(cla, "load_wallet", return_value=(handle, live)),
+        patch.object(cla, "ApiClient", return_value=api),
+        patch("builtins.input", side_effect=AssertionError("must not ask for consent")),
+    ):
+        assert cla.run(args(output=target)) == 1
+    output = capsys.readouterr()
+    assert ("unreachable" if failure == "connect" else "timed out") in output.err
+    assert not output.out
+    assert not target.exists()
+    assert len(requests) == 2 and all(request.method == "GET" for request in requests)
+    live.hotkey.sign.assert_not_called()
 
 
 @pytest.mark.parametrize("command", ["link", "status", "unlink"])
