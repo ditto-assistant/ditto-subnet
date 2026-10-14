@@ -631,7 +631,14 @@ class ApiClient:
         )
 
     def get_cla_status(self, *, hotkey: str | None = None) -> ClaStatus | None:
-        path = f"/api/v1/public/cla/status/{hotkey}" if hotkey else "/api/v1/public/cla"
+        if hotkey == "":
+            # An empty path segment would 404 and read as a pre-gate server.
+            raise ValueError("hotkey must be a non-empty SS58 address")
+        path = (
+            f"/api/v1/public/cla/status/{hotkey}"
+            if hotkey is not None
+            else "/api/v1/public/cla"
+        )
         response = self._request("GET", path)
         if response.status_code == 404:
             # Rolling upgrade to a server that predates the default-off gate.

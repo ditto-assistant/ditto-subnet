@@ -192,6 +192,20 @@ class TestContributorAvailabilityErrors:
         ) as client:
             assert client.get_cla_status() is None
 
+    def test_cla_status_routes_hotkey_lookup_and_rejects_empty_hotkey(self) -> None:
+        paths: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            paths.append(request.url.path)
+            return httpx.Response(200, json={"netuid": 118, "mode": "off"})
+
+        with make_client(handler) as client:
+            client.get_cla_status(hotkey="5Fixture")
+            client.get_cla_status()
+            with pytest.raises(ValueError, match="non-empty"):
+                client.get_cla_status(hotkey="")
+        assert paths == ["/api/v1/public/cla/status/5Fixture", "/api/v1/public/cla"]
+
     def test_unknown_cla_version_preserves_endpoint_error(self) -> None:
         with (
             make_client(
