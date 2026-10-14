@@ -128,18 +128,24 @@ async def public_version(version: int, session: SessionDep) -> ClaVersionView:
 
 
 @router.get("/public/cla/versions/{version}/text", response_class=PlainTextResponse)
-async def public_text(version: int, session: SessionDep) -> Response:
+async def public_text(version: int, request: Request, session: SessionDep) -> Response:
     row = await session.get(ClaVersion, version)
     if row is None:
         raise HTTPException(404, "CLA version is not published")
+    etag = f'"{row.sha256}"'
+    headers = {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "ETag": etag,
+        "X-Content-Type-Options": "nosniff",
+    }
+    validators = request.headers.get("if-none-match", "").split(",")
+    if any(
+        value.strip() == "*" or value.strip().removeprefix("W/") == etag
+        for value in validators
+    ):
+        return Response(status_code=304, headers=headers)
     return Response(
-        content=row.text.encode("utf-8"),
-        media_type="text/plain",
-        headers={
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "ETag": f'"{row.sha256}"',
-            "X-Content-Type-Options": "nosniff",
-        },
+        content=row.text.encode("utf-8"), media_type="text/plain", headers=headers
     )
 
 

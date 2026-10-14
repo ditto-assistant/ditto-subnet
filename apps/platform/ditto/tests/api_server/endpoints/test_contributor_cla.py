@@ -199,6 +199,19 @@ async def test_registry_off_default_pinned_bytes_signature_status_and_immutable_
     document = await client.get("/api/v1/public/cla/versions/1/text")
     assert document.content == FIXTURE.format(version=1).encode()
     assert hashlib.sha256(document.content).hexdigest() == version["sha256"]
+    etag = document.headers["etag"]
+    for validator in (etag, "W/" + etag, "*", '"unrelated", ' + etag):
+        cached = await client.get(
+            "/api/v1/public/cla/versions/1/text", headers={"if-none-match": validator}
+        )
+        assert cached.status_code == 304 and cached.content == b""
+        assert cached.headers["etag"] == etag
+        assert cached.headers["cache-control"] == document.headers["cache-control"]
+        assert cached.headers["x-content-type-options"] == "nosniff"
+    fresh = await client.get(
+        "/api/v1/public/cla/versions/1/text", headers={"if-none-match": '"unrelated"'}
+    )
+    assert fresh.status_code == 200 and fresh.content == document.content
     body = signed(alice, version)
     result = await client.post(
         "/api/v1/cla/sign", json={**body, "future_unknown": "ignored"}

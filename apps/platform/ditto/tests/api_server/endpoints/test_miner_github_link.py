@@ -386,6 +386,33 @@ async def test_live_identity_uses_app_auth_and_never_reuses_stale_results(
     assert len(provider.requests) == 2
 
 
+async def test_expired_status_poll_does_not_lock_or_mutate_the_attempt(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    auth = {"authorization": f"Bearer {token}"}
+    started = await client.post("/api/v1/me/github-link/start", headers=auth)
+    assert started.status_code == 200, started.text
+    attempt_id = UUID(started.json()["attempt_id"])
+    async with session_maker() as session, session.begin():
+        attempt = await session.get(MinerGithubLinkAttempt, attempt_id)
+        attempt.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    async with session_maker() as session, session.begin():
+        await session.get(MinerGithubLinkAttempt, attempt_id, with_for_update=True)
+        response = await asyncio.wait_for(
+            client.get(f"/api/v1/me/github-link/attempts/{attempt_id}", headers=auth),
+            timeout=2,
+        )
+        assert response.status_code == 200 and response.json()["status"] == "expired"
+        assert response.json()["github_user_id"] is None
+    async with session_maker() as session:
+        assert (
+            await session.get(MinerGithubLinkAttempt, attempt_id)
+        ).status == "pending"
+
+
 @pytest.mark.parametrize("action", ["confirm", "unlink"])
 @pytest.mark.parametrize(
     "race", [None, "session_revoked", "scope_removed", "target_changed"]

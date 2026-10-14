@@ -461,16 +461,19 @@ async def attempt_status(
     async with session.begin():
         miner, _ = await resolve_miner_session(request, session)
         require_scope(miner, "read")
-        attempt = await session.get(
-            MinerGithubLinkAttempt, attempt_id, with_for_update=True
-        )
+        attempt = await session.get(MinerGithubLinkAttempt, attempt_id)
         if attempt is None or attempt.session_id != miner.session_id:
             raise HTTPException(404, "unknown GitHub link attempt")
-        _expire(attempt)
-        accepted = attempt.status in ("accepted", "linked")
+        expired = attempt.expires_at <= datetime.now(UTC) and attempt.status not in (
+            "linked",
+            "failed",
+            "expired",
+        )
+        status = "expired" if expired else attempt.status
+        accepted = status in ("accepted", "linked")
         return GithubLinkAttemptStatus(
             attempt_id=attempt_id,
-            status=attempt.status,
+            status=status,
             github_user_id=attempt.github_user_id if accepted else None,
             github_login=attempt.github_login if accepted else None,
             error=attempt.error,
