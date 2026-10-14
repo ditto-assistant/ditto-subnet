@@ -27,6 +27,7 @@ from ditto.api_models.burn_settings import (
     BurnSettings,
     BurnSettingsRevision,
     EffectiveBurnSettings,
+    curve_increases,
 )
 from ditto.api_server.burn_settings import (
     DEFAULT_SETTINGS,
@@ -192,6 +193,15 @@ async def create_settings_revision(
                     "rank_shares explicitly (null to clear)"
                 ),
             ) from error
+        if curve_increases(carried):
+            # The write-only ordering rule binds a carried curve too.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "current burn settings revision carries an increasing "
+                    "rank_shares curve; send rank_shares explicitly (null to clear)"
+                ),
+            )
         settings = settings.model_copy(update={"rank_shares": carried})
     try:
         row = await insert_burn_settings_revision(

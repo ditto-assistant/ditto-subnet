@@ -266,6 +266,15 @@ async def test_an_increasing_curve_is_refused_on_write_but_still_reads(
         burn_share=0.25, rank_shares=(0.07, 0.1, 0.13, 0.2, 0.5)
     )
 
+    # A burn-only write must not republish that legacy curve either.
+    async with settings_maker() as session, session.begin():
+        session.add(legacy)
+    burn_only = await client.post(
+        _URL, headers=_HEADERS, json=_payload(expected_revision=1, burn_share=0.1)
+    )
+    assert burn_only.status_code == 409, burn_only.text
+    assert "increasing" in burn_only.text
+
 
 async def test_an_unreadable_latest_revision_is_never_carried_as_a_clear(
     app: FastAPI,

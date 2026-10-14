@@ -54,6 +54,13 @@ RANK_SHARES_PROTOCOL = 31
 """Validator heartbeat protocol that folds a served ``rank_shares`` curve."""
 
 
+def curve_increases(shares: tuple[float, ...] | None) -> bool:
+    """True when a lower slot would be paid more than the one above it."""
+    return shares is not None and any(
+        later > earlier for earlier, later in zip(shares, shares[1:], strict=False)
+    )
+
+
 class BurnSettings(BaseModel):
     """Complete subnet-global emission-burn policy stored per revision."""
 
@@ -175,10 +182,7 @@ class AdminBurnSettingsRequest(BaseModel):
     def _curve_does_not_increase(self) -> AdminBurnSettingsRequest:
         # Write-only: a stored revision that predates this rule must still
         # read, or settings_from_row would fall back to the full default.
-        shares = self.settings.rank_shares
-        if shares is not None and any(
-            later > earlier for earlier, later in zip(shares, shares[1:], strict=False)
-        ):
+        if curve_increases(self.settings.rank_shares):
             raise ValueError("rank_shares must not increase from the champion down")
         return self
 
