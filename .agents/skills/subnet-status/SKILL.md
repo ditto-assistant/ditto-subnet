@@ -36,8 +36,9 @@ It prints:
    - The on-chain incentive (below) is ground truth.
 3. **Competition (memory KOTH):** the payout curve (`rank_shares`), the
    dethrone margin and z, the champion, and each paid recipient. Each
-   recipient's share is shown both as a share of KOTH and as a share of all
-   miner emission. Only the champion and the next four distinct miners are
+   recipient's share is shown both as a share of KOTH and as a share of the
+   miner pool (the 41% of block emission that Subtensor routes by incentive),
+   after the Gamma and burn split. Only the champion and the next four distinct miners are
    paid.
 4. **Epoch:** when validators next submit weights. A score change pays from
    the next epoch at the earliest.

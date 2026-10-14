@@ -134,7 +134,7 @@ def render(snapshot: dict[str, Any], hotkey: str | None) -> None:
         for recipient in emissions.get("recipients") or []:
             share = recipient.get("share_of_miner_pool")
             of_all = (
-                f" = {pct(share * miner_share)} of all miner emission"
+                f" = {pct(share * miner_share)} of the miner pool (41% of emission)"
                 if number(share) and number(miner_share)
                 else ""
             )
@@ -194,6 +194,12 @@ def main() -> int:
         print()
     else:
         render(snapshot, args.hotkey)
+    if args.hotkey and snapshot.get("miner") is None:
+        print(
+            f"  ! miner lookup failed for {args.hotkey}; agent list is unavailable",
+            file=sys.stderr,
+        )
+        return 1
     core = ("rollout", "bench_config", "treasury", "leaderboard", "weights")
     if all(snapshot.get(key) is None for key in core):
         print("  ! no public endpoint answered; nothing above is live", file=sys.stderr)
