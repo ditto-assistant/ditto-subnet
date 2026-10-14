@@ -322,3 +322,28 @@ def test_recent_probes_share_32_block_budget_and_never_run_money_tick(tmp_path):
         == 8
     )
     assert len(mailbox.reports) == 11  # fresh observation after each 8 + 3 chunks
+
+
+def test_long_source_proof_refreshes_exact_signing_head_and_reserve(tmp_path):
+    p, c, j, env = fixture(tmp_path)
+    request = intent(env)
+    arm_manual_transfer(j, p, c, request)
+    earnings = c.earnings
+
+    def advancing(policy, block):
+        c.observation = replace(c.observation, block=c.observation.block + 1)
+        return earnings(policy, block)
+
+    c.earnings = advancing
+
+    def prepare(policy, call, observed, _request):
+        assert observed.block == c.observation.block
+        return c.prepare(policy, "transfer", call, observed)
+
+    c.prepare_manual = prepare
+    assert (
+        tick(j, p, c, "transfer", manual_request_id=request.request_id) == "dispatching"
+    )
+    assert (
+        j.db.execute("SELECT at_block FROM operations WHERE id=2").fetchone()[0] == 1167
+    )

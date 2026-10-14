@@ -1020,6 +1020,19 @@ def tick(
                     db.execute("COMMIT")
                     return "manual_expired"
                 destination = validate_batch(journal, policy, chain, intent, observed)
+                # Many immutable source proofs can span finalized blocks. The
+                # signing adapter's exact-head check must receive a fresh
+                # observation, never the balance/head from before that work.
+                observed = chain.observe(policy, "transfer")
+                if observed.uid is None:
+                    raise ValueError("collector absent after source verification")
+                if observed.block + 128 > intent.expires_block:
+                    db.execute("COMMIT")
+                    return "manual_expired"
+                if intent.amount_rao + intent.retained_alpha_rao > observed.alpha_rao:
+                    raise ValueError(
+                        "manual retained stake changed during source proof"
+                    )
                 amount, bucket, source_block = (
                     intent.amount_rao,
                     intent.bucket_id,
