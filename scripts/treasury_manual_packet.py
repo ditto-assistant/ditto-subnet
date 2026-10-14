@@ -43,7 +43,7 @@ def prepare(collector_approval: Path, expected_digest: str, output: Path):
             for name, data in files.items()
         },
     }
-    template = Path(__file__).with_name("offline_sign_treasury_manual.py").read_text()
+    template = Path(__file__).with_name("treasury_offline_sign_manual.py").read_text()
     marker = "CONFIG = None  # PACKET_CONFIGURATION"
     if template.count(marker) != 1:
         raise ValueError("offline template configuration marker changed")

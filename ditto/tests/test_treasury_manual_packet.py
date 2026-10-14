@@ -11,7 +11,7 @@ from bittensor_wallet import Keypair
 from ditto.tests.test_collector_automation import policy
 from ditto.treasury.collector import canonical
 from ditto.treasury.service_allocation import ServiceDestination
-from scripts.prepare_treasury_manual_packet import prepare
+from scripts.treasury_manual_packet import prepare
 
 
 def approval(tmp_path):

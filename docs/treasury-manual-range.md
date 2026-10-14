@@ -29,7 +29,7 @@ Prepare a new, exclusive directory using public inputs only:
 
 ```sh
 PYTHONPATH=packages/ditto-screening-protocol .venv/bin/python \
-  scripts/prepare_treasury_manual_packet.py \
+  scripts/treasury_manual_packet.py \
   --collector-approval /private/public-collector-approval.json \
   --collector-policy-digest EXACT_CURRENT_DIGEST \
   --output /private/new-manual-range-packet
