@@ -41,3 +41,14 @@ condition = "AND"
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]{40}$''']
 paths = ['''^dashboard/src/components/EntityPanel\.stack\.test\.tsx$''']
+
+# SHA-256 of the public, pinned Subtensor run_coinbase.rs source. The key's
+# filename triggers the Coinbase token rule; scope the exception to this exact
+# checksum and audit manifest so real credentials remain detectable.
+[[allowlists]]
+description = "Audited public Subtensor source checksum"
+targetRules = ["coinbase-access-token"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^18c68fb6429c42bf53adb7cc4293f1ca4b6945c2d2e2da085b442735a3431afa$''']
+paths = ['''^(apps/platform/)?docs/source-runtime-v475-artifacts\.json$''']

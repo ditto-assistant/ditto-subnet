@@ -386,6 +386,34 @@ async def read_source_emission_block(
         raise ValueError("unsupported mechanism count")
     if controls[1] is not True or controls[3] is not True:
         raise ValueError("unsupported direct/manual weights mode")
+
+    def consensus_boundary(events: list[Any]) -> SourceEmissionBlock | None:
+        if runtime_hashes[1] not in _EPOCH_CONSENSUS_RUNTIME_CODE_HASHES:
+            return None
+        for event in events:
+            if not isinstance(event, dict):
+                raise ValueError("invalid consensus transition event")
+            if (
+                event.get("module_id") == "SubtensorModule"
+                and event.get("event_id") == "EpochConsensusSet"
+            ):
+                subnet, _ = _attrs(event, ("netuid", "mode"))
+                if _uint(subnet) == netuid:
+                    # A Null -> Yuma round trip can leave both endpoint modes
+                    # Yuma while changing permits after initialization.
+                    return SourceEmissionBlock(
+                        block,
+                        block_hash,
+                        parent_hash,
+                        False,
+                        (),
+                        (),
+                        (),
+                        runtime_hashes[1],
+                        "epoch_consensus_changed",
+                    )
+        return None
+
     key_maps = await asyncio.gather(
         *(
             cache.get((netuid, "Keys", at), functools.partial(mapping, "Keys", at))
@@ -433,6 +461,8 @@ async def read_source_emission_block(
                         invalidated.add(identities[uid])
         if not isinstance(boundary_events, list):
             raise ValueError("missing UID transition events")
+        if boundary := consensus_boundary(boundary_events):
+            return boundary
         for event in boundary_events:
             if not isinstance(event, dict):
                 raise ValueError("invalid UID transition event")
@@ -460,6 +490,8 @@ async def read_source_emission_block(
     events = await read("Events", block_hash, [], "System")
     if not isinstance(events, list):
         raise ValueError("invalid block events")
+    if boundary := consensus_boundary(events):
+        return boundary
     writes: dict[int, list[str]] = {}
     reveals: dict[str, list[str]] = {}
     write_positions: dict[int, list[int]] = {}

@@ -56,6 +56,13 @@ Null or unfamiliar values fail closed; these reads use the same finalized-state
 cache as the other controls. Legacy fingerprints do not query a storage entry
 their metadata lacks.
 
+Any SN118 `EpochConsensusSet` event invalidates all source provenance for that
+block, including an intra-block Null-to-Yuma round trip whose endpoint modes
+both read Yuma. This setter can change validator permits after initialization;
+its post-state must not be used to attribute the initialization payout. The
+same guard applies when UID mappings also change. Events for other subnets do
+not reset SN118 provenance.
+
 In `epoch/run_epoch.rs`, the Yuma branch retains permitted/active stake
 selection, row normalization, weighted-median clipping and rank computation.
 The new exact integer apportionment and sole-validator input apply only to

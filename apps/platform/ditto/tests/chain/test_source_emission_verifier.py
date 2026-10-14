@@ -472,6 +472,33 @@ async def test_legacy_runtime_does_not_query_new_consensus_storage(
     )
 
 
+@pytest.mark.parametrize("uid_change", [False, True])
+async def test_same_block_consensus_round_trip_invalidates_all_provenance(
+    chain: tuple, uid_change: bool
+) -> None:
+    substrate, state = chain
+    state["runtime"] = _V475_THROUGH_V478[-1]
+    state["events"] += [
+        event("EpochConsensusSet", [118, "Null"], "ApplyExtrinsic"),
+        event("EpochConsensusSet", [118, "Yuma"], "ApplyExtrinsic"),
+    ]
+    if uid_change:
+        state["post_keys"] = [(0, "replacement"), (1, "miner"), (2, "tail")]
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.reset_reason == "epoch_consensus_changed"
+    assert not block.is_payout and not block.updates and not block.invalidated_hotkeys
+
+
+async def test_other_subnet_consensus_changes_do_not_invalidate_this_subnet(
+    chain: tuple,
+) -> None:
+    substrate, state = chain
+    state["runtime"] = _V475_THROUGH_V478[-1]
+    state["events"].append(event("EpochConsensusSet", [119, "Null"], "ApplyExtrinsic"))
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.reset_reason is None and block.updates
+
+
 @pytest.fixture
 def commit_chain(chain: tuple) -> tuple:
     import hashlib
