@@ -2,6 +2,60 @@
 
 <!-- version list -->
 
+## v0.365.0 (2026-10-14)
+
+### Features
+
+- **treasury**: Support cold-approved manual transfers up to 2500 alpha
+  ([#2923](https://github.com/ditto-assistant/ditto-subnet/pull/2923),
+  [`a408ab3`](https://github.com/ditto-assistant/ditto-subnet/commit/a408ab3acabe7f532b9bfe684567f6e04f8d35d4))
+
+
+## v0.364.0 (2026-10-14)
+
+### Features
+
+- **validator,platform**: Make the KOTH payout curve an operator setting
+  ([#2913](https://github.com/ditto-assistant/ditto-subnet/pull/2913),
+  [`6c2c0f7`](https://github.com/ditto-assistant/ditto-subnet/commit/6c2c0f7f2906558cc96ab797ec04884231509820))
+
+
+## v0.363.0 (2026-10-14)
+
+### Bug Fixes
+
+- **treasury**: Refresh manual readiness during receipt catch-up
+  ([#2920](https://github.com/ditto-assistant/ditto-subnet/pull/2920),
+  [`b989fea`](https://github.com/ditto-assistant/ditto-subnet/commit/b989fea368ec3ca8d7e97cabfce89c3e42cfa4af))
+
+### Features
+
+- **platform,backroom**: Record a per-epoch Gamma ledger from chain state
+  ([#2917](https://github.com/ditto-assistant/ditto-subnet/pull/2917),
+  [`cc184ec`](https://github.com/ditto-assistant/ditto-subnet/commit/cc184ec9fbd9e79ee72848f6e13081881a928eec))
+
+
+## v0.362.2 (2026-10-14)
+
+### Bug Fixes
+
+- **infra**: Provision the Finney archive credential container
+  ([#2915](https://github.com/ditto-assistant/ditto-subnet/pull/2915),
+  [`90cff09`](https://github.com/ditto-assistant/ditto-subnet/commit/90cff09f301a5dc3df716e73205e33d1cf6c1c77))
+
+- **platform**: Cap request bodies before they are spooled
+  ([#2771](https://github.com/ditto-assistant/ditto-subnet/pull/2771),
+  [`62a7692`](https://github.com/ditto-assistant/ditto-subnet/commit/62a76927a4c242a081d4d4d1e91e7deca19fe640))
+
+- **treasury**: Accept complete signed WAL-mode backups
+  ([#2919](https://github.com/ditto-assistant/ditto-subnet/pull/2919),
+  [`45f5e83`](https://github.com/ditto-assistant/ditto-subnet/commit/45f5e83471538009f2adfbf127cba6bd9339b018))
+
+- **treasury**: Recover custody across audited Finney runtimes
+  ([#2918](https://github.com/ditto-assistant/ditto-subnet/pull/2918),
+  [`d278823`](https://github.com/ditto-assistant/ditto-subnet/commit/d2788232ffbe37af05f0279b55c2a8d6dc13837d))
+
+
 ## v0.362.1 (2026-10-14)
 
 ### Bug Fixes

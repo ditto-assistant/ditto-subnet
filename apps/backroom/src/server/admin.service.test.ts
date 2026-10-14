@@ -2047,6 +2047,7 @@ describe('emission burn administration', () => {
       min_burn_share: 0,
       max_burn_share: 1,
       live_validator_count: 3,
+      rank_shares_served: false,
     },
   })
 

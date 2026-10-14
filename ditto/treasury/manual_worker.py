@@ -13,13 +13,37 @@ from ditto.treasury.collector import (
     tick,
 )
 from ditto_screening_protocol.treasury_manual import (
-    ManualEnvelope,
+    ManualBatchEnvelope,
+    ManualBlocker,
     ManualReadiness,
     ManualReport,
     ManualSettlement,
+    parse_manual_envelope,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def publish_observation_blocker(mailbox, policy, error):
+    from ditto.treasury.collector_chain import CollectorRuntimeRefused
+
+    blocker = (
+        ManualBlocker(
+            code=error.code,
+            expected_runtime_hash=error.expected,
+            observed_runtime_hash=error.observed,
+        )
+        if isinstance(error, CollectorRuntimeRefused)
+        else ManualBlocker(code="observation_unavailable")
+    )
+    mailbox.publish(
+        ManualReport(
+            collector_policy_digest=policy.digest,
+            observed_at=int(time.time()),
+            status="blocked",
+            blocker=blocker,
+        ).model_dump()
+    )
 
 
 class InvalidManualRequest(ValueError):
@@ -104,7 +128,7 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
     from pydantic import ValidationError
 
     try:
-        envelope = ManualEnvelope.model_validate(body)
+        envelope = parse_manual_envelope(body)
     except ValidationError as error:
         raise InvalidManualRequest("Invalid manual request contract") from error
     request = envelope.request
@@ -148,7 +172,23 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
         raise InvalidManualRequest(
             "mailbox request differs from signed custody pin", envelope
         )
-    manual = ManualTransfer(**request.model_dump())
+    from ditto.treasury.manual_batch import ManualBatchTransfer
+
+    if isinstance(envelope, ManualBatchEnvelope):
+        try:
+            envelope.manual_approval.verify(policy.digest, policy.collector_coldkey)
+        except ValueError as error:
+            raise InvalidManualRequest(
+                "Manual range lacks valid cold approval", envelope
+            ) from error
+    manual = (
+        ManualBatchTransfer(
+            **request.model_dump(),
+            manual_approval=envelope.manual_approval.model_dump(),
+        )
+        if isinstance(envelope, ManualBatchEnvelope)
+        else ManualTransfer(**request.model_dump())
+    )
     try:
         arm_manual_transfer(journal, policy, chain, manual)
     except ManualIntentRefused as error:
@@ -251,8 +291,29 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
             else:
                 try:
                     saved = json.loads(row["settlement_json"])
+                    source_epochs = []
+                    if isinstance(envelope, ManualBatchEnvelope):
+                        for claim in request.sources:
+                            source_hash = chain.substrate.get_block_hash(
+                                claim.source_block
+                            )
+                            if source_hash is None:
+                                raise ValueError("source epoch unavailable")
+                            source_epoch = chain.query(
+                                "SubtensorModule",
+                                "SubnetEpochIndex",
+                                [118],
+                                source_hash,
+                            )
+                            source_epochs.append(
+                                {
+                                    "source_block": claim.source_block,
+                                    "epoch_index": source_epoch,
+                                }
+                            )
                     settlement = ManualSettlement(
                         epoch_index=epoch,
+                        source_epochs=source_epochs,
                         **{
                             k: saved[k]
                             for k in (

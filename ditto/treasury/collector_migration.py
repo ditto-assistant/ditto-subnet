@@ -19,6 +19,7 @@ from ditto.treasury.collector import CollectorPolicy, canonical
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
     HISTORICAL_COLLECTOR_CODE_HASH,
+    V473_COLLECTOR_CODE_HASH,
 )
 
 SCHEMA = {
@@ -60,8 +61,12 @@ def policy_transition(old: CollectorPolicy, new: CollectorPolicy) -> None:
         changed == {"revision", "runtime_code_hash"}
         and old.gcp_project == new.gcp_project == "sn118-gamma-custody"
         and new.revision == old.revision + 1
-        and old.runtime_code_hash == HISTORICAL_COLLECTOR_CODE_HASH
-        and new.runtime_code_hash == AUDITED_COLLECTOR_CODE_HASH
+        and (old.runtime_code_hash, new.runtime_code_hash)
+        in {
+            (HISTORICAL_COLLECTOR_CODE_HASH, V473_COLLECTOR_CODE_HASH),
+            (HISTORICAL_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH),
+            (V473_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH),
+        }
         and all(
             getattr(new, role + "_service_account")
             == f"sn118-collector-{role}@sn118-gamma-custody.iam.gserviceaccount.com"
@@ -125,11 +130,18 @@ def snapshot(path: Path, expected_sha256: str) -> sqlite3.Connection:
     if (
         hashlib.sha256(raw).hexdigest() != expected_sha256
         or raw[:16] != b"SQLite format 3\x00"
-        or raw[18:20] != b"\x01\x01"
+        or raw[18:20] not in (b"\x01\x01", b"\x02\x02")
     ):
         raise ValueError("snapshot hash or standalone format mismatch")
     db = sqlite3.connect(":memory:", isolation_level=None)
     try:
+        # A complete sqlite3.backup may retain WAL journal-mode header bytes
+        # without a WAL. Verify the exact signed raw hash first, then adapt
+        # only the in-memory image for SQLite deserialize (which cannot use
+        # WAL). Source bytes remain untouched; sidecars still refuse above,
+        # and schema, integrity and cold-approved history must match below.
+        if raw[18:20] == b"\x02\x02":
+            raw = raw[:18] + b"\x01\x01" + raw[20:]
         db.deserialize(raw)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA trusted_schema=OFF")
@@ -278,9 +290,25 @@ def migrate(
         retained = history(db)
         db.execute("BEGIN IMMEDIATE")
         db.execute("UPDATE pin SET digest=?", (new.digest,))
+        runtime_only = old.runtime_code_hash != new.runtime_code_hash
+        event = (
+            "offline_approved_runtime_migration"
+            if runtime_only
+            else "offline_approved_custody_migration"
+        )
+        payload = (
+            {
+                "manifest": approval,
+                "signature": signature,
+                "from_policy": asdict(old),
+                "to_policy": asdict(new),
+            }
+            if runtime_only
+            else approval
+        )
         db.execute(
             "INSERT INTO events(event,payload) VALUES (?,?)",
-            ("offline_approved_custody_migration", canonical(approval)),
+            (event, canonical(payload)),
         )
         db.execute("COMMIT")
         after = history(db)

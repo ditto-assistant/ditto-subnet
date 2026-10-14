@@ -464,6 +464,7 @@ describe('Backroom MCP tools', () => {
         'get_submission_cooldown',
         'get_treasury_settings',
         'get_treasury_receipts',
+        'get_treasury_ledger',
         'get_treasury_receipt_preflight',
         'get_treasury_manual_transfers',
         'get_treasury_activation_preflight',
