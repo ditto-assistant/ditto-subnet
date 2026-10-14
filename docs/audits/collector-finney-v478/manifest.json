@@ -33,96 +33,336 @@
     }
   ],
   "critical_source_sha256": {
-    "473": {
-      "runtime/src/proxy_filters/mod.rs": "cbd460f709682d823e03fe0097b96569735506ea84d1cd1f3c9414a5d09b7d19",
-      "runtime/src/proxy_filters/call_groups.rs": "68cebbb31ac2ff33dba3ae4082161deba16de83611ed12ef7fe12281df148981",
-      "common/src/proxy.rs": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
-      "pallets/proxy/src/lib.rs": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
-      "pallets/subtensor/src/subnets/registration.rs": "ea13c9fc845228cbadd8990066f147429ca85772cb26efece7e834fb3fdbb6db",
-      "pallets/subtensor/src/staking/move_stake.rs": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
-      "pallets/subtensor/src/coinbase/run_coinbase.rs": "09cce211f362295e6e880dc9bb2cbc1c2ee3b83c510e58e40baf5d184ac7ad1d",
-      "pallets/subtensor/src/rpc_info/stake_info.rs": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
-      "pallets/subtensor/src/staking/account.rs": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
-      "pallets/subtensor/src/staking/lock.rs": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
-      "pallets/subtensor/src/staking/stake_utils.rs": "040f765497db2b4e0eeb1ebf531b6da87beaa189d88e1e8c297d65f660c19da1",
-      "pallets/subtensor/src/subnets/collateral.rs": "4598de7d7221f238fb2763d12abbd5a842cc8ce97554864604336df0b63ba342",
-      "pallets/subtensor/src/macros/events.rs": "d310e05848b1cbc032f25976913fe01d310daeeb584d7a5c313b941640db71be",
-      "pallets/subtensor/src/macros/dispatches.rs": "7a678f74e8ba585d59a61495a0c8079cae78bb011736d5c65aa57cd630fec13b",
-      "primitives/share-pool/src/lib.rs": "f659d0b4a067c355938aa1a9a541ce501a53af55c4b32d84f55f2e796815c3ec",
-      "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs": null
-    },
-    "475": {
-      "runtime/src/proxy_filters/mod.rs": "c8b92542ef1ea2180b818fc0396d5deead9e00babbdfd5f8a17daaff9f3c7c37",
-      "runtime/src/proxy_filters/call_groups.rs": "345df227a7271a097717e29087e6a15532a16a87867579907ce4dd143573ee7e",
-      "common/src/proxy.rs": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
-      "pallets/proxy/src/lib.rs": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
-      "pallets/subtensor/src/subnets/registration.rs": "0a621d453b01f7d44e8ebb44a585520a793cb05fc51d4cb906b8fd27f685ca52",
-      "pallets/subtensor/src/staking/move_stake.rs": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
-      "pallets/subtensor/src/coinbase/run_coinbase.rs": "18c68fb6429c42bf53adb7cc4293f1ca4b6945c2d2e2da085b442735a3431afa",
-      "pallets/subtensor/src/rpc_info/stake_info.rs": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
-      "pallets/subtensor/src/staking/account.rs": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
-      "pallets/subtensor/src/staking/lock.rs": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
-      "pallets/subtensor/src/staking/stake_utils.rs": "32d9b6341e9e333b38724b81515ac520ce3557abdebf244716a2aac97ad11732",
-      "pallets/subtensor/src/subnets/collateral.rs": "e13e4d5a5713083e23230dbe928a8f4360db1ff0753b9b0192553467096ef300",
-      "pallets/subtensor/src/macros/events.rs": "95c2b3554f29f931655d9e8f16522b1a067c2288733e3d0d0a6654e3ac23cd33",
-      "pallets/subtensor/src/macros/dispatches.rs": "2efd0802e14fbe628345d87b2c3947d047644bc4b5ed70d7e5b3be25b32265ff",
-      "primitives/share-pool/src/lib.rs": "c099bcfa982175631482a8144970e70af52a6697ab0dff9aa9c1f25966905b26",
-      "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs": null
-    },
-    "476": {
-      "runtime/src/proxy_filters/mod.rs": "6b1eb13b7c2a77cfe834dbb0db320d59c9996bcf7cb2c04b89ed2d0c5c776737",
-      "runtime/src/proxy_filters/call_groups.rs": "ccd92449b15ab42d58b2928b2625fc0b270691bc7227a1d258a39f82ab5c0ae6",
-      "common/src/proxy.rs": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
-      "pallets/proxy/src/lib.rs": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
-      "pallets/subtensor/src/subnets/registration.rs": "0a621d453b01f7d44e8ebb44a585520a793cb05fc51d4cb906b8fd27f685ca52",
-      "pallets/subtensor/src/staking/move_stake.rs": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
-      "pallets/subtensor/src/coinbase/run_coinbase.rs": "18c68fb6429c42bf53adb7cc4293f1ca4b6945c2d2e2da085b442735a3431afa",
-      "pallets/subtensor/src/rpc_info/stake_info.rs": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
-      "pallets/subtensor/src/staking/account.rs": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
-      "pallets/subtensor/src/staking/lock.rs": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
-      "pallets/subtensor/src/staking/stake_utils.rs": "32d9b6341e9e333b38724b81515ac520ce3557abdebf244716a2aac97ad11732",
-      "pallets/subtensor/src/subnets/collateral.rs": "e13e4d5a5713083e23230dbe928a8f4360db1ff0753b9b0192553467096ef300",
-      "pallets/subtensor/src/macros/events.rs": "95c2b3554f29f931655d9e8f16522b1a067c2288733e3d0d0a6654e3ac23cd33",
-      "pallets/subtensor/src/macros/dispatches.rs": "2efd0802e14fbe628345d87b2c3947d047644bc4b5ed70d7e5b3be25b32265ff",
-      "primitives/share-pool/src/lib.rs": "c099bcfa982175631482a8144970e70af52a6697ab0dff9aa9c1f25966905b26",
-      "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs": null
-    },
-    "477": {
-      "runtime/src/proxy_filters/mod.rs": "6b1eb13b7c2a77cfe834dbb0db320d59c9996bcf7cb2c04b89ed2d0c5c776737",
-      "runtime/src/proxy_filters/call_groups.rs": "ccd92449b15ab42d58b2928b2625fc0b270691bc7227a1d258a39f82ab5c0ae6",
-      "common/src/proxy.rs": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
-      "pallets/proxy/src/lib.rs": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
-      "pallets/subtensor/src/subnets/registration.rs": "0a621d453b01f7d44e8ebb44a585520a793cb05fc51d4cb906b8fd27f685ca52",
-      "pallets/subtensor/src/staking/move_stake.rs": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
-      "pallets/subtensor/src/coinbase/run_coinbase.rs": "18c68fb6429c42bf53adb7cc4293f1ca4b6945c2d2e2da085b442735a3431afa",
-      "pallets/subtensor/src/rpc_info/stake_info.rs": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
-      "pallets/subtensor/src/staking/account.rs": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
-      "pallets/subtensor/src/staking/lock.rs": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
-      "pallets/subtensor/src/staking/stake_utils.rs": "32d9b6341e9e333b38724b81515ac520ce3557abdebf244716a2aac97ad11732",
-      "pallets/subtensor/src/subnets/collateral.rs": "e13e4d5a5713083e23230dbe928a8f4360db1ff0753b9b0192553467096ef300",
-      "pallets/subtensor/src/macros/events.rs": "95c2b3554f29f931655d9e8f16522b1a067c2288733e3d0d0a6654e3ac23cd33",
-      "pallets/subtensor/src/macros/dispatches.rs": "2efd0802e14fbe628345d87b2c3947d047644bc4b5ed70d7e5b3be25b32265ff",
-      "primitives/share-pool/src/lib.rs": "c099bcfa982175631482a8144970e70af52a6697ab0dff9aa9c1f25966905b26",
-      "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs": null
-    },
-    "478": {
-      "runtime/src/proxy_filters/mod.rs": "6b1eb13b7c2a77cfe834dbb0db320d59c9996bcf7cb2c04b89ed2d0c5c776737",
-      "runtime/src/proxy_filters/call_groups.rs": "ccd92449b15ab42d58b2928b2625fc0b270691bc7227a1d258a39f82ab5c0ae6",
-      "common/src/proxy.rs": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
-      "pallets/proxy/src/lib.rs": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
-      "pallets/subtensor/src/subnets/registration.rs": "0a621d453b01f7d44e8ebb44a585520a793cb05fc51d4cb906b8fd27f685ca52",
-      "pallets/subtensor/src/staking/move_stake.rs": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
-      "pallets/subtensor/src/coinbase/run_coinbase.rs": "18c68fb6429c42bf53adb7cc4293f1ca4b6945c2d2e2da085b442735a3431afa",
-      "pallets/subtensor/src/rpc_info/stake_info.rs": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
-      "pallets/subtensor/src/staking/account.rs": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
-      "pallets/subtensor/src/staking/lock.rs": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
-      "pallets/subtensor/src/staking/stake_utils.rs": "779acbc9ba7a32dc83d58d26094a7ade4a75e3a67a6e54951547a7a8bfb0ee3b",
-      "pallets/subtensor/src/subnets/collateral.rs": "e13e4d5a5713083e23230dbe928a8f4360db1ff0753b9b0192553467096ef300",
-      "pallets/subtensor/src/macros/events.rs": "95c2b3554f29f931655d9e8f16522b1a067c2288733e3d0d0a6654e3ac23cd33",
-      "pallets/subtensor/src/macros/dispatches.rs": "2efd0802e14fbe628345d87b2c3947d047644bc4b5ed70d7e5b3be25b32265ff",
-      "primitives/share-pool/src/lib.rs": "c099bcfa982175631482a8144970e70af52a6697ab0dff9aa9c1f25966905b26",
-      "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs": "da47da584ae0590e218a4ef66cbcd74941e729519073e8f0687720793f85616b"
-    }
+    "473": [
+      {
+        "sha256": "cbd460f709682d823e03fe0097b96569735506ea84d1cd1f3c9414a5d09b7d19",
+        "path": "runtime/src/proxy_filters/mod.rs"
+      },
+      {
+        "sha256": "68cebbb31ac2ff33dba3ae4082161deba16de83611ed12ef7fe12281df148981",
+        "path": "runtime/src/proxy_filters/call_groups.rs"
+      },
+      {
+        "sha256": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
+        "path": "common/src/proxy.rs"
+      },
+      {
+        "sha256": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
+        "path": "pallets/proxy/src/lib.rs"
+      },
+      {
+        "sha256": "ea13c9fc845228cbadd8990066f147429ca85772cb26efece7e834fb3fdbb6db",
+        "path": "pallets/subtensor/src/subnets/registration.rs"
+      },
+      {
+        "sha256": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
+        "path": "pallets/subtensor/src/staking/move_stake.rs"
+      },
+      {
+        "sha256": "09cce211f362295e6e880dc9bb2cbc1c2ee3b83c510e58e40baf5d184ac7ad1d",
+        "path": "pallets/subtensor/src/coinbase/run_coinbase.rs"
+      },
+      {
+        "sha256": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
+        "path": "pallets/subtensor/src/rpc_info/stake_info.rs"
+      },
+      {
+        "sha256": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
+        "path": "pallets/subtensor/src/staking/account.rs"
+      },
+      {
+        "sha256": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
+        "path": "pallets/subtensor/src/staking/lock.rs"
+      },
+      {
+        "sha256": "040f765497db2b4e0eeb1ebf531b6da87beaa189d88e1e8c297d65f660c19da1",
+        "path": "pallets/subtensor/src/staking/stake_utils.rs"
+      },
+      {
+        "sha256": "4598de7d7221f238fb2763d12abbd5a842cc8ce97554864604336df0b63ba342",
+        "path": "pallets/subtensor/src/subnets/collateral.rs"
+      },
+      {
+        "sha256": "d310e05848b1cbc032f25976913fe01d310daeeb584d7a5c313b941640db71be",
+        "path": "pallets/subtensor/src/macros/events.rs"
+      },
+      {
+        "sha256": "7a678f74e8ba585d59a61495a0c8079cae78bb011736d5c65aa57cd630fec13b",
+        "path": "pallets/subtensor/src/macros/dispatches.rs"
+      },
+      {
+        "sha256": "f659d0b4a067c355938aa1a9a541ce501a53af55c4b32d84f55f2e796815c3ec",
+        "path": "primitives/share-pool/src/lib.rs"
+      },
+      {
+        "sha256": null,
+        "path": "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs"
+      }
+    ],
+    "475": [
+      {
+        "sha256": "c8b92542ef1ea2180b818fc0396d5deead9e00babbdfd5f8a17daaff9f3c7c37",
+        "path": "runtime/src/proxy_filters/mod.rs"
+      },
+      {
+        "sha256": "345df227a7271a097717e29087e6a15532a16a87867579907ce4dd143573ee7e",
+        "path": "runtime/src/proxy_filters/call_groups.rs"
+      },
+      {
+        "sha256": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
+        "path": "common/src/proxy.rs"
+      },
+      {
+        "sha256": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
+        "path": "pallets/proxy/src/lib.rs"
+      },
+      {
+        "sha256": "0a621d453b01f7d44e8ebb44a585520a793cb05fc51d4cb906b8fd27f685ca52",
+        "path": "pallets/subtensor/src/subnets/registration.rs"
+      },
+      {
+        "sha256": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
+        "path": "pallets/subtensor/src/staking/move_stake.rs"
+      },
+      {
+        "sha256": "18c68fb6429c42bf53adb7cc4293f1ca4b6945c2d2e2da085b442735a3431afa",
+        "path": "pallets/subtensor/src/coinbase/run_coinbase.rs"
+      },
+      {
+        "sha256": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
+        "path": "pallets/subtensor/src/rpc_info/stake_info.rs"
+      },
+      {
+        "sha256": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
+        "path": "pallets/subtensor/src/staking/account.rs"
+      },
+      {
+        "sha256": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
+        "path": "pallets/subtensor/src/staking/lock.rs"
+      },
+      {
+        "sha256": "32d9b6341e9e333b38724b81515ac520ce3557abdebf244716a2aac97ad11732",
+        "path": "pallets/subtensor/src/staking/stake_utils.rs"
+      },
+      {
+        "sha256": "e13e4d5a5713083e23230dbe928a8f4360db1ff0753b9b0192553467096ef300",
+        "path": "pallets/subtensor/src/subnets/collateral.rs"
+      },
+      {
+        "sha256": "95c2b3554f29f931655d9e8f16522b1a067c2288733e3d0d0a6654e3ac23cd33",
+        "path": "pallets/subtensor/src/macros/events.rs"
+      },
+      {
+        "sha256": "2efd0802e14fbe628345d87b2c3947d047644bc4b5ed70d7e5b3be25b32265ff",
+        "path": "pallets/subtensor/src/macros/dispatches.rs"
+      },
+      {
+        "sha256": "c099bcfa982175631482a8144970e70af52a6697ab0dff9aa9c1f25966905b26",
+        "path": "primitives/share-pool/src/lib.rs"
+      },
+      {
+        "sha256": null,
+        "path": "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs"
+      }
+    ],
+    "476": [
+      {
+        "sha256": "6b1eb13b7c2a77cfe834dbb0db320d59c9996bcf7cb2c04b89ed2d0c5c776737",
+        "path": "runtime/src/proxy_filters/mod.rs"
+      },
+      {
+        "sha256": "ccd92449b15ab42d58b2928b2625fc0b270691bc7227a1d258a39f82ab5c0ae6",
+        "path": "runtime/src/proxy_filters/call_groups.rs"
+      },
+      {
+        "sha256": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
+        "path": "common/src/proxy.rs"
+      },
+      {
+        "sha256": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
+        "path": "pallets/proxy/src/lib.rs"
+      },
+      {
+        "sha256": "0a621d453b01f7d44e8ebb44a585520a793cb05fc51d4cb906b8fd27f685ca52",
+        "path": "pallets/subtensor/src/subnets/registration.rs"
+      },
+      {
+        "sha256": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
+        "path": "pallets/subtensor/src/staking/move_stake.rs"
+      },
+      {
+        "sha256": "18c68fb6429c42bf53adb7cc4293f1ca4b6945c2d2e2da085b442735a3431afa",
+        "path": "pallets/subtensor/src/coinbase/run_coinbase.rs"
+      },
+      {
+        "sha256": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
+        "path": "pallets/subtensor/src/rpc_info/stake_info.rs"
+      },
+      {
+        "sha256": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
+        "path": "pallets/subtensor/src/staking/account.rs"
+      },
+      {
+        "sha256": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
+        "path": "pallets/subtensor/src/staking/lock.rs"
+      },
+      {
+        "sha256": "32d9b6341e9e333b38724b81515ac520ce3557abdebf244716a2aac97ad11732",
+        "path": "pallets/subtensor/src/staking/stake_utils.rs"
+      },
+      {
+        "sha256": "e13e4d5a5713083e23230dbe928a8f4360db1ff0753b9b0192553467096ef300",
+        "path": "pallets/subtensor/src/subnets/collateral.rs"
+      },
+      {
+        "sha256": "95c2b3554f29f931655d9e8f16522b1a067c2288733e3d0d0a6654e3ac23cd33",
+        "path": "pallets/subtensor/src/macros/events.rs"
+      },
+      {
+        "sha256": "2efd0802e14fbe628345d87b2c3947d047644bc4b5ed70d7e5b3be25b32265ff",
+        "path": "pallets/subtensor/src/macros/dispatches.rs"
+      },
+      {
+        "sha256": "c099bcfa982175631482a8144970e70af52a6697ab0dff9aa9c1f25966905b26",
+        "path": "primitives/share-pool/src/lib.rs"
+      },
+      {
+        "sha256": null,
+        "path": "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs"
+      }
+    ],
+    "477": [
+      {
+        "sha256": "6b1eb13b7c2a77cfe834dbb0db320d59c9996bcf7cb2c04b89ed2d0c5c776737",
+        "path": "runtime/src/proxy_filters/mod.rs"
+      },
+      {
+        "sha256": "ccd92449b15ab42d58b2928b2625fc0b270691bc7227a1d258a39f82ab5c0ae6",
+        "path": "runtime/src/proxy_filters/call_groups.rs"
+      },
+      {
+        "sha256": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
+        "path": "common/src/proxy.rs"
+      },
+      {
+        "sha256": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
+        "path": "pallets/proxy/src/lib.rs"
+      },
+      {
+        "sha256": "0a621d453b01f7d44e8ebb44a585520a793cb05fc51d4cb906b8fd27f685ca52",
+        "path": "pallets/subtensor/src/subnets/registration.rs"
+      },
+      {
+        "sha256": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
+        "path": "pallets/subtensor/src/staking/move_stake.rs"
+      },
+      {
+        "sha256": "18c68fb6429c42bf53adb7cc4293f1ca4b6945c2d2e2da085b442735a3431afa",
+        "path": "pallets/subtensor/src/coinbase/run_coinbase.rs"
+      },
+      {
+        "sha256": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
+        "path": "pallets/subtensor/src/rpc_info/stake_info.rs"
+      },
+      {
+        "sha256": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
+        "path": "pallets/subtensor/src/staking/account.rs"
+      },
+      {
+        "sha256": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
+        "path": "pallets/subtensor/src/staking/lock.rs"
+      },
+      {
+        "sha256": "32d9b6341e9e333b38724b81515ac520ce3557abdebf244716a2aac97ad11732",
+        "path": "pallets/subtensor/src/staking/stake_utils.rs"
+      },
+      {
+        "sha256": "e13e4d5a5713083e23230dbe928a8f4360db1ff0753b9b0192553467096ef300",
+        "path": "pallets/subtensor/src/subnets/collateral.rs"
+      },
+      {
+        "sha256": "95c2b3554f29f931655d9e8f16522b1a067c2288733e3d0d0a6654e3ac23cd33",
+        "path": "pallets/subtensor/src/macros/events.rs"
+      },
+      {
+        "sha256": "2efd0802e14fbe628345d87b2c3947d047644bc4b5ed70d7e5b3be25b32265ff",
+        "path": "pallets/subtensor/src/macros/dispatches.rs"
+      },
+      {
+        "sha256": "c099bcfa982175631482a8144970e70af52a6697ab0dff9aa9c1f25966905b26",
+        "path": "primitives/share-pool/src/lib.rs"
+      },
+      {
+        "sha256": null,
+        "path": "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs"
+      }
+    ],
+    "478": [
+      {
+        "sha256": "6b1eb13b7c2a77cfe834dbb0db320d59c9996bcf7cb2c04b89ed2d0c5c776737",
+        "path": "runtime/src/proxy_filters/mod.rs"
+      },
+      {
+        "sha256": "ccd92449b15ab42d58b2928b2625fc0b270691bc7227a1d258a39f82ab5c0ae6",
+        "path": "runtime/src/proxy_filters/call_groups.rs"
+      },
+      {
+        "sha256": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
+        "path": "common/src/proxy.rs"
+      },
+      {
+        "sha256": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
+        "path": "pallets/proxy/src/lib.rs"
+      },
+      {
+        "sha256": "0a621d453b01f7d44e8ebb44a585520a793cb05fc51d4cb906b8fd27f685ca52",
+        "path": "pallets/subtensor/src/subnets/registration.rs"
+      },
+      {
+        "sha256": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
+        "path": "pallets/subtensor/src/staking/move_stake.rs"
+      },
+      {
+        "sha256": "18c68fb6429c42bf53adb7cc4293f1ca4b6945c2d2e2da085b442735a3431afa",
+        "path": "pallets/subtensor/src/coinbase/run_coinbase.rs"
+      },
+      {
+        "sha256": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
+        "path": "pallets/subtensor/src/rpc_info/stake_info.rs"
+      },
+      {
+        "sha256": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
+        "path": "pallets/subtensor/src/staking/account.rs"
+      },
+      {
+        "sha256": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
+        "path": "pallets/subtensor/src/staking/lock.rs"
+      },
+      {
+        "sha256": "779acbc9ba7a32dc83d58d26094a7ade4a75e3a67a6e54951547a7a8bfb0ee3b",
+        "path": "pallets/subtensor/src/staking/stake_utils.rs"
+      },
+      {
+        "sha256": "e13e4d5a5713083e23230dbe928a8f4360db1ff0753b9b0192553467096ef300",
+        "path": "pallets/subtensor/src/subnets/collateral.rs"
+      },
+      {
+        "sha256": "95c2b3554f29f931655d9e8f16522b1a067c2288733e3d0d0a6654e3ac23cd33",
+        "path": "pallets/subtensor/src/macros/events.rs"
+      },
+      {
+        "sha256": "2efd0802e14fbe628345d87b2c3947d047644bc4b5ed70d7e5b3be25b32265ff",
+        "path": "pallets/subtensor/src/macros/dispatches.rs"
+      },
+      {
+        "sha256": "c099bcfa982175631482a8144970e70af52a6697ab0dff9aa9c1f25966905b26",
+        "path": "primitives/share-pool/src/lib.rs"
+      },
+      {
+        "sha256": "da47da584ae0590e218a4ef66cbcd74941e729519073e8f0687720793f85616b",
+        "path": "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs"
+      }
+    ]
   },
   "live_native_contract": {
     "block": 9279116,
