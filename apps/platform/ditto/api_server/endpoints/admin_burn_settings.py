@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -175,9 +176,23 @@ async def create_settings_revision(
     if "rank_shares" not in settings.model_fields_set:
         # A burn-only write (the console dial) must not silently reset the
         # payout curve; only an explicit null clears it.
-        settings = settings.model_copy(
-            update={"rank_shares": settings_from_row(latest).rank_shares}
-        )
+        # Validate the stored row itself: settings_from_row would turn an
+        # unreadable revision into the default and so silently clear the curve.
+        try:
+            carried = (
+                BurnSettings.model_validate(latest.settings).rank_shares
+                if latest is not None
+                else None
+            )
+        except ValidationError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "current burn settings revision is unreadable; send "
+                    "rank_shares explicitly (null to clear)"
+                ),
+            ) from error
+        settings = settings.model_copy(update={"rank_shares": carried})
     try:
         row = await insert_burn_settings_revision(
             session,

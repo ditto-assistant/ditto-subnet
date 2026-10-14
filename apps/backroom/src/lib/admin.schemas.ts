@@ -1613,9 +1613,9 @@ export const MIN_BURN_SHARE = 0
 export const MAX_BURN_SHARE = 1
 
 // Protocol-31 operator payout curve: champion then the four tail slots,
-// positive, non-increasing and summing to one within the validator fold's
-// 1e-12 tolerance. Omitting it on a write keeps the current curve; null clears
-// it back to the frozen 65/14/10/7/4.
+// positive and summing to one within the validator fold's 1e-12 tolerance,
+// and non-increasing on writes. Omitting it on a write keeps the current
+// curve; null clears it back to the frozen 65/14/10/7/4.
 export const RANK_SHARES_SLOTS = 5
 const rankSharesSchema = z
   .array(z.number().positive())
@@ -1624,10 +1624,6 @@ const rankSharesSchema = z
     (shares) => Math.abs(shares.reduce((total, share) => total + share, 0) - 1) <= 1e-12,
     'rank_shares must sum to 1',
   )
-  .refine(
-    (shares) => shares.every((share, index) => index === 0 || share <= shares[index - 1]),
-    'rank_shares must not increase from the champion down',
-  )
 
 const burnSettingsBaseSchema = z.object({
   burn_share: z.number().min(MIN_BURN_SHARE).max(MAX_BURN_SHARE),
@@ -1635,7 +1631,17 @@ const burnSettingsBaseSchema = z.object({
 })
 
 export const burnSettingsSchema = burnSettingsBaseSchema
-export const burnSettingsWriteSchema = burnSettingsBaseSchema
+// Ordering is enforced on writes only, so a stored revision always reads.
+export const burnSettingsWriteSchema = burnSettingsBaseSchema.superRefine((settings, ctx) => {
+  const shares = settings.rank_shares
+  if (shares && shares.some((share, index) => index > 0 && share > shares[index - 1])) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['rank_shares'],
+      message: 'rank_shares must not increase from the champion down',
+    })
+  }
+})
 
 export const burnSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),

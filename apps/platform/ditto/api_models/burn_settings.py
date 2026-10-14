@@ -35,7 +35,7 @@ import math
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MIN_BURN_SHARE = 0.0
 MAX_BURN_SHARE = 1.0
@@ -86,10 +86,12 @@ class BurnSettings(BaseModel):
     ``None`` (the default) leaves every validator on its frozen 65/14/10/7/4
     curve. A curve is served on the scoring ledger only once every
     recently-live weight setter reports protocol 31, so a mixed fleet never
-    folds two curves. It must have exactly five positive, non-increasing shares
-    summing to one within the validator fold's own 1e-12 tolerance, or
-    validators would refuse it. Omitting it on a write keeps the current curve;
-    an explicit ``null`` clears it.
+    folds two curves. It must have exactly five positive shares summing to one
+    within the validator fold's own 1e-12 tolerance, or validators would refuse
+    it. A write must also be non-increasing from the champion down; reads stay
+    permissive so a stored revision can never fail into the default policy.
+    Omitting it on a write keeps the current curve; an explicit ``null``
+    clears it.
     """
 
     @field_validator("rank_shares")
@@ -106,9 +108,6 @@ class BurnSettings(BaseModel):
             raise ValueError("rank_shares must contain only finite positive values")
         if not math.isclose(sum(shares), 1.0, rel_tol=0.0, abs_tol=1e-12):
             raise ValueError("rank_shares must sum to 1")
-        pairs = zip(shares, shares[1:], strict=False)
-        if any(later > earlier for earlier, later in pairs):
-            raise ValueError("rank_shares must not increase from the champion down")
         return shares
 
 
@@ -170,6 +169,17 @@ class AdminBurnSettingsRequest(BaseModel):
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
+
+    @model_validator(mode="after")
+    def _curve_does_not_increase(self) -> AdminBurnSettingsRequest:
+        # Write-only: a stored revision that predates this rule must still
+        # read, or settings_from_row would fall back to the full default.
+        shares = self.settings.rank_shares
+        if shares is not None and any(
+            later > earlier for earlier, later in zip(shares, shares[1:], strict=False)
+        ):
+            raise ValueError("rank_shares must not increase from the champion down")
+        return self
 
 
 class AdminBurnSettingsResponse(BaseModel):
