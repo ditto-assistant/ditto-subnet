@@ -19,7 +19,7 @@ from ditto.treasury.collector import (
     tick,
 )
 from ditto.treasury.manual_batch import ManualBatchTransfer
-from ditto.treasury.manual_worker import process_manual
+from ditto.treasury.manual_worker import consume_manual, process_manual
 from ditto.treasury.service_allocation import ServiceDestination
 from ditto_screening_protocol.treasury_manual import (
     ManualBatchEnvelope,
@@ -153,6 +153,16 @@ def test_batch_timeout_reconciles_exact_hash_without_second_signature(tmp_path):
         process_manual(Mailbox(), j, p, c, "ack", env.model_dump()).status == "pending"
     )
     assert len(c.sent) == len(c.prepared) == 2
+
+
+def test_invalid_cold_approval_is_refused_and_acked_without_starving_mailbox(tmp_path):
+    p, c, j, env = fixture(tmp_path)
+    raw = env.model_dump()
+    raw["manual_approval"]["signature"] = "0x" + "00" * 64
+    mailbox = Mailbox()
+    result = consume_manual(mailbox, j, p, c, "invalid", raw)
+    assert result.status == "refused" and mailbox.acks == ["invalid"]
+    assert len(c.sent) == 1
 
 
 @pytest.mark.parametrize(

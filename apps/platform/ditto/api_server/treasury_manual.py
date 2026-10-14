@@ -320,10 +320,13 @@ async def accept_report(session, config, body):
         if report.readiness and report.readiness.manual_approval:
             if runtime.treasury_shadow_policy is None:
                 raise InvalidManualReport("Approved collector identity absent")
-            report.readiness.manual_approval.verify(
-                report.collector_policy_digest,
-                runtime.treasury_shadow_policy.collector_coldkey,
-            )
+            try:
+                report.readiness.manual_approval.verify(
+                    report.collector_policy_digest,
+                    runtime.treasury_shadow_policy.collector_coldkey,
+                )
+            except ValueError as error:
+                raise InvalidManualReport("Manual range lacks cold approval") from error
         if not readiness_is_fresh(report.observed_at):
             return
         current = await session.get(BridgeState, 1)

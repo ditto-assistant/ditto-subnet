@@ -174,6 +174,13 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
         )
     from ditto.treasury.manual_batch import ManualBatchTransfer
 
+    if isinstance(envelope, ManualBatchEnvelope):
+        try:
+            envelope.manual_approval.verify(policy.digest, policy.collector_coldkey)
+        except ValueError as error:
+            raise InvalidManualRequest(
+                "Manual range lacks valid cold approval", envelope
+            ) from error
     manual = (
         ManualBatchTransfer(
             **request.model_dump(),
