@@ -66,11 +66,15 @@ def add_subparser(
     )
     parser.add_argument("--json", action="store_true")
     subs = parser.add_subparsers(dest="github_command")
-    status = subs.add_parser("status", help="Read the active verified link.")
+    status = subs.add_parser(
+        "status", help="Read the active verified link.", parents=parents or []
+    )
     status.set_defaults(func=run, github_command="status")
     status.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     unlink = subs.add_parser(
-        "unlink", help="Sign a revocation of the exact active link."
+        "unlink",
+        help="Sign a revocation of the exact active link.",
+        parents=parents or [],
     )
     # Suppressed child defaults preserve values supplied before the subcommand.
     unlink.add_argument(

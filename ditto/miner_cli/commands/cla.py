@@ -31,7 +31,7 @@ def add_subparser(
     )
     subs = parser.add_subparsers(dest="cla_command", required=True)
     for command in ("sign", "status"):
-        sub = subs.add_parser(command)
+        sub = subs.add_parser(command, parents=parents or [])
         sub.set_defaults(func=run)
         sub.add_argument(
             "--wallet.name",

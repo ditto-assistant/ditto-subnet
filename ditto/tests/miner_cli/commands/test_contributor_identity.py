@@ -642,6 +642,84 @@ def test_github_link_completed_by_another_client_returns_without_signing():
     api.confirm_github_link.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "command,child",
+    [
+        ("cla", "sign"),
+        ("cla", "status"),
+        ("link-github", "status"),
+        ("link-github", "unlink"),
+    ],
+)
+@pytest.mark.parametrize("position", [0, 1, 2])
+def test_nested_identity_commands_accept_shared_flags_without_clobbering(
+    command, child, position
+):
+    tokens = [command, child]
+    shared = ["--network", "local", "--chain-endpoint", "ws://127.0.0.1:9944", "-v"]
+    tokens[position:position] = shared
+    parsed = _build_parser().parse_args(tokens)
+    assert parsed.network == "local"
+    assert parsed.chain_endpoint == "ws://127.0.0.1:9944"
+    assert parsed.verbose is True
+
+
+@pytest.mark.parametrize("stage", ["poll", "link_prompt", "unlink_prompt"])
+def test_github_user_interrupt_exits_130_without_signing(stage, capsys):
+    api = client()
+    attempt = uuid4()
+    api.start_github_link.return_value = GithubLinkStart(
+        netuid=118,
+        attempt_id=attempt,
+        authorize_url="https://dittobench.ai/fixture",
+        expires_in=600,
+    )
+    api.get_github_link_attempt.return_value = GithubLinkAttemptStatus(
+        attempt_id=attempt,
+        status="accepted",
+        github_user_id=100,
+        github_login="miner-fixture",
+    )
+    api.get_github_link.return_value = SimpleNamespace(
+        netuid=118,
+        link=SimpleNamespace(
+            link_id=uuid4(), github_login="miner-fixture", github_user_id=100
+        ),
+    )
+    if stage == "poll":
+        api.get_github_link_attempt.side_effect = KeyboardInterrupt
+    argv = [
+        "--network",
+        "local",
+        "link-github",
+        "--coldkey",
+        "fixture",
+        "--hotkey",
+        "fixture",
+        "--no-browser",
+    ]
+    if stage == "unlink_prompt":
+        argv.append("unlink")
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture", "hotkey": KEY.ss58_address},
+        ),
+        patch.object(link_github, "load_wallet") as load,
+        patch("builtins.input", side_effect=KeyboardInterrupt),
+    ):
+        assert main(argv) == 130
+    output = capsys.readouterr()
+    assert "interrupted" in output.err
+    assert "Traceback" not in output.err
+    assert not output.out
+    load.assert_not_called()
+    api.confirm_github_link.assert_not_called()
+    api.unlink_github.assert_not_called()
+
+
 def test_parser_exposes_commands_without_implicit_cla_acceptance():
     parser = _build_parser()
     assert parser.parse_args(["cla", "status"]).cla_command == "status"
