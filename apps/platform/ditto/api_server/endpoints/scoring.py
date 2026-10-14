@@ -38,7 +38,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import ConfirmationScoreRecord, LedgerEntry, LedgerResponse
-from ditto.api_models.burn_settings import BurnSettings
+from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL, BurnSettings
 from ditto.api_models.continual_retest_settings import (
     CROWN_INCUMBENT_PROTOCOL,
     PROVISIONAL_INCUMBENT_PROTOCOL,
@@ -170,7 +170,7 @@ _STATISTICAL_BAND_CAP_PROTOCOL = 29
 # The first validator protocol whose fold reads the served ``rank_shares``
 # payout curve. Withheld until every recently-live weight setter reports it, or
 # a mixed fleet would fold two curves in one epoch.
-_RANK_SHARES_PROTOCOL = 31
+_RANK_SHARES_PROTOCOL = RANK_SHARES_PROTOCOL
 
 
 def _fleet_safe_efficiency_adjustments(
@@ -1247,21 +1247,32 @@ async def _require_statistical_cap_requester(
             raise HTTPException(
                 status_code=428, detail="treasury weight-setting fleet not ready"
             ) from error
-    if ledger.statistical_band_mode != "capped":
+    capped = ledger.statistical_band_mode == "capped"
+    # A pinned curve must only reach validators that fold it: a sub-31
+    # rejoiner would ignore the field and fold the frozen curve, and dropping
+    # the curve on replay would mix curves inside the v31 fleet mid-epoch.
+    curved = ledger.rank_shares is not None
+    if not capped and not curved:
         return ledger
     heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
     seen_at = heartbeat.seen_at if heartbeat is not None else None
     if seen_at is not None and seen_at.tzinfo is None:
         seen_at = seen_at.replace(tzinfo=UTC)
-    if (
-        heartbeat is None
-        or seen_at is None
-        or seen_at < now - VALIDATOR_STALE_WINDOW
-        or heartbeat.protocol_version < _STATISTICAL_BAND_CAP_PROTOCOL
-    ):
+    live = (
+        heartbeat is not None
+        and seen_at is not None
+        and seen_at >= now - VALIDATOR_STALE_WINDOW
+    )
+    protocol = heartbeat.protocol_version if live and heartbeat is not None else -1
+    if capped and protocol < _STATISTICAL_BAND_CAP_PROTOCOL:
         raise HTTPException(
             status_code=428,
             detail="validator protocol 29 is required for the pinned statistical band",
+        )
+    if curved and protocol < _RANK_SHARES_PROTOCOL:
+        raise HTTPException(
+            status_code=428,
+            detail="validator protocol 31 is required for the pinned payout curve",
         )
     return ledger
 
@@ -1594,6 +1605,11 @@ def _serve_last_known(
         raise HTTPException(
             status_code=503,
             detail="scoring ledger unavailable; cannot verify protocol-29 requester",
+        ) from error
+    if snapshot is not None and getattr(snapshot, "rank_shares", None) is not None:
+        raise HTTPException(
+            status_code=503,
+            detail="scoring ledger unavailable; cannot verify protocol-31 requester",
         ) from error
     if snapshot is None:
         logger.warning(

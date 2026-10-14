@@ -165,6 +165,7 @@ from ditto.api_models import bench_glossary as bench_glossary_data
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
+from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.continual_retest_settings import (
@@ -589,7 +590,7 @@ _TIE_WEIGHTING_PROTOCOL = 20
 _DETHRONE_BAND_CLAMP_PROTOCOL = 24
 _STATISTICAL_BAND_CAP_PROTOCOL = 29
 # Validators fold the served operator payout curve from this protocol on.
-_RANK_SHARES_PROTOCOL = 31
+_RANK_SHARES_PROTOCOL = RANK_SHARES_PROTOCOL
 # Grace after a lease is issued before the validator is expected to report (in a
 # heartbeat) that it has picked the agent up. Within this window an assigned-but-
 # not-yet-reported validator reads as "assigning" rather than a mismatch, so the

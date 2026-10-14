@@ -181,7 +181,7 @@ async def test_resolver_without_a_session_maker_returns_the_default() -> None:
     assert (await BurnSettingsResolver().resolve(None)).burn_share == 0.0
 
 
-def test_rank_shares_must_be_a_five_slot_curve_summing_to_one() -> None:
+async def test_rank_shares_must_be_a_five_slot_curve_summing_to_one() -> None:
     from pydantic import ValidationError
 
     from ditto.api_models.burn_settings import BurnSettings
@@ -196,6 +196,44 @@ def test_rank_shares_must_be_a_five_slot_curve_summing_to_one() -> None:
         [0.5, 0.2, 0.13, 0.1, 0.0],
         [0.5, 0.2, 0.13, 0.1, 0.08],
         [0.6, 0.2, 0.13, 0.1, -0.03],
+        # Numeric strings are refused, never coerced.
+        [0.5, "0.2", 0.13, 0.1, 0.07],
+        # A curve must not pay a lower slot more than the one above it.
+        [0.07, 0.1, 0.13, 0.2, 0.5],
+        [0.5, 0.13, 0.2, 0.1, 0.07],
     ):
         with pytest.raises(ValidationError):
             BurnSettings.model_validate({"burn_share": 0.0, "rank_shares": bad})
+
+
+_CURVE = [0.5, 0.2, 0.13, 0.1, 0.07]
+
+
+async def test_a_burn_only_write_keeps_the_payout_curve(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The console dial posts burn_share alone; that must not reset the curve."""
+    _install(app, settings_maker)
+    curved = _payload(burn_share=0.0)
+    curved["settings"] = {"burn_share": 0.0, "rank_shares": _CURVE}
+    first = await client.post(_URL, headers=_HEADERS, json=curved)
+    assert first.status_code == 200, first.text
+
+    burn_only = await client.post(
+        _URL, headers=_HEADERS, json=_payload(expected_revision=1, burn_share=0.1)
+    )
+    assert burn_only.status_code == 200, burn_only.text
+    assert burn_only.json()["settings"] == {"burn_share": 0.1, "rank_shares": _CURVE}
+
+    effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
+    assert effective["settings"]["rank_shares"] == _CURVE
+    # No live v31 weight setter: the curve is configured but not yet served.
+    assert effective["rank_shares_served"] is False
+
+    cleared = _payload(expected_revision=2, burn_share=0.1)
+    cleared["settings"] = {"burn_share": 0.1, "rank_shares": None}
+    reset = await client.post(_URL, headers=_HEADERS, json=cleared)
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["settings"] == {"burn_share": 0.1}

@@ -2217,3 +2217,55 @@ class TestLedgerRankShares:
         ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert ready.status_code == 200
         assert ready.json()["rank_shares"] == [0.5, 0.2, 0.13, 0.1, 0.07]
+
+    @pytest.mark.parametrize(
+        ("protocol", "refused"), [(None, True), (30, True), (31, False)]
+    )
+    async def test_a_pinned_curve_refuses_a_sub_31_requester(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        protocol: int | None,
+        refused: bool,
+    ) -> None:
+        """A v30 rejoiner mid-epoch must not fold the frozen curve beside v31."""
+        from fastapi import HTTPException
+
+        from ditto.api_models.validator import LedgerResponse
+        from ditto.api_server.endpoints.scoring import (
+            _require_statistical_cap_requester,
+        )
+
+        now = datetime.now(UTC)
+        if protocol is not None:
+            async with session_maker() as session, session.begin():
+                session.add(
+                    ValidatorHeartbeat(
+                        validator_hotkey=_VALIDATOR_HOTKEY,
+                        software_version="0.55.0",
+                        protocol_version=protocol,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=now,
+                        seen_at=now,
+                        signature="cd" * 64,
+                        capabilities=_scorer_capabilities(
+                            now, versions=[_BENCH_VERSION]
+                        ),
+                    )
+                )
+        ledger = LedgerResponse(
+            entries=[], count=0, rank_shares=[0.5, 0.2, 0.13, 0.1, 0.07]
+        )
+        async with session_maker() as session:
+            if refused:
+                with pytest.raises(HTTPException) as caught:
+                    await _require_statistical_cap_requester(
+                        session, _VALIDATOR_HOTKEY, ledger, now=now
+                    )
+                assert caught.value.status_code == 428
+                assert "protocol 31" in str(caught.value.detail)
+            else:
+                served = await _require_statistical_cap_requester(
+                    session, _VALIDATOR_HOTKEY, ledger, now=now
+                )
+                assert served.rank_shares == [0.5, 0.2, 0.13, 0.1, 0.07]

@@ -1613,8 +1613,9 @@ export const MIN_BURN_SHARE = 0
 export const MAX_BURN_SHARE = 1
 
 // Protocol-31 operator payout curve: champion then the four tail slots,
-// positive and summing to one within the validator fold's 1e-12 tolerance.
-// Null keeps every validator on its frozen 65/14/10/7/4 curve.
+// positive, non-increasing and summing to one within the validator fold's
+// 1e-12 tolerance. Omitting it on a write keeps the current curve; null clears
+// it back to the frozen 65/14/10/7/4.
 export const RANK_SHARES_SLOTS = 5
 const rankSharesSchema = z
   .array(z.number().positive())
@@ -1622,6 +1623,10 @@ const rankSharesSchema = z
   .refine(
     (shares) => Math.abs(shares.reduce((total, share) => total + share, 0) - 1) <= 1e-12,
     'rank_shares must sum to 1',
+  )
+  .refine(
+    (shares) => shares.every((share, index) => index === 0 || share <= shares[index - 1]),
+    'rank_shares must not increase from the champion down',
   )
 
 const burnSettingsBaseSchema = z.object({
@@ -1659,6 +1664,9 @@ export const effectiveBurnSettingsSchema = z.object({
   // Zero live validators means the dial is not attached to anything, which is
   // worth seeing before rather than after applying a burn.
   live_validator_count: z.number().int().nonnegative().nullable().default(null),
+  // Whether the configured curve is on the ledger now (every live weight
+  // setter reports protocol 31); null when readiness could not be read.
+  rank_shares_served: z.boolean().nullable().default(null),
 })
 
 export const burnSettingsControlSchema = z.object({

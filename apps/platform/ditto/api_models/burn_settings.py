@@ -48,6 +48,8 @@ already does and adding this surface changes no weights on deploy.
 """
 
 RANK_SHARES_SLOTS = 5
+RANK_SHARES_PROTOCOL = 31
+"""Validator heartbeat protocol that folds a served ``rank_shares`` curve."""
 """Champion plus the four-runner tail the KOTH fold pays."""
 
 
@@ -74,7 +76,9 @@ class BurnSettings(BaseModel):
     """
 
     rank_shares: Annotated[
-        tuple[float, ...] | None,
+        # The outer tuple accepts a JSON array; each share must be a number,
+        # never a numeric string.
+        tuple[Annotated[float, Field(strict=True)], ...] | None,
         Field(default=None, strict=False, exclude_if=lambda value: value is None),
     ] = None
     """Operator payout curve for the champion then each tail slot.
@@ -82,9 +86,10 @@ class BurnSettings(BaseModel):
     ``None`` (the default) leaves every validator on its frozen 65/14/10/7/4
     curve. A curve is served on the scoring ledger only once every
     recently-live weight setter reports protocol 31, so a mixed fleet never
-    folds two curves. It must have exactly five positive shares summing to one
-    within the validator fold's own 1e-12 tolerance, or validators would refuse
-    it.
+    folds two curves. It must have exactly five positive, non-increasing shares
+    summing to one within the validator fold's own 1e-12 tolerance, or
+    validators would refuse it. Omitting it on a write keeps the current curve;
+    an explicit ``null`` clears it.
     """
 
     @field_validator("rank_shares")
@@ -101,6 +106,9 @@ class BurnSettings(BaseModel):
             raise ValueError("rank_shares must contain only finite positive values")
         if not math.isclose(sum(shares), 1.0, rel_tol=0.0, abs_tol=1e-12):
             raise ValueError("rank_shares must sum to 1")
+        pairs = zip(shares, shares[1:], strict=False)
+        if any(later > earlier for earlier, later in pairs):
+            raise ValueError("rank_shares must not increase from the champion down")
         return shares
 
 
@@ -138,6 +146,11 @@ class EffectiveBurnSettings(BaseModel):
     max_burn_share: float = MAX_BURN_SHARE
     """Bounds served to the console so it cannot offer a share the platform
     would refuse."""
+
+    rank_shares_served: bool | None = None
+    """Whether the configured curve is on the scoring ledger now: True only
+    when a curve is set and every recently-live weight setter reports protocol
+    31. ``None`` when fleet readiness could not be read."""
 
     live_validator_count: int | None = None
     """Validators that have heartbeated recently enough to be folding weights.

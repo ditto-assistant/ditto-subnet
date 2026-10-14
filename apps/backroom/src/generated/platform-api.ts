@@ -19889,6 +19889,8 @@ export interface components {
             min_burn_share: number;
             /** Miner Emission Share */
             miner_emission_share: number;
+            /** Rank Shares Served */
+            rank_shares_served?: boolean | null;
             /** Revision */
             revision: number;
             /** Scope */
