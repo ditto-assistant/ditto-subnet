@@ -1522,7 +1522,10 @@ def check_github_link_config(config: GithubLinkConfig) -> None:
         invalid_extra = bool(
             parts.username or parts.password or parts.query or parts.fragment
         )
-    except ValueError:
+        # Requests compare Origin with this value; an IDNA-invalid host must
+        # fail startup rather than every consent request.
+        _ = config.origin
+    except (ValueError, UnicodeError):
         raise ApiServerConfigError("GITHUB_LINK_REDIRECT_URL is invalid") from None
     if not config.client_id or not config.client_secret:
         raise ApiServerConfigError(

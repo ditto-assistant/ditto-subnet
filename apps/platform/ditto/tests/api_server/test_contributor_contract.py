@@ -110,6 +110,8 @@ def test_expected_not_found_responses_use_the_actual_error_envelope(app):
         "https://example.com:abc/api/v1/miner-auth/github/callback",
         "https://example.com:65536/api/v1/miner-auth/github/callback",
         "http://localhost:-1/api/v1/miner-auth/github/callback",
+        # A left-to-right mark parses as a hostname but cannot be IDNA-encoded.
+        "https://example\u200e.com/api/v1/miner-auth/github/callback",
     ],
 )
 def test_oauth_config_rejects_unsafe_redirects(url):
