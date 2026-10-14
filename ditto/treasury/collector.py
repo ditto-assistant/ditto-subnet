@@ -762,6 +762,13 @@ class CollectorChain(Protocol):
     def prepare(
         self, policy: CollectorPolicy, role: str, call: dict, observation: Observation
     ) -> SignedOperation: ...
+    def prepare_manual(
+        self,
+        policy: CollectorPolicy,
+        call: dict,
+        observation: Observation,
+        request: ManualTransfer,
+    ) -> SignedOperation: ...
     def broadcast(self, encoded: str) -> None: ...
     def reconcile(
         self, policy: CollectorPolicy, operation: dict, observation: Observation
@@ -1223,23 +1230,70 @@ def _scan_finalized_earnings(journal, policy, chain, finalized, *, max_blocks=32
     cursor = db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
     for block in range(cursor + 1, min(finalized, cursor + max_blocks) + 1):
         earned = chain.earnings(policy, block)
-        if earned is not None:
-            if (
-                not isinstance(earned, FinalizedEarnings)
-                or type(earned.amount_rao) is not int
-                or not 0 < earned.amount_rao < 2**63
-            ):
-                raise ValueError("invalid finalized emission")
-            db.execute(
-                "INSERT INTO earnings(block,amount,block_hash,event_digest) "
-                "VALUES (?,?,?,?)",
-                (block, earned.amount_rao, earned.block_hash, earned.event_digest),
-            )
-            journal.event(
-                "emission_attributed",
-                {"block": block, "policy": policy.digest, **asdict(earned)},
-            )
+        _record_earning(journal, policy, block, earned)
         db.execute("UPDATE cursor SET block=? WHERE id=1", (block,))
+
+
+def _record_earning(journal, policy, block, earned):
+    previous = journal.db.execute(
+        "SELECT * FROM earnings WHERE block=?", (block,)
+    ).fetchone()
+    if previous is not None:
+        if earned != FinalizedEarnings(
+            previous["amount"], previous["block_hash"], previous["event_digest"]
+        ):
+            raise ValueError("previously proved earning changed")
+        return
+    if earned is None:
+        return
+    if (
+        not isinstance(earned, FinalizedEarnings)
+        or type(earned.amount_rao) is not int
+        or not 0 < earned.amount_rao < 2**63
+    ):
+        raise ValueError("invalid finalized emission")
+    journal.db.execute(
+        "INSERT INTO earnings(block,amount,block_hash,event_digest) VALUES (?,?,?,?)",
+        (block, earned.amount_rao, earned.block_hash, earned.event_digest),
+    )
+    journal.event(
+        "emission_attributed",
+        {
+            "block": block,
+            "policy": policy.digest,
+            **asdict(earned),
+        },
+    )
+
+
+def observe_earning_source(journal, policy, chain, block):
+    """Prove a mature candidate without skipping or resetting any audit history."""
+    db = journal.db
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        if tuple(db.execute("SELECT digest,role FROM pin").fetchone()) != (
+            policy.digest,
+            "transfer",
+        ):
+            raise ValueError("source proof requires pinned transfer journal")
+        approval = getattr(chain, "manual_approval", None)
+        if approval is None or not policy.enabled:
+            raise ValueError("recent source proof requires active manual approval")
+        approval.verify(policy.digest, policy.collector_coldkey)
+        observed = chain.observe(policy, "transfer")
+        if type(block) is not int or not (
+            policy.start_block
+            <= block
+            <= observed.block - policy.distribution_interval_blocks
+        ):
+            raise ValueError("candidate source is not mature")
+        earned = chain.earnings(policy, block)
+        _record_earning(journal, policy, block, earned)
+        journal.event("manual_source_probed", {"policy": policy.digest, "block": block})
+        db.execute("COMMIT")
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
 
 
 def observe_earnings(journal, policy, chain, *, max_blocks=32):

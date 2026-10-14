@@ -62,3 +62,12 @@ unchanged. A future custody digest requires a new bound manual approval.
 Max is the minimum of the signed ceiling, the destination's verified remaining
 mature earnings, and current stake minus the requested reserve. Until receipt
 catch-up proves sufficient earnings, the spendable amount can be below 2,500.
+
+With manual approval deployed, up to eight recent payout candidates are checked
+per iteration using the finalized chain's last-step/tempo only as search hints.
+Each candidate still undergoes the full source proof. These probes share the
+32-block iteration budget with the contiguous scanner and publish readiness
+between proofs. They neither skip nor advance that scanner's cursor; when the
+scanner later reaches a proved source it must match exactly and cannot re-credit
+or reset consumption. Schedule changes can miss a candidate, never invent
+earnings. No recent-source probe runs a transfer tick.

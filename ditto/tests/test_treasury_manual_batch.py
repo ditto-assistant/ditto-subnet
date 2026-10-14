@@ -14,6 +14,8 @@ from ditto.treasury.collector import (
     TransferCanary,
     arm_manual_transfer,
     manual_transfer_readiness,
+    observe_earning_source,
+    observe_earnings,
     tick,
 )
 from ditto.treasury.manual_batch import ManualBatchTransfer
@@ -255,3 +257,58 @@ def test_native_adapter_raises_manual_ceiling_only_for_exact_batch(tmp_path):
     wrong = {**call, "params": {**call["params"], "alpha_amount": 2500 * RAO + 1}}
     with pytest.raises(ValueError, match="manual signing intent"):
         adapter.prepare_manual(p, wrong, c.observation, intent(env))
+
+
+def test_recent_source_proof_does_not_skip_history_or_duplicate_later_scan(tmp_path):
+    p, c, j, _ = fixture(tmp_path)
+    cursor = j.db.execute("SELECT block FROM cursor").fetchone()[0]
+    j.db.execute("DELETE FROM earnings WHERE block=50")  # not yet scanned fixture gap
+    c.income[50] = 150 * RAO  # above the automatic batch ceiling
+    observe_earning_source(j, p, c, 50)
+    assert j.db.execute("SELECT block FROM cursor").fetchone()[0] == cursor
+    assert len(c.sent) == 1
+    ready = manual_transfer_readiness(j, p, c)
+    assert (
+        next(s for s in ready["sources"] if s["source_block"] == 50)["remaining"][0][
+            "alpha_rao"
+        ]
+        == 150 * RAO
+    )
+    observe_earnings(j, p, c)
+    assert (
+        j.db.execute("SELECT COUNT(*) FROM earnings WHERE block=50").fetchone()[0] == 1
+    )
+    assert (
+        j.db.execute(
+            "SELECT COUNT(*) FROM events WHERE event='emission_attributed' "
+            "AND json_extract(payload,'$.block')=50"
+        ).fetchone()[0]
+        == 1
+    )
+    # A changed archive answer cannot reset the credit or its consumption.
+    c.income[50] += 1
+    before = list(j.db.iterdump())
+    with pytest.raises(ValueError, match="previously proved"):
+        observe_earning_source(j, p, c, 50)
+    assert list(j.db.iterdump()) == before
+
+
+def test_recent_probes_share_32_block_budget_and_never_run_money_tick(tmp_path):
+    from scripts.treasury_manual_worker import consume_iteration
+
+    p, c, j, _ = fixture(tmp_path)
+    cursor = j.db.execute("SELECT block FROM cursor").fetchone()[0]
+    c.income.update(dict.fromkeys(range(200, 208), 150 * RAO))
+    c.recent_earning_candidates = lambda _: list(range(200, 208))
+    mailbox = Mailbox()
+    mailbox.pull = lambda: None
+    consume_iteration(mailbox, j, p, c)
+    assert len(c.sent) == 1
+    assert j.db.execute("SELECT block FROM cursor").fetchone()[0] == cursor + 24
+    assert (
+        j.db.execute(
+            "SELECT COUNT(*) FROM events WHERE event='manual_source_probed'"
+        ).fetchone()[0]
+        == 8
+    )
+    assert len(mailbox.reports) == 11  # fresh observation after each 8 + 3 chunks

@@ -473,6 +473,29 @@ class PublicCollectorChain:
         self._last_receipt_state = (policy.digest, block, block_hash, code, uid)
         return result
 
+    def recent_earning_candidates(self, policy):
+        """Schedule hints only. Every candidate still needs full earnings proof.
+
+        Tempo may have changed historically: an absent candidate gives no
+        entitlement and never advances the contiguous audit cursor.
+        """
+        observed = self.observe(policy, "transfer")
+        step = uint(
+            self.query(
+                "SubtensorModule", "LastMechansimStepBlock", [118], observed.block_hash
+            )
+        )
+        tempo = uint(self.query("SubtensorModule", "Tempo", [118], observed.block_hash))
+        if not policy.start_block <= step <= observed.block or not 1 <= tempo <= 7200:
+            raise ValueError("recent earning schedule unavailable")
+        return [
+            step - offset * tempo
+            for offset in range(512)
+            if policy.start_block
+            <= step - offset * tempo
+            <= observed.block - policy.distribution_interval_blocks
+        ]
+
     def assert_no_sponsor(self, policy, delegate, block_hash):
         # SCALE Option<()> can decode BOTH absence and presence as None. Only
         # raw storage absence proves the collector is not sponsoring fees.

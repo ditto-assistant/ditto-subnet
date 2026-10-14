@@ -61,16 +61,16 @@ def source_operations(journal, block, *, exclude=-1):
     for operation in journal.db.execute(
         "SELECT * FROM operations WHERE id!=? ORDER BY id", (exclude,)
     ):
-        request = claims.get(operation["id"])
-        if request:
+        bound_request = claims.get(operation["id"])
+        if bound_request:
             if (
                 operation["role"] != "transfer"
-                or operation["amount"] != request.amount_rao
-                or operation["bucket"] != request.bucket_id
-                or operation["source_block"] != request.source_block
+                or operation["amount"] != bound_request.amount_rao
+                or operation["bucket"] != bound_request.bucket_id
+                or operation["source_block"] != bound_request.source_block
             ):
                 raise ValueError("aggregate operation differs from durable intent")
-            for claim in request.sources:
+            for claim in bound_request.sources:
                 if claim["source_block"] == block:
                     result.append({**dict(operation), "amount": claim["amount_rao"]})
         elif operation["source_block"] == block:

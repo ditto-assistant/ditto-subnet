@@ -225,12 +225,26 @@ async def _receipt(
     public_proof["event_at"] = proof.event_at.isoformat()
     public_proof["block"] = selector.block
     public_proof["source_block"] = selector.source_block
-    if parent is not None and (
-        parent.proof["source_block_hash"],
-        parent.proof["source_event_digest"],
-        parent.proof["source_amount_rao"],
-    ) != (proof.source_block_hash, proof.source_event_digest, proof.source_amount_rao):
-        raise ReceiptConflict("source credit differs from historical distribution")
+    if parent is not None:
+        parent_source = parent.proof
+        if parent.proof.get("source_claims"):
+            matches = [
+                c
+                for c in parent.proof["source_claims"]
+                if c["source_block"] == selector.source_block
+            ]
+            if len(matches) != 1:
+                raise ReceiptConflict("parent aggregate source is ambiguous")
+            parent_source = matches[0]
+        if tuple(
+            parent_source[k]
+            for k in ("source_block_hash", "source_event_digest", "source_amount_rao")
+        ) != (
+            proof.source_block_hash,
+            proof.source_event_digest,
+            proof.source_amount_rao,
+        ):
+            raise ReceiptConflict("source credit differs from historical distribution")
     request_digest = digest(
         {
             "selector": selector.model_dump(
