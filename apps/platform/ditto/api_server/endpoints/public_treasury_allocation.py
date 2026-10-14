@@ -1,7 +1,7 @@
 """Safe public projection of wallet policy and live routing. No actors."""
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
@@ -57,11 +57,23 @@ async def public_runtime(
 
 RoutingStatus = Literal["not_activated", "scheduled", "active", "stale", "paused"]
 
-# A pin is taken once per epoch (361 blocks of ~12 s). Older than one epoch
-# plus a grace window means the current epoch's pin is missing: scoring then
-# serves the previous pin flagged stale, and validators refuse the enforcing
-# fold, so the page must not claim the split is being folded.
-PIN_FRESH_FOR = timedelta(seconds=(BLOCKS_PER_TEMPO + 1) * 12 + 600)
+# A pin covers one epoch: from its first block for BLOCKS_PER_TEMPO + 1
+# blocks (~12 s each). Past that end, the current epoch's pin is missing:
+# scoring serves the previous pin flagged stale and validators refuse the
+# enforcing fold, so the page must not claim the split is being folded. The
+# short grace only absorbs the next pin's materialization.
+BLOCK_SECONDS = 12
+NEXT_PIN_GRACE = timedelta(seconds=120)
+
+
+def pin_epoch_ends_at(row: Any) -> datetime | None:
+    pinned_at = row.pinned_at
+    if pinned_at is None:
+        return None
+    if pinned_at.tzinfo is None:
+        pinned_at = pinned_at.replace(tzinfo=UTC)
+    remaining = row.last_epoch_block + BLOCKS_PER_TEMPO + 1 - row.pinned_block
+    return pinned_at + timedelta(seconds=max(0, remaining) * BLOCK_SECONDS)
 
 
 async def served_routing(
@@ -86,10 +98,8 @@ async def served_routing(
         # A malformed stored context never 500s the public page.
         treasury = None
     if isinstance(treasury, EnforcingTreasuryPin):
-        pinned_at = row.pinned_at if row is not None else None
-        if pinned_at is not None and pinned_at.tzinfo is None:
-            pinned_at = pinned_at.replace(tzinfo=UTC)
-        if pinned_at is None or now - pinned_at > PIN_FRESH_FOR:
+        ends_at = pin_epoch_ends_at(row) if row is not None else None
+        if ends_at is None or now > ends_at + NEXT_PIN_GRACE:
             return "stale", treasury.epoch_index, 0.0
         return "active", treasury.epoch_index, treasury.service_bps / 10_000
     if runtime.mode == "enforce":

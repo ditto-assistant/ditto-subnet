@@ -1,6 +1,6 @@
 """Forecasts cannot masquerade as active funding or leak billing identity."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -289,6 +289,9 @@ async def test_unverifiable_pin_never_reports_active_routing(
     [
         # An enforcing pin from an earlier epoch: validators refuse to fold it.
         ("stale", "stale"),
+        # Just past its own epoch's end (360 blocks after the pinned block,
+        # plus a 2-minute grace): the next epoch started without a fresh pin.
+        ("previous_epoch", "stale"),
         # A malformed stored context must not 500 the public page.
         ("malformed", "not_activated"),
     ],
@@ -317,10 +320,14 @@ async def test_stale_or_malformed_pin_never_reports_active_routing(
                 last_epoch_block=pin.first_block,
                 pinned_block=pin.pinned_block,
                 pinned_block_hash=h(pin.pinned_block),
-                pinned_at=datetime(2020, 1, 1, tzinfo=UTC),
+                pinned_at=(
+                    datetime.now(UTC) - timedelta(minutes=75)
+                    if context == "previous_epoch"
+                    else datetime(2020, 1, 1, tzinfo=UTC)
+                ),
                 bench_version=13,
                 entries=[],
-                context={"served": served} if context == "stale" else [1, 2],
+                context={"served": served} if context != "malformed" else [1, 2],
                 ledger_digest=ledger_digest([], served),
             )
         )
