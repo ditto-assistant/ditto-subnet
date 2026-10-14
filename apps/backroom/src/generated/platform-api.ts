@@ -34367,6 +34367,8 @@ export interface components {
         TreasuryLedgerSamplerStatus: {
             /** Enabled */
             enabled: boolean;
+            /** Last Checked At */
+            last_checked_at?: string | null;
             /** Last Error */
             last_error?: string | null;
             /** Last Sampled At */

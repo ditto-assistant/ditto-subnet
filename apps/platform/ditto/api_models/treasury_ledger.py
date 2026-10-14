@@ -83,6 +83,9 @@ class TreasuryLedgerSamplerStatus(BaseModel):
     enabled: bool
     state: Literal["running", "not_configured", "blocked", "stopped"]
     last_sampled_at: datetime | None = None
+    """When this process last recorded a new epoch sample."""
+    last_checked_at: datetime | None = None
+    """When this process last read the chain, whether or not the epoch was new."""
     last_error: str | None = None
 
 

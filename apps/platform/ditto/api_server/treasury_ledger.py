@@ -108,6 +108,9 @@ class TreasuryLedgerSampler:
         self._stop = asyncio.Event()
         self.status: SamplerState = "stopped"
         self.last_sampled_at: datetime | None = None
+        """When this process last recorded a new epoch sample."""
+        self.last_checked_at: datetime | None = None
+        """When this process last read the chain successfully."""
         self.last_error: str | None = None
 
     async def start(self) -> None:
@@ -180,9 +183,12 @@ class TreasuryLedgerSampler:
         if reading is not None:
             async with self.sessions() as session, session.begin():
                 inserted = await record_sample(session, reading)
+        now = datetime.now(UTC)
         self.status = "running"
         self.last_error = None
-        self.last_sampled_at = datetime.now(UTC)
+        self.last_checked_at = now
+        if inserted:
+            self.last_sampled_at = now
         return inserted
 
     def public_status(self) -> TreasuryLedgerSamplerStatus:
@@ -190,6 +196,7 @@ class TreasuryLedgerSampler:
             enabled=self.enabled,
             state=self.status,
             last_sampled_at=self.last_sampled_at,
+            last_checked_at=self.last_checked_at,
             last_error=self.last_error,
         )
 

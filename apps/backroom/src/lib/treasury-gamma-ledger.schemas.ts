@@ -59,6 +59,7 @@ export const treasuryGammaLedgerSchema = z.object({
     enabled: z.boolean(),
     state: z.enum(['running', 'not_configured', 'blocked', 'stopped']),
     last_sampled_at: z.string().nullable().optional(),
+    last_checked_at: z.string().nullable().optional(),
     last_error: z.string().nullable().optional(),
   }),
 })

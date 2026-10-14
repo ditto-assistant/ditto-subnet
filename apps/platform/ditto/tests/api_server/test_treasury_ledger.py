@@ -277,7 +277,12 @@ async def test_sampler_skips_without_collector_then_records(app, session_maker):
 
     sampler.read = fake_read  # type: ignore[method-assign]
     assert await sampler.tick()
+    first_sample = sampler.last_sampled_at
     assert not await sampler.tick()
+    # A tick that finds its epoch already recorded is a check, not a sample.
+    assert sampler.last_sampled_at == first_sample
+    assert sampler.last_checked_at is not None
+    assert sampler.last_checked_at > first_sample
     assert seen == [(HOTKEY, COLLECTOR, ["5" + "g" * 47])] * 2
     status = sampler.public_status()
     assert status.state == "running" and status.last_sampled_at is not None
