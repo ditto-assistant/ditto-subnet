@@ -186,9 +186,18 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
             )
 
 
-async def test_check_and_artifact_commit_share_policy_then_coldkey_lock_order(
+async def test_policy_then_coldkey_lock_order_survives_a_queued_policy_writer(
     app, client, session_maker, object_storage, monkeypatch
 ):
+    """Pin the shared policy -> coldkey lock order with a real deadlock setup.
+
+    The upload holds the shared policy lock and is about to take the coldkey
+    lock; an operator policy write queues for the exclusive lock behind it; a
+    reserving check then arrives. With the shared order the check waits on the
+    policy lock and all three finish. A check that took the coldkey lock first
+    would wait behind the queued writer while the upload waited on the check,
+    and PostgreSQL would abort one of them as a deadlock.
+    """
     from ditto.api_server.endpoints import upload
 
     del object_storage
@@ -219,62 +228,67 @@ async def test_check_and_artifact_commit_share_policy_then_coldkey_lock_order(
         )
     )
     app.dependency_overrides[get_payment_verifier] = lambda: verifier
-    consumed = asyncio.Event()
+    holding_policy = asyncio.Event()
     continue_commit = asyncio.Event()
     original = upload.consume_or_enforce_upload_admission
 
-    async def pause_after_coldkey_lock(*args, **kwargs):
-        await original(*args, **kwargs)
-        consumed.set()
+    async def pause_before_coldkey_lock(*args, **kwargs):
+        holding_policy.set()
         await continue_commit.wait()
+        await original(*args, **kwargs)
 
     monkeypatch.setattr(
-        upload, "consume_or_enforce_upload_admission", pause_after_coldkey_lock
+        upload, "consume_or_enforce_upload_admission", pause_before_coldkey_lock
     )
+
+    async def wait_for_advisory_waiters(count: int, *tasks: asyncio.Task) -> None:
+        # Observe real PostgreSQL lock queues; request scheduling alone could
+        # let the requests run one after another and hide an ordering bug.
+        async with session_maker() as session:
+            while True:
+                for task in tasks:
+                    assert not task.done(), "request did not queue on a lock"
+                waiting = await session.scalar(
+                    text("""
+                    SELECT count(*) FROM pg_locks
+                    WHERE locktype = 'advisory' AND NOT granted
+                      AND database = (SELECT oid FROM pg_database
+                                      WHERE datname = current_database())
+                """)
+                )
+                await session.rollback()
+                if waiting >= count:
+                    return
+                await asyncio.sleep(0.01)
+
     async with create_storage_client(parse_storage_config_from_env()) as storage:
         app.dependency_overrides[get_storage_client] = lambda: storage
         data, files = _build_form(keypair=alice, block_hash=block_hash)
         uploading = asyncio.create_task(
             client.post("/api/v1/upload/agent", data=data, files=files)
         )
-        checking = None
+        tasks = [uploading]
         try:
-            async with asyncio.timeout(10):
-                await consumed.wait()
+            async with asyncio.timeout(15):
+                await holding_policy.wait()
+                writing = asyncio.create_task(policy(client, "enforce"))
+                tasks.append(writing)
+                await wait_for_advisory_waiters(1, writing)
                 body = _signed_request_body(keypair=alice, sha256="e" * 64)
                 body["reserve_submission_slot"] = True
                 checking = asyncio.create_task(
                     client.post("/api/v1/upload/check", json=body)
                 )
-                # Observe real PostgreSQL contention before releasing the upload;
-                # otherwise request scheduling could hide the reversed lock order.
-                async with session_maker() as session:
-                    while True:
-                        assert not checking.done(), (
-                            "check did not contend with the artifact transaction"
-                        )
-                        waiting = await session.scalar(
-                            text("""
-                            SELECT EXISTS (
-                                SELECT 1 FROM pg_locks
-                                WHERE locktype = 'advisory' AND NOT granted
-                                  AND database = (SELECT oid FROM pg_database
-                                                  WHERE datname = current_database())
-                            )
-                        """)
-                        )
-                        if waiting:
-                            break
-                        await asyncio.sleep(0.01)
+                tasks.append(checking)
+                await wait_for_advisory_waiters(2, writing, checking)
                 continue_commit.set()
-                uploaded, checked = await asyncio.gather(uploading, checking)
+                uploaded, _written, checked = await asyncio.gather(*tasks)
             assert uploaded.status_code == 200, uploaded.text
             assert checked.status_code == 200, checked.text
             assert checked.json()["error_codes"] == [1105]
             assert checked.json()["admission_token"] is None
         finally:
             continue_commit.set()
-            tasks = [uploading] + ([checking] if checking is not None else [])
             for task in tasks:
                 if not task.done():
                     task.cancel()
