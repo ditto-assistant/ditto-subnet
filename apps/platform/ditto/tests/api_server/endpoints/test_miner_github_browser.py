@@ -11,11 +11,22 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 import bittensor
 import httpx
+import pytest
 import uvicorn
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from ditto.api_server.github_link import GithubLinkClient
 from ditto.tests.api_server.endpoints.test_miner_github_link import _sign_in, setup
+
+
+def _browser_required() -> bool:
+    """CI sets DITTO_REQUIRE_BROWSER=1 so a missing browser fails, not skips."""
+    return os.environ.get("DITTO_REQUIRE_BROWSER", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 async def test_browser_launch_and_consent_reach_accepted_state(app, session_maker):
@@ -51,9 +62,19 @@ async def test_browser_launch_and_consent_reach_accepted_state(app, session_make
             assert started.status_code == 200, started.text
             launch = started.json()
             async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch(
-                    channel=os.environ.get("DITTO_TEST_BROWSER_CHANNEL"),
-                )
+                try:
+                    browser = await playwright.chromium.launch(
+                        channel=os.environ.get("DITTO_TEST_BROWSER_CHANNEL"),
+                    )
+                except PlaywrightError as exc:
+                    if _browser_required() or "Executable doesn't exist" not in str(
+                        exc
+                    ):
+                        raise
+                    pytest.skip(
+                        "Chromium is not installed; run "
+                        "`uv run playwright install chromium`"
+                    )
                 try:
                     context = await browser.new_context()
                     page = await context.new_page()

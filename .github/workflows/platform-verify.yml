@@ -326,6 +326,9 @@ jobs:
           # The integration shard must fail rather than skip if MinIO is down.
           # The other shards never request the fixture, so this remains inert.
           DITTO_REQUIRE_OBJECT_STORAGE: "1"
+          # The browser shard installs Chromium above; a missing browser must
+          # fail the OAuth regression rather than skip it.
+          DITTO_REQUIRE_BROWSER: "1"
           DITTO_UPLOAD_PAYMENT_ADDRESS: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
           PYLON_URL: http://127.0.0.1:1
           PYLON_OPEN_ACCESS_TOKEN: ci-no-chain
