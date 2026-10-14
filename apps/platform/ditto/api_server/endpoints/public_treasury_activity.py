@@ -26,6 +26,7 @@ async def list_treasury_activity(
     statement = select(
         TreasuryPublicEvent,
         TreasuryVerifiedReceipt.proof["extrinsic_hash"].as_string(),
+        TreasuryVerifiedReceipt.proof["source_claims"],
     ).outerjoin(
         TreasuryVerifiedReceipt,
         and_(
@@ -81,13 +82,14 @@ async def list_treasury_activity(
                 "block_hash": row.block_hash,
                 "extrinsic_index": row.extrinsic_index,
                 "extrinsic_hash": extrinsic_hash,
+                "source_claims": source_claims or [],
                 "event_index": row.event_index,
                 "actor_provenance": row.actor_provenance,
                 "actor_public_id": row.actor_public_id,
                 "verification_source": row.verification_source,
             }
         )
-        for row, extrinsic_hash in rows[:limit]
+        for row, extrinsic_hash, source_claims in rows[:limit]
     ]
     response.headers["Cache-Control"] = "public, max-age=5"
     return PublicTreasuryEventPage(

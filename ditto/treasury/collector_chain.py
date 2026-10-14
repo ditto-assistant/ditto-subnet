@@ -546,9 +546,46 @@ class PublicCollectorChain:
             raise ValueError("wrong delegate key; primary coldkey never accepted")
         return key
 
-    def prepare(self, policy, role, call, observation):
+    def prepare_manual(self, policy, call, observation, request):
+        return self.prepare(
+            policy, "transfer", call, observation, manual_request=request
+        )
+
+    def prepare(self, policy, role, call, observation, *, manual_request=None):
         if role != self.role:
             raise ValueError("role mismatch")
+        maximum = policy.max_distribution_rao
+        if manual_request is not None:
+            from ditto.treasury.manual_batch import ManualBatchTransfer
+            from ditto_screening_protocol.treasury_manual_limit import (
+                ManualLimitApproval,
+            )
+
+            if role != "transfer" or not isinstance(
+                manual_request, ManualBatchTransfer
+            ):
+                raise ValueError(
+                    "only an exact manual transfer may use range authority"
+                )
+            approval = ManualLimitApproval.model_validate(
+                manual_request.manual_approval
+            )
+            approval.verify(policy.digest, policy.collector_coldkey)
+            if (
+                approval != getattr(self, "manual_approval", None)
+                or call["params"].get("alpha_amount") != manual_request.amount_rao
+                or not observation.block + 128 <= manual_request.expires_block
+                or manual_request.amount_rao + manual_request.retained_alpha_rao
+                > observation.alpha_rao
+                or not any(
+                    d.bucket_id == manual_request.bucket_id
+                    and d.allocation_bps > 0
+                    and d.holding_coldkey == call["params"].get("destination_coldkey")
+                    for d in policy.destinations
+                )
+            ):
+                raise ValueError("manual signing intent differs from exact approval")
+            maximum = approval.policy.max_amount_rao
         expected_function = (
             "register_limit" if role == "registration" else "transfer_stake"
         )
@@ -577,7 +614,7 @@ class PublicCollectorChain:
             or params["origin_netuid"] != 118
             or params["destination_netuid"] != 118
             or type(params["alpha_amount"]) is not int
-            or not 0 < params["alpha_amount"] <= policy.max_distribution_rao
+            or not 0 < params["alpha_amount"] <= maximum
         ):
             raise ValueError("distribution intent mismatch")
         s = self.substrate

@@ -75,6 +75,8 @@ def main():
     parser.add_argument("--request-subscription", required=True)
     parser.add_argument("--report-topic", required=True)
     parser.add_argument("--enabled", action="store_true")
+    parser.add_argument("--manual-approval")
+    parser.add_argument("--manual-approval-sha256")
     args = parser.parse_args()
     if not args.enabled:
         print(json.dumps({"status": "disabled"}))
@@ -86,6 +88,18 @@ def main():
     policy = load_policy(Path(args.policy), args.policy_sha256)
     if not policy.enabled or policy.gcp_project != args.project:
         parser.error("enabled immutable custody project pin required")
+    if bool(args.manual_approval) != bool(args.manual_approval_sha256):
+        parser.error("manual approval file and immutable digest must be paired")
+    manual_approval = None
+    if args.manual_approval:
+        from ditto_screening_protocol.treasury_manual_limit import ManualLimitApproval
+
+        manual_approval = ManualLimitApproval.model_validate_json(
+            Path(args.manual_approval).read_text()
+        )
+        manual_approval.verify(policy.digest, policy.collector_coldkey)
+        if manual_approval.policy.digest != args.manual_approval_sha256:
+            parser.error("manual approval digest differs from deployment pin")
     mailbox = TreasuryMailbox(
         project=args.project,
         topic=args.report_topic,
@@ -99,6 +113,7 @@ def main():
             try:
                 with bt.Subtensor(network="archive") as subtensor:
                     chain = PublicCollectorChain(subtensor.substrate, role="transfer")
+                    chain.manual_approval = manual_approval
                     consume_iteration(mailbox, journal, policy, chain)
             except Exception as error:
                 with contextlib.suppress(Exception):

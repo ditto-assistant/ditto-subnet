@@ -377,6 +377,83 @@ def selection(stage="service_distribution"):
     }
 
 
+async def test_aggregate_receipt_preserves_sources_and_fences_legacy_reuse(
+    app, client, session_maker
+):
+    _, _, rpc = await install(app, session_maker)
+    query = rpc.query
+
+    async def extra_source(**kwargs):
+        if kwargs["storage_function"] == "Events" and kwargs["block_hash"] == h(111):
+            return copy.deepcopy(rpc.source_events)
+        return await query(**kwargs)
+
+    rpc.query = extra_source
+    body = {
+        **selection(),
+        "source_claims": [
+            {"source_block": 110, "epoch_index": 9, "amount_rao": 20},
+            {"source_block": 111, "epoch_index": 9, "amount_rao": 20},
+        ],
+    }
+    response = await client.post(URL, headers=HEADERS, json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["published"] and len(response.json()["source_claims"]) == 2
+    public = (await client.get("/api/v1/public/treasury-activity")).json()
+    assert public["items"][0]["source_claims"] == body["source_claims"]
+    replay = await client.post(URL, headers=HEADERS, json=body)
+    assert replay.status_code == 200 and replay.json()["replayed"]
+    async with session_maker() as session:
+        rows = list(await session.scalars(select(TreasuryVerifiedReceipt)))
+        assert len(rows) == 1 and rows[0].amount_atomic == 40
+        assert sum(c["amount_rao"] for c in rows[0].proof["source_claims"]) == 40
+    # A different finalized payment cannot consume the aggregate's sources again.
+    rpc.distribution_amounts[121] = 21
+    for source in (110, 111):
+        reused = {
+            **selection(),
+            "block": 121,
+            "block_hash": h(121),
+            "source_block": source,
+            "amount_atomic": 21,
+        }
+        refusal = await client.post(URL, headers=HEADERS, json=reused)
+        assert refusal.status_code == 409, refusal.text
+
+
+@pytest.mark.parametrize("fault", ["duplicate", "sum", "missing_proof", "wrong_epoch"])
+async def test_aggregate_bad_source_never_publishes_partial_receipt(
+    app, client, session_maker, fault
+):
+    _, _, rpc = await install(app, session_maker)
+    query = rpc.query
+
+    async def extra_source(**kwargs):
+        if kwargs["storage_function"] == "Events" and kwargs["block_hash"] == h(111):
+            return [] if fault == "missing_proof" else copy.deepcopy(rpc.source_events)
+        return await query(**kwargs)
+
+    rpc.query = extra_source
+    body = {
+        **selection(),
+        "source_claims": [
+            {"source_block": 110, "epoch_index": 9, "amount_rao": 20},
+            {"source_block": 111, "epoch_index": 9, "amount_rao": 20},
+        ],
+    }
+    if fault == "duplicate":
+        body["source_claims"][1]["source_block"] = 110
+    if fault == "sum":
+        body["source_claims"][1]["amount_rao"] = 21
+    if fault == "wrong_epoch":
+        body["source_claims"][1]["epoch_index"] = 10
+    response = await client.post(URL, headers=HEADERS, json=body)
+    assert response.status_code in (409, 422), response.text
+    async with session_maker() as session:
+        assert list(await session.scalars(select(TreasuryVerifiedReceipt))) == []
+        assert list(await session.scalars(select(TreasuryPublicEvent))) == []
+
+
 async def test_real_ingress_replay_independent_vendor_and_history(
     app, client, session_maker
 ):

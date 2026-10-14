@@ -63,6 +63,7 @@ def receipt_result(
         bucket_id=row.bucket_id,
         policy_digest=row.policy_digest,
         source_block=row.source_block,
+        source_claims=row.proof.get("source_claims", []),
         block=row.proof["block"],
         block_hash=row.block_hash,
         extrinsic_index=row.extrinsic_index,
@@ -93,7 +94,13 @@ async def _receipt(
     selector: TreasuryReceiptSelector,
     *,
     record: bool,
-) -> TreasuryReceiptResult | TreasuryReceiptPreflight:
+    claim_amount: int | None = None,
+    evidence_only: bool = False,
+) -> TreasuryReceiptResult | TreasuryReceiptPreflight | dict[str, Any]:
+    if selector.source_claims:
+        from ditto.api_server.treasury_aggregate import aggregate_receipt
+
+        return await aggregate_receipt(session, chain, selector, record=record)
     if selector.stage == "provider_credit":
         # No independently authenticated provider reconciliation contract exists.
         # An administrator, journal entry or chain transfer cannot supply it.
@@ -226,7 +233,9 @@ async def _receipt(
         raise ReceiptConflict("source credit differs from historical distribution")
     request_digest = digest(
         {
-            "selector": selector.model_dump(mode="json", exclude={"reason"}),
+            "selector": selector.model_dump(
+                mode="json", exclude={"reason", "source_claims"}
+            ),
             "settings_checksum": revision.checksum,
             "policy_digest": policy.digest,
             "proof": public_proof,
@@ -241,7 +250,7 @@ async def _receipt(
         }
     )
     existing = await session.get(TreasuryVerifiedReceipt, receipt_id)
-    if existing is not None:
+    if existing is not None and not evidence_only:
         if existing.request_digest != request_digest:
             raise ReceiptConflict(
                 "chain effect already recorded with different proof or policy"
@@ -256,8 +265,6 @@ async def _receipt(
             await session.scalars(
                 select(TreasuryVerifiedReceipt).where(
                     TreasuryVerifiedReceipt.stage == "service_distribution",
-                    TreasuryVerifiedReceipt.epoch_index == selector.epoch_index,
-                    TreasuryVerifiedReceipt.source_block == selector.source_block,
                     TreasuryVerifiedReceipt.bucket_id == bucket.bucket_id,
                 )
             )
@@ -271,31 +278,23 @@ async def _receipt(
                 for b in pin.effective_buckets
             ),
         )
-        amounts = {item.bucket_id: item.alpha_rao for item in split}
-        source_identity = (
-            proof.source_block_hash,
-            proof.source_event_digest,
-            proof.source_amount_rao,
+        from ditto.api_server.treasury_aggregate import source_consumption
+
+        consumed = source_consumption(
+            prior,
+            selector.source_block,
+            policy.digest,
+            revision.revision,
+            proof,
+            ignore_receipt=receipt_id if evidence_only else None,
         )
-        for receipt in prior:
-            if (
-                receipt.policy_digest != policy.digest
-                or receipt.settings_revision != revision.revision
-                or (
-                    receipt.proof["source_block_hash"],
-                    receipt.proof["source_event_digest"],
-                    receipt.proof["source_amount_rao"],
-                )
-                != source_identity
-            ):
-                raise ReceiptConflict(
-                    "source credit differs from retained distribution"
-                )
-        consumed = sum(receipt.amount_atomic for receipt in prior)
-        entitlement = amounts.get(bucket.bucket_id, 0)
-        if not 0 < proof.amount_atomic <= entitlement:
+        entitlement = {item.bucket_id: item.alpha_rao for item in split}.get(
+            bucket.bucket_id, 0
+        )
+        amount = proof.amount_atomic if claim_amount is None else claim_amount
+        if not 0 < amount <= entitlement:
             raise ValueError("transfer exceeds exact attributed service bucket")
-        if consumed + proof.amount_atomic > entitlement:
+        if consumed + amount > entitlement:
             raise ReceiptConflict("cumulative distributions exceed source bucket")
     elif asset == "SN118_ALPHA":
         payments = list(
@@ -311,10 +310,39 @@ async def _receipt(
         )
         if parent is None or consumed + proof.amount_atomic > parent.amount_atomic:
             raise ReceiptConflict("linked alpha payments exceed finalized distribution")
+    evidence = {
+        "selector": selector,
+        "proof": proof,
+        "policy": policy,
+        "revision": revision,
+        "bucket": bucket,
+        "allocation": allocation,
+        "asset": asset,
+        "public_proof": public_proof,
+        "request_digest": request_digest,
+        "receipt_id": receipt_id,
+    }
+    if evidence_only:
+        return evidence
     if not record:
-        # Read-only snapshot, not a reservation. Ingress repeats every check
-        # under the epoch lock before publishing or consuming an allocation.
         return TreasuryReceiptPreflight(ready=True, receipt_id=receipt_id)
+    return await save_receipt(session, **evidence)
+
+
+async def save_receipt(
+    session,
+    *,
+    selector,
+    proof,
+    policy,
+    revision,
+    bucket,
+    allocation,
+    asset,
+    public_proof,
+    request_digest,
+    receipt_id,
+):
     event = None
     if bucket.publish_payments:
         # Vendor transfers prove payment, not alpha conversion/funding lineage.

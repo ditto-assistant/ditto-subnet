@@ -252,6 +252,8 @@ def manual_transfer_history(journal, policy):
         if any(body.get("policy") != policy.digest for body, _ in records)
         else {policy.digest: None}
     )
+    from ditto.treasury.manual_batch import ManualBatchTransfer, manual_maximum
+
     requests = []
     ids = set()
     previous = 0
@@ -261,11 +263,12 @@ def manual_transfer_history(journal, policy):
             limits[digest] is not None and event_id >= limits[digest]
         ):
             raise ValueError("manual transfer policy changed")
-        request = ManualTransfer(**body)
+        request = (ManualBatchTransfer if "sources" in body else ManualTransfer)(**body)
         if request.request_id in ids or request.after_operation <= previous:
             raise ValueError("manual transfer history reset or reused")
         if (
-            request.amount_rao > policy.max_distribution_rao
+            request.amount_rao
+            > manual_maximum(request, policy, collector_digest=digest)
             or not any(
                 d.bucket_id == request.bucket_id and d.allocation_bps > 0
                 for d in policy.destinations
@@ -321,10 +324,17 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
     No prepare/broadcast occurs. The caller must use the custody operator's
     authenticated path; request JSON alone is never a network authorization.
     """
+    from ditto.treasury.manual_batch import (
+        ManualBatchTransfer,
+        manual_maximum,
+        source_operations,
+        validate_batch,
+    )
+
     if (
         not isinstance(requested, ManualTransfer)
         or not policy.enabled
-        or requested.amount_rao > policy.max_distribution_rao
+        or requested.amount_rao > manual_maximum(requested, policy)
     ):
         raise ManualIntentRefused("manual request requires enabled signed policy")
     db = journal.db
@@ -382,6 +392,15 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
             for d in policy.destinations
         ):
             raise ManualIntentRefused("manual request bucket is not allocated")
+        if isinstance(requested, ManualBatchTransfer):
+            validate_batch(journal, policy, chain, requested, observed)
+            if record:
+                journal.event(
+                    "manual_transfer_armed",
+                    {"policy": policy.digest, **asdict(requested)},
+                )
+            db.execute("COMMIT")
+            return "armed" if record else "ready_not_armed"
         if (
             requested.source_block < policy.start_block
             or requested.source_block + policy.distribution_interval_blocks
@@ -409,14 +428,11 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
         )
         remaining = remaining_distribution(
             split,
-            db.execute(
-                "SELECT bucket,amount,destination,role,state FROM operations "
-                "WHERE source_block=? AND id!=?",
-                (
-                    requested.source_block,
-                    replacement["after_operation"] if replacement else -1,
-                ),
-            ).fetchall(),
+            source_operations(
+                journal,
+                requested.source_block,
+                exclude=replacement["after_operation"] if replacement else -1,
+            ),
         )
         if not any(
             part.bucket_id == requested.bucket_id
@@ -439,6 +455,8 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
 
 def manual_transfer_readiness(journal, policy, chain):
     """Read public custody coordinates; a preview is not spending authority."""
+    from ditto.treasury.manual_batch import remaining_source
+
     db = journal.db
     db.execute("BEGIN")
     try:
@@ -454,30 +472,17 @@ def manual_transfer_readiness(journal, policy, chain):
         ).fetchone()
         observed = chain.observe(policy, "transfer")
         sources = []
-        replacement = canary_replacement(journal, policy)
+        approval = getattr(chain, "manual_approval", None)
+        if approval is not None:
+            approval.verify(policy.digest, policy.collector_coldkey)
         for row in db.execute(
-            "SELECT * FROM earnings WHERE completed=0 AND block+?<=? "
-            "ORDER BY block LIMIT 100",
+            "SELECT * FROM earnings WHERE completed=0 AND block+?<=? ORDER BY block",
             (policy.distribution_interval_blocks, observed.block),
-        ).fetchall():
-            if row["amount"] > policy.max_distribution_rao:
+        ):
+            if approval is None and row["amount"] > policy.max_distribution_rao:
                 continue
-            parts = plan_service_distribution(
-                attributed_alpha_rao=row["amount"],
-                available_alpha_rao=row["amount"],
-                collector_coldkey=policy.collector_coldkey,
-                destinations=policy.destinations,
-            )
-            remaining = remaining_distribution(
-                parts,
-                db.execute(
-                    "SELECT bucket,amount,destination,role,state FROM operations "
-                    "WHERE source_block=? AND id!=?",
-                    (
-                        row["block"],
-                        replacement["after_operation"] if replacement else -1,
-                    ),
-                ).fetchall(),
+            remaining = remaining_source(
+                journal, policy, row, manual=approval is not None
             )
             if remaining:
                 sources.append(
@@ -486,6 +491,8 @@ def manual_transfer_readiness(journal, policy, chain):
                         "remaining": [asdict(part) for part in remaining],
                     }
                 )
+                if len(sources) >= (512 if approval else 100):
+                    break
         result = {
             "policy": policy.digest,
             "after_operation": maximum,
@@ -498,6 +505,7 @@ def manual_transfer_readiness(journal, policy, chain):
             "available_alpha_rao": observed.alpha_rao,
             "max_distribution_rao": policy.max_distribution_rao,
             "sources": sources,
+            "manual_approval": approval.model_dump() if approval else None,
             "authority": "none",
             "publication": "not_performed",
         }
@@ -990,150 +998,187 @@ def tick(
         else:
             if observed.uid is None:
                 raise ValueError("collector absent; service transfers halted")
-            replacement = canary_replacement(journal, policy)
+            from ditto.treasury.manual_batch import (
+                ManualBatchTransfer,
+                source_operations,
+                validate_batch,
+            )
+
             intent = manual[-1] if manual else None
-            if intent is not None and manual_request_id is None:
-                db.execute("COMMIT")
-                return "manual_ready"
-            if intent is not None and observed.block + 128 > intent.expires_block:
-                db.execute("COMMIT")
-                return "manual_expired"
-            row = db.execute(
-                """SELECT * FROM earnings e WHERE NOT EXISTS
-                (SELECT 1 FROM operations o WHERE o.source_block=e.block
-                 AND o.state IN ('dispatching','failed','expired'))
-                AND e.completed=0 AND e.block+?<=? ORDER BY e.block LIMIT 1""",
-                (policy.distribution_interval_blocks, observed.block),
-            ).fetchone()
-            if replacement is not None or intent is not None:
-                if intent is not None:
-                    selected_source = intent.source_block
-                else:
-                    assert replacement is not None
-                    selected_source = replacement["source_block"]
-                row = db.execute(
-                    "SELECT * FROM earnings WHERE block=? AND completed=0 "
-                    "AND block+?<=?",
-                    (
-                        selected_source,
-                        policy.distribution_interval_blocks,
-                        observed.block,
-                    ),
-                ).fetchone()
-                if row is None:
-                    raise ValueError("replacement same-source receipt unavailable")
-            if not row:
-                _scan_finalized_earnings(journal, policy, chain, observed.block)
-                # Commit independently proved history without using the now
-                # stale observation to sign. A following tick observes a fresh
-                # finalized head and prioritizes this durable mature receipt.
-                db.execute("COMMIT")
-                return "observing"
-            previous_batch = db.execute(
-                "SELECT MAX(at_block) FROM operations WHERE source_block!=?",
-                (row["block"],),
-            ).fetchone()[0]
-            if (
-                previous_batch is not None
-                and observed.block - previous_batch
-                < policy.distribution_interval_blocks
-            ):
-                db.execute("COMMIT")
-                return "interval"
-            if row["amount"] > policy.max_distribution_rao:
-                raise ValueError(
-                    "distribution ceiling exceeded; no partial unreviewed split"
+            if isinstance(intent, ManualBatchTransfer):
+                if manual_request_id is None:
+                    db.execute("COMMIT")
+                    return "manual_ready"
+                if observed.block + 128 > intent.expires_block:
+                    db.execute("COMMIT")
+                    return "manual_expired"
+                destination = validate_batch(journal, policy, chain, intent, observed)
+                amount, bucket, source_block = (
+                    intent.amount_rao,
+                    intent.bucket_id,
+                    intent.source_block,
                 )
-            parts = plan_service_distribution(
-                attributed_alpha_rao=row["amount"],
-                available_alpha_rao=row["amount"],
-                collector_coldkey=policy.collector_coldkey,
-                destinations=policy.destinations,
-            )
-            remaining = remaining_distribution(
-                parts,
-                db.execute(
-                    "SELECT bucket,amount,destination,role,state FROM operations "
-                    "WHERE source_block=? AND id!=?",
-                    (
-                        row["block"],
-                        replacement["after_operation"] if replacement else -1,
-                    ),
-                ).fetchall(),
-            )
-            if sum(part.alpha_rao for part in remaining) > observed.alpha_rao:
-                raise ValueError("remaining attributed earnings exceed finalized stake")
-            part = next(
-                (
-                    part
-                    for part in remaining
-                    if intent is None or part.bucket_id == intent.bucket_id
-                ),
-                None,
-            )
-            if intent is not None and (
-                part is None or intent.amount_rao > part.alpha_rao
-            ):
-                raise ValueError(
-                    "manual amount exceeds exact remaining bucket entitlement"
-                )
-            if part is None:
-                # Earnings remain as audit records; complete batches skip onward.
-                db.execute(
-                    "UPDATE earnings SET completed=1 WHERE block=?", (row["block"],)
-                )
-                journal.event(
-                    "distribution_complete",
-                    {"source_block": row["block"], "amount": row["amount"]},
-                )
-                db.execute("COMMIT")
-                return "distributed"
-            amount, bucket, destination, source_block = (
-                part.alpha_rao,
-                part.bucket_id,
-                part.holding_coldkey,
-                row["block"],
-            )
-            if canary is not None and amount > canary.max_alpha_rao:
-                # Preserve the full receipt and all other bucket entitlements.
-                # The persisted one-claim guard still stops after this leg;
-                # omitting flags never enables distribution of its remainder.
-                amount = canary.max_alpha_rao
-            if intent is not None:
-                amount = intent.amount_rao
-                if observed.alpha_rao - amount < intent.retained_alpha_rao:
-                    raise ValueError("manual retained stake floor changed")
-            if canary is not None:
-                journal.event(
-                    "canary_receipt_reserved",
-                    {
-                        "source_block": row["block"],
-                        "source_hash": row["block_hash"],
-                        "source_event_digest": row["event_digest"],
-                        "source_amount": row["amount"],
-                        "bucket": bucket,
-                        "bucket_remaining_before": part.alpha_rao,
-                        "canary_amount": amount,
-                        "receipt_remaining_after": sum(
-                            part.alpha_rao for part in remaining
-                        )
-                        - amount,
+                call = {
+                    "module": "SubtensorModule",
+                    "function": "transfer_stake",
+                    "params": {
+                        "destination_coldkey": destination,
+                        "hotkey": policy.collector_hotkey,
+                        "origin_netuid": 118,
+                        "destination_netuid": 118,
+                        "alpha_amount": amount,
                     },
+                }
+            else:
+                replacement = canary_replacement(journal, policy)
+                intent = manual[-1] if manual else None
+                if intent is not None and manual_request_id is None:
+                    db.execute("COMMIT")
+                    return "manual_ready"
+                if intent is not None and observed.block + 128 > intent.expires_block:
+                    db.execute("COMMIT")
+                    return "manual_expired"
+                row = db.execute(
+                    """SELECT * FROM earnings e WHERE NOT EXISTS
+                    (SELECT 1 FROM operations o WHERE o.source_block=e.block
+                     AND o.state IN ('dispatching','failed','expired'))
+                    AND e.completed=0 AND e.block+?<=? ORDER BY e.block LIMIT 1""",
+                    (policy.distribution_interval_blocks, observed.block),
+                ).fetchone()
+                if replacement is not None or intent is not None:
+                    if intent is not None:
+                        selected_source = intent.source_block
+                    else:
+                        assert replacement is not None
+                        selected_source = replacement["source_block"]
+                    row = db.execute(
+                        "SELECT * FROM earnings WHERE block=? AND completed=0 "
+                        "AND block+?<=?",
+                        (
+                            selected_source,
+                            policy.distribution_interval_blocks,
+                            observed.block,
+                        ),
+                    ).fetchone()
+                    if row is None:
+                        raise ValueError("replacement same-source receipt unavailable")
+                if not row:
+                    _scan_finalized_earnings(journal, policy, chain, observed.block)
+                    # Commit independently proved history without using the now
+                    # stale observation to sign. A following tick observes a fresh
+                    # finalized head and prioritizes this durable mature receipt.
+                    db.execute("COMMIT")
+                    return "observing"
+                previous_batch = db.execute(
+                    "SELECT MAX(at_block) FROM operations WHERE source_block!=?",
+                    (row["block"],),
+                ).fetchone()[0]
+                if (
+                    previous_batch is not None
+                    and observed.block - previous_batch
+                    < policy.distribution_interval_blocks
+                ):
+                    db.execute("COMMIT")
+                    return "interval"
+                if row["amount"] > policy.max_distribution_rao:
+                    raise ValueError(
+                        "distribution ceiling exceeded; no partial unreviewed split"
+                    )
+                parts = plan_service_distribution(
+                    attributed_alpha_rao=row["amount"],
+                    available_alpha_rao=row["amount"],
+                    collector_coldkey=policy.collector_coldkey,
+                    destinations=policy.destinations,
                 )
-            call = {
-                "module": "SubtensorModule",
-                "function": "transfer_stake",
-                "params": {
-                    "destination_coldkey": destination,
-                    "hotkey": policy.collector_hotkey,
-                    "origin_netuid": 118,
-                    "destination_netuid": 118,
-                    "alpha_amount": amount,
-                },
-            }
+                remaining = remaining_distribution(
+                    parts,
+                    source_operations(
+                        journal,
+                        row["block"],
+                        exclude=replacement["after_operation"] if replacement else -1,
+                    ),
+                )
+                if sum(part.alpha_rao for part in remaining) > observed.alpha_rao:
+                    raise ValueError(
+                        "remaining attributed earnings exceed finalized stake"
+                    )
+                part = next(
+                    (
+                        part
+                        for part in remaining
+                        if intent is None or part.bucket_id == intent.bucket_id
+                    ),
+                    None,
+                )
+                if intent is not None and (
+                    part is None or intent.amount_rao > part.alpha_rao
+                ):
+                    raise ValueError(
+                        "manual amount exceeds exact remaining bucket entitlement"
+                    )
+                if part is None:
+                    # Earnings remain as audit records; complete batches skip onward.
+                    db.execute(
+                        "UPDATE earnings SET completed=1 WHERE block=?", (row["block"],)
+                    )
+                    journal.event(
+                        "distribution_complete",
+                        {"source_block": row["block"], "amount": row["amount"]},
+                    )
+                    db.execute("COMMIT")
+                    return "distributed"
+                amount, bucket, destination, source_block = (
+                    part.alpha_rao,
+                    part.bucket_id,
+                    part.holding_coldkey,
+                    row["block"],
+                )
+                if canary is not None and amount > canary.max_alpha_rao:
+                    # Preserve the full receipt and all other bucket entitlements.
+                    # The persisted one-claim guard still stops after this leg;
+                    # omitting flags never enables distribution of its remainder.
+                    amount = canary.max_alpha_rao
+                if intent is not None:
+                    amount = intent.amount_rao
+                    if observed.alpha_rao - amount < intent.retained_alpha_rao:
+                        raise ValueError("manual retained stake floor changed")
+                if canary is not None:
+                    journal.event(
+                        "canary_receipt_reserved",
+                        {
+                            "source_block": row["block"],
+                            "source_hash": row["block_hash"],
+                            "source_event_digest": row["event_digest"],
+                            "source_amount": row["amount"],
+                            "bucket": bucket,
+                            "bucket_remaining_before": part.alpha_rao,
+                            "canary_amount": amount,
+                            "receipt_remaining_after": sum(
+                                part.alpha_rao for part in remaining
+                            )
+                            - amount,
+                        },
+                    )
+                call = {
+                    "module": "SubtensorModule",
+                    "function": "transfer_stake",
+                    "params": {
+                        "destination_coldkey": destination,
+                        "hotkey": policy.collector_hotkey,
+                        "origin_netuid": 118,
+                        "destination_netuid": 118,
+                        "alpha_amount": amount,
+                    },
+                }
         if observed.delegate_free_rao < policy.max_fee_rao + policy.fee_reserve_rao:
             raise ValueError("delegate fee reserve insufficient")
-        signed = chain.prepare(policy, role, call, observed)
+        from ditto.treasury.manual_batch import ManualBatchTransfer
+
+        signed = (
+            chain.prepare_manual(policy, call, observed, manual[-1])
+            if manual and isinstance(manual[-1], ManualBatchTransfer)
+            else chain.prepare(policy, role, call, observed)
+        )
         if (
             type(signed.fee_rao) is not int
             or not 0 <= signed.fee_rao <= policy.max_fee_rao
