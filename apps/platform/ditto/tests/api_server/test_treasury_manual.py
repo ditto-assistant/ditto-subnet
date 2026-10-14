@@ -944,3 +944,46 @@ async def test_downgrade_preserves_populated_bridge_with_empty_transfers(session
             )
             == 0
         )
+
+
+async def test_runtime_blocker_replaces_readiness_but_never_authorizes_transfer(
+    session_maker, monkeypatch
+):
+    now = int(time.time())
+    monkeypatch.setattr(manual.time, "time", lambda: now)
+    await seed(session_maker)
+    body = {
+        "collector_policy_digest": POLICY,
+        "observed_at": now + 1,
+        "status": "blocked",
+        "blocker": {
+            "code": "runtime_changed",
+            "expected_runtime_hash": "0x" + "ab" * 32,
+            "observed_runtime_hash": "0x" + "cd" * 32,
+        },
+    }
+    async with session_maker() as session, session.begin():
+        await manual.accept_report(session, None, body)
+    async with session_maker() as session:
+        view = await manual.state(session, None, enabled=True)
+        assert view["readiness"] is None
+        assert (
+            view["blocked_reason"]
+            == "Finney runtime changed; custody audit and offline approval required"
+        )
+    with pytest.raises(ValueError, match="runtime changed"):
+        await get_preview(session_maker)
+    # Wrong pin cannot erase/replace this observation.
+    async with session_maker() as session, session.begin():
+        with pytest.raises(manual.InvalidManualReport, match="policy differs"):
+            await manual.accept_report(
+                session, None, {**body, "collector_policy_digest": "b" * 64}
+            )
+    # A fresh proved observation recovers normally. A stale blocker cannot revive.
+    fresh = {**report().model_dump(), "observed_at": now + 2}
+    async with session_maker() as session, session.begin():
+        await manual.accept_report(session, None, fresh)
+        await manual.accept_report(session, None, {**body, "observed_at": now - 181})
+    async with session_maker() as session:
+        view = await manual.state(session, None, enabled=True)
+        assert view["blocked_reason"] is None and view["readiness"] is not None

@@ -94,7 +94,8 @@ export function BurnControlPanel({
       const next = await applySettings({
         data: {
           expectedRevision: effective.revision,
-          settings: { burn_share: selectedShare },
+          // Carry the payout curve so a burn change can never reset it.
+          settings: { burn_share: selectedShare, rank_shares: effective.settings.rank_shares ?? null },
           reason,
           confirmation,
         },
@@ -165,6 +166,20 @@ export function BurnControlPanel({
               <div>
                 <dt className="text-[var(--muted)]">Live validators</dt>
                 <dd className="mt-1 font-medium">{effective.live_validator_count ?? '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-[var(--muted)]">Payout curve</dt>
+                <dd className="mt-1 font-medium">
+                  {effective.settings.rank_shares
+                    ? `${effective.settings.rank_shares.map((share) => Math.round(share * 1000) / 10).join('/')} · ${
+                        effective.rank_shares_served === true
+                          ? 'served'
+                          : effective.rank_shares_served === false
+                            ? 'waiting for protocol 31'
+                            : 'readiness unknown'
+                      }`
+                    : 'Frozen 65/14/10/7/4'}
+                </dd>
               </div>
             </dl>
           </div>

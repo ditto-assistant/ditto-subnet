@@ -5150,3 +5150,15 @@ describe('scoring lease settings (#1156)', () => {
     ).toThrow(/APPLY SCORING TICKET TTL 150 MINUTES/)
   })
 })
+
+describe('burn settings payout curve ordering', () => {
+  it('refuses an increasing curve on writes but still reads a stored one', async () => {
+    const { burnSettingsSchema, burnSettingsWriteSchema } = await import('./admin.schemas')
+    const increasing = { burn_share: 0, rank_shares: [0.07, 0.1, 0.13, 0.2, 0.5] }
+    expect(burnSettingsWriteSchema.safeParse(increasing).success).toBe(false)
+    expect(burnSettingsSchema.safeParse(increasing).success).toBe(true)
+    expect(
+      burnSettingsWriteSchema.safeParse({ burn_share: 0, rank_shares: [0.5, 0.2, 0.13, 0.1, 0.07] }).success,
+    ).toBe(true)
+  })
+})

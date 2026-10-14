@@ -41,8 +41,9 @@ class Mailbox:
         self.acks.append(value)
 
 
-def setup(tmp_path):
+def setup(tmp_path, **policy_changes):
     p = policy(destinations=(ServiceDestination("gm", 1000, GM),))
+    p = replace(p, **policy_changes)
     c = Chain()
     c.observation = replace(c.observation, uid=14)
     c.income = {10: 501}
@@ -508,7 +509,7 @@ def test_readiness_publish_failure_still_pulls_and_reconciles_exact_request(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     p, c, j, env, mailbox = setup(tmp_path)
-    monkeypatch.setattr(module, "observe_earnings", lambda *_: None)
+    monkeypatch.setattr(module, "observe_earnings", lambda *_, **__: None)
 
     def failed_readiness(*_):
         raise TimeoutError("raw provider detail must not be logged")
@@ -530,3 +531,319 @@ def test_readiness_publish_failure_still_pulls_and_reconciles_exact_request(
     logs = capsys.readouterr().out
     assert "readiness_publish_failed" in logs and "TimeoutError" in logs
     assert "raw provider detail" not in logs
+
+
+def test_cold_approved_runtime_migration_preserves_used_manual_history(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    import json
+
+    from bittensor_wallet import Keypair
+
+    from ditto.treasury import collector_migration as migration
+    from ditto.treasury.collector import (
+        CollectorJournal,
+        manual_transfer_history,
+        transfer_canary,
+    )
+    from ditto_screening_protocol.collector_receipts import (
+        AUDITED_COLLECTOR_CODE_HASH,
+        V473_COLLECTOR_CODE_HASH,
+    )
+
+    key = Keypair.create_from_seed("0x" + "22" * 32)
+    old, c, journal, env, mailbox = setup(
+        tmp_path,
+        collector_coldkey=key.ss58_address,
+        runtime_code_hash=V473_COLLECTOR_CODE_HASH,
+        gcp_project="sn118-gamma-custody",
+        registration_service_account="sn118-collector-registration@sn118-gamma-custody.iam.gserviceaccount.com",
+        transfer_service_account="sn118-collector-transfer@sn118-gamma-custody.iam.gserviceaccount.com",
+    )
+    process_manual(mailbox, journal, old, c, "first", env.model_dump())
+    process_manual(mailbox, journal, old, c, "second", env.model_dump())
+    assert (
+        journal.db.execute(
+            "SELECT state FROM operations ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+        == "finalized"
+    )
+    next_env = env.model_copy(
+        update={
+            "request": env.request.model_copy(
+                update={"request_id": str(uuid4()), "after_operation": 2}
+            )
+        }
+    )
+    process_manual(mailbox, journal, old, c, "third", next_env.model_dump())
+    process_manual(mailbox, journal, old, c, "fourth", next_env.model_dump())
+    source = tmp_path / "snapshot.db"
+    journal.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    journal.db.execute("PRAGMA journal_mode=DELETE")
+    import sqlite3
+
+    snapshot_db = sqlite3.connect(source)
+    journal.db.backup(snapshot_db)
+    snapshot_db.close()
+    source.chmod(0o600)
+    journal.close()
+    new = replace(
+        old, revision=old.revision + 1, runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH
+    )
+    source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    proof = migration.manifest(source, old, new, "transfer", source_sha)
+    signature = key.sign(
+        (
+            "ditto-collector-custody-migration-v1:"
+            + hashlib.sha256(migration.canonical(proof).encode()).hexdigest()
+        ).encode()
+    ).hex()
+    target = tmp_path / "migrated.db"
+    migration.migrate(source, target, old, new, proof, signature)
+    current = CollectorJournal(target, new, "transfer")
+    from ditto_screening_protocol import treasury_approval
+
+    original_verify = treasury_approval.verify_public_signature
+    verifications = []
+
+    def counted_verify(*args):
+        verifications.append(1)
+        return original_verify(*args)
+
+    monkeypatch.setattr(treasury_approval, "verify_public_signature", counted_verify)
+    requests = manual_transfer_history(current, new)
+    assert len(requests) == 2 and len(verifications) == 1
+    assert requests[0].request_id == env.request.request_id
+    assert (
+        transfer_canary(current, new, "transfer", None).max_alpha_rao
+        == env.request.amount_rao
+    )
+    publish_readiness(mailbox, current, new, c)
+    assert mailbox.reports[-1]["readiness"]["bounded_claim_available"] is True
+    assert len(c.sent) == 3  # No migration or readiness signing.
+    raw = current.db.execute(
+        "SELECT payload FROM events WHERE event='manual_transfer_armed'"
+    ).fetchone()[0]
+    assert json.loads(raw)["policy"] == old.digest  # Original bytes preserved.
+    # An old-policy intent appended after the migration cannot gain authority.
+    current.event("manual_transfer_armed", json.loads(raw))
+    with pytest.raises(ValueError, match="policy changed"):
+        manual_transfer_history(current, new)
+    current.db.execute("DELETE FROM events WHERE id=(SELECT max(id) FROM events)")
+    row = current.db.execute(
+        "SELECT id,payload FROM events WHERE event='offline_approved_runtime_migration'"
+    ).fetchone()
+    body = json.loads(row[1])
+    body["signature"] = "00" * 64
+    current.db.execute(
+        "UPDATE events SET payload=? WHERE id=?", (json.dumps(body), row[0])
+    )
+    with pytest.raises(ValueError, match="cold approval"):
+        manual_transfer_history(current, new)
+    current.close()
+
+
+def test_runtime_blocker_reports_only_fixed_public_diagnostics(tmp_path):
+    from ditto.treasury.collector_chain import CollectorRuntimeRefused
+    from ditto.treasury.manual_worker import publish_observation_blocker
+    from ditto_screening_protocol.treasury_manual import ManualReport
+
+    p, c, journal, _, mailbox = setup(tmp_path)
+    before = list(journal.db.iterdump())
+    error = CollectorRuntimeRefused(
+        "runtime_changed",
+        "fixed local diagnostic",
+        p.runtime_code_hash,
+        "0x" + "ab" * 32,
+    )
+    publish_observation_blocker(mailbox, p, error)
+    report = ManualReport.model_validate(mailbox.reports[-1])
+    assert report.status == "blocked" and report.readiness is None
+    assert report.blocker.observed_runtime_hash == "0x" + "ab" * 32
+    publish_observation_blocker(mailbox, p, ValueError("private-provider-token"))
+    assert "private-provider-token" not in str(mailbox.reports)
+    assert mailbox.reports[-1]["blocker"]["code"] == "observation_unavailable"
+    assert list(journal.db.iterdump()) == before and len(c.sent) == 1
+    for patch in [
+        {"readiness": mailbox.reports[0]["readiness"] or {}},
+        {"request_id": str(uuid4())},
+        {"blocker": None},
+    ]:
+        with pytest.raises(ValueError):
+            ManualReport.model_validate({**report.model_dump(), **patch})
+    journal.close()
+
+
+def test_request_refusal_after_healthy_readiness_is_not_observation_failure(
+    tmp_path, monkeypatch, capsys
+):
+    import runpy
+    from pathlib import Path
+
+    module = runpy.run_path(
+        str(Path(__file__).resolve().parents[2] / "scripts/treasury_manual_worker.py")
+    )
+    consume = module["consume_iteration"]
+    p, c, journal, env, mailbox = setup(tmp_path)
+    monkeypatch.setitem(consume.__globals__, "observe_earnings", lambda *_, **__: None)
+    mailbox.pull = lambda: ("ack", env.model_dump())
+
+    def refused(*_):
+        raise ValueError("private request failure")
+
+    monkeypatch.setitem(consume.__globals__, "consume_manual", refused)
+    consume(mailbox, journal, p, c)
+    assert [x["status"] for x in mailbox.reports] == ["readiness"]
+    assert mailbox.acks == [] and len(c.sent) == 1
+    log = capsys.readouterr().out
+    assert (
+        "manual_request_processing_failed" in log
+        and "private request failure" not in log
+    )
+    journal.close()
+
+
+def test_malformed_expected_runtime_does_not_hide_public_blocker(tmp_path):
+    from ditto.treasury.collector_chain import CollectorRuntimeRefused
+    from ditto.treasury.manual_worker import publish_observation_blocker
+
+    p, _, journal, _, mailbox = setup(tmp_path)
+    error = CollectorRuntimeRefused(
+        "policy_runtime_unreviewed", "fixed", "0x" + "AA" * 32
+    )
+    publish_observation_blocker(mailbox, p, error)
+    assert mailbox.reports[-1]["blocker"]["expected_runtime_hash"] is None
+    assert mailbox.reports[-1]["blocker"]["code"] == "policy_runtime_unreviewed"
+    journal.close()
+
+
+def test_slow_receipt_catchup_keeps_readiness_inside_freshness_window(
+    tmp_path, monkeypatch
+):
+    import runpy
+    from pathlib import Path
+
+    import ditto.treasury.manual_worker as worker
+
+    module = runpy.run_path(
+        str(Path(__file__).resolve().parents[2] / "scripts/treasury_manual_worker.py")
+    )
+    p, c, journal, _, mailbox = setup(tmp_path)
+    journal.db.execute("UPDATE cursor SET block=10")
+    c.income = {}
+    now = [1000]
+    scanned, published, pulled = [], [], []
+    original_earnings, original_publish = c.earnings, mailbox.publish
+
+    def slow_earnings(policy, block):
+        now[0] += 8  # A complete 32-block sweep exceeds the 180s UI freshness gate.
+        scanned.append(block)
+        return original_earnings(policy, block)
+
+    def publish(body):
+        published.append(body["observed_at"])
+        original_publish(body)
+
+    def pull():
+        pulled.append(True)
+        return None
+
+    monkeypatch.setattr(worker.time, "time", lambda: now[0])
+    c.earnings, mailbox.publish, mailbox.pull = slow_earnings, publish, pull
+    before_operations = list(journal.db.execute("SELECT * FROM operations"))
+    module["consume_iteration"](mailbox, journal, p, c)
+    assert scanned == list(range(11, 43))  # Existing total bound and exact cursor.
+    assert max(b - a for a, b in zip([1000] + published, published, strict=False)) < 180
+    assert published[-1] == now[0]
+    assert all(r["status"] == "readiness" for r in mailbox.reports)
+    assert pulled == [True]  # Still at most one manual message per outer iteration.
+    assert not journal.db.in_transaction and len(c.sent) == 1
+    assert list(journal.db.execute("SELECT * FROM operations")) == before_operations
+    journal.close()
+
+
+@pytest.mark.parametrize("limit", [0, -1, 33, True, 8.0])
+def test_receipt_chunk_bound_refuses_before_history_or_chain(tmp_path, limit):
+    from ditto.treasury.collector import observe_earnings
+
+    p, c, journal, _, _ = setup(tmp_path)
+    before = list(journal.db.iterdump())
+    with pytest.raises(ValueError, match="receipt chunk"):
+        observe_earnings(journal, p, object(), max_blocks=limit)
+    assert list(journal.db.iterdump()) == before and len(c.sent) == 1
+    journal.close()
+
+
+def test_failed_receipt_chunk_rolls_back_only_unproved_progress(tmp_path):
+    from ditto.treasury.collector import observe_earnings
+
+    p, c, journal, _, _ = setup(tmp_path)
+    journal.db.execute("UPDATE cursor SET block=10")
+    c.income = {12: 5, 21: 7}
+    original = c.earnings
+
+    def fail(policy, block):
+        if block == 22:
+            raise TimeoutError()
+        return original(policy, block)
+
+    observe_earnings(journal, p, c, max_blocks=8)
+    c.earnings = fail
+    with pytest.raises(TimeoutError):
+        observe_earnings(journal, p, c, max_blocks=8)
+    assert not journal.db.in_transaction
+    assert journal.db.execute("SELECT block FROM cursor").fetchone()[0] == 18
+    assert (
+        journal.db.execute("SELECT amount FROM earnings WHERE block=12").fetchone()[0]
+        == 5
+    )
+    assert (
+        journal.db.execute("SELECT 1 FROM earnings WHERE block=21").fetchone() is None
+    )
+    c.earnings = original
+    observe_earnings(journal, p, c, max_blocks=8)
+    assert journal.db.execute("SELECT block FROM cursor").fetchone()[0] == 26
+    assert (
+        journal.db.execute("SELECT amount FROM earnings WHERE block=21").fetchone()[0]
+        == 7
+    )
+    assert (
+        journal.db.execute("SELECT count(*) FROM earnings WHERE block=12").fetchone()[0]
+        == 1
+    )
+    assert len(c.sent) == 1
+    journal.close()
+
+
+@pytest.mark.parametrize("cursor,reports", [(100, 1), (96, 2)])
+def test_caught_up_worker_publishes_readiness_then_stops_redundant_chunks(
+    tmp_path, cursor, reports
+):
+    import runpy
+    from pathlib import Path
+
+    module = runpy.run_path(
+        str(Path(__file__).resolve().parents[2] / "scripts/treasury_manual_worker.py")
+    )
+    p, c, journal, _, mailbox = setup(tmp_path)
+    journal.db.execute("UPDATE cursor SET block=?", (cursor,))
+    c.income = {}
+    calls, pulls = [], []
+    original = c.earnings
+
+    def earnings(policy, block):
+        calls.append(block)
+        return original(policy, block)
+
+    def pull():
+        pulls.append(True)
+        return None
+
+    c.earnings, mailbox.pull = earnings, pull
+    module["consume_iteration"](mailbox, journal, p, c)
+    assert calls == list(range(cursor + 1, 101))
+    assert len(mailbox.reports) == reports
+    assert all(r["status"] == "readiness" for r in mailbox.reports)
+    assert pulls == [True] and len(c.sent) == 1 and not journal.db.in_transaction
+    journal.close()

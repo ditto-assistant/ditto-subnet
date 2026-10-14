@@ -165,6 +165,7 @@ from ditto.api_models import bench_glossary as bench_glossary_data
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
+from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.continual_retest_settings import (
@@ -274,7 +275,6 @@ from ditto.api_server.koth import (
     KOTH_BAND_DECAY_RATE,
     KOTH_BAND_DECAY_START_COMPOSITE,
     KOTH_CEILING_HEADROOM_SHARE,
-    KOTH_CHAMPION_SHARE,
     KOTH_DETHRONE_Z,
     KOTH_MARGIN,
     KOTH_RANK_SHARES,
@@ -290,6 +290,7 @@ from ditto.api_server.ledger_pin import (
     classify_vector_against_pins,
     pin_expected_shares,
     pin_provisional_incumbent,
+    served_rank_shares,
 )
 from ditto.api_server.miner_avatar import public_avatar_path
 from ditto.api_server.model_use import model_use_factor, model_use_policy
@@ -588,6 +589,8 @@ _TIE_WEIGHTING_PROTOCOL = 20
 # can still gain, so a saturated benchmark cannot freeze the crown.
 _DETHRONE_BAND_CLAMP_PROTOCOL = 24
 _STATISTICAL_BAND_CAP_PROTOCOL = 29
+# Validators fold the served operator payout curve from this protocol on.
+_RANK_SHARES_PROTOCOL = RANK_SHARES_PROTOCOL
 # Grace after a lease is issued before the validator is expected to report (in a
 # heartbeat) that it has picked the agent up. Within this window an assigned-but-
 # not-yet-reported validator reads as "assigning" rather than a mismatch, so the
@@ -2922,6 +2925,7 @@ def _public_koth_emissions(
     reward_eligibility: dict | None = None,
     incumbent_agent_id: UUID | None = None,
     provisional_incumbent: LedgerRow | None = None,
+    rank_shares: Sequence[float] | None = None,
 ) -> PublicKothEmissions | None:
     """Project the caller's finalized, registration-eligible score pool.
 
@@ -3035,7 +3039,9 @@ def _public_koth_emissions(
         tie_pooling=tie_weighting_active,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        rank_shares=rank_shares,
     )
+    curve = tuple(rank_shares) if rank_shares is not None else KOTH_RANK_SHARES
     share_total = sum(allocation.shares)
     normalized_shares = tuple(share / share_total for share in allocation.shares)
     recipients = [
@@ -3081,8 +3087,8 @@ def _public_koth_emissions(
         band_decay_min_bench_version=KOTH_BAND_DECAY_MIN_BENCH_VERSION,
         band_decay_start_composite=KOTH_BAND_DECAY_START_COMPOSITE,
         band_decay_rate=KOTH_BAND_DECAY_RATE,
-        champion_share=KOTH_CHAMPION_SHARE,
-        rank_shares=KOTH_RANK_SHARES,
+        champion_share=curve[0],
+        rank_shares=curve,
         tie_weighting_active=tie_weighting_active,
         tie_weighting_required_protocol=_TIE_WEIGHTING_PROTOCOL,
         ceiling_headroom_share=KOTH_CEILING_HEADROOM_SHARE,
@@ -3539,6 +3545,26 @@ async def build_public_leaderboard(
                 freshness=_VALIDATOR_STALE_WINDOW,
             ),
         )
+    )
+    # The operator payout curve, projected exactly when the ledger serves it:
+    # set in burn settings and withheld until the weight setters report v31.
+    burn_resolver = getattr(request.app.state, "burn_settings", None)
+    session_maker = getattr(request.app.state, "session_maker", None)
+    operator_rank_shares = (
+        (await burn_resolver.resolve(session_maker)).rank_shares
+        if burn_resolver is not None and bench_version is None
+        else None
+    )
+    board_rank_shares = (
+        operator_rank_shares
+        if operator_rank_shares is not None
+        and await live_weight_setter_fleet_supports_protocol(
+            session,
+            minimum_protocol=_RANK_SHARES_PROTOCOL,
+            now=now,
+            freshness=_VALIDATOR_STALE_WINDOW,
+        )
+        else None
     )
     crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
@@ -4349,6 +4375,7 @@ async def build_public_leaderboard(
                 reward_eligibility=projected_reward_eligibility,
                 incumbent_agent_id=emission_incumbent_id,
                 provisional_incumbent=provisional_incumbent,
+                rank_shares=board_rank_shares,
             )
         ),
         efficiency=_efficiency_status(efficiency_view),
@@ -4492,6 +4519,7 @@ async def ledger_epochs(
                 ceiling_band_clamp=served.get("dethrone_band_mode")
                 == "headroom_capped",
                 statistical_band_cap=served.get("statistical_band_mode") == "capped",
+                rank_shares=served_rank_shares(served),
             )
             if projection is not None
             else None
