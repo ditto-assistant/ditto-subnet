@@ -33,8 +33,8 @@ WHERE p.miner_coldkey = $1;
 SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(miner_coldkey), 0));
 
 -- name: LockClaPolicy :exec
--- Matches Platform's policy publication and revision lock.
-SELECT pg_advisory_xact_lock(hashtextextended('cla-policy', 0));
+-- Readers share the policy lock; Platform publication takes it exclusively.
+SELECT pg_advisory_xact_lock_shared(hashtextextended('cla-policy', 0));
 
 -- name: GetUploadAdmissionForColdkey :one
 SELECT miner_coldkey, token, miner_hotkey, sha256, settings_revision,

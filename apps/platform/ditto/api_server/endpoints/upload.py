@@ -435,7 +435,7 @@ async def check(
                 await rollback_result
         try:
             async with session.begin():
-                await lock_identity_writes(session, namespace="cla-policy")
+                await lock_identity_writes(session, namespace="cla-policy", shared=True)
                 cla_message = await _cla_check_message(
                     session, body=body, netuid=netuid
                 )
@@ -836,7 +836,7 @@ async def upload_agent(
         async with session.begin():
             # Match Python/Go reservation order: policy before the coldkey lock
             # acquired by admission consumption. Hold both through commit.
-            await lock_identity_writes(session, namespace="cla-policy")
+            await lock_identity_writes(session, namespace="cla-policy", shared=True)
             settings = await effective_submission_settings(
                 session,
                 default_payment_address=request.app.state.config.upload_payment_address,

@@ -6,8 +6,7 @@ import hashlib
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from sqlalchemy import false, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +24,7 @@ from ditto.api_models.contributor_identity import (
 from ditto.api_models.contributor_identity import (
     ClaSettingsRevision as SettingsView,
 )
+from ditto.api_models.http_errors import HttpErrorEnvelope
 from ditto.api_server.contributor_identity import (
     ContributorProofRejected,
     check_contributor_proof,
@@ -119,7 +119,16 @@ async def public_status(
     )
 
 
-@router.get("/public/cla/versions/{version}", response_model=ClaVersionView)
+@router.get(
+    "/public/cla/versions/{version}",
+    response_model=ClaVersionView,
+    responses={
+        404: {
+            "model": HttpErrorEnvelope,
+            "description": "CLA version is not published.",
+        }
+    },
+)
 async def public_version(version: int, session: SessionDep) -> ClaVersionView:
     row = await session.get(ClaVersion, version)
     if row is None:
@@ -127,8 +136,26 @@ async def public_version(version: int, session: SessionDep) -> ClaVersionView:
     return version_view(row)
 
 
-@router.get("/public/cla/versions/{version}/text", response_class=PlainTextResponse)
-async def public_text(version: int, request: Request, session: SessionDep) -> Response:
+@router.get(
+    "/public/cla/versions/{version}/text",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Exact published UTF-8 agreement.",
+            "content": {"text/plain": {"schema": {"type": "string"}}},
+        },
+        304: {"description": "Agreement matches If-None-Match; no response body."},
+        404: {
+            "model": HttpErrorEnvelope,
+            "description": "CLA version is not published.",
+        },
+    },
+)
+async def public_text(
+    version: int,
+    session: SessionDep,
+    if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
+) -> Response:
     row = await session.get(ClaVersion, version)
     if row is None:
         raise HTTPException(404, "CLA version is not published")
@@ -138,7 +165,7 @@ async def public_text(version: int, request: Request, session: SessionDep) -> Re
         "ETag": etag,
         "X-Content-Type-Options": "nosniff",
     }
-    validators = request.headers.get("if-none-match", "").split(",")
+    validators = (if_none_match or "").split(",")
     if any(
         value.strip() == "*" or value.strip().removeprefix("W/") == etag
         for value in validators

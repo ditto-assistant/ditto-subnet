@@ -18,9 +18,16 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def lock_identity_writes(session: AsyncSession, *, namespace: str) -> None:
+async def lock_identity_writes(
+    session: AsyncSession, *, namespace: str, shared: bool = False
+) -> None:
+    statement = (
+        "SELECT pg_advisory_xact_lock_shared(hashtextextended(:namespace, 0))"
+        if shared
+        else "SELECT pg_advisory_xact_lock(hashtextextended(:namespace, 0))"
+    )
     await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:namespace, 0))"),
+        text(statement),
         {"namespace": namespace},
     )
 

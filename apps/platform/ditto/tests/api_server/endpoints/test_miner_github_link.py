@@ -372,8 +372,8 @@ async def test_browser_binding_consent_and_session_binding_are_required(
     ).status_code == 400
 
 
-@pytest.mark.parametrize("status", [301, 302, 307, 308])
-async def test_live_identity_redirects_require_relink_without_forwarding_credentials(
+@pytest.mark.parametrize("status", [301, 302, 307, 308, 404])
+async def test_live_identity_unavailable_or_redirected_requires_relink(
     app, session_maker, status
 ):
     setup(app, session_maker)

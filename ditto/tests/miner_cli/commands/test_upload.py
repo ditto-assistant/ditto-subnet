@@ -464,6 +464,44 @@ class TestUploadHappyPath:
         pay.assert_not_called()
         register.assert_not_called()
 
+    @pytest.mark.parametrize("different", ["name", "digest"])
+    def test_unsigned_reassigned_receipt_requires_current_consent(
+        self, good_tar: Path, different: str
+    ) -> None:
+        client = MagicMock()
+        client.get_cla_status.return_value = ClaStatus(netuid=118, mode="enforce")
+        pending = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="other" if different == "name" else "alpha",
+            sha256="ef" * 32 if different == "digest" else _good_preflight().sha256,
+            payment=_payment_receipt(),
+        )
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(MagicMock(hotkey_ss58=HOTKEY), MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient", _patch_api_client(client)
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payments_for_hotkey",
+                return_value=(pending,),
+            ),
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+            patch("ditto.miner_cli.commands.upload._register_hotkey") as register,
+        ):
+            assert run(make_args(good_tar)) == 1
+        client.post_upload_check.assert_not_called()
+        client.post_upload_agent.assert_not_called()
+        pay.assert_not_called()
+        register.assert_not_called()
+
     def test_reuses_finalized_payment_without_new_transfer(
         self, good_tar: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

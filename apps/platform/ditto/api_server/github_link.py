@@ -151,6 +151,10 @@ class GithubLinkClient:
                         "X-GitHub-Api-Version": "2022-11-28",
                     },
                 )
+                if response.status_code == 404:
+                    raise GithubLinkRejected(
+                        "GitHub account was not found; re-link before claiming"
+                    )
                 if response.is_redirect:
                     raise GithubLinkRejected(
                         "GitHub login has moved; re-link before claiming"

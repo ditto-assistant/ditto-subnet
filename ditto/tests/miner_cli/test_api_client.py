@@ -106,6 +106,18 @@ class TestContributorAuthenticationErrors:
 
 
 class TestContributorAvailabilityErrors:
+    @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+    def test_polling_status_failures_are_transient(self, status):
+        with (
+            make_client(
+                lambda _request: httpx.Response(status, json={"message": "temporary"})
+            ) as client,
+            pytest.raises(TransientApiError),
+        ):
+            client.get_github_link_attempt(
+                token="fixture-token", attempt_id=UUID(int=1)
+            )
+
     @pytest.mark.parametrize("operation", ["status", "start", "attempt"])
     @pytest.mark.parametrize(
         "body", [{"detail": "Not Found"}, {"error_code": 3002, "message": "Not Found"}]

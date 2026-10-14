@@ -258,10 +258,10 @@ func (q *Queries) IsHotkeyBanned(ctx context.Context, hotkey string) (bool, erro
 }
 
 const lockClaPolicy = `-- name: LockClaPolicy :exec
-SELECT pg_advisory_xact_lock(hashtextextended('cla-policy', 0))
+SELECT pg_advisory_xact_lock_shared(hashtextextended('cla-policy', 0))
 `
 
-// Matches Platform's policy publication and revision lock.
+// Readers share the policy lock; Platform publication takes it exclusively.
 func (q *Queries) LockClaPolicy(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, lockClaPolicy)
 	return err

@@ -489,6 +489,49 @@ func TestCLAUploadGateParityBeforePayment(t *testing.T) {
 	}
 }
 
+func TestCLAReservationsForDifferentColdkeysOverlap(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	now := time.Now().UTC()
+	d := uploadDeps(pool, "fixture", now)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	defer close(release)
+	d.Now = func() time.Time {
+		started <- struct{}{}
+		<-release
+		return now
+	}
+	done := make(chan error, 2)
+	for _, coldkey := range []string{"5FirstOwner", "5SecondOwner"} {
+		go func() {
+			_, _, err := d.reserve(t.Context(), coldkey, fixtureAddress, strings.Repeat("b", 64), now)
+			done <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case err := <-done:
+			t.Fatalf("reservation failed before the shared gate: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("different coldkeys were serialized by the policy lock")
+		}
+	}
+	// Both readers have reached the gate while holding their policy lock.
+	release <- struct{}{}
+	release <- struct{}{}
+	for range 2 {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent reservations did not commit")
+		}
+	}
+}
+
 func TestCLARevisionChangesBeforeReservation(t *testing.T) {
 	for _, mode := range []string{"off", "shadow"} {
 		t.Run(mode, func(t *testing.T) {

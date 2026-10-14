@@ -290,8 +290,8 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := d.Queries.WithTx(tx)
-	// Policy writers use the same advisory lock. Keep it through commit so a
-	// policy revision cannot pass the final gate check before admission exists.
+	// Readers share this lock; policy writers acquire it exclusively. Hold it
+	// through commit so publication cannot pass the admission's gate check.
 	if err := q.LockClaPolicy(ctx); err != nil {
 		return nil, settings{}, err
 	}

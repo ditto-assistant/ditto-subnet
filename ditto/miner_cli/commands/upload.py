@@ -284,6 +284,7 @@ def _run_upload(
     )
 
     saved_recovery_candidates: tuple[PendingUploadPayment, ...] | None = None
+    cla_error: str | None = None
     # Reject ordinary unsigned contributions before packaging or payment.
     # Recoveries need the artifact digest before the server can recognize an
     # already accepted contribution; they still pass /check before any fee.
@@ -292,20 +293,19 @@ def _run_upload(
     with ApiClient(base_url=network_api_url) as cla_client:
         consent = cla_client.get_cla_status(hotkey=handle.hotkey_ss58)
         if consent is not None and consent.mode == "enforce" and not consent.is_current:
+            cla_error = (
+                "no effective contributor agreement is published; contact "
+                "the operator before uploading"
+                if consent.current is None
+                else "the current contributor agreement is required; run "
+                "`ditto cla sign` before upload"
+            )
             if explicit_recovery_receipt is None:
                 saved_recovery_candidates = load_pending_payments_for_hotkey(
                     network=network_name, hotkey=handle.hotkey_ss58
                 )
             if explicit_recovery_receipt is None and not saved_recovery_candidates:
-                if consent.current is None:
-                    raise MinerCliError(
-                        "no effective contributor agreement is published; contact "
-                        "the operator before uploading"
-                    )
-                raise MinerCliError(
-                    "the current contributor agreement is required; run `ditto cla "
-                    "sign` before upload"
-                )
+                raise MinerCliError(cla_error)
 
     agent_name = args.name
     if agent_name is None:
@@ -396,6 +396,11 @@ def _run_upload(
                 reassigned_payment = candidates[0]
                 receipt = reassigned_payment.payment
                 receipt_source = "saved_reassigned"
+
+    if cla_error is not None and receipt_source == "saved_reassigned":
+        # Different names/digests represent a new contribution. Reassigning a
+        # credit does not waive its current-consent requirement.
+        raise MinerCliError(cla_error)
 
     with ApiClient(base_url=network_api_url) as client:
 

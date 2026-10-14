@@ -560,6 +560,7 @@ class ApiClient:
         token: str | None = None,
         body: Any = None,
         max_body_bytes: int | None = None,
+        retryable: bool = False,
     ) -> httpx.Response:
         kwargs: dict[str, Any] = {}
         if token is not None:
@@ -568,6 +569,8 @@ class ApiClient:
             kwargs["json"] = body.model_dump(mode="json")
         response = self._request(method, path, max_body_bytes=max_body_bytes, **kwargs)
         if not response.is_success:
+            if retryable and response.status_code in (429, 500, 502, 503, 504):
+                raise TransientApiError(_format_error(response, prefix="contributor"))
             if response.status_code == 401 and token is not None:
                 raise LoginRequiredError(
                     "miner session is invalid or expired; run `ditto login`"
@@ -605,7 +608,10 @@ class ApiClient:
     ) -> GithubLinkAttemptStatus:
         return GithubLinkAttemptStatus.model_validate(
             self._contributor_response(
-                "GET", f"/api/v1/me/github-link/attempts/{attempt_id}", token=token
+                "GET",
+                f"/api/v1/me/github-link/attempts/{attempt_id}",
+                token=token,
+                retryable=True,
             ).json()
         )
 

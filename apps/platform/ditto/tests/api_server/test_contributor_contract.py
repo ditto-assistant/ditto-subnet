@@ -9,6 +9,7 @@ from uuid import UUID
 import pytest
 
 from ditto.api_models.contributor_identity import cla_message, github_link_message
+from ditto.api_models.http_errors import HttpErrorEnvelope
 from ditto.api_server.config import (
     ApiServerConfigError,
     check_github_link_config,
@@ -48,6 +49,41 @@ def test_signing_bytes_are_pinned_to_public_protocol():
         signer="owner",
     ) == (
         b"ditto-github-link:v1:118:hotkey:100:miner:11111111-1111-4111-8111-111111111111:11111111-1111-4111-8111-111111111111:2026-10-13T00:00:00.000000+00:00:coldkey:owner"
+    )
+
+
+def test_expected_not_found_responses_use_the_actual_error_envelope(app):
+    schema = app.openapi()
+    paths = schema["paths"]
+    for path, method in (
+        ("/api/v1/public/cla/versions/{version}", "get"),
+        ("/api/v1/public/cla/versions/{version}/text", "get"),
+        ("/api/v1/me/github-link/attempts/{attempt_id}", "get"),
+        ("/api/v1/me/github-link/confirm", "post"),
+    ):
+        content = paths[path][method]["responses"]["404"]["content"]
+        assert set(content) == {"application/json"}
+        assert (
+            content["application/json"]["schema"]["$ref"]
+            == "#/components/schemas/HttpErrorEnvelope"
+        )
+    text_operation = paths["/api/v1/public/cla/versions/{version}/text"]["get"]
+    assert "text/plain" in text_operation["responses"]["200"]["content"]
+    assert "content" not in text_operation["responses"]["304"]
+    assert any(
+        parameter["name"] == "If-None-Match" and parameter["in"] == "header"
+        for parameter in text_operation["parameters"]
+    )
+    assert (
+        HttpErrorEnvelope.model_validate(
+            {
+                "error_code": 3002,
+                "message": "fixture",
+                "request_id": None,
+                "future": "ignored",
+            }
+        ).message
+        == "fixture"
     )
 
 

@@ -21750,6 +21750,15 @@ export interface components {
              */
             weight_eligible: false;
         };
+        /** HttpErrorEnvelope */
+        HttpErrorEnvelope: {
+            /** Error Code */
+            error_code: number;
+            /** Message */
+            message: string;
+            /** Request Id */
+            request_id: string | null;
+        };
         /** InferenceAdmissionRejectionRow */
         InferenceAdmissionRejectionRow: {
             /** Admission Code */
@@ -47400,6 +47409,15 @@ export interface operations {
                     "application/json": components["schemas"]["GithubLinkAttemptStatus"];
                 };
             };
+            /** @description No GitHub link attempt for this session. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -47433,6 +47451,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GithubLinkView"];
+                };
+            };
+            /** @description No GitHub link attempt for this session. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
                 };
             };
             /** @description Validation Error */
@@ -48547,6 +48574,15 @@ export interface operations {
                     "application/json": components["schemas"]["ClaVersionView"];
                 };
             };
+            /** @description CLA version is not published. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -48561,7 +48597,9 @@ export interface operations {
     public_text_api_v1_public_cla_versions__version__text_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "If-None-Match"?: string | null;
+            };
             path: {
                 version: number;
             };
@@ -48569,13 +48607,29 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description Exact published UTF-8 agreement. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "text/plain": string;
+                };
+            };
+            /** @description Agreement matches If-None-Match; no response body. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description CLA version is not published. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
                 };
             };
             /** @description Validation Error */

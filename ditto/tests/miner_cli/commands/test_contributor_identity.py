@@ -25,7 +25,7 @@ from ditto.api_models.contributor_identity import (
 )
 from ditto.miner_cli.__main__ import _build_parser, main
 from ditto.miner_cli.commands import cla, link_github
-from ditto.miner_cli.errors import ApiResponseError
+from ditto.miner_cli.errors import ApiResponseError, TransientApiError
 
 TEXT = b"TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.\n"
 KEY = bittensor.Keypair.create_from_uri("//Alice")
@@ -346,8 +346,9 @@ def test_cla_refuses_to_sign_unverified_or_unconfirmed_text(tmp_path, case):
 
 
 @pytest.mark.parametrize("as_json", [True, False])
+@pytest.mark.parametrize("transient", [True, False])
 def test_github_prints_verified_account_before_loading_private_wallet(
-    capsys, monkeypatch, as_json
+    capsys, monkeypatch, as_json, transient
 ):
     api = MagicMock()
     api.__enter__.return_value = api
@@ -364,6 +365,11 @@ def test_github_prints_verified_account_before_loading_private_wallet(
         github_user_id=100,
         github_login="miner-fixture",
     )
+    if transient:
+        api.get_github_link_attempt.side_effect = [
+            TransientApiError("fixture temporary outage"),
+            api.get_github_link_attempt.return_value,
+        ]
     api.confirm_github_link.return_value.model_dump.return_value = {
         "github_user_id": 100
     }
@@ -385,6 +391,7 @@ def test_github_prints_verified_account_before_loading_private_wallet(
         ),
         patch.object(link_github, "load_wallet", side_effect=load),
         patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(link_github.time, "sleep"),
     ):
         assert link_github.run(args(yes=False, json=as_json)) == 0
     if as_json:
@@ -396,6 +403,38 @@ def test_github_prints_verified_account_before_loading_private_wallet(
         and proof.hotkey == KEY.ss58_address
     )
     live.hotkey.sign.assert_called_once()
+    assert api.get_github_link_attempt.call_count == (2 if transient else 1)
+
+
+def test_transient_github_polling_obeys_original_deadline(capsys):
+    api = client()
+    api.start_github_link.return_value = GithubLinkStart(
+        netuid=118,
+        attempt_id=uuid4(),
+        authorize_url="https://dittobench.ai/fixture",
+        expires_in=600,
+    )
+    api.get_github_link_attempt.side_effect = TransientApiError(
+        "fixture temporary outage"
+    )
+    clock = SimpleNamespace(
+        monotonic=MagicMock(side_effect=[0.0, 0.0, 0.5, 1.0]), sleep=MagicMock()
+    )
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture", "hotkey": KEY.ss58_address},
+        ),
+        patch.object(link_github, "load_wallet") as load_wallet,
+        patch.object(link_github, "time", clock),
+    ):
+        assert link_github.run(args(wait=1)) == 1
+    assert "timed out" in capsys.readouterr().err
+    api.get_github_link_attempt.assert_called_once()
+    clock.sleep.assert_called_once_with(0.5)
+    load_wallet.assert_not_called()
 
 
 def test_interactive_json_cla_sign_keeps_prompt_on_stderr(

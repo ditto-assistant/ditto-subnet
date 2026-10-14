@@ -33,6 +33,7 @@ from ditto.api_models.contributor_identity import (
     github_link_message,
     github_unlink_message,
 )
+from ditto.api_models.http_errors import HttpErrorEnvelope
 from ditto.api_server.contributor_identity import (
     ContributorProofRejected,
     check_contributor_proof,
@@ -454,7 +455,14 @@ async def accept(
 
 
 @router.get(
-    "/me/github-link/attempts/{attempt_id}", response_model=GithubLinkAttemptStatus
+    "/me/github-link/attempts/{attempt_id}",
+    response_model=GithubLinkAttemptStatus,
+    responses={
+        404: {
+            "model": HttpErrorEnvelope,
+            "description": "No GitHub link attempt for this session.",
+        }
+    },
 )
 async def attempt_status(
     attempt_id: UUID,
@@ -573,7 +581,16 @@ async def _approved_attempt(
     return attempt
 
 
-@router.post("/me/github-link/confirm", response_model=GithubLinkView)
+@router.post(
+    "/me/github-link/confirm",
+    response_model=GithubLinkView,
+    responses={
+        404: {
+            "model": HttpErrorEnvelope,
+            "description": "No GitHub link attempt for this session.",
+        }
+    },
+)
 async def confirm(
     body: GithubLinkRequest,
     request: Request,

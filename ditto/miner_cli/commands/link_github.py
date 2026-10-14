@@ -21,7 +21,7 @@ from ditto.api_models.contributor_identity import (
 )
 from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.confirm import prompt_input
-from ditto.miner_cli.errors import MinerCliError
+from ditto.miner_cli.errors import MinerCliError, TransientApiError
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.preferences import load_miner_session
 from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
@@ -201,9 +201,15 @@ def run(args: argparse.Namespace) -> int:
                     webbrowser.open(started.authorize_url, new=2)
             deadline = time.monotonic() + max(1, min(args.wait, started.expires_in))
             while time.monotonic() < deadline:
-                attempt = client.get_github_link_attempt(
-                    token=token, attempt_id=started.attempt_id
-                )
+                try:
+                    attempt = client.get_github_link_attempt(
+                        token=token, attempt_id=started.attempt_id
+                    )
+                except TransientApiError:
+                    remaining = max(0, deadline - time.monotonic())
+                    if remaining:
+                        time.sleep(min(2, remaining))
+                    continue
                 if attempt.status == "linked":
                     link = client.get_github_link(token=token).link
                     if link is None or link.link_attempt_id != started.attempt_id:

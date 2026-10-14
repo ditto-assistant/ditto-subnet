@@ -127,7 +127,7 @@ async def require_verified_bounty_contributor(
         raise BountyIdentityRejected(
             "verified GitHub link changed during verification; re-link or retry"
         )
-    await lock_identity_writes(session, namespace="cla-policy")
+    await lock_identity_writes(session, namespace="cla-policy", shared=True)
     consent = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
     if not consent.allowed:
         raise ClaConsentRequired(consent.message)

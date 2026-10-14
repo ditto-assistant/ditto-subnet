@@ -15,6 +15,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from ditto.api_models.contributor_identity import cla_message
+from ditto.api_models.http_errors import HttpErrorEnvelope
 from ditto.api_server.cla import evaluate_cla_gate, record_shadow_upload
 from ditto.api_server.dependencies import (
     get_payment_verifier,
@@ -53,6 +54,17 @@ async def test_missing_policy_seed_cannot_silently_disable_consent(session_maker
         )
         with pytest.raises(RuntimeError, match="migration seed is missing"):
             await evaluate_cla_gate(session, netuid=118, hotkey="fixture")
+
+
+@pytest.mark.parametrize("suffix", ["", "/text"])
+async def test_unpublished_document_returns_documented_json_error(
+    app, client, session_maker, suffix
+):
+    setup(app, session_maker)
+    response = await client.get(f"/api/v1/public/cla/versions/999{suffix}")
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/json")
+    assert HttpErrorEnvelope.model_validate(response.json()).error_code == 3002
 
 
 @pytest.mark.parametrize(
@@ -225,6 +237,14 @@ async def test_registry_off_default_pinned_bytes_signature_status_and_immutable_
     assert result.json()["owner_block"] == 123
     replay = await client.post("/api/v1/cla/sign", json=body)
     assert replay.status_code == 409 and "nonce already used" in replay.text
+    async with session_maker() as session:
+        nonce_constraints = await session.scalars(
+            text(
+                "SELECT conname FROM pg_constraint "
+                "WHERE conrelid = 'cla_signatures'::regclass AND contype = 'u'"
+            )
+        )
+        assert "uq_cla_signatures_nonce" in nonce_constraints
     status = (
         await client.get(f"/api/v1/public/cla/status/{alice.ss58_address}")
     ).json()
@@ -374,10 +394,11 @@ async def test_policy_change_before_admission_rechecks_consent(
     original_gate = upload.evaluate_cla_gate
     observed = []
 
-    async def changing_policy(session, *, namespace):
+    async def changing_policy(session, *, namespace, shared=False):
         assert namespace == "cla-policy"
+        assert shared is True
         await policy(client, "enforce")
-        await original_lock(session, namespace=namespace)
+        await original_lock(session, namespace=namespace, shared=shared)
 
     async def observe_gate(session, *, netuid, hotkey):
         decision = await original_gate(session, netuid=netuid, hotkey=hotkey)
