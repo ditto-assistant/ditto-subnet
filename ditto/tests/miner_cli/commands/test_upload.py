@@ -247,6 +247,59 @@ def _reusable_credit_response() -> UploadAgentResponse:
 
 
 class TestUploadHappyPath:
+    @pytest.mark.parametrize("error", [ApiResponseError, TransientApiError])
+    @pytest.mark.parametrize("allowed", [False, True])
+    def test_unavailable_cla_probe_defers_to_authoritative_check_before_payment(
+        self, good_tar: Path, error, allowed
+    ) -> None:
+        client = MagicMock()
+        client.get_cla_status.side_effect = error("fixture CLA status unavailable")
+        client.post_upload_check.return_value = (
+            _ok_check()
+            if allowed
+            else UploadCheckResponse(
+                ok=False, error_codes=[1106], messages=["current CLA required"]
+            )
+        )
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.return_value = _upload_response()
+
+        def payment(**_kwargs):
+            client.post_upload_check.assert_called_once()
+            assert client.post_upload_check.return_value.ok
+            return _payment_receipt()
+
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(MagicMock(hotkey_ss58=HOTKEY), MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient", _patch_api_client(client)
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                side_effect=payment,
+            ) as pay,
+        ):
+            assert run(make_args(good_tar)) == (0 if allowed else 1)
+        client.post_upload_check.assert_called_once()
+        if allowed:
+            pay.assert_called_once()
+            client.post_upload_agent.assert_called_once()
+        else:
+            pay.assert_not_called()
+            client.get_eval_pricing.assert_not_called()
+            client.post_upload_agent.assert_not_called()
+
     def test_full_flow_exits_zero_and_prints_agent_id(
         self, good_tar: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

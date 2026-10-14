@@ -291,7 +291,12 @@ def _run_upload(
     # Older Platform releases return 404 while the feature rolls out default-off;
     # the authoritative upload endpoints still enforce the deployed policy.
     with ApiClient(base_url=network_api_url) as cla_client:
-        consent = cla_client.get_cla_status(hotkey=handle.hotkey_ss58)
+        try:
+            consent = cla_client.get_cla_status(hotkey=handle.hotkey_ss58)
+        except ApiResponseError:
+            # An unavailable advisory endpoint must not prevent the server's
+            # authoritative pre-payment policy check below.
+            consent = None
         if consent is not None and consent.mode == "enforce" and not consent.is_current:
             cla_error = (
                 "no effective contributor agreement is published; contact "

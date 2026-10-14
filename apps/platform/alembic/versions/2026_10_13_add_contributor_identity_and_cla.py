@@ -124,7 +124,7 @@ def upgrade() -> None:
         sa.Column("owner_block", sa.BigInteger(), nullable=False),
         sa.Column("owner_block_hash", sa.Text(), nullable=False),
         sa.ForeignKeyConstraint(["cla_version"], ["cla_versions.version"]),
-        sa.UniqueConstraint("nonce"),
+        sa.UniqueConstraint("nonce", name=op.f("uq_cla_signatures_nonce")),
     )
     op.create_index(
         "cla_signatures_hotkey_version_idx",
