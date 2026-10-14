@@ -1191,6 +1191,12 @@ export const artifactReleaseRevisionSchema = z.object({
 export const sourceReleaseGateSchema = z.object({
   version: z.string(),
   automatic_confirmation_enabled: z.boolean(),
+  archive_provider: z.object({
+    configured: z.boolean(),
+    host: z.string().nullable(),
+    auth_mode: z.enum(['none', 'query', 'path']),
+    credential_configured: z.boolean(),
+  }).nullish(),
   collector_cursor_block: z.number().nullable().optional(),
   collector_cursor_hash: z.string().nullable().optional(),
   collector_runtime_code_hash: z.string().nullable().optional(),

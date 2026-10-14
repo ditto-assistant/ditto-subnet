@@ -74,7 +74,7 @@ from ditto.api_models.admin_copy_review import (
 from ditto.api_server.continual_retest_settings import tie_weighting_is_active
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_copy_review import (
-    open_copy_review,
+    open_review,
     resolve_copy_review,
 )
 from ditto.api_server.endpoints.admin_quarantine import (
@@ -597,7 +597,10 @@ async def _preview_ruling(
     elif ruling.action == "clear":
         if held:
             steps = ["clear"]
-        elif resolved_as == "clear" and scored_or_live:
+        elif resolved_as == "clear" and (
+            # A cleared below-quorum reject goes back to evaluating.
+            scored_or_live or agent.status == AgentStatus.EVALUATING
+        ):
             return _blocked(
                 **base,
                 ok=True,
@@ -620,7 +623,10 @@ async def _preview_ruling(
     else:  # reject
         if held:
             steps = ["reject"]
-        elif scored_or_live:
+        elif scored_or_live or agent.status == AgentStatus.EVALUATING:
+            # Below quorum is accepted too: rejecting a proven violation then
+            # expires its live validator tickets instead of paying for the
+            # remaining runs and waiting for it to reach the board.
             steps = ["open", "reject"]
         elif resolved_as == "reject" and agent.status == AgentStatus.BANNED:
             return _blocked(
@@ -635,7 +641,8 @@ async def _preview_ruling(
                 ok=False,
                 disposition="conflict",
                 conflict_reason=(
-                    f"agent is {agent.status.value}, not held, scored, or live"
+                    f"agent is {agent.status.value}, not held, evaluating, scored,"
+                    " or live"
                 ),
                 message="neither open nor resolve would be accepted",
             )
@@ -844,16 +851,17 @@ async def _apply_step(
 ) -> None:
     """Apply one step through the only two writers, then end their autobegin."""
     if step == "open":
-        await open_copy_review(
+        await open_review(
             ruling.agent_id,
             AdminCopyReviewOpenRequest(
                 expected_sha256=ruling.expected_sha256,
                 expected_score_count=ruling.expected_score_count,
                 reason=ruling.reason,
             ),
-            None,
             session,
             x_admin_actor=actor,
+            # Only a reject opens below quorum; it resolves in this same item.
+            allow_evaluating=ruling.action == "reject",
         )
     else:
         await resolve_copy_review(

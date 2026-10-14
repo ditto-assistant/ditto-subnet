@@ -63,6 +63,7 @@ from ditto_screener.l2_review import (
     _parse_l2_review,
     _qualifies_for_direct_clear,
     _require_complete_analysis,
+    _response_fault_subcode,
     _response_output_and_usage,
     _review_adaptation_hold,
     _routes_inconclusive_to_l3,
@@ -1051,6 +1052,39 @@ async def test_future_policy_l3_off_does_not_certify_without_runtime_contract() 
     )
     assert result.error_code == "l2-runtime-evidence-unavailable"
     assert l1.calls == l2.calls == 0
+
+
+async def test_layered_review_carries_the_l3_failure_subcode() -> None:
+    failed = L2RunResult(
+        SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l3-adjudicator-model-provider-fault",
+            failure_disposition="retryable_infra",
+        ),
+        (),
+        (),
+        (),
+        L2Usage(),
+        False,
+        failure_subcode="context_length_exceeded",
+    )
+    l1 = _FakeL1(_l1("medium"))
+    l2 = _FakeL2(failed)
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        policy_version=12,
+    )
+
+    assert l2.calls == 1
+    assert result.error_code == "l3-adjudicator-model-provider-fault"
+    assert result.failure_subcode == "context_length_exceeded"
 
 
 async def test_v13_disabled_review_reports_preflight_cause() -> None:
@@ -8020,6 +8054,58 @@ async def test_relayed_provider_outage_is_named_a_provider_fault(
 
     assert result.observation.error_code == "l2-model-provider-fault"
     assert result.observation.failure_disposition == "retryable_infra"
+    assert result.failure_subcode == "server_error"
+
+
+async def test_deterministic_provider_rejection_names_its_code(tmp_path: Path) -> None:
+    """A rejection that recurs on every retry must be told apart from an outage.
+
+    2026-10-13: crown-v175 parked as l3-adjudicator-model-provider-fault on four
+    of four attempts while the stored detail said only "audit inconclusive".
+    """
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": {
+                    "code": "context_length_exceeded",
+                    "message": "maximum context length is 400000 tokens",
+                },
+                "output": [],
+                "usage": {},
+            },
+        )
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.error_code == "l2-model-provider-fault"
+    assert result.failure_subcode == "context_length_exceeded"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"error": {"code": 429, "message": "slow down"}}, "429"),
+        ({"status": "failed", "error_type": "Server_Error"}, "server_error"),
+        ({"incomplete_details": {"reason": "content_filter"}}, "content_filter"),
+        ({"error": "Provider returned error: see https://x.y/z"}, "unrecognized"),
+        ({"output": []}, None),
+        ("not a body", None),
+    ],
+)
+def test_response_fault_subcode_keeps_only_a_bounded_slug(
+    payload: object, expected: str | None
+) -> None:
+    assert _response_fault_subcode(payload) == expected
 
 
 async def test_malformed_body_without_a_provider_error_stays_a_contract_fault(

@@ -13,6 +13,11 @@ from ditto.chain.errors import (
 from ditto.tests.api_server.test_treasury_weights import pin
 from ditto.tests.chain.test_client import make_chain_config
 
+# Real-time stand-in for the reader's 8 s window. Wide enough that the fake
+# RPCs of one stage finish well inside it on a loaded CI runner, so a stall
+# injected in a later stage is the one that trips it.
+WINDOW_SECONDS = 0.2
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("managed_scope", [False, True])
@@ -46,7 +51,7 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
         def __init__(self, seconds):
             assert seconds == 8
             windows.append(seconds)
-            self.inner = timeout(0.01)
+            self.inner = timeout(WINDOW_SECONDS)
 
         async def __aenter__(self):
             await self.inner.__aenter__()
@@ -58,7 +63,7 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
         def reschedule(self, when):
             assert 7.9 < when - asyncio.get_running_loop().time() <= 8
             windows.append(8)
-            self.inner.reschedule(asyncio.get_running_loop().time() + 0.01)
+            self.inner.reschedule(asyncio.get_running_loop().time() + WINDOW_SECONDS)
 
         def when(self):
             return self.inner.when()
@@ -114,7 +119,7 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
                 if fault == "identity_cpu":
                     # Deliberate sync-decode simulation: cancellation has not
                     # run yet when the first window's clock expires.
-                    time.sleep(0.02)
+                    time.sleep(WINDOW_SECONDS * 1.5)
                 return p.identity.hotkey
             if storage_function == "Uids":
                 if params[1] == p.fleet[0].validator_hotkey:

@@ -1456,6 +1456,7 @@ describe('Backroom MCP tools', () => {
       current: revision(3),
       release_gate: {
         version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false,
+        archive_provider: { configured: true, host: 'api.taostats.io', auth_mode: 'query', credential_configured: true },
         receipt_diagnostics: [{ report: {
           schema_version: 3, validator_hotkey: 'validator', netuid: 118, timestamp: 100,
           observation: { submission_status: 'accepted', submission_observed_at: 90,
@@ -1500,6 +1501,7 @@ describe('Backroom MCP tools', () => {
     expect(readJsonResult(currentOnly)).toMatchObject({
       current: { revision: 3 },
       release_gate: { version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false, pending_kings: 7, confirmed_kings: 0,
+        archive_provider: { configured: true, host: 'api.taostats.io', auth_mode: 'query', credential_configured: true },
         receipt_diagnostics: [{ report: { schema_version: 3, observation: {
           last_validation: { error_count: 1, fields: ['provenance.champion_artifact_sha256:string_pattern_mismatch'] },
           failure_context: { claimed_schema_version: 1, task_id: 12, claimed_epoch_index: 25017, claimed_commit_block: 9029300, attempt_id: '11111111-1111-4111-8111-111111111111' },

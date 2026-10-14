@@ -2,6 +2,100 @@
 
 <!-- version list -->
 
+## v0.362.1 (2026-10-14)
+
+### Bug Fixes
+
+- **screener**: Name the provider's fault code on a parked L2/L3 review
+  ([#2907](https://github.com/ditto-assistant/ditto-subnet/pull/2907),
+  [`ca5ec54`](https://github.com/ditto-assistant/ditto-subnet/commit/ca5ec54246a0bd0265291bbe731d5dcca3167b1d))
+
+
+## v0.362.0 (2026-10-13)
+
+### Features
+
+- **platform**: Accept ATH rejects on agents still below scoring quorum
+  ([#2906](https://github.com/ditto-assistant/ditto-subnet/pull/2906),
+  [`92e3dcf`](https://github.com/ditto-assistant/ditto-subnet/commit/92e3dcfb460c566ae5c66a26cfbffb18bd1f3fab))
+
+
+## v0.361.0 (2026-10-13)
+
+### Bug Fixes
+
+- **relay**: Match chat RPM env fallbacks to the board defaults
+  ([#2854](https://github.com/ditto-assistant/ditto-subnet/pull/2854),
+  [`cec8c70`](https://github.com/ditto-assistant/ditto-subnet/commit/cec8c70dd69bb5f1fdd06aa31ef589f01da81e64))
+
+### Features
+
+- **platform**: Report the configured source archive provider
+  ([#2870](https://github.com/ditto-assistant/ditto-subnet/pull/2870),
+  [`d9b0ae8`](https://github.com/ditto-assistant/ditto-subnet/commit/d9b0ae81f0e1076e21e89036e8a198bd7927f063))
+
+
+## v0.360.1 (2026-10-13)
+
+### Bug Fixes
+
+- **tests**: Widen the treasury activation reader timing window
+  ([#2891](https://github.com/ditto-assistant/ditto-subnet/pull/2891),
+  [`168dfe3`](https://github.com/ditto-assistant/ditto-subnet/commit/168dfe30cea59d16cf4d9c66f0c4fac839df973c))
+
+### Chores
+
+- **security**: Digest-pin remaining image bases and deployed sidecars
+  ([#2831](https://github.com/ditto-assistant/ditto-subnet/pull/2831),
+  [`d9eb7b8`](https://github.com/ditto-assistant/ditto-subnet/commit/d9eb7b87b85f64fce90e95b783fb2271c798b0ac))
+
+
+## v0.360.0 (2026-10-13)
+
+### Features
+
+- **platform**: Add owner downloads and submission versions
+  ([#2868](https://github.com/ditto-assistant/ditto-subnet/pull/2868),
+  [`bfb6368`](https://github.com/ditto-assistant/ditto-subnet/commit/bfb63688381b5b49e913b196151d2a52936c6e29))
+
+
+## v0.359.0 (2026-10-13)
+
+### Bug Fixes
+
+- **dittobench**: Let operators enforce control-plane auth and reject the public broker token
+  ([#2830](https://github.com/ditto-assistant/ditto-subnet/pull/2830),
+  [`f773f8b`](https://github.com/ditto-assistant/ditto-subnet/commit/f773f8b54cea61c24b0e6c1df4208bdcdc3ff919))
+
+- **platform**: Bound request bodies before authentication
+  ([#2826](https://github.com/ditto-assistant/ditto-subnet/pull/2826),
+  [`103f95f`](https://github.com/ditto-assistant/ditto-subnet/commit/103f95f0c7f3ae4458a7a98f85a9ebe4054bf330))
+
+- **platform**: Record review events for policy-only rescreen passes
+  ([#2829](https://github.com/ditto-assistant/ditto-subnet/pull/2829),
+  [`15fed9e`](https://github.com/ditto-assistant/ditto-subnet/commit/15fed9ed63d7af3460c247280bd71c343a8f7f30))
+
+### Features
+
+- **platform**: Diff source between any two agents for lineage review
+  ([#2834](https://github.com/ditto-assistant/ditto-subnet/pull/2834),
+  [`6aa22da`](https://github.com/ditto-assistant/ditto-subnet/commit/6aa22da9905f48cfa710f2d2d262620f5c26fc46))
+
+- **platform**: Report ATH and copy-review queue age against SLO
+  ([#2833](https://github.com/ditto-assistant/ditto-subnet/pull/2833),
+  [`8acc729`](https://github.com/ditto-assistant/ditto-subnet/commit/8acc729f12c749defebb68663afecae01f4cf4c1))
+
+- **scoring**: Publish every composite gate factor
+  ([#2832](https://github.com/ditto-assistant/ditto-subnet/pull/2832),
+  [`cca2486`](https://github.com/ditto-assistant/ditto-subnet/commit/cca248617969d977664902e2278e6ac2a0d41400))
+
+### Testing
+
+- **datagen**: Add a generator pool cardinality canary
+  ([#2840](https://github.com/ditto-assistant/ditto-subnet/pull/2840),
+  [`d6c901f`](https://github.com/ditto-assistant/ditto-subnet/commit/d6c901f2ab6af4c4f9994afc879dd689e1e1cbc3))
+
+
 ## v0.358.2 (2026-10-13)
 
 ### Bug Fixes
