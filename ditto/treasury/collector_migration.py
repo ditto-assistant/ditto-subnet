@@ -130,11 +130,18 @@ def snapshot(path: Path, expected_sha256: str) -> sqlite3.Connection:
     if (
         hashlib.sha256(raw).hexdigest() != expected_sha256
         or raw[:16] != b"SQLite format 3\x00"
-        or raw[18:20] != b"\x01\x01"
+        or raw[18:20] not in (b"\x01\x01", b"\x02\x02")
     ):
         raise ValueError("snapshot hash or standalone format mismatch")
     db = sqlite3.connect(":memory:", isolation_level=None)
     try:
+        # A complete sqlite3.backup may retain WAL journal-mode header bytes
+        # without a WAL. Verify the exact signed raw hash first, then adapt
+        # only the in-memory image for SQLite deserialize (which cannot use
+        # WAL). Source bytes remain untouched; sidecars still refuse above,
+        # and schema, integrity and cold-approved history must match below.
+        if raw[18:20] == b"\x02\x02":
+            raw = raw[:18] + b"\x01\x01" + raw[20:]
         db.deserialize(raw)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA trusted_schema=OFF")
