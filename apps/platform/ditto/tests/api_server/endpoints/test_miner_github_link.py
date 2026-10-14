@@ -386,6 +386,47 @@ async def test_live_identity_uses_app_auth_and_never_reuses_stale_results(
     assert len(provider.requests) == 2
 
 
+@pytest.mark.parametrize("unexpected", [False, True])
+async def test_exchange_failure_is_terminal_and_redacts_unexpected_details(
+    app, client, session_maker, caplog, unexpected
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    auth = {"authorization": f"Bearer {token}"}
+    started = await client.post("/api/v1/me/github-link/start", headers=auth)
+    assert started.status_code == 200, started.text
+    body = started.json()
+    params = await launch_in_browser(client, body)
+    error = (
+        RuntimeError(TOKEN + SECRET)
+        if unexpected
+        else GithubLinkRejected("provider refused")
+    )
+    app.state.github_link.exchange = AsyncMock(side_effect=error)
+    response = await client.get(
+        "/api/v1/miner-auth/github/callback",
+        params={"state": params["state"][0], "code": "fixture-code"},
+    )
+    assert response.status_code == 400, response.text
+    polled = await client.get(
+        f"/api/v1/me/github-link/attempts/{body['attempt_id']}", headers=auth
+    )
+    assert polled.json()["status"] == "failed"
+    expected = (
+        "GitHub identity verification failed; start again"
+        if unexpected
+        else "provider refused"
+    )
+    assert polled.json()["error"] == expected
+    assert TOKEN not in response.text + polled.text + caplog.text
+    assert SECRET not in response.text + polled.text + caplog.text
+    async with session_maker() as session:
+        attempt = await session.get(MinerGithubLinkAttempt, UUID(body["attempt_id"]))
+        assert attempt.status == "failed" and attempt.code_verifier is None
+        assert attempt.error == expected
+
+
 async def test_expired_status_poll_does_not_lock_or_mutate_the_attempt(
     app, client, session_maker
 ):

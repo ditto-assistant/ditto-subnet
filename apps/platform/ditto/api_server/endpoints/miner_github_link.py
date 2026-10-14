@@ -350,6 +350,10 @@ async def callback(
         identity = await client.exchange(code=code, verifier=verifier)
     except GithubLinkRejected as exc:
         failure = str(exc)
+    except Exception:
+        # The verifier is consumed; persist a terminal failure without leaking
+        # unexpected provider exception bodies, tokens or credentials.
+        failure = "GitHub identity verification failed; start again"
     async with session.begin():
         attempt = await session.get(
             MinerGithubLinkAttempt,
