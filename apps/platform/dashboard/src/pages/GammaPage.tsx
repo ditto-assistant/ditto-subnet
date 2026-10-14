@@ -7,8 +7,9 @@ import { dashboardHref } from "../lib/router";
 export interface TreasuryAllocation {
   policy_revision: number;
   allocation_version: 1 | 2;
-  mode: "shadow";
-  routing_status: "not_activated";
+  mode: "shadow" | "observe" | "enforce" | "pause";
+  routing_status: "not_activated" | "scheduled" | "active" | "paused";
+  routing_epoch?: number | null;
   denominator: "miner_emission" | "released_miner_emission";
   service_bps: number;
   forecast_service_share: number;
@@ -93,7 +94,18 @@ export function GammaPage(): JSX.Element {
                 }
               >
                 <div class="gamma-notice" aria-label="Gamma runtime control">
-                  <Show when={policy().runtime?.mode === "enforce"}>
+                  <Show when={policy().routing_status === "active"}>
+                    <p>
+                      Gamma routing is active. Validators fold{" "}
+                      {percent(policy().effective_service_share)} of miner emission to the collector
+                      hotkey (ledger epoch {policy().routing_epoch}).
+                    </p>
+                  </Show>
+                  <Show
+                    when={
+                      policy().runtime?.mode === "enforce" && policy().routing_status !== "active"
+                    }
+                  >
                     <p>
                       Gamma enforcement is armed for epoch {policy().runtime?.activation_epoch}.
                     </p>
@@ -133,7 +145,11 @@ export function GammaPage(): JSX.Element {
               </Show>
               <dl class="gamma-split">
                 <div>
-                  <dt>Services, forecast</dt>
+                  <dt>
+                    {policy().routing_status === "active"
+                      ? "Services, routed"
+                      : "Services, forecast"}
+                  </dt>
                   <dd>{percent(policy().forecast_service_share)}</dd>
                 </div>
                 <div>

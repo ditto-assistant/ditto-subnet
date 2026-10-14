@@ -1,4 +1,4 @@
-"""Public treasury intent, deliberately distinct from active weight routing."""
+"""Public treasury policy plus the routing the newest served ledger pin enforces."""
 
 from typing import Literal
 
@@ -36,14 +36,22 @@ class PublicTreasuryAllocation(BaseModel):
 
     policy_revision: int
     allocation_version: Literal[1, 2]
-    mode: Literal["shadow"] = "shadow"
-    routing_status: Literal["not_activated"] = "not_activated"
+    # Derived from the recorded runtime: "shadow" when none is recorded or it
+    # cannot be verified.
+    mode: Literal["shadow", "observe", "enforce", "pause"] = "shadow"
+    # "active" only when the newest served ledger pin carries an enforcing
+    # treasury pin, i.e. validators were handed the service split to fold.
+    routing_status: Literal["not_activated", "scheduled", "active", "paused"] = (
+        "not_activated"
+    )
+    routing_epoch: int | None = Field(default=None, ge=0)
     denominator: Literal["miner_emission", "released_miner_emission"]
     service_bps: int
     forecast_service_share: float
     forecast_burn_share: float
     forecast_miner_share: float
-    effective_service_share: Literal[0] = 0
+    # The service share of miner emission the active pin folds; 0 otherwise.
+    effective_service_share: float = Field(default=0.0, ge=0.0, le=1.0)
     burn_revision: int
     burn_of_miner_remainder: float
     collector_hotkey: str | None
@@ -52,6 +60,5 @@ class PublicTreasuryAllocation(BaseModel):
     sweep_status: Literal["not_activated"] = "not_activated"
     payment_observer_status: Literal["not_activated"] = "not_activated"
     buckets: list[PublicServiceBucket]
-    # Legacy shadow fields above describe the allocation projection, not the
-    # durable runtime. Runtime control still is not finalized funding proof.
+    # Runtime control is not finalized funding proof; receipts are.
     runtime: PublicTreasuryRuntime = Field(default_factory=PublicTreasuryRuntime)

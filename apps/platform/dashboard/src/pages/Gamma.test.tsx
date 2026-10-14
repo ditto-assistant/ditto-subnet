@@ -106,3 +106,26 @@ it("flags an allocation that differs from the recorded runtime", async () => {
     "This allocation differs from the approved runtime policy.",
   );
 });
+
+it("reports active routing with the share validators fold", async () => {
+  vi.mocked(getJSON).mockResolvedValue({
+    policy_revision: 4,
+    allocation_version: 2,
+    mode: "enforce",
+    routing_status: "active",
+    routing_epoch: 25800,
+    service_bps: 6500,
+    effective_service_share: 0.65,
+    forecast_service_share: 0.65,
+    forecast_burn_share: 0,
+    forecast_miner_share: 0.35,
+    buckets: [],
+    runtime: { revision: 8, mode: "enforce", activation_epoch: 25708, allocation_matches: true },
+  });
+  render(() => <GammaPage />);
+  expect(await screen.findByText(/Gamma routing is active/)).toHaveTextContent(
+    "fold 65% of miner emission to the collector hotkey (ledger epoch 25800)",
+  );
+  expect(screen.getByText("Services, routed")).toBeInTheDocument();
+  expect(screen.queryByText(/enforcement is armed/)).not.toBeInTheDocument();
+});

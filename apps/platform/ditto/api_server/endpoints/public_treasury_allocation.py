@@ -1,8 +1,8 @@
-"""Safe public projection of wallet policy. No account references or actors."""
+"""Safe public projection of wallet policy and live routing. No actors."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,7 @@ from ditto.api_models.treasury_allocation import (
 from ditto.api_models.treasury_settings import TreasurySettings, public_wallet_address
 from ditto.api_server.burn_settings import settings_from_row
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.ledger_pin import LedgerPin, treasury_pin_from_context
 from ditto.api_server.treasury_runtime import (
     latest_runtime_row,
     runtime_revision,
@@ -22,6 +23,8 @@ from ditto.api_server.treasury_runtime import (
 )
 from ditto.db.models import TreasurySettingsRevision
 from ditto.db.queries.burn_settings import latest_burn_settings_revision
+from ditto.db.queries.ledger_epochs import latest_pin
+from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
 
 router = APIRouter(prefix="/public/treasury-allocation", tags=["public"])
 
@@ -50,8 +53,34 @@ async def public_runtime(
         )
 
 
+RoutingStatus = Literal["not_activated", "scheduled", "active", "paused"]
+
+
+async def served_routing(
+    session: AsyncSession, *, netuid: int, runtime: PublicTreasuryRuntime
+) -> tuple[RoutingStatus, int | None, float]:
+    """Routing as validators were told to fold it, read from the newest pin.
+
+    The pin is what every validator folds, so it -- not the recorded runtime --
+    decides "active". An unreadable pin never reports routing as active.
+    """
+    try:
+        row = await latest_pin(session, netuid=netuid)
+        treasury = treasury_pin_from_context(LedgerPin.from_row(row)) if row else None
+    except (ValueError, SQLAlchemyError):
+        treasury = None
+    if isinstance(treasury, EnforcingTreasuryPin):
+        return "active", treasury.epoch_index, treasury.service_bps / 10_000
+    if runtime.mode == "enforce":
+        return "scheduled", None, 0.0
+    if runtime.mode == "pause":
+        return "paused", None, 0.0
+    return "not_activated", None, 0.0
+
+
 @router.get("", response_model=PublicTreasuryAllocation)
 async def get_public_treasury_allocation(
+    request: Request,
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> PublicTreasuryAllocation:
@@ -70,6 +99,10 @@ async def get_public_treasury_allocation(
     # v1 retains its released-share denominator, v2 is carved before burn.
     service = fraction if policy.allocation_version == 2 else fraction * (1 - burn)
     forecast_burn = (1 - fraction) * burn if policy.allocation_version == 2 else burn
+    runtime = await public_runtime(session, policy)
+    routing_status, routing_epoch, effective = await served_routing(
+        session, netuid=request.app.state.config.chain.netuid, runtime=runtime
+    )
     response.headers["Cache-Control"] = "public, max-age=5"
     return PublicTreasuryAllocation(
         policy_revision=row.revision if row else 0,
@@ -81,6 +114,12 @@ async def get_public_treasury_allocation(
         forecast_service_share=service,
         forecast_burn_share=forecast_burn,
         forecast_miner_share=(1 - fraction) * (1 - burn),
+        mode=runtime.mode
+        if runtime.mode in ("observe", "enforce", "pause")
+        else "shadow",
+        routing_status=routing_status,
+        routing_epoch=routing_epoch,
+        effective_service_share=effective,
         burn_revision=burn_row.revision if burn_row else 0,
         burn_of_miner_remainder=burn,
         collector_hotkey=public_wallet_address(policy.treasury_hotkey),
@@ -97,5 +136,5 @@ async def get_public_treasury_allocation(
             )
             for b in policy.service_buckets
         ],
-        runtime=await public_runtime(session, policy),
+        runtime=runtime,
     )

@@ -158,9 +158,14 @@ for later manually signed purchases. Legacy v1 payment prerequisites remain.
 
 `GET /api/v1/public/treasury-allocation` and the dashboard **Gamma · Beta** page
 show configured service allocations, a service-first forecast, collector and
-holding addresses, and payment rules. They explicitly show effective service
-funding, distribution and observation as inactive. The Beta page makes no
-token issuance, redemption, or token-economic promise.
+holding addresses, and payment rules. `routing_status` is `active`, with
+`effective_service_share` equal to the pinned service share and
+`routing_epoch` naming the epoch, only when the newest served ledger pin
+carries a verified enforcing treasury pin, the exact input every validator
+folds. A recorded `enforce` runtime without such a pin reports `scheduled`,
+`pause` reports `paused`, and an unreadable pin never reports routing as
+active. Distribution and the payment observer still report inactive. The
+Beta page makes no token issuance, redemption, or token-economic promise.
 
 A rule matches the holding coldkey plus exact payee, asset and, for stake,
 recipient hotkey. Disabled/ambiguous rules must not classify a payment. A
