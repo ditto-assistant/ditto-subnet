@@ -156,16 +156,24 @@ def test_github_omitted_wallet_names_without_tty_never_prompt(capsys):
 
 
 @pytest.mark.parametrize("command", ["link", "unlink"])
-def test_github_coldkey_unlock_failure_is_actionable_without_traceback(command, capsys):
-    class KeyfileFailure(Exception):
+@pytest.mark.parametrize("failure", ["unlock", "sign"])
+def test_github_coldkey_failure_is_actionable_without_traceback(
+    command, failure, capsys
+):
+    class KeyfileFailure(RuntimeError):
         pass
+
+    def fail_sign(_payload):
+        raise KeyfileFailure("private SDK error fixture")
 
     class LockedWallet:
         hotkey = KEY
 
         @property
         def coldkey(self):
-            raise KeyfileFailure("private SDK error fixture")
+            if failure == "unlock":
+                raise KeyfileFailure("private SDK error fixture")
+            return SimpleNamespace(ss58_address=KEY.ss58_address, sign=fail_sign)
 
     api = client()
     attempt = uuid4()
@@ -205,8 +213,11 @@ def test_github_coldkey_unlock_failure_is_actionable_without_traceback(command, 
     ):
         assert link_github.run(args(github_command=command, key_kind="coldkey")) == 1
     output = capsys.readouterr()
-    assert "cannot load or unlock the coldkey signing key" in output.err
-    assert "keyfile and passphrase" in output.err
+    if failure == "unlock":
+        assert "cannot load or unlock the coldkey signing key" in output.err
+        assert "keyfile and passphrase" in output.err
+    else:
+        assert "cannot sign GitHub identity proof" in output.err
     assert "private SDK error" not in output.err
     assert not output.out
     api.confirm_github_link.assert_not_called()
@@ -506,19 +517,23 @@ def test_github_prints_verified_account_before_loading_private_wallet(
     assert api.get_github_link_attempt.call_count == (2 if transient else 1)
 
 
-def test_transient_github_polling_obeys_original_deadline(capsys):
+@pytest.mark.parametrize("wait,expiry,timeout", [(1, 600, 1), (7200, 7200, 600)])
+def test_transient_github_polling_obeys_original_deadline(
+    capsys, wait, expiry, timeout
+):
     api = client()
     api.start_github_link.return_value = GithubLinkStart(
         netuid=118,
         attempt_id=uuid4(),
         authorize_url="https://dittobench.ai/fixture",
-        expires_in=600,
+        expires_in=expiry,
     )
     api.get_github_link_attempt.side_effect = TransientApiError(
         "fixture temporary outage"
     )
     clock = SimpleNamespace(
-        monotonic=MagicMock(side_effect=[0.0, 0.0, 0.5, 1.0]), sleep=MagicMock()
+        monotonic=MagicMock(side_effect=[0.0, 0.0, timeout - 0.5, timeout]),
+        sleep=MagicMock(),
     )
     with (
         patch.object(link_github, "ApiClient", return_value=api),
@@ -530,7 +545,7 @@ def test_transient_github_polling_obeys_original_deadline(capsys):
         patch.object(link_github, "load_wallet") as load_wallet,
         patch.object(link_github, "time", clock),
     ):
-        assert link_github.run(args(wait=1)) == 1
+        assert link_github.run(args(wait=wait)) == 1
     assert "timed out" in capsys.readouterr().err
     api.get_github_link_attempt.assert_called_once()
     clock.sleep.assert_called_once_with(0.5)

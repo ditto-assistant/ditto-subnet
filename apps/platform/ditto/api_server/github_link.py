@@ -95,6 +95,7 @@ class GithubLinkClient:
                 token = token_response.get("access_token")
                 if not isinstance(token, str) or not token:
                     raise GithubLinkRejected("GitHub did not issue an identity token")
+                verified = False
                 try:
                     if token_response.get("token_type", "").lower() != "bearer":
                         raise GithubLinkRejected(
@@ -123,26 +124,35 @@ class GithubLinkClient:
                             "GitHub returned an invalid account id"
                         )
                     login = TypeAdapter(GithubLogin).validate_python(login)
-                    return GithubIdentity(user_id=user_id, login=login)
+                    identity = GithubIdentity(user_id=user_id, login=login)
+                    verified = True
+                    return identity
                 finally:
                     # Revoke the single transient token on success or rejection.
                     # Never revoke the user's other app tokens or authorization.
-                    revoked = await client.request(
-                        "DELETE",
-                        f"https://api.github.com/applications/{self.config.client_id}/token",
-                        auth=httpx.BasicAuth(
-                            self.config.client_id or "", self.config.client_secret or ""
-                        ),
-                        headers={
-                            "Accept": "application/vnd.github+json",
-                            "X-GitHub-Api-Version": "2022-11-28",
-                        },
-                        json={"access_token": token},
-                    )
-                    if revoked.status_code != 204:
+                    try:
+                        revoked = await client.request(
+                            "DELETE",
+                            f"https://api.github.com/applications/{self.config.client_id}/token",
+                            auth=httpx.BasicAuth(
+                                self.config.client_id or "",
+                                self.config.client_secret or "",
+                            ),
+                            headers={
+                                "Accept": "application/vnd.github+json",
+                                "X-GitHub-Api-Version": "2022-11-28",
+                            },
+                            json={"access_token": token},
+                        )
+                        cleanup_ok = revoked.status_code == 204
+                    except Exception:
+                        cleanup_ok = False
+                    # Preserve the original rejection. Cleanup cannot turn a
+                    # failed verification into success or expose provider errors.
+                    if verified and not cleanup_ok:
                         raise GithubLinkRejected(
                             "GitHub token cleanup failed; start a new link attempt"
-                        )
+                        ) from None
         except GithubLinkRejected:
             raise
         except (httpx.HTTPError, ValueError, TypeError, AttributeError):

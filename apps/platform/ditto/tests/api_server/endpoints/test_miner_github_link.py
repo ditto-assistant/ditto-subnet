@@ -50,6 +50,7 @@ class Provider:
     login = "miner-fixture"
     scope = ""
     revoke_status = 204
+    revoke_transport_error = False
 
     def __init__(self):
         self.requests = []
@@ -78,6 +79,8 @@ class Provider:
                 ).decode()
                 assert request.headers["authorization"] == f"Basic {expected}"
                 assert json.loads(request.content) == {"access_token": TOKEN}
+                if self.revoke_transport_error:
+                    raise httpx.ConnectError(f"fixture transport {TOKEN} {SECRET}")
                 return httpx.Response(self.revoke_status)
             if request.url.path.startswith("/users/"):
                 expected = base64.b64encode(
@@ -388,6 +391,57 @@ async def test_exchange_revokes_only_the_issued_token_on_every_outcome(
     assert len(deletes) == 1
     assert deletes[0].url.path == "/applications/fixture-client/token"
     assert json.loads(deletes[0].content) == {"access_token": TOKEN}
+
+
+@pytest.mark.parametrize("verification", ["scope", "identity", "success"])
+@pytest.mark.parametrize("cleanup", ["status", "transport"])
+async def test_cleanup_preserves_original_rejection_and_blocks_success(
+    app, session_maker, verification, cleanup
+):
+    provider = setup(app, session_maker)
+    if verification == "scope":
+        provider.scope = "repo"
+        expected = "public-profile-only"
+    elif verification == "identity":
+        provider.user_id = 0
+        expected = "invalid account id"
+    else:
+        expected = "token cleanup failed"
+    if cleanup == "status":
+        provider.revoke_status = 503
+    else:
+        provider.revoke_transport_error = True
+    with pytest.raises(GithubLinkRejected, match=expected) as rejected:
+        await app.state.github_link.exchange(code="fixture", verifier="fixture")
+    assert TOKEN not in str(rejected.value) and SECRET not in str(rejected.value)
+    assert len([r for r in provider.requests if r.method == "DELETE"]) == 1
+
+
+async def test_linked_attempt_is_terminal_but_session_cleanup_remains_allowed(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    started, _, _ = await browser_flow(client, token)
+    linked = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers={"authorization": f"Bearer {token}"},
+        json=signed_link(alice, started["attempt_id"]),
+    )
+    assert linked.status_code == 200, linked.text
+    async with session_maker() as session:
+        attempt = await session.get(MinerGithubLinkAttempt, UUID(started["attempt_id"]))
+        assert attempt is not None and attempt.status == "linked"
+        attempt.status = "failed"
+        with pytest.raises(DBAPIError, match="linked GitHub attempts are terminal"):
+            await session.flush()
+        await session.rollback()
+    async with session_maker() as session, session.begin():
+        attempt = await session.get(MinerGithubLinkAttempt, UUID(started["attempt_id"]))
+        assert attempt is not None and attempt.status == "linked"
+        attempt.session_id = None
+        await session.flush()
 
 
 def signed_link(

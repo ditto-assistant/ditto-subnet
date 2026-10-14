@@ -317,6 +317,21 @@ CREATE FUNCTION public.enforce_v13_ticket_cohort() RETURNS trigger
 
 
 --
+-- Name: github_link_attempt_linked_terminal(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.github_link_attempt_linked_terminal() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF OLD.status = 'linked' AND NEW.status IS DISTINCT FROM OLD.status THEN
+            RAISE EXCEPTION 'linked GitHub attempts are terminal';
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
 -- Name: github_link_revocation_only(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -10739,6 +10754,13 @@ CREATE TRIGGER miner_github_action_nonces_immutable BEFORE DELETE OR UPDATE ON p
 --
 
 CREATE TRIGGER miner_github_action_nonces_no_truncate BEFORE TRUNCATE ON public.miner_github_action_nonces FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: miner_github_link_attempts miner_github_link_attempts_linked_terminal; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_link_attempts_linked_terminal BEFORE UPDATE OF status ON public.miner_github_link_attempts FOR EACH ROW EXECUTE FUNCTION public.github_link_attempt_linked_terminal();
 
 
 --

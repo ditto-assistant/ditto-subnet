@@ -575,8 +575,9 @@ class ApiClient:
                 raise LoginRequiredError(
                     "miner session is invalid or expired; run `ditto login`"
                 )
-            if response.status_code == 404 and path.startswith(
-                "/api/v1/me/github-link"
+            if response.status_code == 404 and path in (
+                "/api/v1/me/github-link",
+                "/api/v1/me/github-link/start",
             ):
                 envelope = _safe_envelope(response)
                 message = envelope.get("message", envelope.get("detail"))

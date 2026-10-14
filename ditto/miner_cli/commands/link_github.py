@@ -127,6 +127,15 @@ def _signing_key(wallet: Any, key_kind: str) -> tuple[str, Any]:
         ) from None
 
 
+def _sign_payload(key: Any, payload: bytes) -> str:
+    try:
+        return key.sign(payload).hex()
+    except Exception:
+        raise MinerCliError(
+            "cannot sign GitHub identity proof; check the wallet signing key and retry"
+        ) from None
+
+
 def run(args: argparse.Namespace) -> int:
     network = resolve_network(args.network)
     saved = load_miner_session(network=network.name)
@@ -190,7 +199,7 @@ def run(args: argparse.Namespace) -> int:
                     proof=ContributorProof(
                         key_kind=args.key_kind,
                         signer=signer,
-                        signature=key.sign(payload).hex(),
+                        signature=_sign_payload(key, payload),
                     ),
                 )
                 client.unlink_github(token=token, body=body)
@@ -210,7 +219,9 @@ def run(args: argparse.Namespace) -> int:
             if not args.no_browser:
                 with contextlib.suppress(Exception):
                     webbrowser.open(started.authorize_url, new=2)
-            deadline = time.monotonic() + max(1, min(args.wait, started.expires_in))
+            deadline = time.monotonic() + max(
+                1, min(args.wait, 600, started.expires_in)
+            )
             while time.monotonic() < deadline:
                 try:
                     attempt = client.get_github_link_attempt(
@@ -283,7 +294,7 @@ def run(args: argparse.Namespace) -> int:
                         proof=ContributorProof(
                             key_kind=args.key_kind,
                             signer=signer,
-                            signature=key.sign(payload).hex(),
+                            signature=_sign_payload(key, payload),
                         ),
                     )
                     _print(

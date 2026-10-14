@@ -118,7 +118,7 @@ class TestContributorAvailabilityErrors:
                 token="fixture-token", attempt_id=UUID(int=1)
             )
 
-    @pytest.mark.parametrize("operation", ["status", "start", "attempt"])
+    @pytest.mark.parametrize("operation", ["status", "start"])
     @pytest.mark.parametrize(
         "body", [{"detail": "Not Found"}, {"error_code": 3002, "message": "Not Found"}]
     )
@@ -133,10 +133,34 @@ class TestContributorAvailabilityErrors:
                 client.get_github_link(token="fixture-token")
             elif operation == "start":
                 client.start_github_link(token="fixture-token")
-            else:
-                client.get_github_link_attempt(
-                    token="fixture-token", attempt_id=UUID(int=1)
+
+    @pytest.mark.parametrize(
+        "suffix", ["/attempts/" + str(UUID(int=1)), "/confirm", "/unlink"]
+    )
+    @pytest.mark.parametrize(
+        "body",
+        [None, {"detail": "Not Found"}, {"error_code": 3002, "message": "Not Found"}],
+    )
+    def test_generic_action_not_found_does_not_claim_platform_upgrade(
+        self, suffix, body
+    ):
+        with (
+            make_client(
+                lambda _: (
+                    httpx.Response(404, json=body)
+                    if body is not None
+                    else httpx.Response(404)
                 )
+            ) as client,
+            pytest.raises(ApiResponseError) as caught,
+        ):
+            client._contributor_response(
+                "GET" if suffix.startswith("/attempts/") else "POST",
+                "/api/v1/me/github-link" + suffix,
+                token="fixture-token",
+            )
+        assert "HTTP 404" in str(caught.value)
+        assert "upgrade Platform" not in str(caught.value)
 
     @pytest.mark.parametrize("field", ["detail", "message"])
     def test_unknown_attempt_preserves_endpoint_error(self, field) -> None:
