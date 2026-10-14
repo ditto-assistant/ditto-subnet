@@ -162,6 +162,13 @@ def run(args: argparse.Namespace) -> int:
                 nonce=nonce,
                 issued_at=issued,
             )
+            try:
+                signature = wallet.hotkey.sign(payload).hex()
+            except Exception:
+                # Wallet SDK errors can echo keyfile details; keep them private.
+                raise MinerCliError(
+                    "cannot sign the CLA; check the hotkey signing key and retry"
+                ) from None
             result = client.sign_cla(
                 ClaSignRequest(
                     netuid=status.netuid,
@@ -170,7 +177,7 @@ def run(args: argparse.Namespace) -> int:
                     cla_sha256=digest,
                     nonce=nonce,
                     issued_at=issued,
-                    signature=wallet.hotkey.sign(payload).hex(),
+                    signature=signature,
                 )
             )
             if args.json:

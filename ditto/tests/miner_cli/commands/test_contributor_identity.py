@@ -591,6 +591,40 @@ def test_malformed_successful_cla_responses_fail_cleanly(tmp_path, capsys, stage
     assert "malformed fixture response" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("failure", ["unlock", "sign"])
+def test_cla_wallet_failure_is_actionable_without_traceback(tmp_path, capsys, failure):
+    class KeyfileFailure(RuntimeError):
+        pass
+
+    def fail_sign(_payload):
+        raise KeyfileFailure("private SDK error fixture")
+
+    class LockedWallet:
+        @property
+        def hotkey(self):
+            if failure == "unlock":
+                raise KeyfileFailure("private SDK error fixture")
+            return SimpleNamespace(ss58_address=KEY.ss58_address, sign=fail_sign)
+
+    api = client()
+    handle, _live = wallet()
+    v = version()
+    with (
+        patch.object(cla, "ApiClient", return_value=api),
+        patch.object(cla, "load_wallet", return_value=(handle, LockedWallet())),
+    ):
+        assert (
+            cla.run(
+                args(output=tmp_path / "CLA.md", confirmation=f"SIGN CLA 1 {v.sha256}")
+            )
+            == 1
+        )
+    err = capsys.readouterr().err
+    assert "cannot sign the CLA" in err
+    assert "private SDK error fixture" not in err
+    api.sign_cla.assert_not_called()
+
+
 def test_cla_confirmation_interrupt_exits_130_without_signing(tmp_path, capsys):
     api = client()
     handle, live = wallet()
