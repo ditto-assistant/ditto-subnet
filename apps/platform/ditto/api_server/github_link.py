@@ -123,10 +123,16 @@ class GithubLinkClient:
     async def public_identity(self, login: str) -> GithubIdentity:
         """Revalidate a recorded display label before accepting a bounty claim.
 
-        Numeric id must still match the immutable OAuth link. No OAuth token
-        is needed, and redirects or provider failures never prove identity.
+        Numeric id must still match the immutable OAuth link. The server-only
+        app credentials use its own public-data rate budget; no miner token or
+        stale identity cache is used. Provider failures never prove identity.
         """
         login = TypeAdapter(GithubLogin).validate_python(login)
+        if not self.config.client_id or not self.config.client_secret:
+            raise GithubLinkRejected(
+                "live GitHub identity verification requires configured "
+                "OAuth app credentials"
+            )
         try:
             async with httpx.AsyncClient(
                 transport=self.transport,
@@ -135,6 +141,9 @@ class GithubLinkClient:
             ) as client:
                 response = await client.get(
                     f"https://api.github.com/users/{login}",
+                    auth=httpx.BasicAuth(
+                        self.config.client_id, self.config.client_secret
+                    ),
                     headers={
                         "Accept": "application/vnd.github+json",
                         "X-GitHub-Api-Version": "2022-11-28",

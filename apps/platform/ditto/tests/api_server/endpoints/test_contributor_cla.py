@@ -364,6 +364,20 @@ async def test_shadow_counts_only_unsigned_uploads_despite_later_archive_failure
     app.dependency_overrides[get_storage_client] = lambda: storage
     raw = b"TEST FIXTURE: not a gzip archive"
     digest = hashlib.sha256(raw).hexdigest()
+    checked = await client.post(
+        "/api/v1/upload/check",
+        json={
+            "hotkey": alice.ss58_address,
+            "sha256": digest,
+            "file_size_bytes": len(raw),
+            **_signed_upload_auth(alice, hotkey=alice.ss58_address, sha256=digest),
+        },
+    )
+    assert checked.status_code == 200 and checked.json()["ok"], checked.text
+    async with session_maker() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(ClaShadowUpload)) == 0
+        )
     response = await client.post(
         "/api/v1/upload/agent",
         data={
@@ -430,6 +444,15 @@ async def test_future_version_publication_hash_guards_policy_cas_and_adoption(
                     status=AgentStatus.SCORED,
                 )
             )
+        session.add(
+            Agent(
+                agent_id=uuid4(),
+                miner_hotkey=bittensor.Keypair.create_from_uri("//Eve").ss58_address,
+                name="banned-only",
+                sha256="ab" * 32,
+                status=AgentStatus.BANNED,
+            )
+        )
     await policy(client, "shadow")
     async with session_maker() as session, session.begin():
         decision = await evaluate_cla_gate(session, netuid=118, hotkey=bob.ss58_address)

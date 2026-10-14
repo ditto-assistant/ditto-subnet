@@ -4,10 +4,40 @@ from uuid import UUID
 import pytest
 
 from ditto_screening_protocol.contributor_identity import (
+    ClaPublishRequest,
     cla_message,
     github_link_message,
     github_unlink_message,
 )
+
+
+@pytest.mark.parametrize("text", ["a" * 262144, "猫" * (262144 // 3)])
+def test_cla_publish_accepts_text_within_utf8_byte_limit(text):
+    assert (
+        ClaPublishRequest(
+            version=1,
+            sha256="a" * 64,
+            text=text,
+            effective_at=datetime.now(UTC),
+            reason="fixture publication",
+            confirmation="fixture confirmation",
+        ).text
+        == text
+    )
+
+
+def test_cla_publish_rejects_multibyte_text_over_byte_limit():
+    text = "猫" * (262144 // 3 + 1)
+    assert len(text) < 262144
+    with pytest.raises(ValueError, match="UTF-8 limit"):
+        ClaPublishRequest(
+            version=1,
+            sha256="a" * 64,
+            text=text,
+            effective_at=datetime.now(UTC),
+            reason="fixture publication",
+            confirmation="fixture confirmation",
+        )
 
 
 @pytest.mark.parametrize("kind", ["cla", "link", "unlink"])

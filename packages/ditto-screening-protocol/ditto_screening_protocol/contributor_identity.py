@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 Address = Annotated[str, Field(pattern=r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -171,6 +171,13 @@ class ClaPublishRequest(WireModel):
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
+
+    @field_validator("text")
+    @classmethod
+    def text_fits_utf8_byte_limit(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 262144:
+            raise ValueError("CLA text exceeds the 262144-byte UTF-8 limit")
+        return value
 
 
 def _issued_stamp(issued_at: datetime) -> str:

@@ -509,6 +509,13 @@ func TestCLAShadowChecksDoNotFloodWarnings(t *testing.T) {
 	if !strings.Contains(logs.String(), "unsigned CLA prepayment check") {
 		t.Fatal("debug diagnostic missing")
 	}
+	var observed int
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM cla_shadow_uploads").Scan(&observed); err != nil {
+		t.Fatal(err)
+	}
+	if observed != 0 {
+		t.Fatalf("dry-run checks counted as upload attempts: %d", observed)
+	}
 }
 
 func TestCLAMissingPolicyFailsClosedBeforeAdmission(t *testing.T) {

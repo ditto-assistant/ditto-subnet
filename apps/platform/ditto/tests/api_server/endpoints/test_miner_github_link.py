@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -68,7 +69,10 @@ class Provider:
                     200, json={"id": self.user_id, "login": self.login}
                 )
             if request.url.path.startswith("/users/"):
-                assert "authorization" not in request.headers
+                expected = base64.b64encode(
+                    f"fixture-client:{SECRET}".encode()
+                ).decode()
+                assert request.headers["authorization"] == f"Basic {expected}"
                 return httpx.Response(
                     200, json={"id": self.user_id, "login": self.login}
                 )
@@ -364,6 +368,22 @@ async def test_browser_binding_consent_and_session_binding_are_required(
             params={"state": params["state"][0], "code": "fixture-code"},
         )
     ).status_code == 400
+
+
+async def test_live_identity_uses_app_auth_and_never_reuses_stale_results(
+    app, session_maker
+):
+    provider = setup(app, session_maker)
+    assert (await app.state.github_link.public_identity(provider.login)).user_id == 100
+    provider.user_id = 200
+    assert (await app.state.github_link.public_identity(provider.login)).user_id == 200
+    requests = [r for r in provider.requests if r.url.path.startswith("/users/")]
+    assert len(requests) == 2
+    assert all(SECRET not in str(r.url) for r in requests)
+    unconfigured = GithubLinkClient(GithubLinkConfig(), transport=provider.transport())
+    with pytest.raises(GithubLinkRejected, match="configured OAuth app credentials"):
+        await unconfigured.public_identity(provider.login)
+    assert len(provider.requests) == 2
 
 
 @pytest.mark.parametrize("action", ["confirm", "unlink"])

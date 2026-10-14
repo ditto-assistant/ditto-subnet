@@ -47,7 +47,7 @@ class UploadCheckRequest(BaseModel):
     """Lowercase hex of the tarball SHA-256 digest."""
 
     name: Annotated[str, Field(min_length=1, max_length=64)] | None = None
-    """Submission name, required to recognize an exact accepted-artifact retry.
+    """Optional name hint for accepted-artifact retry checks.
 
     Older clients may omit it; the multipart endpoint always rechecks the name.
     """

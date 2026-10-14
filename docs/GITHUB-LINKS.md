@@ -87,7 +87,14 @@ records the claim; never construct evidence from client JSON. Evidence expires
 after two minutes. The guard rejects absent links, mismatched
 logins, renamed/reassigned logins, unavailable GitHub evidence and missing
 current consent when CLA enforcement is enabled. It checks the public login's
-current numeric id against the OAuth-proven id. Call it in the same transaction
+current numeric id against the OAuth-proven id.
+
+The fresh public-data request uses the OAuth app's server-only client credentials
+under GitHub's [app rate budget](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#primary-rate-limit-for-oauth-apps).
+It requires configured app credentials and never caches a positive identity;
+renaming or reassignment is checked again for each prepared claim.
+
+Call the guard in the same transaction
 that records the claim: link revocation and policy changes are serialized with
 that transaction. Persist the returned link id, numeric user id and consent
 receipt id for audit. The result intentionally contains no payee field.

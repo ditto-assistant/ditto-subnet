@@ -264,7 +264,7 @@ async def control(
     active = (
         select(Agent.miner_hotkey.label("hotkey"))
         .where(
-            Agent.status != AgentStatus.REJECTED,
+            Agent.status.not_in((AgentStatus.REJECTED, AgentStatus.BANNED)),
             ~select(SubmissionRetirement.agent_id)
             .where(SubmissionRetirement.agent_id == Agent.agent_id)
             .exists(),

@@ -117,8 +117,12 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
                 "/api/v1/upload/check", json={**recovery, "name": name}
             )
             assert non_exact.status_code == 200, non_exact.text
-            assert not non_exact.json()["ok"]
-            assert 1106 in non_exact.json()["error_codes"]
+            if name is None:
+                assert non_exact.json()["ok"]
+                assert not non_exact.json()["payment_required"]
+            else:
+                assert not non_exact.json()["ok"]
+                assert 1106 in non_exact.json()["error_codes"]
         credit_block = "0x" + "32" * 32
         async with session_maker() as session, session.begin():
             session.add(

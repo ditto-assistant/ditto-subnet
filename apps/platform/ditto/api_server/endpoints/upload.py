@@ -266,7 +266,9 @@ async def check(
         messages.append("hotkey is banned from submitting")
 
     # Consent is checked before admission or a new payment. An exact retry of
-    # an already accepted artifact is not a new contribution.
+    # an already accepted artifact is not a new contribution. The optional name
+    # is a dry-run hint for newer clients; reservations bind hotkey/SHA, and
+    # the multipart commit always rechecks the exact stored name.
     if signature_valid and not banned:
         cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=body.hotkey)
         if not cla.allowed:
@@ -283,8 +285,8 @@ async def check(
             exact_retry = (
                 existing_retry is not None
                 and existing_retry.miner_hotkey == body.hotkey
-                and existing_retry.name == body.name
                 and existing_retry.sha256 == body.sha256
+                and (body.name is None or existing_retry.name == body.name)
             )
             if not exact_retry:
                 codes.append(CLA_REQUIRED_ERROR_CODE)
