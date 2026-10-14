@@ -267,6 +267,8 @@ async def control(
     total = int(
         await session.scalar(select(func.count()).select_from(ClaSettingsRevision)) or 0
     )
+    # Agents are this Platform's single-subnet corpus and have no netuid column.
+    # Consent proofs use the deployment's current signing context below.
     active = (
         select(Agent.miner_hotkey.label("hotkey"))
         .where(

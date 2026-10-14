@@ -634,6 +634,46 @@ func TestCLAMissingPolicyFailsClosedBeforeAdmission(t *testing.T) {
 	}
 }
 
+func TestCLAUnknownModeFailsClosedBeforeAdmission(t *testing.T) {
+	for _, phase := range []string{"preflight", "reservation"} {
+		t.Run(phase, func(t *testing.T) {
+			pool := testutil.NewTestPGPool(t)
+			secret, hotkey := newSignedHotkey(t)
+			now := time.Now().UTC()
+			d := uploadDeps(pool, "5Owner", now)
+			// Simulate a future policy migration that an older relay cannot interpret.
+			testutil.SeedSQL(t, pool, "ALTER TABLE cla_settings_revisions DROP CONSTRAINT ck_cla_settings_revisions_mode")
+			publishUnknown := func() {
+				testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+					VALUES (1,0,'future-mode','fixture','forward compatibility test',now())`)
+			}
+			if phase == "preflight" {
+				publishUnknown()
+			} else {
+				calls := 0
+				d.Now = func() time.Time {
+					calls++
+					if calls == 2 {
+						publishUnknown()
+					}
+					return now
+				}
+			}
+			body := signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), map[string]any{"reserve_submission_slot": true})
+			r := httptest.NewRequest("POST", "/api/v1/upload/check", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			d.handleCheck(w, r)
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("unknown mode was accepted: %d %s", w.Code, w.Body.String())
+			}
+			var reservations int
+			if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM upload_admission_reservations").Scan(&reservations); err != nil || reservations != 0 {
+				t.Fatalf("unknown mode created admissions=%d err=%v", reservations, err)
+			}
+		})
+	}
+}
+
 func TestCLARejectsNetuidNarrowingBeforeAdmission(t *testing.T) {
 	pool := testutil.NewTestPGPool(t)
 	secret, hotkey := newSignedHotkey(t)

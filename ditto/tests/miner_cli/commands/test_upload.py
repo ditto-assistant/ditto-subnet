@@ -129,7 +129,7 @@ class TestOwnerLinkOffer:
             hotkey_ss58="5OldHotkey",
         )
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-        monkeypatch.setattr("builtins.input", lambda _prompt: "yes")
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "yes")
         with patch(
             "ditto.miner_cli.commands.attest._run_attest", return_value=0
         ) as submit:
@@ -731,7 +731,7 @@ class TestUploadFailurePaths:
         fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
         receipt = _payment_receipt()
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-        monkeypatch.setattr("builtins.input", lambda _prompt: "")
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "")
 
         with (
             patch(

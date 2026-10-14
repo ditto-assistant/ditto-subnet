@@ -243,8 +243,15 @@ type claRequiredError struct{ message string }
 
 func (e *claRequiredError) Error() string { return e.message }
 
-func claGateRejection(consent postgres.GetClaUploadGateRow) *claRequiredError {
-	if consent.Mode != "enforce" || consent.HasSignature {
+func claGateRejection(consent postgres.GetClaUploadGateRow) error {
+	switch consent.Mode {
+	case "off", "shadow":
+		return nil
+	case "enforce":
+	default:
+		return errors.New("unknown CLA mode")
+	}
+	if consent.HasSignature {
 		return nil
 	}
 	message := "No effective contributor agreement is published; contact the operator before submitting."
@@ -439,7 +446,12 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 			d.dbError(w, r, "CLA gate lookup", qerr)
 			return
 		}
-		if rejection := claGateRejection(consent); rejection != nil {
+		if gateError := claGateRejection(consent); gateError != nil {
+			var rejection *claRequiredError
+			if !errors.As(gateError, &rejection) {
+				d.dbError(w, r, "CLA gate lookup", gateError)
+				return
+			}
 			appendFailure(&codes, &messages, errorCLARequired, rejection.message)
 		} else if consent.Mode == "shadow" && !consent.HasSignature {
 			d.Logger.Debug("unsigned CLA prepayment check in shadow mode", slog.String("hotkey", *payload.Hotkey))

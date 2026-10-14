@@ -187,11 +187,12 @@ class TestClaTextStreaming:
         stream = Chunks()
         with (
             make_client(lambda _: httpx.Response(status, stream=stream)) as client,
-            pytest.raises(ApiResponseError, match="size limit"),
+            pytest.raises(ApiResponseError, match="size limit") as caught,
         ):
             client.get_cla_text(version=1)
         assert stream.consumed == 33
         assert stream.closed
+        assert f"HTTP {status}" in str(caught.value)
 
     def test_gzip_text_is_decoded_once(self):
         document = "TEST FIXTURE ONLY. No legal terms. é\n".encode()

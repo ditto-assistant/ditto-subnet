@@ -395,6 +395,17 @@ async def test_live_identity_redirects_require_relink_without_forwarding_credent
     assert SECRET not in str(rejected.value)
 
 
+@pytest.mark.parametrize("login", ["", "invalid/name", "invalid:login", "a" * 40])
+async def test_malformed_stored_login_is_rejected_without_network_or_input_details(
+    app, session_maker, login
+):
+    provider = setup(app, session_maker)
+    with pytest.raises(GithubLinkRejected, match="identity is unavailable") as rejected:
+        await app.state.github_link.public_identity(login)
+    assert provider.requests == []
+    assert "validation" not in str(rejected.value)
+
+
 async def test_live_identity_uses_app_auth_and_never_reuses_stale_results(
     app, session_maker
 ):

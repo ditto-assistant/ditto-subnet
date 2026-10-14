@@ -127,13 +127,13 @@ class GithubLinkClient:
         app credentials use its own public-data rate budget; no miner token or
         stale identity cache is used. Provider failures never prove identity.
         """
-        login = TypeAdapter(GithubLogin).validate_python(login)
         if not self.config.client_id or not self.config.client_secret:
             raise GithubLinkRejected(
                 "live GitHub identity verification requires configured "
                 "OAuth app credentials"
             )
         try:
+            login = TypeAdapter(GithubLogin).validate_python(login)
             async with httpx.AsyncClient(
                 transport=self.transport,
                 timeout=self.config.timeout_seconds,

@@ -191,7 +191,8 @@ class ApiClient:
                     for chunk in response.iter_bytes(chunk_size=8192):
                         if len(content) + len(chunk) > max_body_bytes:
                             raise ApiResponseError(
-                                "API response exceeds the size limit"
+                                "API response exceeds the size limit "
+                                f"(HTTP {response.status_code})"
                             )
                         content.extend(chunk)
                     headers = httpx.Headers(response.headers)

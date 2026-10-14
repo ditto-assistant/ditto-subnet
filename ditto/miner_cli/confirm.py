@@ -82,7 +82,7 @@ def confirm_payment(
         return
 
     try:
-        response = input("Confirm payment? [y/N]: ").strip().lower()
+        response = prompt_input("Confirm payment? [y/N]: ").strip().lower()
     except EOFError as e:
         raise PaymentCancelledError("payment cancelled: EOF on stdin") from e
 
@@ -138,7 +138,7 @@ def confirm_registration(*, quote: RegistrationQuote, skip: bool) -> None:
         return
 
     try:
-        response = input("Register this hotkey now? [y/N]: ").strip().lower()
+        response = prompt_input("Register this hotkey now? [y/N]: ").strip().lower()
     except EOFError as e:
         raise RegistrationCancelledError("registration cancelled: EOF on stdin") from e
 
@@ -219,7 +219,7 @@ def confirm_attestation(
         return
 
     try:
-        response = input("Submit this attestation? [y/N]: ").strip().lower()
+        response = prompt_input("Submit this attestation? [y/N]: ").strip().lower()
     except EOFError as e:
         raise AttestationCancelledError("attestation cancelled: EOF on stdin") from e
 
@@ -258,7 +258,7 @@ def confirm_name_action(
         return
 
     try:
-        response = input(f"Submit this name {action}? [y/N]: ").strip().lower()
+        response = prompt_input(f"Submit this name {action}? [y/N]: ").strip().lower()
     except EOFError as e:
         raise NameClaimCancelledError(f"name {action} cancelled: EOF on stdin") from e
 
@@ -294,7 +294,7 @@ def confirm_avatar_action(
         return
 
     try:
-        response = input(f"Submit this avatar {action}? [y/N]: ").strip().lower()
+        response = prompt_input(f"Submit this avatar {action}? [y/N]: ").strip().lower()
     except EOFError as e:
         raise AvatarCancelledError(f"avatar {action} cancelled: EOF on stdin") from e
 
@@ -334,7 +334,7 @@ def confirm_login_action(
         return
 
     try:
-        response = input("Approve this login? [y/N]: ").strip().lower()
+        response = prompt_input("Approve this login? [y/N]: ").strip().lower()
     except EOFError as e:
         raise LoginCancelledError("login cancelled: EOF on stdin") from e
 
