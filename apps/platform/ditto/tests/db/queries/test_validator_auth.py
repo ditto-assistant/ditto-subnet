@@ -11,11 +11,40 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ditto.db.models import ValidatorRequestNonce
 from ditto.db.queries.validator_auth import (
+    VALIDATOR_NONCE_EXPIRY_MARGIN,
     VALIDATOR_NONCE_JANITOR_LOCK_KEY,
     ValidatorRequestReplayError,
     consume_validator_nonce,
     delete_expired_validator_nonces,
+    nonce_expires_at,
 )
+
+
+def test_future_dated_request_keeps_the_nonce_past_the_signature() -> None:
+    now = datetime(2026, 10, 14, 12, tzinfo=UTC)
+    requested_at = now + timedelta(minutes=2)
+    max_age = timedelta(minutes=2)
+    expires_at = nonce_expires_at(now=now, requested_at=requested_at, max_age=max_age)
+    assert expires_at == requested_at + max_age + VALIDATOR_NONCE_EXPIRY_MARGIN
+    assert expires_at > requested_at + max_age
+
+
+def test_past_request_is_retained_from_receipt() -> None:
+    now = datetime(2026, 10, 14, 12, tzinfo=UTC)
+    requested_at = now - timedelta(minutes=1)
+    max_age = timedelta(minutes=2)
+    expires_at = nonce_expires_at(now=now, requested_at=requested_at, max_age=max_age)
+    assert expires_at == now + max_age + VALIDATOR_NONCE_EXPIRY_MARGIN
+
+
+def test_naive_nonce_time_is_rejected() -> None:
+    now = datetime(2026, 10, 14, 12, tzinfo=UTC)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        nonce_expires_at(
+            now=now,
+            requested_at=datetime(2026, 10, 14, 12),
+            max_age=timedelta(minutes=2),
+        )
 
 
 async def test_signed_request_only_inserts_its_nonce(

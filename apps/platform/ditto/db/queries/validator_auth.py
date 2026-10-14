@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -20,6 +20,27 @@ class ValidatorRequestReplayError(Exception):
 
 
 VALIDATOR_NONCE_JANITOR_LOCK_KEY = "ditto:validator-nonce-janitor:v1"
+# The janitor sweeps once a minute. Keep the row through the sweep that can
+# land on the signature's last legal instant.
+VALIDATOR_NONCE_EXPIRY_MARGIN = timedelta(seconds=60)
+
+
+def nonce_expires_at(
+    *, now: datetime, requested_at: datetime, max_age: timedelta
+) -> datetime:
+    """Retain a nonce until the signed request itself is no longer acceptable.
+
+    A future ``requested_at`` stays valid until ``requested_at + max_age``.
+    Storing ``now + max_age`` drops the guard while that signature still
+    verifies. The margin covers one janitor sweep on that boundary.
+    """
+    if now.tzinfo is None or requested_at.tzinfo is None:
+        raise ValueError("nonce times must be timezone-aware")
+    if max_age <= timedelta(0):
+        raise ValueError("max_age must be positive")
+    current = now.astimezone(UTC)
+    requested = requested_at.astimezone(UTC)
+    return max(current, requested) + max_age + VALIDATOR_NONCE_EXPIRY_MARGIN
 
 
 async def consume_validator_nonce(
@@ -100,8 +121,10 @@ async def delete_expired_validator_nonces(
 
 
 __all__ = [
+    "VALIDATOR_NONCE_EXPIRY_MARGIN",
     "VALIDATOR_NONCE_JANITOR_LOCK_KEY",
     "ValidatorRequestReplayError",
     "consume_validator_nonce",
     "delete_expired_validator_nonces",
+    "nonce_expires_at",
 ]

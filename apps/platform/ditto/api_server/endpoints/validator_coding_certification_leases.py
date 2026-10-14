@@ -79,6 +79,7 @@ from ditto.db.queries.coding_inference_grants import (
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+    nonce_expires_at,
 )
 
 router = APIRouter(prefix="/validator", tags=["validator"])
@@ -139,6 +140,7 @@ async def issue_lease(
         validator_hotkey=payload.validator_hotkey,
         nonce=payload.nonce,
         now=now,
+        requested_at=payload.requested_at,
         mutate=_issue,
         conflict_detail="coding certification lease already exists for this artifact",
     )
@@ -190,6 +192,7 @@ async def claim_lease(
         validator_hotkey=payload.validator_hotkey,
         nonce=payload.nonce,
         now=now,
+        requested_at=payload.requested_at,
         mutate=_claim,
         conflict_detail="coding certification lease already exists for this artifact",
     )
@@ -241,6 +244,7 @@ async def abort_lease(
         validator_hotkey=payload.validator_hotkey,
         nonce=payload.nonce,
         now=now,
+        requested_at=payload.requested_at,
         mutate=_abort,
         conflict_detail="claimed coding certification lease cannot be aborted",
     )
@@ -308,7 +312,11 @@ async def request_coding_certification_harness_launch(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError:
             raise HTTPException(
@@ -508,7 +516,11 @@ async def request_coding_certification_inference_grant(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=_REQUEST_MAX_AGE,
+                ),
             )
             result = await ensure_coding_certification_inference_grant(
                 session,
@@ -600,7 +612,11 @@ async def exchange_coding_certification_inference_grant(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=_REQUEST_MAX_AGE,
+                ),
             )
             activated = await activate_coding_certification_inference_grant(
                 session,
@@ -690,7 +706,11 @@ async def revoke_coding_certification_inference_grant_endpoint(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=_REQUEST_MAX_AGE,
+                ),
             )
             revoked = await revoke_coding_certification_inference_grant(
                 session,
@@ -799,6 +819,7 @@ async def _run_signed_lease_mutation(
     validator_hotkey: str,
     nonce: UUID,
     now: datetime,
+    requested_at: datetime,
     mutate: Callable[[], Awaitable[CodingCertificationLeaseResult]],
     conflict_detail: str,
 ) -> CodingCertificationLeaseResult:
@@ -811,7 +832,11 @@ async def _run_signed_lease_mutation(
                     nonce=nonce,
                     validator_hotkey=validator_hotkey,
                     now=now,
-                    expires_at=now + _REQUEST_MAX_AGE,
+                    expires_at=nonce_expires_at(
+                        now=now,
+                        requested_at=requested_at,
+                        max_age=_REQUEST_MAX_AGE,
+                    ),
                 )
             except ValidatorRequestReplayError:
                 if not result.idempotent:
@@ -833,6 +858,7 @@ async def _run_signed_lease_mutation(
             validator_hotkey=validator_hotkey,
             nonce=nonce,
             now=now,
+            requested_at=requested_at,
         )
         if isinstance(error, CodingCertificationLeaseNotAvailableError):
             raise HTTPException(
@@ -859,6 +885,7 @@ async def _consume_failed_request_nonce(
     validator_hotkey: str,
     nonce: UUID,
     now: datetime,
+    requested_at: datetime,
 ) -> None:
     try:
         async with session.begin():
@@ -867,7 +894,11 @@ async def _consume_failed_request_nonce(
                 nonce=nonce,
                 validator_hotkey=validator_hotkey,
                 now=now,
-                expires_at=now + _REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=requested_at,
+                    max_age=_REQUEST_MAX_AGE,
+                ),
             )
     except ValidatorRequestReplayError as error:
         raise HTTPException(
