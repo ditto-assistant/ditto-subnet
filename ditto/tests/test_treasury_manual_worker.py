@@ -694,7 +694,7 @@ def test_request_refusal_after_healthy_readiness_is_not_observation_failure(
 
     monkeypatch.setitem(consume.__globals__, "consume_manual", refused)
     consume(mailbox, journal, p, c)
-    assert [x["status"] for x in mailbox.reports] == ["readiness"] * 4
+    assert [x["status"] for x in mailbox.reports] == ["readiness"]
     assert mailbox.acks == [] and len(c.sent) == 1
     log = capsys.readouterr().out
     assert (
@@ -813,4 +813,37 @@ def test_failed_receipt_chunk_rolls_back_only_unproved_progress(tmp_path):
         == 1
     )
     assert len(c.sent) == 1
+    journal.close()
+
+
+@pytest.mark.parametrize("cursor,reports", [(100, 1), (96, 2)])
+def test_caught_up_worker_publishes_readiness_then_stops_redundant_chunks(
+    tmp_path, cursor, reports
+):
+    import runpy
+    from pathlib import Path
+
+    module = runpy.run_path(
+        str(Path(__file__).resolve().parents[2] / "scripts/treasury_manual_worker.py")
+    )
+    p, c, journal, _, mailbox = setup(tmp_path)
+    journal.db.execute("UPDATE cursor SET block=?", (cursor,))
+    c.income = {}
+    calls, pulls = [], []
+    original = c.earnings
+
+    def earnings(policy, block):
+        calls.append(block)
+        return original(policy, block)
+
+    def pull():
+        pulls.append(True)
+        return None
+
+    c.earnings, mailbox.pull = earnings, pull
+    module["consume_iteration"](mailbox, journal, p, c)
+    assert calls == list(range(cursor + 1, 101))
+    assert len(mailbox.reports) == reports
+    assert all(r["status"] == "readiness" for r in mailbox.reports)
+    assert pulls == [True] and len(c.sent) == 1 and not journal.db.in_transaction
     journal.close()

@@ -21,8 +21,14 @@ def consume_iteration(mailbox, journal, policy, chain):
     # a time so current custody readiness is not starved by archive catch-up.
     # No automatic money tick; still pull only one manual message below.
     for _ in range(4):
+        cursor = journal.db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
         observe_earnings(journal, policy, chain, max_blocks=8)
         publish_current_readiness(mailbox, journal, policy, chain)
+        if (
+            journal.db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
+            == cursor
+        ):
+            break
     message = mailbox.pull()
     if message:
         try:
