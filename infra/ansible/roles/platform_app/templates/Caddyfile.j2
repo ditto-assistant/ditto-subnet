@@ -94,10 +94,9 @@
     reverse_proxy localhost:{{ platform_api_port }}
 {% endif %}
 
-    # request_body answers 413 itself, before reverse_proxy, so the API never
-    # gets to write its error envelope. This covers every cap above. Other
-    # statuses keep Caddy's default error handler. 3004 is the transport body
-    # cap; the route's own tighter cap still answers 3002 from the app.
+    # request_body bounds streamed reads while proxying. Format these edge
+    # errors consistently across every proxy above; other statuses keep
+    # Caddy's default error handler. Route-specific app limits still apply.
     handle_errors 413 {
         header Content-Type application/json
         header Connection close
