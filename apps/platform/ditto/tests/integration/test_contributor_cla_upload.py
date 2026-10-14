@@ -12,7 +12,7 @@ from uuid import UUID
 import bittensor
 import httpx
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from ditto.api_server import create_api_server
 from ditto.api_server.dependencies import get_payment_verifier, get_storage_client
@@ -21,7 +21,7 @@ from ditto.api_server.storage import (
     create_storage_client,
     parse_storage_config_from_env,
 )
-from ditto.db.models import Agent, AgentClaBinding, EvaluationPayment
+from ditto.db.models import Agent, AgentClaBinding, ClaShadowUpload, EvaluationPayment
 from ditto.tests.api_server.conftest import make_api_server_config
 from ditto.tests.api_server.endpoints.test_contributor_cla import (
     policy,
@@ -275,3 +275,81 @@ async def test_check_and_artifact_commit_share_policy_then_coldkey_lock_order(
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def test_shadow_observes_only_accepted_unsigned_artifacts(
+    app, client, session_maker, object_storage
+):
+    del object_storage
+    setup(app, session_maker)
+    app.state.session_maker = session_maker
+    app.state.embedder = SimpleNamespace(embed=AsyncMock(return_value=None))
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    owner = bittensor.Keypair.create_from_uri("//Bob").ss58_address
+    await publish(client)
+    await policy(client, "shadow")
+    block_hash = "0x" + "51" * 32
+    verifier = SimpleNamespace(
+        verify_payment=AsyncMock(
+            return_value=VerifiedPayment(
+                block_hash=block_hash,
+                extrinsic_index=0,
+                miner_hotkey=alice.ss58_address,
+                miner_coldkey=owner,
+                amount_rao=40_000_000,
+                tao_usd_rate=Decimal("400"),
+                dest_address=app.state.config.upload_payment_address,
+                block_timestamp=datetime.now(UTC),
+            )
+        )
+    )
+    app.dependency_overrides[get_payment_verifier] = lambda: verifier
+
+    async def observations() -> int:
+        async with session_maker() as session:
+            return int(
+                await session.scalar(select(func.count()).select_from(ClaShadowUpload))
+            )
+
+    async with create_storage_client(parse_storage_config_from_env()) as storage:
+        app.dependency_overrides[get_storage_client] = lambda: storage
+        data, files = _build_form(keypair=alice, block_hash=block_hash)
+        uploaded = await client.post("/api/v1/upload/agent", data=data, files=files)
+        assert uploaded.status_code == 200, uploaded.text
+        agent_id = UUID(uploaded.json()["agent_id"])
+        assert await observations() == 1
+        retry_data, retry_files = _build_form(keypair=alice, block_hash=block_hash)
+        retried = await client.post(
+            "/api/v1/upload/agent", data=retry_data, files=retry_files
+        )
+        assert retried.status_code == 200, retried.text
+        assert await observations() == 1
+        # A credit owned by another hotkey passes the CLA gate but is rejected
+        # by the later payment checks, so it must not count as an upload.
+        credit_block = "0x" + "52" * 32
+        async with session_maker() as session, session.begin():
+            session.add(
+                EvaluationPayment(
+                    block_hash=credit_block,
+                    extrinsic_index=0,
+                    agent_id=None,
+                    credit_for_agent_id=agent_id,
+                    miner_hotkey=bittensor.Keypair.create_from_uri(
+                        "//Charlie"
+                    ).ss58_address,
+                    miner_coldkey=owner,
+                    amount_rao=40_000_000,
+                    dest_address=app.state.config.upload_payment_address,
+                    timestamp=datetime.now(UTC),
+                )
+            )
+        stolen_data, stolen_files = _build_form(
+            keypair=alice, block_hash=credit_block, name="credit-agent"
+        )
+        stolen = await client.post(
+            "/api/v1/upload/agent", data=stolen_data, files=stolen_files
+        )
+        assert stolen.status_code == 402, stolen.text
+        assert stolen.json()["error_code"] == 3207
+        assert await observations() == 1
+        verifier.verify_payment.assert_awaited_once()

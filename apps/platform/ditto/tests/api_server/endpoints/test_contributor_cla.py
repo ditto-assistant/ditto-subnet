@@ -502,7 +502,7 @@ async def test_upload_agent_enforces_before_payment_verification_or_storage(
 
 
 @pytest.mark.parametrize("has_consent", [False, True])
-async def test_shadow_counts_only_unsigned_uploads_despite_later_archive_failure(
+async def test_shadow_does_not_count_uploads_rejected_after_the_cla_gate(
     app, client, session_maker, has_consent
 ):
     setup(app, session_maker)
@@ -551,9 +551,9 @@ async def test_shadow_counts_only_unsigned_uploads_despite_later_archive_failure
     verifier.verify_payment.assert_not_awaited()
     storage.put_object.assert_not_awaited()
     async with session_maker() as session:
-        assert await session.scalar(
-            select(func.count()).select_from(ClaShadowUpload)
-        ) == (0 if has_consent else 1)
+        assert (
+            await session.scalar(select(func.count()).select_from(ClaShadowUpload)) == 0
+        )
 
 
 async def test_cla_ownership_lookup_does_not_hold_a_database_connection(

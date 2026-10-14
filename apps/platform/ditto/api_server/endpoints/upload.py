@@ -220,6 +220,9 @@ async def _cla_check_message(
             block_hash=body.payment_block_hash,
             extrinsic_index=body.payment_extrinsic_index,
         )
+    # Pre-CLA clients omit the optional name. They may still recover a paid
+    # exact retry; the multipart commit checks the stored name and rejects any
+    # other upload on this proof as a 3207 replay before the CLA gate.
     if (
         existing is not None
         and existing.miner_hotkey == body.hotkey
@@ -644,11 +647,6 @@ async def upload_agent(
     cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
     if not cla.allowed:
         raise ClaConsentRequired(cla.message)
-    await record_shadow_upload(session, netuid=netuid, hotkey=hotkey, decision=cla)
-    if cla.mode == "shadow" and cla.signature_id is None:
-        # Persist the shadow observation before the read-only transaction is
-        # released for slow archive/payment/storage work.
-        await session.commit()
 
     payment_record = await get_evaluation_payment_for_proof(
         session,
@@ -883,6 +881,11 @@ async def upload_agent(
                     )
                 )
                 await session.flush()
+            # Shadow observations count accepted unsigned artifacts only, so they
+            # commit or roll back with this upload.
+            await record_shadow_upload(
+                session, netuid=netuid, hotkey=hotkey, decision=final_cla
+            )
             if using_credit:
                 locked_credit = await get_evaluation_payment_for_proof(
                     session,
