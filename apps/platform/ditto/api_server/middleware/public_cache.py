@@ -51,9 +51,25 @@ _MAX_AGE = re.compile(r"max-age=(\d+)")
 _STALE_WHILE_REVALIDATE = re.compile(r"stale-while-revalidate=(\d+)")
 _REFRESH_FAILURE_BACKOFF_SECONDS = 5.0
 
-_CACHEABLE_HEADERS = ("cache-control", "content-encoding", "content-type", "vary")
+_CACHEABLE_HEADERS = (
+    "cache-control",
+    "content-encoding",
+    "content-type",
+    "vary",
+    "x-content-type-options",
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _entry_etag(declared: str | None, body: bytes) -> str:
+    """Keep an endpoint's own validator; otherwise derive one from the body.
+
+    Content-addressed endpoints (pinned CLA text, avatars) publish a digest
+    ETag that clients pin in If-None-Match; replacing it would turn every
+    revalidation of a cached entry into a full 200.
+    """
+    return declared or compute_etag(body)
 
 
 def compute_etag(body: bytes) -> str:
@@ -211,7 +227,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
             if name.lower() in _CACHEABLE_HEADERS
         }
         headers.setdefault("vary", "Accept-Encoding")
-        etag = compute_etag(body)
+        etag = _entry_etag(response.headers.get("etag"), body)
         expires_at = self._now() + ttl
         entry = _Entry(
             response.status_code,
@@ -303,7 +319,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
                     status,
                     headers,
                     body,
-                    compute_etag(body),
+                    _entry_etag(headers_obj.get("etag"), body),
                     expires_at,
                     expires_at + stale_ttl,
                 ),

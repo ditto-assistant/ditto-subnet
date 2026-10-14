@@ -37,6 +37,9 @@ class _RefreshGate:
         self.done.set()
 
 
+_PINNED_ETAG = '"' + "ab" * 32 + '"'
+
+
 def _build(
     clock: _Clock,
     *,
@@ -55,7 +58,23 @@ def _build(
         "stale_fail": 0,
         "outside": 0,
         "big": 0,
+        "pinned": 0,
     }
+
+    @app.get("/api/v1/public/pinned")
+    async def pinned() -> Response:
+        # Content-addressed like the pinned CLA text: the endpoint owns its
+        # digest validator and hardening headers.
+        calls["pinned"] += 1
+        return Response(
+            content=b"TEST FIXTURE ONLY",
+            media_type="text/plain",
+            headers={
+                "ETag": _PINNED_ETAG,
+                "Cache-Control": "public, max-age=10",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.get("/api/v1/public/cached")
     async def cached(response: Response) -> dict:
@@ -393,3 +412,26 @@ async def test_gzip_wrapped_304_carries_vary(clock: _Clock) -> None:
     assert second.status_code == 304
     assert second.content == b""
     assert second.headers["Vary"] == "Accept-Encoding"
+
+
+async def test_endpoint_validator_and_hardening_headers_survive_the_cache(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        miss = await client.get("/api/v1/public/pinned")
+        hit = await client.get("/api/v1/public/pinned")
+        revalidated = await client.get(
+            "/api/v1/public/pinned", headers={"If-None-Match": _PINNED_ETAG}
+        )
+    assert (miss.headers["X-Public-Cache"], hit.headers["X-Public-Cache"]) == (
+        "MISS",
+        "HIT",
+    )
+    for response in (miss, hit):
+        assert response.headers["etag"] == _PINNED_ETAG
+        assert response.headers["x-content-type-options"] == "nosniff"
+    # A client that pinned the published digest revalidates from the cache.
+    assert revalidated.status_code == 304
+    assert revalidated.headers["etag"] == _PINNED_ETAG
+    assert calls["pinned"] == 1
