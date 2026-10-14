@@ -20,6 +20,7 @@ from ditto.api_models.contributor_identity import (
     github_unlink_message,
 )
 from ditto.miner_cli.api_client import ApiClient
+from ditto.miner_cli.confirm import prompt_input
 from ditto.miner_cli.errors import MinerCliError
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.preferences import load_miner_session
@@ -138,7 +139,7 @@ def run(args: argparse.Namespace) -> int:
                 )
                 if (
                     not args.yes
-                    and input("Type UNLINK to sign this revocation: ").strip()
+                    and prompt_input("Type UNLINK to sign this revocation: ").strip()
                     != "UNLINK"
                 ):
                     return 1
@@ -221,7 +222,9 @@ def run(args: argparse.Namespace) -> int:
                     )
                     if (
                         not args.yes
-                        and input("Type LINK to sign this exact pairing: ").strip()
+                        and prompt_input(
+                            "Type LINK to sign this exact pairing: "
+                        ).strip()
                         != "LINK"
                     ):
                         print("not linked", file=sys.stderr)

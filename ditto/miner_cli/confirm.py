@@ -39,6 +39,12 @@ logger = logging.getLogger(__name__)
 _RAO_PER_TAO = Decimal(1_000_000_000)
 
 
+def prompt_input(prompt: str) -> str:
+    """Read input without contaminating machine-readable stdout."""
+    print(prompt, file=sys.stderr, end="", flush=True)
+    return input()
+
+
 def confirm_payment(
     *,
     amount_rao: int,

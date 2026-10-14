@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -112,9 +113,12 @@ def test_cla_signs_exact_verified_bytes_after_explicit_typed_confirmation(
     target = tmp_path / "CLA.md"
     v = api.get_cla_status.return_value.current
 
-    def confirm(_prompt):
+    def confirm():
         assert target.read_bytes() == TEXT
-        assert str(target) in capsys.readouterr().err
+        output = capsys.readouterr()
+        assert str(target) in output.err
+        assert "Type exactly" in output.err
+        assert not output.out
         live.hotkey.sign.assert_not_called()
         return f"SIGN CLA {v.version} {v.sha256}"
 
@@ -203,7 +207,10 @@ def test_unlink_signing_options_work_before_and_after_subcommand(after_unlink):
 
 
 @pytest.mark.parametrize("has_link", [True, False])
-def test_json_unlink_signs_current_context_for_a_global_link(capsys, has_link):
+@pytest.mark.parametrize("skip_confirmation", [True, False])
+def test_json_unlink_signs_current_context_for_a_global_link(
+    capsys, monkeypatch, has_link, skip_confirmation
+):
     api = client()
     handle, live = wallet()
     link_id = uuid4()
@@ -215,6 +222,7 @@ def test_json_unlink_signs_current_context_for_a_global_link(capsys, has_link):
         if has_link
         else None,
     )
+    monkeypatch.setattr("sys.stdin", io.StringIO("UNLINK\n"))
     with (
         patch.object(link_github, "ApiClient", return_value=api),
         patch.object(link_github, "load_wallet", return_value=(handle, live)),
@@ -224,11 +232,18 @@ def test_json_unlink_signs_current_context_for_a_global_link(capsys, has_link):
             return_value={"token": "fixture-session", "hotkey": KEY.ss58_address},
         ),
     ):
-        assert link_github.run(args(github_command="unlink", json=True)) == 0
-    assert json.loads(capsys.readouterr().out) == {
+        assert (
+            link_github.run(
+                args(github_command="unlink", json=True, yes=skip_confirmation)
+            )
+            == 0
+        )
+    output = capsys.readouterr()
+    assert json.loads(output.out) == {
         "link_id": str(link_id) if has_link else None,
         "revoked": has_link,
     }
+    assert ("Type UNLINK" in output.err) == (has_link and not skip_confirmation)
     if has_link:
         body = api.unlink_github.call_args.kwargs["body"]
         assert body.netuid == 119 and body.link_id == link_id
@@ -266,7 +281,10 @@ def test_cla_refuses_to_sign_unverified_or_unconfirmed_text(tmp_path, case):
     api.sign_cla.assert_not_called()
 
 
-def test_github_prints_verified_account_before_loading_private_wallet(capsys):
+@pytest.mark.parametrize("as_json", [True, False])
+def test_github_prints_verified_account_before_loading_private_wallet(
+    capsys, monkeypatch, as_json
+):
     api = MagicMock()
     api.__enter__.return_value = api
     attempt = uuid4()
@@ -282,11 +300,17 @@ def test_github_prints_verified_account_before_loading_private_wallet(capsys):
         github_user_id=100,
         github_login="miner-fixture",
     )
+    api.confirm_github_link.return_value.model_dump.return_value = {
+        "github_user_id": 100
+    }
+    monkeypatch.setattr("sys.stdin", io.StringIO("LINK\n"))
     handle, live = wallet()
 
     def load(**_kwargs):
-        printed = capsys.readouterr().err
-        assert "miner-fixture" in printed and "id 100" in printed
+        printed = capsys.readouterr()
+        assert "miner-fixture" in printed.err and "id 100" in printed.err
+        assert "Type LINK" in printed.err
+        assert not printed.out
         return handle, live
 
     with (
@@ -298,7 +322,9 @@ def test_github_prints_verified_account_before_loading_private_wallet(capsys):
         patch.object(link_github, "load_wallet", side_effect=load),
         patch.object(link_github, "ApiClient", return_value=api),
     ):
-        assert link_github.run(args()) == 0
+        assert link_github.run(args(yes=False, json=as_json)) == 0
+    if as_json:
+        assert json.loads(capsys.readouterr().out) == {"github_user_id": 100}
     proof = api.confirm_github_link.call_args.kwargs["body"]
     assert (
         proof.github_user_id == 100
@@ -306,6 +332,23 @@ def test_github_prints_verified_account_before_loading_private_wallet(capsys):
         and proof.hotkey == KEY.ss58_address
     )
     live.hotkey.sign.assert_called_once()
+
+
+def test_interactive_json_cla_sign_keeps_prompt_on_stderr(
+    tmp_path, capsys, monkeypatch
+):
+    api = client()
+    handle, live = wallet()
+    v = version()
+    monkeypatch.setattr("sys.stdin", io.StringIO(f"SIGN CLA 1 {v.sha256}\n"))
+    with (
+        patch.object(cla, "ApiClient", return_value=api),
+        patch.object(cla, "load_wallet", return_value=(handle, live)),
+    ):
+        assert cla.run(args(output=tmp_path / "CLA.md", json=True)) == 0
+    output = capsys.readouterr()
+    assert "Type exactly" in output.err
+    assert json.loads(output.out)["cla_sha256"] == v.sha256
 
 
 @pytest.mark.parametrize("stage", ["status", "sign"])

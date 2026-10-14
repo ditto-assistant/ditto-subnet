@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from ditto.api_models.contributor_identity import ClaSignRequest, cla_message
 from ditto.miner_cli.api_client import ApiClient
+from ditto.miner_cli.confirm import prompt_input
 from ditto.miner_cli.errors import MinerCliError
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
@@ -142,7 +143,7 @@ def run(args: argparse.Namespace) -> int:
             value = (
                 args.confirmation
                 if args.confirmation is not None
-                else input(
+                else prompt_input(
                     f"Type exactly '{confirmation}' to sign with hotkey "
                     f"{handle.hotkey_ss58}: "
                 )

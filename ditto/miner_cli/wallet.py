@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ditto.miner_cli.confirm import prompt_input
 from ditto.miner_cli.errors import (
     WalletNotFoundError,
     WalletSelectionCancelledError,
@@ -79,7 +80,7 @@ def list_local_wallet_pairs(*, root: Path | None = None) -> list[WalletPair]:
 
 def _ask_yes(prompt: str) -> bool:
     try:
-        answer = input(prompt).strip().lower()
+        answer = prompt_input(prompt).strip().lower()
     except EOFError as exc:
         raise WalletSelectionCancelledError(
             "wallet selection cancelled: EOF on stdin"
@@ -121,7 +122,7 @@ def _pick_from_list(pairs: list[WalletPair]) -> WalletPair:
     for index, pair in enumerate(pairs, start=1):
         print(f"  {index}) {pair.label()}", file=sys.stderr)
     try:
-        raw = input("Select a wallet [1]: ").strip()
+        raw = prompt_input("Select a wallet [1]: ").strip()
     except EOFError as exc:
         raise WalletSelectionCancelledError(
             "wallet selection cancelled: EOF on stdin"
