@@ -162,6 +162,27 @@ holding addresses, and payment rules. They explicitly show effective service
 funding, distribution and observation as inactive. The Beta page makes no
 token issuance, redemption, or token-economic promise.
 
+### Gamma ledger
+
+Platform records one reading of the collector per epoch from finalized public
+chain state (`treasury_ledger_samples`, sampler flag
+`DITTO_TREASURY_LEDGER_SAMPLER_ENABLED`, default on). Each reading stores, at
+one block hash: the collector UID's incentive share and last-epoch emission;
+the collector coldkey's total, conviction-locked and unlocked alpha
+(`get_stake_availability_for_coldkeys`); whether the lock is perpetual
+(`DecayingLock`); the owner hotkey's conviction and the most-convicted hotkey;
+and each holding wallet's alpha and free TAO.
+
+`GET /api/v1/public/treasury-ledger` (and the Backroom `get_treasury_ledger`
+read) compares consecutive readings. An interval's outflow is what the
+collector earned minus how much its balance grew. Verified receipts from the
+collector coldkey inside the interval attribute that outflow; the remainder is
+reported as unattributed until Backroom records the receipt with
+`record_treasury_receipt`. A skipped epoch is extrapolated and flagged
+`estimated`, and a collector rotation is never counted as an outflow. The
+dashboard Gamma page shows the balance, lock, conviction, window totals and
+every interval with an outflow.
+
 A rule matches the holding coldkey plus exact payee, asset and, for stake,
 recipient hotkey. Disabled/ambiguous rules must not classify a payment. A
 finalized transfer to GM's configured treasury is **GM credit payment**.

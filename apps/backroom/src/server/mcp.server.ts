@@ -16,7 +16,7 @@ import { observerGrant } from './treasury-observer-access.server'
 import { createTreasuryObserverServer } from './treasury-observer-mcp.server'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
-import { fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers } from './admin.service'
+import { fetchTreasuryLedger, fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers } from './admin.service'
 import { fetchTreasuryActivationPreflight, fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 import { fetchTreasuryRuntime, recordTreasuryRuntime } from './admin.service'
 import { recordTreasuryRuntimeInputSchema } from '../lib/treasury-ledger.schemas'
@@ -932,6 +932,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_treasury_ledger_readiness: 'Read epoch/policy readiness; no activation.',
   record_treasury_settings: 'Record buckets with CAS; in-range Gamma % under signed range moves next epoch.',
   get_treasury_receipts: 'Read treasury receipt history/publication.',
+  get_treasury_ledger: 'Read per-epoch Gamma earnings, balance, lock and unreceipted outflow.',
   get_treasury_manual_transfers: 'Read manual custody readiness, requests and public receipts; no funds.',
   get_treasury_receipt_preflight: 'Read exact receipt readiness/archive checkpoint; no writes.',
   record_treasury_receipt: 'Ingest finalized receipt; no signing/provider credit.',
@@ -3525,6 +3526,16 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_treasury_receipts',
     { title: 'Read verified treasury receipts', description: 'Read up to 100 independently finalized receipt records, including publication-off observations, historical policy digest, source selector and provider-credit not_proven state. No spending authority. Requires backroom:read.', annotations: toolAnnotations('read') },
     async () => result(await fetchTreasuryReceipts()),
+  )
+  registerTool(
+    'get_treasury_ledger',
+    {
+      title: 'Read the Gamma collector ledger',
+      description: 'Read per-epoch finalized public readings of the Gamma collector: earnings per epoch, balance, conviction-lock mass and mode, owner-hotkey conviction, holding-wallet balances, and each interval where alpha left the collector, split into receipted and unreceipted amounts. An unreceipted outflow stays listed until record_treasury_receipt ingests its verified receipt. Amounts are rao (1e-9 alpha). Includes sampler status. No writes. Requires backroom:read.',
+      inputSchema: { limit: z.number().int().min(1).max(480).optional().describe('Epochs to read, newest first; default 72.') },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchTreasuryLedger(input.limit ?? 72)),
   )
   registerTool(
     'get_treasury_manual_transfers',

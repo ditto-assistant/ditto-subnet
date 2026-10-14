@@ -26,6 +26,15 @@ export async function fetchTreasuryReceiptPreflight(rawInput: unknown) {
 export async function fetchTreasuryReceipts() {
   return treasuryReceiptPageSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts?limit=100'))
 }
+
+import type { components as PlatformComponents } from '../generated/platform-api'
+
+/** Per-epoch Gamma collector readings; the generated Platform type is the contract. */
+export async function fetchTreasuryLedger(limit: number) {
+  return (await platformAdminRequest(`/api/v1/admin/treasury-ledger?limit=${limit}`, {
+    retries: 1,
+  })) as PlatformComponents['schemas']['PublicTreasuryLedger']
+}
 import { publicTreasuryApprovalSchema, treasuryActivationPreflightInputSchema, treasuryActivationPreflightSchema, treasuryLedgerReadinessSchema } from '../lib/treasury-ledger.schemas'
 import { recordTreasuryRuntimeInputSchema, treasuryRuntimeControlSchema, treasuryRuntimeRevisionSchema } from '../lib/treasury-ledger.schemas'
 import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
