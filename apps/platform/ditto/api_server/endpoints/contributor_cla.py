@@ -203,8 +203,16 @@ async def sign_cla(
         raise HTTPException(
             503, "finalized ownership unavailable; retry shortly"
         ) from None
-    except IntegrityError:
-        raise HTTPException(409, "CLA signature nonce already used") from None
+    except IntegrityError as exc:
+        # SQLAlchemy's asyncpg adapter chains the original PostgreSQL error.
+        driver_error = getattr(exc.orig, "__cause__", None)
+        if (
+            getattr(driver_error, "sqlstate", None) == "23505"
+            and getattr(driver_error, "constraint_name", None)
+            == "uq_cla_signatures_nonce"
+        ):
+            raise HTTPException(409, "CLA signature nonce already used") from None
+        raise
 
 
 @router.post("/admin/cla/versions", response_model=ClaVersionView)

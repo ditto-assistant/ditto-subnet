@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import bittensor
+import httpx
 import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
@@ -222,7 +223,8 @@ async def test_registry_off_default_pinned_bytes_signature_status_and_immutable_
         == bittensor.Keypair.create_from_uri("//Bob").ss58_address
     )
     assert result.json()["owner_block"] == 123
-    assert (await client.post("/api/v1/cla/sign", json=body)).status_code == 409
+    replay = await client.post("/api/v1/cla/sign", json=body)
+    assert replay.status_code == 409 and "nonce already used" in replay.text
     status = (
         await client.get(f"/api/v1/public/cla/status/{alice.ss58_address}")
     ).json()
@@ -242,6 +244,43 @@ async def test_registry_off_default_pinned_bytes_signature_status_and_immutable_
                 await session.rollback()
     async with session_maker() as session:
         assert await session.scalar(select(func.count()).select_from(ClaSignature)) == 1
+
+
+async def test_cla_other_integrity_failures_are_server_errors(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    version = await publish(client)
+    async with session_maker() as session, session.begin():
+        await session.execute(
+            text(
+                "ALTER TABLE cla_signatures ADD CONSTRAINT fixture_cla_owner_guard "
+                "CHECK (owner_block <> 123)"
+            )
+        )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as failures:
+            response = await failures.post(
+                "/api/v1/cla/sign",
+                json=signed(bittensor.Keypair.create_from_uri("//Alice"), version),
+            )
+        assert response.status_code == 500, response.text
+        assert "nonce already used" not in response.text
+        async with session_maker() as session:
+            assert (
+                await session.scalar(select(func.count()).select_from(ClaSignature))
+                == 0
+            )
+    finally:
+        async with session_maker() as session, session.begin():
+            await session.execute(
+                text(
+                    "ALTER TABLE cla_signatures DROP CONSTRAINT fixture_cla_owner_guard"
+                )
+            )
 
 
 @pytest.mark.parametrize(
