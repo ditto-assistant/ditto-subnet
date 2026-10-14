@@ -17,24 +17,12 @@ from ditto_screening_protocol.treasury_pubsub import TreasuryMailbox
 
 
 def consume_iteration(mailbox, journal, policy, chain):
-    # Advance proved earnings only; no automatic money tick.
-    observe_earnings(journal, policy, chain)
-    try:
-        publish_readiness(mailbox, journal, policy, chain)
-    except Exception as error:
-        # Readiness is an observation; existing exact requests still undergo
-        # independent custody validation and durable unknown-delivery handling.
-        print(
-            json.dumps(
-                {
-                    "status": "readiness_publish_failed",
-                    "error_type": type(error).__name__,
-                }
-            ),
-            flush=True,
-        )
-        with contextlib.suppress(Exception):
-            publish_observation_blocker(mailbox, policy, error)
+    # Keep the existing total bound of 32 proved blocks, committing eight at
+    # a time so current custody readiness is not starved by archive catch-up.
+    # No automatic money tick; still pull only one manual message below.
+    for _ in range(4):
+        observe_earnings(journal, policy, chain, max_blocks=8)
+        publish_current_readiness(mailbox, journal, policy, chain)
     message = mailbox.pull()
     if message:
         try:
@@ -51,6 +39,25 @@ def consume_iteration(mailbox, journal, policy, chain):
                 ),
                 flush=True,
             )
+
+
+def publish_current_readiness(mailbox, journal, policy, chain):
+    try:
+        publish_readiness(mailbox, journal, policy, chain)
+    except Exception as error:
+        # Readiness is an observation; existing exact requests still undergo
+        # independent custody validation and durable unknown-delivery handling.
+        print(
+            json.dumps(
+                {
+                    "status": "readiness_publish_failed",
+                    "error_type": type(error).__name__,
+                }
+            ),
+            flush=True,
+        )
+        with contextlib.suppress(Exception):
+            publish_observation_blocker(mailbox, policy, error)
 
 
 def main():

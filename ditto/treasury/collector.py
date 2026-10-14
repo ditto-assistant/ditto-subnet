@@ -1173,10 +1173,10 @@ def tick(
     return "dispatching"
 
 
-def _scan_finalized_earnings(journal, policy, chain, finalized):
+def _scan_finalized_earnings(journal, policy, chain, finalized, *, max_blocks=32):
     db = journal.db
     cursor = db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
-    for block in range(cursor + 1, min(finalized, cursor + 32) + 1):
+    for block in range(cursor + 1, min(finalized, cursor + max_blocks) + 1):
         earned = chain.earnings(policy, block)
         if earned is not None:
             if (
@@ -1197,8 +1197,10 @@ def _scan_finalized_earnings(journal, policy, chain, finalized):
         db.execute("UPDATE cursor SET block=? WHERE id=1", (block,))
 
 
-def observe_earnings(journal, policy, chain):
+def observe_earnings(journal, policy, chain, *, max_blocks=32):
     """Bounded receipt-only scan, independent of daily/manual money frequency."""
+    if type(max_blocks) is not int or not 1 <= max_blocks <= 32:
+        raise ValueError("receipt chunk must be between one and 32 blocks")
     if not policy.enabled:
         return "disabled"
     db = journal.db
@@ -1210,7 +1212,9 @@ def observe_earnings(journal, policy, chain):
         ):
             raise ValueError("earnings scan requires pinned transfer journal")
         observed = chain.observe(policy, "transfer")
-        _scan_finalized_earnings(journal, policy, chain, observed.block)
+        _scan_finalized_earnings(
+            journal, policy, chain, observed.block, max_blocks=max_blocks
+        )
         db.execute("COMMIT")
         return "observed"
     except BaseException:

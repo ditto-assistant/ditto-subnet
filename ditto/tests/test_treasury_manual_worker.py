@@ -509,7 +509,7 @@ def test_readiness_publish_failure_still_pulls_and_reconciles_exact_request(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     p, c, j, env, mailbox = setup(tmp_path)
-    monkeypatch.setattr(module, "observe_earnings", lambda *_: None)
+    monkeypatch.setattr(module, "observe_earnings", lambda *_, **__: None)
 
     def failed_readiness(*_):
         raise TimeoutError("raw provider detail must not be logged")
@@ -686,7 +686,7 @@ def test_request_refusal_after_healthy_readiness_is_not_observation_failure(
     )
     consume = module["consume_iteration"]
     p, c, journal, env, mailbox = setup(tmp_path)
-    monkeypatch.setitem(consume.__globals__, "observe_earnings", lambda *_: None)
+    monkeypatch.setitem(consume.__globals__, "observe_earnings", lambda *_, **__: None)
     mailbox.pull = lambda: ("ack", env.model_dump())
 
     def refused(*_):
@@ -694,7 +694,7 @@ def test_request_refusal_after_healthy_readiness_is_not_observation_failure(
 
     monkeypatch.setitem(consume.__globals__, "consume_manual", refused)
     consume(mailbox, journal, p, c)
-    assert [x["status"] for x in mailbox.reports] == ["readiness"]
+    assert [x["status"] for x in mailbox.reports] == ["readiness"] * 4
     assert mailbox.acks == [] and len(c.sent) == 1
     log = capsys.readouterr().out
     assert (
@@ -715,4 +715,102 @@ def test_malformed_expected_runtime_does_not_hide_public_blocker(tmp_path):
     publish_observation_blocker(mailbox, p, error)
     assert mailbox.reports[-1]["blocker"]["expected_runtime_hash"] is None
     assert mailbox.reports[-1]["blocker"]["code"] == "policy_runtime_unreviewed"
+    journal.close()
+
+
+def test_slow_receipt_catchup_keeps_readiness_inside_freshness_window(
+    tmp_path, monkeypatch
+):
+    import runpy
+    from pathlib import Path
+
+    import ditto.treasury.manual_worker as worker
+
+    module = runpy.run_path(
+        str(Path(__file__).resolve().parents[2] / "scripts/treasury_manual_worker.py")
+    )
+    p, c, journal, _, mailbox = setup(tmp_path)
+    journal.db.execute("UPDATE cursor SET block=10")
+    c.income = {}
+    now = [1000]
+    scanned, published, pulled = [], [], []
+    original_earnings, original_publish = c.earnings, mailbox.publish
+
+    def slow_earnings(policy, block):
+        now[0] += 8  # A complete 32-block sweep exceeds the 180s UI freshness gate.
+        scanned.append(block)
+        return original_earnings(policy, block)
+
+    def publish(body):
+        published.append(body["observed_at"])
+        original_publish(body)
+
+    def pull():
+        pulled.append(True)
+        return None
+
+    monkeypatch.setattr(worker.time, "time", lambda: now[0])
+    c.earnings, mailbox.publish, mailbox.pull = slow_earnings, publish, pull
+    before_operations = list(journal.db.execute("SELECT * FROM operations"))
+    module["consume_iteration"](mailbox, journal, p, c)
+    assert scanned == list(range(11, 43))  # Existing total bound and exact cursor.
+    assert max(b - a for a, b in zip([1000] + published, published, strict=False)) < 180
+    assert published[-1] == now[0]
+    assert all(r["status"] == "readiness" for r in mailbox.reports)
+    assert pulled == [True]  # Still at most one manual message per outer iteration.
+    assert not journal.db.in_transaction and len(c.sent) == 1
+    assert list(journal.db.execute("SELECT * FROM operations")) == before_operations
+    journal.close()
+
+
+@pytest.mark.parametrize("limit", [0, -1, 33, True, 8.0])
+def test_receipt_chunk_bound_refuses_before_history_or_chain(tmp_path, limit):
+    from ditto.treasury.collector import observe_earnings
+
+    p, c, journal, _, _ = setup(tmp_path)
+    before = list(journal.db.iterdump())
+    with pytest.raises(ValueError, match="receipt chunk"):
+        observe_earnings(journal, p, object(), max_blocks=limit)
+    assert list(journal.db.iterdump()) == before and len(c.sent) == 1
+    journal.close()
+
+
+def test_failed_receipt_chunk_rolls_back_only_unproved_progress(tmp_path):
+    from ditto.treasury.collector import observe_earnings
+
+    p, c, journal, _, _ = setup(tmp_path)
+    journal.db.execute("UPDATE cursor SET block=10")
+    c.income = {12: 5, 21: 7}
+    original = c.earnings
+
+    def fail(policy, block):
+        if block == 22:
+            raise TimeoutError()
+        return original(policy, block)
+
+    observe_earnings(journal, p, c, max_blocks=8)
+    c.earnings = fail
+    with pytest.raises(TimeoutError):
+        observe_earnings(journal, p, c, max_blocks=8)
+    assert not journal.db.in_transaction
+    assert journal.db.execute("SELECT block FROM cursor").fetchone()[0] == 18
+    assert (
+        journal.db.execute("SELECT amount FROM earnings WHERE block=12").fetchone()[0]
+        == 5
+    )
+    assert (
+        journal.db.execute("SELECT 1 FROM earnings WHERE block=21").fetchone() is None
+    )
+    c.earnings = original
+    observe_earnings(journal, p, c, max_blocks=8)
+    assert journal.db.execute("SELECT block FROM cursor").fetchone()[0] == 26
+    assert (
+        journal.db.execute("SELECT amount FROM earnings WHERE block=21").fetchone()[0]
+        == 7
+    )
+    assert (
+        journal.db.execute("SELECT count(*) FROM earnings WHERE block=12").fetchone()[0]
+        == 1
+    )
+    assert len(c.sent) == 1
     journal.close()
