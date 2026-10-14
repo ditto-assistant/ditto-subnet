@@ -1682,7 +1682,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_cla_policy', {
     title: 'Get CLA rollout and adoption',
-    description: 'Read the append-only CLA off/shadow/enforce policy, current effective version, newest-first paged history and adoption counts. active_hotkeys_basis=non_retired_submissions counts distinct hotkeys with a non-rejected, non-retired submission, not current chain registrations. Unsigned includes outdated receipts. unsigned_shadow_uploads counts unsigned artifacts accepted in shadow mode, recorded in the same transaction as the upload; rejected requests and exact retries add no observations. Requires backroom:read and changes nothing.',
+    description: 'Read the append-only CLA off/shadow/enforce policy, current effective version, newest-first paged history and adoption counts. active_hotkeys_basis=non_retired_submissions counts distinct hotkeys with a non-rejected, non-banned, non-retired submission, not current chain registrations. Unsigned includes outdated receipts. unsigned_shadow_uploads counts unsigned artifacts accepted in shadow mode, recorded in the same transaction as the upload; rejected requests and exact retries add no observations. Requires backroom:read and changes nothing.',
     inputSchema: claPolicyReadInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchClaPolicy(input)))
 

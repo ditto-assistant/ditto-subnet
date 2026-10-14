@@ -13,10 +13,12 @@ public; versions and effective dates must advance monotonically.
 
 Publication does not enable the gate. It starts `off`. Read adoption and
 history with `get_cla_policy`, then use `set_cla_policy` for `shadow`. Shadow
-records and counts unsigned artifact upload attempts without refusing them.
+accepts unsigned artifacts and counts each accepted one without refusing it.
 Announce the effective date in miner docs before choosing `enforce`. Enforce
-cannot be enabled without currently effective published text. An effective
-new version requires a new receipt before the next contribution.
+requires currently effective published text, and every current or scheduled
+version must have had at least 24 hours notice; `get_cla_policy` reports
+`earliest_enforcement_at`. An effective new version requires a new receipt
+before the next contribution.
 
 While enforcement is on, publishing another version requires at least 24
 hours notice. `get_cla_policy` exposes the minimum notice and earliest allowed
@@ -41,8 +43,9 @@ New artifact rows are linked to their exact consent receipt through
 receipt without changing old agent rows. Model/base-licence validation is a
 separate artifact-validation policy, not a conclusion drawn from a signature.
 
-Adoption counts use distinct hotkeys with a non-rejected, non-retired
-submission, explicitly reported as `active_hotkeys_basis`. They do not claim
-to be a current chain registration census. Unsigned includes outdated receipts.
-The shadow upload count includes requests that fail a later archive/payment
-validation, and excludes exact accepted-artifact retries.
+Adoption counts use distinct hotkeys with a non-rejected, non-banned,
+non-retired submission, explicitly reported as `active_hotkeys_basis`. They do
+not claim to be a current chain registration census. Unsigned includes
+outdated receipts. The shadow upload count covers accepted unsigned artifacts
+only: each observation commits with its upload, so rejected requests and exact
+accepted-artifact retries add none.

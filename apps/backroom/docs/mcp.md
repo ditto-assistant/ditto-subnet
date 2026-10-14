@@ -533,7 +533,7 @@ These are identity/consent evidence, never payment routing or bounty awards.
 
 `get_cla_policy` reads the audited off/shadow/enforce mode, paged history,
 effective version and signed/unsigned adoption. Its active-hotkey basis is
-non-rejected, non-retired submissions, not chain registrations. All reads use
+non-rejected, non-banned, non-retired submissions, not chain registrations. All reads use
 `backroom:read`. `set_cla_policy` and `publish_cla_version` require
 `backroom:write`, the account's live write level, exact confirmation and the
 signed-in operator's audit identity. Publication preserves exact UTF-8 text and
