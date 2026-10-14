@@ -298,12 +298,14 @@ class SourceReviewObservation:
     DURING review so a budget- or fault-terminated attempt still ships the
     evidence it accumulated; at exhaustion they decide the gradient verdict."""
     failure_subcode: str | None = None
-    """Bounded slug naming why a failed review stopped (for example the
-    provider's own error code behind ``l3-adjudicator-model-provider-fault``).
-    Private diagnostics only; it never changes the outcome."""
+    """Bounded slug naming why a failed review stopped: the provider's own
+    error code behind ``l3-adjudicator-model-provider-fault``, an incomplete
+    response reason behind ``*-model-response-contract``, or joined clearance
+    gaps. Private diagnostics only; it never changes the outcome."""
 
 
-_FAILURE_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.:-]{0,79}")
+# Joined clearance-gap subcodes use ``+`` (``models:a+b``); keep them whole.
+_FAILURE_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.:+/-]{0,159}")
 
 
 def _failure_subcode_suffix(subcode: str | None) -> str:
@@ -822,6 +824,7 @@ class AgenticSourceReviewModule(_BaseModule):
                     finding=observation.finding,
                     review_audit=observation.review_audit,
                     review_notes=review_notes,
+                    failure_subcode=observation.failure_subcode,
                 )
             disposition = (
                 ModuleDisposition.INCONCLUSIVE
@@ -1282,6 +1285,7 @@ class PolicyEngine:
         pass_inconclusive = False
         selected_reason_code: str | None = None
         pass_inconclusive_code: str | None = None
+        pass_inconclusive_subcode: str | None = None
         # The mechanical lane does not collect source-review evidence. The
         # selector phase owns that work (source review, fingerprint, and timing
         # tripwires), so skip it entirely. Mechanical failures from the gate's
@@ -1302,6 +1306,9 @@ class PolicyEngine:
                             result.evidence[0].code
                             if result.evidence
                             else "source-review-inconclusive"
+                        )
+                        pass_inconclusive_subcode = (
+                            pass_inconclusive_subcode or result.failure_subcode
                         )
                         continue
                     return self._decision(
@@ -1475,6 +1482,7 @@ class PolicyEngine:
                 review_notes=review_notes,
                 policy_version=context.policy_version,
                 reason_code=pass_inconclusive_code,
+                failure_subcode=pass_inconclusive_subcode,
             )
 
         return self._decision(

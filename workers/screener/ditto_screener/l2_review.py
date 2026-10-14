@@ -7368,12 +7368,14 @@ _RESPONSE_FAULT_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
 
 
 def _response_fault_subcode(payload: object) -> str | None:
-    """Name the provider's own fault code from an unusable 200 body.
+    """Name why a 200 body was unusable: the provider's own fault code, or the
+    ``incomplete_details`` reason of a response-contract failure.
 
     Only a bounded slug survives (``server_error``, ``429``,
-    ``context_length_exceeded``); provider messages, model names and request
-    content never do. It tells a deterministic rejection that recurs on every
-    retry apart from a transient outage.
+    ``context_length_exceeded``, ``max_output_tokens``); provider messages,
+    model names and request content never do. It tells a deterministic
+    rejection that recurs on every retry apart from a transient outage. The
+    reason code still carries the provider-fault vs contract classification.
     """
     if not isinstance(payload, dict):
         return None
