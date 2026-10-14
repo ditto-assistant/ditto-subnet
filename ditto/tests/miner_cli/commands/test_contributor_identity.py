@@ -292,7 +292,13 @@ def test_json_unlink_signs_current_context_for_a_global_link(
     ):
         assert (
             link_github.run(
-                args(github_command="unlink", json=True, yes=skip_confirmation)
+                args(
+                    github_command="unlink",
+                    json=True,
+                    yes=skip_confirmation,
+                    coldkey_name="fixture" if has_link else None,
+                    hotkey_name="fixture" if has_link else None,
+                )
             )
             == 0
         )

@@ -103,6 +103,14 @@ def _print(link, as_json: bool) -> None:
         print("no verified GitHub account is linked")
 
 
+def _wallet_names(args: argparse.Namespace) -> tuple[str, str]:
+    return resolve_wallet_names(
+        coldkey_name=args.coldkey_name,
+        hotkey_name=args.hotkey_name,
+        interactive=sys.stdin.isatty() and not args.yes,
+    )
+
+
 def run(args: argparse.Namespace) -> int:
     network = resolve_network(args.network)
     saved = load_miner_session(network=network.name)
@@ -117,11 +125,6 @@ def run(args: argparse.Namespace) -> int:
             if args.github_command == "status":
                 _print(client.get_github_link(token=token).link, bool(args.json))
                 return 0
-            names = resolve_wallet_names(
-                coldkey_name=args.coldkey_name,
-                hotkey_name=args.hotkey_name,
-                interactive=sys.stdin.isatty() and not args.yes,
-            )
             if args.github_command == "unlink":
                 status = client.get_github_link(token=token)
                 linked = status.link
@@ -132,6 +135,7 @@ def run(args: argparse.Namespace) -> int:
                         else "no active GitHub link to revoke"
                     )
                     return 0
+                names = _wallet_names(args)
                 print(
                     f"Revoke @{linked.github_login} (id "
                     f"{linked.github_user_id}) from hotkey {hotkey}",
@@ -185,6 +189,7 @@ def run(args: argparse.Namespace) -> int:
                     else "GitHub link revoked; its signed history is retained"
                 )
                 return 0
+            names = _wallet_names(args)
             started = client.start_github_link(token=token)
             print(
                 f"Approve the GitHub account and this hotkey in your browser: "
