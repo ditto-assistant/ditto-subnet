@@ -32671,6 +32671,8 @@ export interface components {
         /** SourceReleaseGateStatus */
         SourceReleaseGateStatus: {
             archive_provider?: components["schemas"]["SourceArchiveProviderStatus"] | null;
+            /** Audited Runtime Code Hashes */
+            audited_runtime_code_hashes?: string[] | null;
             /**
              * Automatic Confirmation Enabled
              * @default false

@@ -26,6 +26,7 @@ from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticReport
 from ditto.api_models.source_disclosure import SourceDisclosure, release_confirmation
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.chain.source_emission_verifier import AUDITED_RUNTIME_CODE_HASHES
 from ditto.db.models import (
     Agent,
     AgentKingship,
@@ -184,6 +185,7 @@ async def get_settings(
         release_gate=SourceReleaseGateStatus(
             version=SOURCE_RELEASE_GATE_VERSION,
             automatic_confirmation_enabled=request.app.state.config.source_emission_confirmation_enabled,
+            audited_runtime_code_hashes=sorted(AUDITED_RUNTIME_CODE_HASHES),
             archive_provider=SourceArchiveProviderStatus(
                 configured=bool(chain.archive_rpc_url),
                 host=archive_host,

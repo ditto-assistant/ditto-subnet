@@ -68,6 +68,9 @@ class SourceReleaseGateStatus(BaseModel):
 
     version: str
     automatic_confirmation_enabled: bool = False
+    audited_runtime_code_hashes: (
+        list[Annotated[str, Field(pattern=r"^0x[0-9a-f]{64}$")]] | None
+    ) = Field(default=None, max_length=64)
     archive_provider: SourceArchiveProviderStatus | None = None
     collector_cursor_block: int | None = None
     collector_cursor_hash: str | None = None

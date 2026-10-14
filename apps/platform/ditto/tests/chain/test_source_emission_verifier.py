@@ -138,7 +138,9 @@ def event(
 def chain(request: pytest.FixtureRequest) -> tuple[AsyncMock, dict]:
     substrate = AsyncMock()
     state: dict[str, Any] = {
-        "runtime": sorted(AUDITED_RUNTIME_CODE_HASHES)[0],
+        "runtime": (
+            "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08"
+        ),
         "events": [
             event("WeightsSet", request.param([118, 0])),
             event("TimelockedWeightsRevealed", request.param([118, "v1"])),
@@ -164,6 +166,9 @@ def chain(request: pytest.FixtureRequest) -> tuple[AsyncMock, dict]:
 
     async def query(**kw: Any) -> Any:
         return {
+            "SubnetEpochConsensus": state.get("post_consensus", "Yuma")
+            if kw["block_hash"] == "h100"
+            else state.get("consensus", "Yuma"),
             "MechanismCountCurrent": 1,
             "CommitRevealWeightsEnabled": True,
             "Events": state["events"],
@@ -407,6 +412,64 @@ async def test_v468_through_v473_fingerprints_are_admitted(chain: tuple) -> None
         assert block.runtime_code_hash == runtime
         assert block.reset_reason is None
         assert block.updates[0].commit_ciphertext_hash is not None
+
+
+_V475_THROUGH_V478 = (
+    "0x557634c8c31bc639ea6552e297dcfb781cd7d9bdd491a5352c151305db33d3a0",
+    "0x12a5ec0b0d4d1f72281a4e41a926ccce6c4cfda6134adf40eeb13847b6a8cd12",
+    "0x18b52484d9c5d7523f704c86b17b2ab959fffbc6edb6766a77e9877f0ad19387",
+    "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1",
+)
+
+
+@pytest.mark.parametrize("runtime", _V475_THROUGH_V478)
+@pytest.mark.parametrize("upgrade", [False, True])
+async def test_v475_through_v478_preserve_yuma_reveals_and_reset_upgrades(
+    chain: tuple, runtime: str, upgrade: bool
+) -> None:
+    substrate, state = chain
+    previous = "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08"
+    state["runtime"] = previous if upgrade else runtime
+    state["post_runtime"] = runtime
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.runtime_code_hash == runtime
+    if upgrade:
+        assert block.reset_reason == "runtime_changed"
+        assert not block.updates and not block.is_payout
+    else:
+        assert block.reset_reason is None
+        assert block.updates[0].commit_ciphertext_hash is not None
+        assert {
+            call.kwargs["block_hash"]
+            for call in substrate.query.call_args_list
+            if call.kwargs["storage_function"] == "SubnetEpochConsensus"
+        } == {"h99", "h100"}
+
+
+@pytest.mark.parametrize("boundary", ["consensus", "post_consensus"])
+@pytest.mark.parametrize("mode", ["Null", None, 0, False, {"Yuma": None}, "unknown"])
+async def test_new_runtime_requires_explicit_yuma_at_both_boundaries(
+    chain: tuple, boundary: str, mode: Any
+) -> None:
+    substrate, state = chain
+    state["runtime"] = _V475_THROUGH_V478[-1]
+    state[boundary] = mode
+    with pytest.raises(ValueError, match="non-Yuma"):
+        await read_source_emission_block(substrate, netuid=118, block=100)
+
+
+async def test_legacy_runtime_does_not_query_new_consensus_storage(
+    chain: tuple,
+) -> None:
+    substrate, state = chain
+    state["runtime"] = (
+        "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08"
+    )
+    await read_source_emission_block(substrate, netuid=118, block=100)
+    assert all(
+        call.kwargs["storage_function"] != "SubnetEpochConsensus"
+        for call in substrate.query.call_args_list
+    )
 
 
 @pytest.fixture
