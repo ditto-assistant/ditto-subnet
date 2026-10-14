@@ -834,6 +834,9 @@ async def upload_agent(
     # (3207) and the envelope handler maps it to HTTP 402.
     try:
         async with session.begin():
+            # Match Python/Go reservation order: policy before the coldkey lock
+            # acquired by admission consumption. Hold both through commit.
+            await lock_identity_writes(session, namespace="cla-policy")
             settings = await effective_submission_settings(
                 session,
                 default_payment_address=request.app.state.config.upload_payment_address,
@@ -855,9 +858,8 @@ async def upload_agent(
             )
             if reserved is not None:
                 raise HTTPException(status_code=409, detail=reserved)
-            # Serialize against publication/rollout writes and recheck inside
-            # the artifact commit, closing the slow-upload TOCTOU window.
-            await lock_identity_writes(session, namespace="cla-policy")
+            # Recheck inside the artifact commit after admission/name checks,
+            # closing the slow-upload TOCTOU window.
             final_cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
             if not final_cla.allowed:
                 raise ClaConsentRequired(final_cla.message)

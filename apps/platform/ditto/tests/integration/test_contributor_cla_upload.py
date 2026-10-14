@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from uuid import UUID
 import bittensor
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from ditto.api_server import create_api_server
 from ditto.api_server.dependencies import get_payment_verifier, get_storage_client
@@ -28,6 +29,7 @@ from ditto.tests.api_server.endpoints.test_contributor_cla import (
     setup,
     signed,
 )
+from ditto.tests.api_server.endpoints.test_upload import _signed_request_body
 from ditto.tests.integration.test_upload_agent_integration import _TAR_SHA, _build_form
 
 pytestmark = pytest.mark.integration
@@ -175,3 +177,97 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
             assert (await session.get(AgentClaBinding, agent_id)).signature_id == UUID(
                 receipt.json()["signature_id"]
             )
+
+
+async def test_check_and_artifact_commit_share_policy_then_coldkey_lock_order(
+    app, client, session_maker, object_storage, monkeypatch
+):
+    from ditto.api_server.endpoints import upload
+
+    del object_storage
+    setup(app, session_maker)
+    app.state.session_maker = session_maker
+    app.state.embedder = SimpleNamespace(embed=AsyncMock(return_value=None))
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    owner = bittensor.Keypair.create_from_uri("//Bob").ss58_address
+    version = await publish(client)
+    assert (
+        await client.post("/api/v1/cla/sign", json=signed(alice, version))
+    ).status_code == 200
+    await policy(client, "enforce")
+    block_hash = "0x" + "41" * 32
+    verifier = SimpleNamespace(
+        verify_payment=AsyncMock(
+            return_value=VerifiedPayment(
+                block_hash=block_hash,
+                extrinsic_index=0,
+                miner_hotkey=alice.ss58_address,
+                miner_coldkey=owner,
+                amount_rao=40_000_000,
+                tao_usd_rate=Decimal("400"),
+                dest_address=app.state.config.upload_payment_address,
+                block_timestamp=datetime.now(UTC),
+            )
+        )
+    )
+    app.dependency_overrides[get_payment_verifier] = lambda: verifier
+    consumed = asyncio.Event()
+    continue_commit = asyncio.Event()
+    original = upload.consume_or_enforce_upload_admission
+
+    async def pause_after_coldkey_lock(*args, **kwargs):
+        await original(*args, **kwargs)
+        consumed.set()
+        await continue_commit.wait()
+
+    monkeypatch.setattr(
+        upload, "consume_or_enforce_upload_admission", pause_after_coldkey_lock
+    )
+    async with create_storage_client(parse_storage_config_from_env()) as storage:
+        app.dependency_overrides[get_storage_client] = lambda: storage
+        data, files = _build_form(keypair=alice, block_hash=block_hash)
+        uploading = asyncio.create_task(
+            client.post("/api/v1/upload/agent", data=data, files=files)
+        )
+        checking = None
+        try:
+            async with asyncio.timeout(10):
+                await consumed.wait()
+                body = _signed_request_body(keypair=alice, sha256="e" * 64)
+                body["reserve_submission_slot"] = True
+                checking = asyncio.create_task(
+                    client.post("/api/v1/upload/check", json=body)
+                )
+                # Observe real PostgreSQL contention before releasing the upload;
+                # otherwise request scheduling could hide the reversed lock order.
+                async with session_maker() as session:
+                    while True:
+                        assert not checking.done(), (
+                            "check did not contend with the artifact transaction"
+                        )
+                        waiting = await session.scalar(
+                            text("""
+                            SELECT EXISTS (
+                                SELECT 1 FROM pg_locks
+                                WHERE locktype = 'advisory' AND NOT granted
+                                  AND database = (SELECT oid FROM pg_database
+                                                  WHERE datname = current_database())
+                            )
+                        """)
+                        )
+                        if waiting:
+                            break
+                        await asyncio.sleep(0.01)
+                continue_commit.set()
+                uploaded, checked = await asyncio.gather(uploading, checking)
+            assert uploaded.status_code == 200, uploaded.text
+            assert checked.status_code == 200, checked.text
+            assert checked.json()["error_codes"] == [1105]
+            assert checked.json()["admission_token"] is None
+        finally:
+            continue_commit.set()
+            tasks = [uploading] + ([checking] if checking is not None else [])
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)

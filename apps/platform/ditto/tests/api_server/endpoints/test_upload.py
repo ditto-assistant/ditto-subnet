@@ -681,9 +681,17 @@ class TestUploadCheck:
 
     @pytest.mark.parametrize("offset_seconds", [-301, 301])
     async def test_signed_request_outside_clock_window_is_rejected(
-        self, app: FastAPI, client: httpx.AsyncClient, offset_seconds: int
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        offset_seconds: int,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         override_get_chain_client(app)
+        now = int(time.time())
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.time", SimpleNamespace(time=lambda: now)
+        )
         keypair = _make_keypair()
         body = _signed_request_body(keypair=keypair)
         body.update(
@@ -691,7 +699,7 @@ class TestUploadCheck:
                 keypair,
                 hotkey=keypair.ss58_address,
                 sha256=_GOOD_SHA256,
-                signature_timestamp=int(time.time()) + offset_seconds,
+                signature_timestamp=now + offset_seconds,
             )
         )
         response = await client.post("/api/v1/upload/check", json=body)
