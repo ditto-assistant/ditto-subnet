@@ -46,6 +46,12 @@ class UploadCheckRequest(BaseModel):
     sha256: Annotated[str, Field(pattern=_SHA256_PATTERN)]
     """Lowercase hex of the tarball SHA-256 digest."""
 
+    name: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+    """Submission name, required to recognize an exact accepted-artifact retry.
+
+    Older clients may omit it; the multipart endpoint always rechecks the name.
+    """
+
     file_size_bytes: Annotated[int, Field(ge=1)]
     """Tarball size in bytes. Server caps at MAX_TARBALL_SIZE_BYTES."""
 

@@ -140,7 +140,6 @@ async def my_link(
         require_scope(miner, "read")
         link = await active_github_link(
             session,
-            netuid=request.app.state.config.chain.netuid,
             hotkey=miner.miner_hotkey,
         )
     return GithubLinkStatus(
@@ -154,9 +153,7 @@ async def my_link(
 async def public_link(
     hotkey: str, request: Request, session: SessionDep
 ) -> GithubLinkStatus:
-    link = await active_github_link(
-        session, netuid=request.app.state.config.chain.netuid, hotkey=hotkey
-    )
+    link = await active_github_link(session, hotkey=hotkey)
     return GithubLinkStatus(
         netuid=request.app.state.config.chain.netuid,
         enabled=request.app.state.github_link.enabled,
@@ -170,7 +167,6 @@ async def account_link(
 ) -> GithubLinkStatus:
     link = await active_github_link(
         session,
-        netuid=request.app.state.config.chain.netuid,
         github_user_id=github_user_id,
     )
     return GithubLinkStatus(
@@ -543,9 +539,7 @@ async def confirm(
                 )
             await lock_identity_writes(session, namespace="github-link")
             now = datetime.now(UTC)
-            previous = await active_github_link(
-                session, netuid=body.netuid, hotkey=body.hotkey
-            )
+            previous = await active_github_link(session, hotkey=body.hotkey)
             if previous:
                 previous.revoked_at = now
                 await session.flush()
@@ -641,9 +635,7 @@ async def unlink(
                     "signer is not the finalized Owner(hotkey)"
                 )
             await lock_identity_writes(session, namespace="github-link")
-            link = await active_github_link(
-                session, netuid=body.netuid, hotkey=body.hotkey
-            )
+            link = await active_github_link(session, hotkey=body.hotkey)
             if link is None or link.link_id != body.link_id:
                 raise HTTPException(409, "unlink must name the exact active link")
             session.add(

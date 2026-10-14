@@ -149,7 +149,16 @@ def test_github_omitted_wallet_names_without_tty_never_prompt(capsys):
 
 @pytest.mark.parametrize("after_unlink", [False, True])
 def test_unlink_signing_options_work_before_and_after_subcommand(after_unlink):
-    options = ["--coldkey", "W", "--hotkey", "H", "--key-kind", "coldkey", "--yes"]
+    options = [
+        "--coldkey",
+        "W",
+        "--hotkey",
+        "H",
+        "--key-kind",
+        "coldkey",
+        "--yes",
+        "--json",
+    ]
     argv = (
         ["link-github", "unlink", *options]
         if after_unlink
@@ -157,6 +166,7 @@ def test_unlink_signing_options_work_before_and_after_subcommand(after_unlink):
     )
     parsed = _build_parser().parse_args(argv)
     assert parsed.github_command == "unlink"
+    assert parsed.json is True
     assert (parsed.coldkey_name, parsed.hotkey_name, parsed.key_kind, parsed.yes) == (
         "W",
         "H",

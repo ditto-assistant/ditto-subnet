@@ -81,6 +81,7 @@ def add_subparser(
         "--key-kind", choices=("hotkey", "coldkey"), default=argparse.SUPPRESS
     )
     unlink.add_argument("--yes", action="store_true", default=argparse.SUPPRESS)
+    unlink.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     unlink.set_defaults(func=run, github_command="unlink")
     return parser
 

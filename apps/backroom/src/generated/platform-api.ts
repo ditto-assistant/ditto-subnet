@@ -35574,6 +35574,8 @@ export interface components {
             file_size_bytes: number;
             /** Hotkey */
             hotkey: string;
+            /** Name */
+            name?: string | null;
             /** Payment Block Hash */
             payment_block_hash?: string | null;
             /** Payment Block Number */

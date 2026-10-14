@@ -1511,6 +1511,7 @@ def check_github_link_config(config: GithubLinkConfig) -> None:
 
     try:
         parts = urlsplit(config.redirect_url)
+        _ = parts.port  # urlsplit defers numeric/range validation until access.
         valid_origin = parts.scheme == "https" or (
             parts.scheme == "http"
             and parts.hostname in ("localhost", "127.0.0.1", "::1")

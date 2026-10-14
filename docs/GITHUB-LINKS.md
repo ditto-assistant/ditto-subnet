@@ -36,8 +36,10 @@ at a finalized block. Coldkey proofs must use that owner, not a payment record
 or a client-supplied coldkey. Each hotkey and each GitHub id has at most one
 active link globally, including across netuids, enforced by partial unique
 database indexes. A netuid binds the signed proof; it does not permit another
-active identity mapping. Re-linking appends a
-new proof and revokes the previous link. Signed unlinking names the exact active
+active identity mapping. Lookups, re-linking and signed unlinking use this global
+mapping even when the active proof was recorded on another netuid; its original
+signed fields remain unchanged. Re-linking appends a new proof and revokes the
+previous link. Signed unlinking names the exact active
 link; it preserves all proof/history rows. Proof fields cannot be edited, and
 revocation cannot be undone.
 

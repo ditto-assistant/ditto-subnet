@@ -388,6 +388,7 @@ def _run_upload(
                 UploadCheckRequest(
                     hotkey=handle.hotkey_ss58,
                     sha256=preflight.sha256,
+                    name=agent_name,
                     file_size_bytes=preflight.file_size_bytes,
                     signature=signature,
                     signature_timestamp=signature_timestamp,

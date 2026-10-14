@@ -283,6 +283,7 @@ async def check(
             exact_retry = (
                 existing_retry is not None
                 and existing_retry.miner_hotkey == body.hotkey
+                and existing_retry.name == body.name
                 and existing_retry.sha256 == body.sha256
             )
             if not exact_retry:

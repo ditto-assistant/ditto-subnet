@@ -60,6 +60,9 @@ def test_signing_bytes_are_pinned_to_public_protocol():
         "https://example.com/api/v1/miner-auth/github/callback?state=controlled",
         "https://example.com/api/v1/miner-auth/github/callback#fragment",
         "https://example.com/wrong-callback",
+        "https://example.com:abc/api/v1/miner-auth/github/callback",
+        "https://example.com:65536/api/v1/miner-auth/github/callback",
+        "http://localhost:-1/api/v1/miner-auth/github/callback",
     ],
 )
 def test_oauth_config_rejects_unsafe_redirects(url):

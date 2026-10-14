@@ -287,6 +287,7 @@ class TestUploadHappyPath:
         load_w.assert_called_once_with(coldkey_name="miner", hotkey_name="default")
         # Pre-check + pricing + payment + upload all called.
         client.post_upload_check.assert_called_once()
+        assert client.post_upload_check.call_args.args[0].name == "alpha"
         client.get_eval_pricing.assert_called_once()
         pay.assert_called_once()
         client.post_upload_agent.assert_called_once()

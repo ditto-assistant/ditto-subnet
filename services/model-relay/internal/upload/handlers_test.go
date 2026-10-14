@@ -132,7 +132,7 @@ func insertPaidAgent(t *testing.T, pool *pgxpool.Pool, hotkey, coldkey, sha stri
 }
 
 func TestPaymentRecoveryForwardsToPythonUnchanged(t *testing.T) {
-	want := validCheckJSON(`"payment_block_hash":"0x` + strings.Repeat("1", 64) + `","payment_block_number":7,"payment_extrinsic_index":2`)
+	want := validCheckJSON(`"name":"original-name","payment_block_hash":"0x` + strings.Repeat("1", 64) + `","payment_block_number":7,"payment_extrinsic_index":2`)
 	called := false
 	legacy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -148,6 +148,24 @@ func TestPaymentRecoveryForwardsToPythonUnchanged(t *testing.T) {
 	d.handleCheck(w, r)
 	if !called || w.Code != http.StatusTeapot {
 		t.Fatalf("legacy called=%v status=%d", called, w.Code)
+	}
+}
+
+func TestCheckNameValidationMatchesPython(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		valid bool
+	}{
+		{`null`, true}, {`"original-name"`, true},
+		{`"` + strings.Repeat("猫", 64) + `"`, true},
+		{`""`, false}, {`"` + strings.Repeat("猫", 65) + `"`, false}, {`42`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, valid, _ := parseCheckRequest([]byte(validCheckJSON(`"name":` + tc.name)))
+			if valid != tc.valid {
+				t.Fatalf("valid=%v want=%v", valid, tc.valid)
+			}
+		})
 	}
 }
 

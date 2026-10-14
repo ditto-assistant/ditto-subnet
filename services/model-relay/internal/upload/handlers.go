@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -131,6 +132,7 @@ func (d *Deps) handleEvalPricing(w http.ResponseWriter, r *http.Request) {
 type checkRequestWire struct {
 	Hotkey                *string `json:"hotkey"`
 	SHA256                *string `json:"sha256"`
+	Name                  *string `json:"name"`
 	FileSizeBytes         *int64  `json:"file_size_bytes"`
 	Signature             *string `json:"signature"`
 	AllowIdenticalRescore bool    `json:"allow_identical_rescore"`
@@ -153,6 +155,12 @@ func parseCheckRequest(body []byte) (*checkRequestWire, bool, bool) {
 		!ss58Pattern.MatchString(*wire.Hotkey) || !sha256Pattern.MatchString(*wire.SHA256) ||
 		*wire.FileSizeBytes < 1 || !signaturePattern.MatchString(*wire.Signature) {
 		return nil, false, false
+	}
+	if wire.Name != nil {
+		length := utf8.RuneCountInString(*wire.Name)
+		if length < 1 || length > 64 {
+			return nil, false, false
+		}
 	}
 	proofFields := 0
 	if wire.PaymentBlockHash != nil {

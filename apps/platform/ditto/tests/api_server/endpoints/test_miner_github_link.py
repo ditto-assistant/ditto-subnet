@@ -361,11 +361,23 @@ async def test_active_identity_is_globally_one_to_one_across_netuids(
     app.state.config = replace(
         app.state.config, chain=replace(app.state.config.chain, netuid=119)
     )
+    for url in (
+        f"/api/v1/public/github-link/{alice.ss58_address}",
+        "/api/v1/public/github-account/100",
+        "/api/v1/me/github-link",
+    ):
+        status = await client.get(
+            url, headers={"authorization": f"Bearer {alice_token}"}
+        )
+        assert status.status_code == 200, status.text
+        assert status.json()["netuid"] == 119
+        assert status.json()["link"] == response.json()
+        assert status.json()["link"]["netuid"] == 118
     key, token = (alice, alice_token) if same_hotkey else (bob, bob_token)
     if same_hotkey:
         provider.user_id, provider.login = 101, "second-fixture"
     other, _, _ = await browser_flow(client, token)
-    refused = await client.post(
+    relinked = await client.post(
         "/api/v1/me/github-link/confirm",
         headers={"authorization": f"Bearer {token}"},
         json=signed_link(
@@ -376,11 +388,70 @@ async def test_active_identity_is_globally_one_to_one_across_netuids(
             login=provider.login,
         ),
     )
-    assert refused.status_code == 409, refused.text
+    assert relinked.status_code == (200 if same_hotkey else 409), relinked.text
     async with session_maker() as session:
-        assert (
-            await session.scalar(select(func.count()).select_from(MinerGithubLink)) == 1
-        )
+        links = list(await session.scalars(select(MinerGithubLink)))
+        assert len(links) == (2 if same_hotkey else 1)
+        active = [row for row in links if row.revoked_at is None]
+        assert len(active) == 1 and active[0].hotkey == alice.ss58_address
+        assert active[0].netuid == (119 if same_hotkey else 118)
+        if same_hotkey:
+            previous = next(row for row in links if row.netuid == 118)
+            assert previous.revoked_at is not None
+            assert previous.signature == response.json()["signature"]
+
+
+async def test_signed_unlink_of_global_identity_preserves_original_proof_netuid(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    started, _, _ = await browser_flow(client, token)
+    auth = {"authorization": f"Bearer {token}"}
+    response = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers=auth,
+        json=signed_link(alice, started["attempt_id"]),
+    )
+    assert response.status_code == 200, response.text
+    link_id = UUID(response.json()["link_id"])
+    app.state.config = replace(
+        app.state.config, chain=replace(app.state.config.chain, netuid=119)
+    )
+    nonce, issued = uuid4(), datetime.now(UTC)
+    payload = github_unlink_message(
+        netuid=119,
+        hotkey=alice.ss58_address,
+        link_id=link_id,
+        nonce=nonce,
+        issued_at=issued,
+        key_kind="hotkey",
+        signer=alice.ss58_address,
+    )
+    body = {
+        "netuid": 119,
+        "hotkey": alice.ss58_address,
+        "link_id": str(link_id),
+        "nonce": str(nonce),
+        "issued_at": issued.isoformat(),
+        "proof": {
+            "key_kind": "hotkey",
+            "signer": alice.ss58_address,
+            "signature": alice.sign(payload).hex(),
+        },
+    }
+    revoked = await client.post(
+        "/api/v1/me/github-link/unlink", headers=auth, json=body
+    )
+    assert revoked.status_code == 204, revoked.text
+    assert (await client.get("/api/v1/me/github-link", headers=auth)).json()[
+        "link"
+    ] is None
+    async with session_maker() as session:
+        row = await session.get(MinerGithubLink, link_id)
+        assert row.revoked_at is not None and row.netuid == 118
+        assert row.signature == response.json()["signature"]
 
 
 async def test_unique_account_relink_rename_nonce_replay_and_signed_unlink(

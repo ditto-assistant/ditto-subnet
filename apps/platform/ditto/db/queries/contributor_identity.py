@@ -28,13 +28,12 @@ async def lock_identity_writes(session: AsyncSession, *, namespace: str) -> None
 async def active_github_link(
     session: AsyncSession,
     *,
-    netuid: int,
     hotkey: str | None = None,
     github_user_id: int | None = None,
 ) -> MinerGithubLink | None:
-    query = select(MinerGithubLink).where(
-        MinerGithubLink.netuid == netuid, MinerGithubLink.revoked_at.is_(None)
-    )
+    # The signed proof retains its netuid, but the active identity mapping is
+    # global, matching the partial unique indexes and the write lock.
+    query = select(MinerGithubLink).where(MinerGithubLink.revoked_at.is_(None))
     if hotkey is not None:
         query = query.where(MinerGithubLink.hotkey == hotkey)
     elif github_user_id is not None:

@@ -63,7 +63,7 @@ async def prepare_bounty_identity(
 ) -> PreparedBountyIdentity:
     """Read the immutable proof, release its connection, then query GitHub."""
     async with session_maker() as session:
-        link = await active_github_link(session, netuid=netuid, hotkey=hotkey)
+        link = await active_github_link(session, hotkey=hotkey)
         if link is None or link.github_login.casefold() != github_login.casefold():
             raise BountyIdentityRejected(
                 "github_login must match the hotkey's active verified link; "
@@ -118,7 +118,7 @@ async def require_verified_bounty_contributor(
     ):
         raise BountyIdentityRejected("prepare fresh GitHub evidence for this claim")
     await lock_identity_writes(session, namespace="github-link")
-    link = await active_github_link(session, netuid=netuid, hotkey=hotkey)
+    link = await active_github_link(session, hotkey=hotkey)
     if link is None or (
         link.link_id,
         link.github_user_id,
