@@ -76,6 +76,27 @@ class GithubLinkStatus(WireModel):
     link: GithubLinkView | None = None
 
 
+class GithubOperatorRevokeRequest(WireModel):
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+
+
+class GithubOperatorRevocationView(WireModel):
+    link_id: UUID
+    actor: str
+    reason: str
+    revoked_at: datetime
+
+
+class GithubRevocationControl(WireModel):
+    link: GithubLinkView
+    operator_revocation: GithubOperatorRevocationView | None
+    can_revoke: bool
+    blocking_reason: str | None
+    confirmation: str
+
+
 class GithubLinkStart(WireModel):
     netuid: int
     attempt_id: UUID
@@ -155,6 +176,8 @@ class ClaControl(WireModel):
     history_limit: int
     history_offset: int
     history_has_more: bool
+    minimum_enforced_notice_seconds: int
+    earliest_enforced_effective_at: datetime | None
 
 
 class ClaSettingsRequest(WireModel):

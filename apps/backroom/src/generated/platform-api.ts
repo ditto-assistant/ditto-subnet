@@ -1384,6 +1384,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/github-links/{link_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Github Revocation Preflight */
+        get: operations["github_revocation_preflight_api_v1_admin_github_links__link_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/github-links/{link_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Github Link */
+        post: operations["revoke_github_link_api_v1_admin_github_links__link_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/hotkey-bans": {
         parameters: {
             query?: never;
@@ -15801,6 +15835,8 @@ export interface components {
              */
             active_hotkeys_basis: "non_retired_submissions";
             current: components["schemas"]["ClaSettingsRevision"];
+            /** Earliest Enforced Effective At */
+            earliest_enforced_effective_at: string | null;
             effective_version: components["schemas"]["ClaVersionView"] | null;
             /** History */
             history: components["schemas"]["ClaSettingsRevision"][];
@@ -15812,6 +15848,8 @@ export interface components {
             history_offset: number;
             /** History Total */
             history_total: number;
+            /** Minimum Enforced Notice Seconds */
+            minimum_enforced_notice_seconds: number;
             /** Signed Active Hotkeys */
             signed_active_hotkeys: number;
             /** Unsigned Active Hotkeys */
@@ -21441,6 +21479,46 @@ export interface components {
             signature: string;
             /** Signer */
             signer: string;
+        };
+        /** GithubOperatorRevocationView */
+        GithubOperatorRevocationView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Link Id
+             * Format: uuid
+             */
+            link_id: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Revoked At
+             * Format: date-time
+             */
+            revoked_at: string;
+        };
+        /** GithubOperatorRevokeRequest */
+        GithubOperatorRevokeRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /** GithubRevocationControl */
+        GithubRevocationControl: {
+            /** Blocking Reason */
+            blocking_reason: string | null;
+            /** Can Revoke */
+            can_revoke: boolean;
+            /** Confirmation */
+            confirmation: string;
+            link: components["schemas"]["GithubLinkView"];
+            operator_revocation: components["schemas"]["GithubOperatorRevocationView"] | null;
         };
         /** GithubUnlinkRequest */
         GithubUnlinkRequest: {
@@ -40948,6 +41026,139 @@ export interface operations {
             };
         };
     };
+    github_revocation_preflight_api_v1_admin_github_links__link_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                link_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubRevocationControl"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    revoke_github_link_api_v1_admin_github_links__link_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                link_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GithubOperatorRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubRevocationControl"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
     active_hotkey_bans_api_v1_admin_hotkey_bans_get: {
         parameters: {
             query?: {
@@ -46753,6 +46964,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
                 };
             };
             /** @description Service Unavailable */

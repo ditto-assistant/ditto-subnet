@@ -407,6 +407,7 @@ describe('Backroom MCP tools', () => {
         'get_screener_replay_process_readiness',
         'register_screener_replay_process_key',
         'revoke_screener_replay_process_key',
+        'revoke_miner_github_link',
         'create_screener_bootstrap_grant',
         'get_screener_review_settings',
         'get_screener_fanout_shadow',
@@ -463,6 +464,7 @@ describe('Backroom MCP tools', () => {
         'get_source_release_policy',
         'get_miner_github_link',
         'get_github_contributor_status',
+        'get_github_link_revocation_preflight',
         'get_miner_cla_status',
         'get_cla_policy',
         'set_cla_policy',
@@ -675,9 +677,9 @@ describe('Backroom MCP tools', () => {
     // Measure the serialized UTF-8 catalog, including guarded Gamma controls.
     // The quarantine batch execute now publishes its real decisions schema
     // instead of `{}` (about 1.5 KB), which takes the catalog past 180,000.
-    // Six contributor identity/CLA tools add bounded lookup, publication and
-    // rollout inputs: measured 184,408 bytes. Prose budgets remain unchanged.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(185_000)
+    // Eight contributor tools now include audited exact-link recovery. Keep
+    // UUID schemas compact and allow this addition; prose budgets stay fixed.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(186_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -11405,6 +11407,54 @@ describe('Backroom MCP tools', () => {
 
 
 describe('contributor identity and CLA MCP tools', () => {
+  it('exposes exact-link recovery preflight as read-only', async () => {
+    const { githubRevocationFixture } = await import('./contributor.test-fixtures')
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(githubRevocationFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({ name: 'get_github_link_revocation_preflight', arguments: { linkId: contributorFixture.link.link_id } })
+    expect(readJsonResult(response)).toEqual(githubRevocationFixture)
+    const tools = await client.listTools()
+    expect(tools.tools.find((tool) => tool.name === 'get_github_link_revocation_preflight')?.annotations)
+      .toMatchObject({ readOnlyHint: true, destructiveHint: false })
+    await client.close(); await server.close()
+  })
+
+  it('refuses GitHub recovery without write scope', async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({ name: 'revoke_miner_github_link', arguments: {
+      linkId: contributorFixture.link.link_id, reason: 'recover a verified hostile link',
+      confirmation: `REVOKE GITHUB LINK ${contributorFixture.link.link_id}`,
+    } })
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(TOOL_SCOPE_REQUIREMENTS.get('revoke_miner_github_link')).toBe(BACKROOM_WRITE_SCOPE)
+    await client.close(); await server.close()
+  })
+
+  it('attributes destructive recovery to the current operator', async () => {
+    const { revokedGithubFixture } = await import('./contributor.test-fixtures')
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ...revokedGithubFixture,
+      operator_revocation: { ...revokedGithubFixture.operator_revocation, actor: session.email },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const tools = await client.listTools()
+    expect(tools.tools.find((tool) => tool.name === 'revoke_miner_github_link')?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false })
+    const result = await client.callTool({ name: 'revoke_miner_github_link', arguments: {
+      linkId: contributorFixture.link.link_id, reason: 'recover a verified hostile link',
+      confirmation: `REVOKE GITHUB LINK ${contributorFixture.link.link_id}`,
+      actor: 'untrusted-input@invalid.example',
+    } })
+    expect(result.isError).not.toBe(true)
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ actor: session.email })
+    await client.close(); await server.close()
+  })
+
   it('returns numeric GitHub identity, exact consent status and rollout adoption with read scope', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(contributorFixture))

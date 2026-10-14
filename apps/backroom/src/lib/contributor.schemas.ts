@@ -15,6 +15,15 @@ const githubLinkSchema = z.object({
   owner_block: z.number().int(), owner_block_hash: z.string(),
 })
 export const githubLinkStatusSchema = z.object({ netuid: z.number().int(), enabled: z.boolean(), link: githubLinkSchema.nullable() })
+export const githubRevocationReadInputSchema = z.object({ linkId: z.string().uuid() })
+export const githubRevocationWriteInputSchema = githubRevocationReadInputSchema.extend({
+  reason: z.string().min(8), confirmation: z.string().min(1).max(200),
+})
+export const githubRevocationControlSchema = z.object({
+  link: githubLinkSchema,
+  operator_revocation: z.object({ link_id: z.string().uuid(), actor: z.string(), reason: z.string(), revoked_at: z.string() }).nullable(),
+  can_revoke: z.boolean(), blocking_reason: z.string().nullable(), confirmation: z.string(),
+})
 export const claVersionSchema = z.object({ version: z.number().int().positive(), sha256, published_at: z.string(), effective_at: z.string() })
 export const claSignatureSchema = z.object({
   signature_id: z.string().uuid(), netuid: z.number().int(), hotkey: z.string(), coldkey: z.string(),
@@ -32,6 +41,8 @@ export const claControlSchema = z.object({
   active_hotkeys_basis: z.literal('non_retired_submissions'), unsigned_shadow_uploads: z.number().int().nonnegative(),
   history_total: z.number().int().nonnegative(), history_limit: z.number().int().min(1).max(100),
   history_offset: z.number().int().nonnegative(), history_has_more: z.boolean(),
+  minimum_enforced_notice_seconds: z.number().int().positive(),
+  earliest_enforced_effective_at: z.string().nullable(),
 })
 export const claPolicyReadInputSchema = z.object({ historyLimit: z.number().int().min(1).max(100).default(25), historyOffset: z.number().int().nonnegative().default(0) })
 export const claPolicyWriteInputSchema = z.object({ expectedRevision: z.number().int().nonnegative(), mode: claModeSchema,

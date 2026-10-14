@@ -18,6 +18,13 @@ Announce the effective date in miner docs before choosing `enforce`. Enforce
 cannot be enabled without currently effective published text. An effective
 new version requires a new receipt before the next contribution.
 
+While enforcement is on, publishing another version requires at least 24
+hours notice. `get_cla_policy` exposes the minimum notice and earliest allowed
+activation time. Miners can sign a published future version with
+`ditto cla sign --version <N>` before activation. Configure a positive
+`DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE` to limit public CLA signing as well as
+uploads; invalid documents and used nonces are rejected before chain lookup.
+
 The CLI downloads the registry's exact published bytes, independently verifies
 the hash, saves the complete document for review, and requires explicit typed
 version/digest confirmation. It signs only with the miner hotkey. Public

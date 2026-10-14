@@ -92,7 +92,11 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
             agent = await session.get(Agent, agent_id)
             assert binding.signature_id == UUID(receipt.json()["signature_id"])
             assert agent.sha256 == _TAR_SHA and agent.miner_hotkey == alice.ss58_address
+        # Stage an already effective replacement before explicitly re-enabling
+        # enforcement; publishing during enforcement now requires notice.
+        await policy(client, "off")
         await publish(client, 2)
+        await policy(client, "enforce")
         stale = (
             await client.get(f"/api/v1/public/cla/status/{alice.ss58_address}")
         ).json()

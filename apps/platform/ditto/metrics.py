@@ -130,8 +130,8 @@ INFERENCE_ADMISSION_AT_CAPACITY = Counter(
 
 # Fires on every 429 from the opt-in per-client-IP limit on unauthenticated
 # routes (``DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE``). ``route`` is the limited
-# router -- ``upload``, ``retrieval``, or ``public`` -- a closed set; the client
-# address stays off the label so a flood cannot inflate cardinality. A steady
+# router -- ``upload``, ``retrieval``, ``public``, or ``cla`` -- a closed set.
+# The client address stays off the label so a flood cannot inflate cardinality. A steady
 # non-zero rate on ``upload`` is worth a look: miners share that path.
 PUBLIC_RATE_LIMITED = Counter(
     "ditto_public_rate_limited_total",

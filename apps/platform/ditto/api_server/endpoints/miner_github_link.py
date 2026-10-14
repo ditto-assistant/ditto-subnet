@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import (
@@ -28,6 +28,9 @@ from ditto.api_models.contributor_identity import (
     GithubLinkStart,
     GithubLinkStatus,
     GithubLinkView,
+    GithubOperatorRevocationView,
+    GithubOperatorRevokeRequest,
+    GithubRevocationControl,
     GithubUnlinkRequest,
     github_link_message,
     github_unlink_message,
@@ -40,6 +43,7 @@ from ditto.api_server.contributor_identity import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.ditto_link import hash_state, new_code_verifier, new_state
+from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.miner_auth import require_scope, resolve_miner_session
 from ditto.api_server.github_link import (
     ATTEMPT_TTL_SECONDS,
@@ -51,6 +55,7 @@ from ditto.db.models import (
     MinerGithubActionNonce,
     MinerGithubLink,
     MinerGithubLinkAttempt,
+    MinerGithubOperatorRevocation,
     MinerSession,
 )
 from ditto.db.queries.contributor_identity import (
@@ -85,7 +90,13 @@ def link_view(row: MinerGithubLink) -> GithubLinkView:
 
 
 def _page(
-    title: str, content: str, *, status: int = 200, script_nonce: str | None = None
+    title: str,
+    content: str,
+    *,
+    status: int = 200,
+    script_nonce: str | None = None,
+    allow_github_redirect: bool = False,
+    referrer_policy: Literal["no-referrer", "strict-origin"] = "no-referrer",
 ) -> HTMLResponse:
     return HTMLResponse(
         f'<!doctype html><html lang="en"><meta charset="utf-8"><meta '
@@ -95,9 +106,11 @@ def _page(
         status_code=status,
         headers={
             "Cache-Control": "no-store",
-            "Referrer-Policy": "no-referrer",
+            "Referrer-Policy": referrer_policy,
             "Content-Security-Policy": (
-                "default-src 'none'; form-action 'self'; "
+                "default-src 'none'; form-action 'self'"
+                + (" https://github.com" if allow_github_redirect else "")
+                + "; "
                 "frame-ancestors 'none'; base-uri 'none'"
                 + (f"; script-src 'nonce-{script_nonce}'" if script_nonce else "")
             ),
@@ -264,6 +277,7 @@ async def launch_page(attempt_id: UUID) -> Response:
         "<noscript>Enable JavaScript to open this one-use sign-in link.</noscript>"
         f'<script nonce="{nonce}">{script}</script>',
         script_nonce=nonce,
+        allow_github_redirect=True,
     )
 
 
@@ -412,7 +426,9 @@ async def callback(
             '<button name="decision" value="accept">Approve this hotkey</button> '
             '<button name="decision" value="cancel">Cancel</button></form>'
         )
-        return _page("Confirm your GitHub link", content)
+        return _page(
+            "Confirm your GitHub link", content, referrer_policy="strict-origin"
+        )
 
 
 @router.post("/miner-auth/github/accept", include_in_schema=False)
@@ -747,3 +763,87 @@ async def unlink(
         ) from None
     except IntegrityError:
         raise HTTPException(409, "nonce already used") from None
+
+
+def _revocation_control(
+    link: MinerGithubLink, audit: MinerGithubOperatorRevocation | None
+) -> GithubRevocationControl:
+    return GithubRevocationControl(
+        link=link_view(link),
+        operator_revocation=GithubOperatorRevocationView(
+            link_id=audit.link_id,
+            actor=audit.actor,
+            reason=audit.reason,
+            revoked_at=audit.revoked_at,
+        )
+        if audit
+        else None,
+        can_revoke=link.revoked_at is None,
+        blocking_reason="GitHub link is already revoked"
+        if link.revoked_at is not None
+        else None,
+        confirmation=f"REVOKE GITHUB LINK {link.link_id}",
+    )
+
+
+async def _revocation_rows(
+    session: AsyncSession, link_id: UUID, *, for_update: bool = False
+) -> tuple[MinerGithubLink, MinerGithubOperatorRevocation | None]:
+    query = (
+        select(MinerGithubLink, MinerGithubOperatorRevocation)
+        .outerjoin(
+            MinerGithubOperatorRevocation,
+            MinerGithubOperatorRevocation.link_id == MinerGithubLink.link_id,
+        )
+        .where(MinerGithubLink.link_id == link_id)
+        .execution_options(populate_existing=True)
+    )
+    if for_update:
+        query = query.with_for_update(of=MinerGithubLink)
+    row = (await session.execute(query)).one_or_none()
+    if row is None:
+        raise HTTPException(404, "unknown GitHub link")
+    return row[0], row[1]
+
+
+@router.get(
+    "/admin/github-links/{link_id}",
+    response_model=GithubRevocationControl,
+    responses={status: {"model": HttpErrorEnvelope} for status in (401, 404, 503)},
+)
+async def github_revocation_preflight(
+    link_id: UUID, _admin: Annotated[None, Depends(require_admin)], session: SessionDep
+) -> GithubRevocationControl:
+    link, audit = await _revocation_rows(session, link_id)
+    return _revocation_control(link, audit)
+
+
+@router.post(
+    "/admin/github-links/{link_id}/revoke",
+    response_model=GithubRevocationControl,
+    responses={status: {"model": HttpErrorEnvelope} for status in (401, 404, 409, 503)},
+)
+async def revoke_github_link(
+    link_id: UUID,
+    body: GithubOperatorRevokeRequest,
+    _admin: Annotated[None, Depends(require_admin)],
+    session: SessionDep,
+) -> GithubRevocationControl:
+    if body.confirmation != f"REVOKE GITHUB LINK {link_id}":
+        raise HTTPException(
+            409, "explicit GitHub link revocation confirmation is required"
+        )
+    async with session.begin():
+        await lock_identity_writes(session, namespace="github-link")
+        link, audit = await _revocation_rows(session, link_id, for_update=True)
+        control = _revocation_control(link, audit)
+        if not control.can_revoke:
+            raise HTTPException(409, control.blocking_reason)
+        now = datetime.now(UTC)
+        audit = MinerGithubOperatorRevocation(
+            link_id=link_id, actor=body.actor, reason=body.reason, revoked_at=now
+        )
+        session.add(audit)
+        link.revoked_at = now
+        await session.flush()
+        return _revocation_control(link, audit)

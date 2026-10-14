@@ -539,3 +539,17 @@ non-rejected, non-retired submissions, not chain registrations. All reads use
 signed-in operator's audit identity. Publication preserves exact UTF-8 text and
 SHA-256 and never activates enforcement. Maintain approved versioned text in
 `docs/legal`; never publish a test fixture or draft legal wording.
+
+When enforcement is on, new versions require at least 24 hours notice.
+`get_cla_policy` returns `minimum_enforced_notice_seconds` and
+`earliest_enforced_effective_at`; the publication transaction rechecks that
+deadline under the policy lock.
+
+For a hostile or compromised identity link, read
+`get_github_link_revocation_preflight` with the exact `linkId`. It returns the
+original proof, current blocker, confirmation and any operator recovery audit.
+`revoke_miner_github_link` requires `backroom:write`, an operator reason and
+`REVOKE GITHUB LINK {linkId}`. It records the signed-in operator in append-only
+history, preserves the miner's original signature, and frees the account for a
+fresh OAuth-verified link. Stale targets cannot revoke a replacement link.
+Revocation does not change payments or previously accepted submissions.

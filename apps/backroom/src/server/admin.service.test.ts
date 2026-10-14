@@ -1,5 +1,5 @@
-import { fetchMinerGithubLink, fetchGithubContributor, fetchClaPolicy, updateClaPolicy, publishClaVersion } from './admin.service'
-import { contributorFixture, claStatusFixture, claControlFixture, claVersionFixture } from './contributor.test-fixtures'
+import { fetchMinerGithubLink, fetchGithubContributor, fetchClaPolicy, updateClaPolicy, publishClaVersion, fetchGithubRevocationPreflight, revokeMinerGithubLink } from './admin.service'
+import { contributorFixture, claStatusFixture, claControlFixture, claVersionFixture, githubRevocationFixture, revokedGithubFixture } from './contributor.test-fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   startBenchmarkRollout,
@@ -5954,6 +5954,30 @@ describe('lease revocation ledger', () => {
 
 
 describe('verified contributors and CLA rollout', () => {
+  it('rejects malformed recovery IDs before any Platform request', async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchGithubRevocationPreflight({ linkId: 'not-a-uuid' })).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reads exact recovery guards and carries the operator on revocation', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(githubRevocationFixture))
+      .mockResolvedValueOnce(Response.json(revokedGithubFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const linkId = contributorFixture.link.link_id
+    expect(await fetchGithubRevocationPreflight({ linkId })).toEqual(githubRevocationFixture)
+    const result = await revokeMinerGithubLink('operator@omniaura.ai', {
+      linkId, reason: 'recover a verified hostile link', confirmation: githubRevocationFixture.confirmation,
+      actor: 'untrusted-input@invalid.example',
+    })
+    expect(result).toEqual(revokedGithubFixture)
+    expect(fetchMock.mock.calls[1][0]).toContain(`/admin/github-links/${linkId}/revoke`)
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      actor: 'operator@omniaura.ai', reason: 'recover a verified hostile link', confirmation: githubRevocationFixture.confirmation,
+    })
+  })
+
   it('preserves signed public identity and resolves a numeric account to its hotkey consent', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi.fn()

@@ -11841,6 +11841,21 @@ class ClaVersion(Base):
     )
 
 
+class MinerGithubOperatorRevocation(Base):
+    """Append-only operator recovery audit, separate from miner signatures."""
+
+    __tablename__ = "miner_github_operator_revocations"
+    link_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    revoked_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["link_id"], ["miner_github_links.link_id"]),
+    )
+
+
 class ClaSignature(Base):
     __tablename__ = "cla_signatures"
     signature_id: Mapped[UUID] = mapped_column(

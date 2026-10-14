@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -72,6 +73,7 @@ async def test_unpublished_document_returns_documented_json_error(
     "table",
     [
         "miner_github_action_nonces",
+        "miner_github_operator_revocations",
         "miner_github_links",
         "cla_versions",
         "cla_signatures",
@@ -403,7 +405,11 @@ async def test_upload_check_modes_require_current_consent_before_payment(
         "/api/v1/upload/check", json=_signed_request_body(keypair=alice)
     )
     assert accepted.json()["ok"] is True, accepted.text
+    if mode == "enforce":
+        await policy(client, "off")
     await publish(client, 2)
+    if mode == "enforce":
+        await policy(client, "enforce")
     outdated = await client.post(
         "/api/v1/upload/check", json=_signed_request_body(keypair=alice)
     )
@@ -659,3 +665,101 @@ async def test_nonexistent_owner_is_rejected_without_uid_registration(
     assert (
         await client.get(f"/api/v1/public/cla/status/{alice.ss58_address}")
     ).headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("case", ["missing", "digest", "nonce"])
+async def test_invalid_document_and_nonce_replay_do_not_spend_chain_rpcs(
+    app, client, session_maker, case
+):
+    chain = setup(app, session_maker)
+    version = await publish(client)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    body = signed(alice, version)
+    if case == "missing":
+        body = signed(alice, {**version, "version": 2})
+    elif case == "digest":
+        body = signed(alice, {**version, "sha256": "cd" * 32})
+    else:
+        assert (await client.post("/api/v1/cla/sign", json=body)).status_code == 200
+    chain.get_finalized_block.reset_mock()
+    chain.get_coldkey_for_hotkey.reset_mock()
+    rejected = await client.post("/api/v1/cla/sign", json=body)
+    assert rejected.status_code == 409, rejected.text
+    chain.get_finalized_block.assert_not_awaited()
+    chain.get_coldkey_for_hotkey.assert_not_awaited()
+
+
+async def test_concurrent_nonce_replay_still_returns_conflict_after_both_prechecks(
+    app, client, session_maker
+):
+    chain = setup(app, session_maker)
+    version = await publish(client)
+    body = signed(bittensor.Keypair.create_from_uri("//Alice"), version)
+    arrivals = 0
+    ready = asyncio.Event()
+
+    async def owner(*_args, **_kwargs):
+        nonlocal arrivals
+        arrivals += 1
+        if arrivals == 2:
+            ready.set()
+        await asyncio.wait_for(ready.wait(), 10)
+        return bittensor.Keypair.create_from_uri("//Bob").ss58_address
+
+    chain.get_coldkey_for_hotkey.side_effect = owner
+    results = await asyncio.wait_for(
+        asyncio.gather(
+            client.post("/api/v1/cla/sign", json=body),
+            client.post("/api/v1/cla/sign", json=body),
+        ),
+        15,
+    )
+    assert sorted(result.status_code for result in results) == [200, 409]
+    assert "nonce already used" in next(
+        result.text for result in results if result.status_code == 409
+    )
+    async with session_maker() as session:
+        assert await session.scalar(select(func.count()).select_from(ClaSignature)) == 1
+
+
+@pytest.mark.parametrize("hours,accepted", [(0, False), (23, False), (24, True)])
+async def test_enforced_cla_publication_requires_one_day_notice(
+    app, client, session_maker, monkeypatch, hours, accepted
+):
+    from ditto.api_server.endpoints import contributor_cla
+
+    setup(app, session_maker)
+    await publish(client)
+    await policy(client, "enforce")
+    now = datetime.now(UTC)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz)
+
+    monkeypatch.setattr(contributor_cla, "datetime", Clock)
+    metadata = (await client.get("/api/v1/admin/cla/settings", headers=_HEADERS)).json()
+    assert metadata["minimum_enforced_notice_seconds"] == 86400
+    assert datetime.fromisoformat(
+        metadata["earliest_enforced_effective_at"]
+    ) == now + timedelta(hours=24)
+    content = FIXTURE.format(version=2)
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    result = await client.post(
+        "/api/v1/admin/cla/versions",
+        headers=_HEADERS,
+        json={
+            "version": 2,
+            "text": content,
+            "sha256": digest,
+            "effective_at": (now + timedelta(hours=hours)).isoformat(),
+            "reason": "test notice before enforced agreement changes",
+            "confirmation": f"PUBLISH CLA 2 {digest}",
+        },
+    )
+    assert result.status_code == (200 if accepted else 409), result.text
+    if not accepted:
+        assert "24 hours notice" in result.text
+    current = (await client.get("/api/v1/public/cla")).json()
+    assert current["current"]["version"] == 1

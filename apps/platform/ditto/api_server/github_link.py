@@ -93,31 +93,56 @@ class GithubLinkClient:
                 response.raise_for_status()
                 token_response = response.json()
                 token = token_response.get("access_token")
-                if (
-                    not isinstance(token, str)
-                    or not token
-                    or token_response.get("token_type", "").lower() != "bearer"
-                ):
+                if not isinstance(token, str) or not token:
                     raise GithubLinkRejected("GitHub did not issue an identity token")
-                if token_response.get("scope", "").strip():
-                    raise GithubLinkRejected(
-                        "GitHub linking requires a public-profile-only OAuth app"
+                try:
+                    if token_response.get("token_type", "").lower() != "bearer":
+                        raise GithubLinkRejected(
+                            "GitHub did not issue an identity token"
+                        )
+                    if token_response.get("scope", "").strip():
+                        raise GithubLinkRejected(
+                            "GitHub linking requires a public-profile-only OAuth app"
+                        )
+                    user_response = await client.get(
+                        "https://api.github.com/user",
+                        headers={
+                            "Accept": "application/vnd.github+json",
+                            "Authorization": f"Bearer {token}",
+                            "X-GitHub-Api-Version": "2022-11-28",
+                        },
                     )
-                user_response = await client.get(
-                    "https://api.github.com/user",
-                    headers={
-                        "Accept": "application/vnd.github+json",
-                        "Authorization": f"Bearer {token}",
-                        "X-GitHub-Api-Version": "2022-11-28",
-                    },
-                )
-                user_response.raise_for_status()
-                user = user_response.json()
-                user_id, login = user.get("id"), user.get("login")
-                if type(user_id) is not int or not 0 < user_id <= 9223372036854775807:
-                    raise GithubLinkRejected("GitHub returned an invalid account id")
-                login = TypeAdapter(GithubLogin).validate_python(login)
-                return GithubIdentity(user_id=user_id, login=login)
+                    user_response.raise_for_status()
+                    user = user_response.json()
+                    user_id, login = user.get("id"), user.get("login")
+                    if (
+                        type(user_id) is not int
+                        or not 0 < user_id <= 9223372036854775807
+                    ):
+                        raise GithubLinkRejected(
+                            "GitHub returned an invalid account id"
+                        )
+                    login = TypeAdapter(GithubLogin).validate_python(login)
+                    return GithubIdentity(user_id=user_id, login=login)
+                finally:
+                    # Revoke the single transient token on success or rejection.
+                    # Never revoke the user's other app tokens or authorization.
+                    revoked = await client.request(
+                        "DELETE",
+                        f"https://api.github.com/applications/{self.config.client_id}/token",
+                        auth=httpx.BasicAuth(
+                            self.config.client_id or "", self.config.client_secret or ""
+                        ),
+                        headers={
+                            "Accept": "application/vnd.github+json",
+                            "X-GitHub-Api-Version": "2022-11-28",
+                        },
+                        json={"access_token": token},
+                    )
+                    if revoked.status_code != 204:
+                        raise GithubLinkRejected(
+                            "GitHub token cleanup failed; start a new link attempt"
+                        )
         except GithubLinkRejected:
             raise
         except (httpx.HTTPError, ValueError, TypeError, AttributeError):

@@ -245,6 +245,10 @@ jobs:
           cache: true
           cache-dependency-path: services/dittobench-api/go.sum
 
+      - name: Install Chromium for the GitHub OAuth browser regression
+        if: matrix.suite == 'other-endpoints-remaining'
+        run: uv run playwright install --with-deps chromium
+
       - name: Tune disposable Postgres
         # Match the local test harness: these databases are rebuilt from the
         # migration template and never hold durable data. tmpfs alone still

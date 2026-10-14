@@ -3749,6 +3749,18 @@ CREATE TABLE public.miner_github_links (
 
 
 --
+-- Name: miner_github_operator_revocations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_github_operator_revocations (
+    link_id uuid NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    revoked_at timestamp with time zone NOT NULL
+);
+
+
+--
 -- Name: miner_login_nonces; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8012,6 +8024,14 @@ ALTER TABLE ONLY public.miner_github_links
 
 
 --
+-- Name: miner_github_operator_revocations pk_miner_github_operator_revocations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_operator_revocations
+    ADD CONSTRAINT pk_miner_github_operator_revocations PRIMARY KEY (link_id);
+
+
+--
 -- Name: private_benchmark_datasets pk_private_benchmark_datasets; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10736,6 +10756,20 @@ CREATE TRIGGER miner_github_links_no_truncate BEFORE TRUNCATE ON public.miner_gi
 
 
 --
+-- Name: miner_github_operator_revocations miner_github_operator_revocations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_operator_revocations_immutable BEFORE DELETE OR UPDATE ON public.miner_github_operator_revocations FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: miner_github_operator_revocations miner_github_operator_revocations_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_operator_revocations_no_truncate BEFORE TRUNCATE ON public.miner_github_operator_revocations FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
 -- Name: private_benchmark_datasets private_benchmark_dataset_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -11657,6 +11691,14 @@ ALTER TABLE ONLY public.miner_github_links
 
 ALTER TABLE ONLY public.miner_github_links
     ADD CONSTRAINT fk_miner_github_links_nonce_miner_github_action_nonces FOREIGN KEY (nonce) REFERENCES public.miner_github_action_nonces(nonce);
+
+
+--
+-- Name: miner_github_operator_revocations fk_miner_github_operator_revocations_link_id_miner_github_links; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_operator_revocations
+    ADD CONSTRAINT fk_miner_github_operator_revocations_link_id_miner_github_links FOREIGN KEY (link_id) REFERENCES public.miner_github_links(link_id);
 
 
 --

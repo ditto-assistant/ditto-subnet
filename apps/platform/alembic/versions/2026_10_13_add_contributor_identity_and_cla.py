@@ -99,6 +99,14 @@ def upgrade() -> None:
             postgresql_where=sa.text("revoked_at IS NULL"),
         )
     op.create_table(
+        "miner_github_operator_revocations",
+        sa.Column("link_id", sa.UUID(), primary_key=True),
+        sa.Column("actor", sa.Text(), nullable=False),
+        sa.Column("reason", sa.Text(), nullable=False),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["link_id"], ["miner_github_links.link_id"]),
+    )
+    op.create_table(
         "cla_versions",
         sa.Column("version", sa.Integer(), primary_key=True, autoincrement=False),
         sa.Column("sha256", sa.Text(), nullable=False),
@@ -167,6 +175,7 @@ def upgrade() -> None:
         BEGIN RAISE EXCEPTION 'contributor identity history is append-only'; END $$""")
     for table in (
         "miner_github_action_nonces",
+        "miner_github_operator_revocations",
         "cla_versions",
         "cla_signatures",
         "cla_settings_revisions",
@@ -215,6 +224,7 @@ def downgrade() -> None:
         "cla_settings_revisions",
         "cla_signatures",
         "cla_versions",
+        "miner_github_operator_revocations",
         "miner_github_links",
         "miner_github_action_nonces",
         "miner_github_link_attempts",

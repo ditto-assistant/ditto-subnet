@@ -16,4 +16,16 @@ export const claControlFixture = {
   history: [], effective_version: claVersionFixture, active_hotkeys: 2, signed_active_hotkeys: 1, unsigned_active_hotkeys: 1,
   active_hotkeys_basis: 'non_retired_submissions', unsigned_shadow_uploads: 3,
   history_total: 1, history_limit: 25, history_offset: 0, history_has_more: false,
+  minimum_enforced_notice_seconds: 86400, earliest_enforced_effective_at: null,
+}
+export const githubRevocationFixture = {
+  link: contributorFixture.link, operator_revocation: null, can_revoke: true,
+  blocking_reason: null, confirmation: `REVOKE GITHUB LINK ${contributorFixture.link.link_id}`,
+}
+export const revokedGithubFixture = {
+  ...githubRevocationFixture,
+  link: { ...contributorFixture.link, revoked_at: '2026-10-14T10:00:00Z' },
+  operator_revocation: { link_id: contributorFixture.link.link_id, actor: 'operator@omniaura.ai',
+    reason: 'recover a verified hostile link', revoked_at: '2026-10-14T10:00:00Z' },
+  can_revoke: false, blocking_reason: 'GitHub link is already revoked',
 }

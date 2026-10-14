@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
@@ -53,6 +53,11 @@ from ditto.db.queries.contributor_identity import (
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 router = APIRouter(tags=["contributor-cla"], dependencies=[Depends(no_store)])
+ENFORCED_CLA_NOTICE = timedelta(hours=24)
+
+
+def enforced_cla_notice_deadline(mode: str, *, now: datetime) -> datetime | None:
+    return now + ENFORCED_CLA_NOTICE if mode == "enforce" else None
 
 
 def version_view(row: ClaVersion) -> ClaVersionView:
@@ -179,7 +184,7 @@ async def public_text(
 @router.post(
     "/cla/sign",
     response_model=ClaSignatureView,
-    responses={status: {"model": HttpErrorEnvelope} for status in (400, 409, 503)},
+    responses={status: {"model": HttpErrorEnvelope} for status in (400, 409, 429, 503)},
 )
 async def sign_cla(
     body: ClaSignRequest, request: Request, session: SessionDep
@@ -204,6 +209,24 @@ async def sign_cla(
             issued_at=body.issued_at,
             now=now,
         )
+        # Reject unpublished/mismatched documents and known replays before
+        # spending chain RPCs. The insert constraint still closes nonce races.
+        async with session.begin():
+            version = await session.get(ClaVersion, body.cla_version)
+            if version is None or version.sha256 != body.cla_sha256:
+                raise HTTPException(
+                    409, "CLA version or digest is not the published document"
+                )
+            if (
+                await session.scalar(
+                    select(ClaSignature.signature_id).where(
+                        ClaSignature.nonce == body.nonce
+                    )
+                )
+                is not None
+            ):
+                raise HTTPException(409, "CLA signature nonce already used")
+        session.expire_all()
         owner = await finalized_owner(request.app.state.chain, body.hotkey)
         async with session.begin():
             version = await session.get(ClaVersion, body.cla_version)
@@ -261,6 +284,13 @@ async def publish(
         )
     async with session.begin():
         await lock_identity_writes(session, namespace="cla-policy")
+        settings = await current_cla_settings(session)
+        now = datetime.now(UTC)
+        notice_deadline = enforced_cla_notice_deadline(settings.mode, now=now)
+        if notice_deadline is not None and body.effective_at < notice_deadline:
+            raise HTTPException(
+                409, "CLA changes under enforcement require at least 24 hours notice"
+            )
         previous = await session.scalar(
             select(ClaVersion).order_by(ClaVersion.version.desc()).limit(1)
         )
@@ -277,7 +307,7 @@ async def publish(
             version=body.version,
             sha256=body.sha256,
             text=body.text,
-            published_at=datetime.now(UTC),
+            published_at=now,
             effective_at=body.effective_at,
             actor=body.actor,
             reason=body.reason,
@@ -360,6 +390,10 @@ async def control(
         history_limit=history_limit,
         history_offset=history_offset,
         history_has_more=history_offset + len(history) < total,
+        minimum_enforced_notice_seconds=int(ENFORCED_CLA_NOTICE.total_seconds()),
+        earliest_enforced_effective_at=enforced_cla_notice_deadline(
+            settings.mode, now=datetime.now(UTC)
+        ),
     )
 
 

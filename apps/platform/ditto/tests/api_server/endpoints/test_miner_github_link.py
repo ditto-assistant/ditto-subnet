@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -33,6 +34,7 @@ from ditto.db.models import (
     MinerGithubActionNonce,
     MinerGithubLink,
     MinerGithubLinkAttempt,
+    MinerGithubOperatorRevocation,
     MinerSession,
 )
 from ditto.db.queries.contributor_identity import active_github_link
@@ -47,6 +49,7 @@ class Provider:
     user_id = 100
     login = "miner-fixture"
     scope = ""
+    revoke_status = 204
 
     def __init__(self):
         self.requests = []
@@ -68,6 +71,14 @@ class Provider:
                 return httpx.Response(
                     200, json={"id": self.user_id, "login": self.login}
                 )
+            if request.url.path == "/applications/fixture-client/token":
+                assert request.method == "DELETE"
+                expected = base64.b64encode(
+                    f"fixture-client:{SECRET}".encode()
+                ).decode()
+                assert request.headers["authorization"] == f"Basic {expected}"
+                assert json.loads(request.content) == {"access_token": TOKEN}
+                return httpx.Response(self.revoke_status)
             if request.url.path.startswith("/users/"):
                 expected = base64.b64encode(
                     f"fixture-client:{SECRET}".encode()
@@ -212,6 +223,171 @@ async def test_malformed_callback_returns_html_without_provider_exchange(
     assert "Invalid sign-in" in response.text
     assert "Start a new link from the CLI" in response.text
     assert not provider.requests
+
+
+async def test_operator_recovery_frees_hostile_link_without_rewriting_signed_proof(
+    app, client, session_maker
+):
+    from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
+        _HEADERS,
+    )
+    from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
+        _install as install_admin,
+    )
+
+    setup(app, session_maker)
+    install_admin(app, session_maker)
+    attacker = bittensor.Keypair.create_from_uri("//Alice")
+    victim = bittensor.Keypair.create_from_uri("//Bob")
+    attack_token = await _sign_in(client, attacker)
+    attack_attempt, _, _ = await browser_flow(client, attack_token)
+    linked = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers={"authorization": f"Bearer {attack_token}"},
+        json=signed_link(attacker, attack_attempt["attempt_id"]),
+    )
+    assert linked.status_code == 200, linked.text
+    original = linked.json()
+    link_id = original["link_id"]
+    victim_token = await _sign_in(client, victim)
+    victim_attempt, _, _ = await browser_flow(client, victim_token)
+    victim_body = signed_link(victim, victim_attempt["attempt_id"])
+    auth = {"authorization": f"Bearer {victim_token}"}
+    blocked = await client.post(
+        "/api/v1/me/github-link/confirm", headers=auth, json=victim_body
+    )
+    assert blocked.status_code == 409, blocked.text
+    path = f"/api/v1/admin/github-links/{link_id}"
+    payload = {
+        "actor": "operator@omniaura.ai",
+        "reason": "victim verified a phishing-induced hostile link",
+        "confirmation": f"REVOKE GITHUB LINK {link_id}",
+    }
+    assert (await client.post(path + "/revoke", json=payload)).status_code == 401
+    inspected = await client.get(path, headers=_HEADERS)
+    assert inspected.status_code == 200 and inspected.json()["can_revoke"]
+    assert inspected.json()["operator_revocation"] is None
+    wrong = await client.post(
+        path + "/revoke",
+        headers=_HEADERS,
+        json={**payload, "confirmation": "wrong target"},
+    )
+    assert wrong.status_code == 409
+    revoked = await client.post(path + "/revoke", headers=_HEADERS, json=payload)
+    assert revoked.status_code == 200, revoked.text
+    record = revoked.json()
+    assert record["link"]["signature"] == original["signature"]
+    assert record["link"]["nonce"] == original["nonce"]
+    assert not record["can_revoke"] and record["link"]["revoked_at"]
+    assert record["operator_revocation"]["actor"] == payload["actor"]
+    assert record["operator_revocation"]["reason"] == payload["reason"]
+    assert (await client.get(path, headers=_HEADERS)).json() == record
+    assert (
+        await client.post(path + "/revoke", headers=_HEADERS, json=payload)
+    ).status_code == 409
+    recovered = await client.post(
+        "/api/v1/me/github-link/confirm", headers=auth, json=victim_body
+    )
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["hotkey"] == victim.ss58_address
+    assert recovered.json()["github_user_id"] == original["github_user_id"]
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(MinerGithubOperatorRevocation)
+            )
+            == 1
+        )
+        for sql in (
+            "DELETE FROM miner_github_operator_revocations",
+            "UPDATE miner_github_operator_revocations SET actor='rewrite'",
+            "TRUNCATE miner_github_operator_revocations",
+        ):
+            with pytest.raises(DBAPIError, match="append-only"):
+                await session.execute(text(sql))
+            await session.rollback()
+
+
+async def test_operator_recovery_rejects_stale_preflight_after_miner_relinks(
+    app, client, session_maker
+):
+    from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
+        _HEADERS,
+    )
+    from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
+        _install as install_admin,
+    )
+
+    setup(app, session_maker)
+    install_admin(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    auth = {"authorization": f"Bearer {token}"}
+    first, _, _ = await browser_flow(client, token)
+    linked = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers=auth,
+        json=signed_link(alice, first["attempt_id"]),
+    )
+    old_id = linked.json()["link_id"]
+    path = f"/api/v1/admin/github-links/{old_id}"
+    before = (await client.get(path, headers=_HEADERS)).json()
+    assert before["can_revoke"]
+    next_attempt, _, _ = await browser_flow(client, token)
+    relinked = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers=auth,
+        json=signed_link(alice, next_attempt["attempt_id"]),
+    )
+    assert relinked.status_code == 200
+    stale = await client.post(
+        path + "/revoke",
+        headers=_HEADERS,
+        json={
+            "reason": "stale exact target must not revoke the replacement",
+            "confirmation": before["confirmation"],
+        },
+    )
+    assert stale.status_code == 409
+    assert (await client.get("/api/v1/me/github-link", headers=auth)).json()["link"][
+        "link_id"
+    ] == relinked.json()["link_id"]
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(MinerGithubOperatorRevocation)
+            )
+            == 0
+        )
+
+
+@pytest.mark.parametrize("case", ["success", "scope", "identity", "cleanup"])
+async def test_exchange_revokes_only_the_issued_token_on_every_outcome(
+    app, session_maker, case
+):
+    provider = setup(app, session_maker)
+    if case == "scope":
+        provider.scope = "repo"
+    elif case == "identity":
+        provider.user_id = 0
+    elif case == "cleanup":
+        provider.revoke_status = 503
+    if case == "success":
+        assert (
+            await app.state.github_link.exchange(
+                code="fixture-code", verifier="fixture-verifier"
+            )
+        ).user_id == provider.user_id
+    else:
+        with pytest.raises(GithubLinkRejected) as failure:
+            await app.state.github_link.exchange(
+                code="fixture-code", verifier="fixture-verifier"
+            )
+        assert TOKEN not in str(failure.value) and SECRET not in str(failure.value)
+    deletes = [request for request in provider.requests if request.method == "DELETE"]
+    assert len(deletes) == 1
+    assert deletes[0].url.path == "/applications/fixture-client/token"
+    assert json.loads(deletes[0].content) == {"access_token": TOKEN}
 
 
 def signed_link(
@@ -915,7 +1091,8 @@ async def test_oauth_broad_scope_errors_do_not_leak_tokens(
         TOKEN not in denied.text + caplog.text
         and SECRET not in denied.text + caplog.text
     )
-    assert len(provider.requests) == 1
+    assert len(provider.requests) == 2
+    assert provider.requests[-1].method == "DELETE"
     replayed = await client.get(
         "/api/v1/miner-auth/github/callback",
         params={"state": state, "code": "fixture-code"},

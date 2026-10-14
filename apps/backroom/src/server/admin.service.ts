@@ -2,6 +2,7 @@ import {
   contributorHotkeyInputSchema, githubAccountInputSchema, githubLinkStatusSchema,
   claStatusSchema, claControlSchema, claPolicyReadInputSchema, claPolicyWriteInputSchema,
   claPublishInputSchema, claVersionSchema,
+  githubRevocationReadInputSchema, githubRevocationWriteInputSchema, githubRevocationControlSchema,
 } from '../lib/contributor.schemas'
 import '@tanstack/react-start/server-only'
 import { manualControlSchema } from '../lib/treasury-manual.schemas'
@@ -4134,6 +4135,18 @@ export async function authorizeConversationRetry(actor: string, rawInput: unknow
 }
 
 // Contributor identity and default-off CLA rollout.
+export async function fetchGithubRevocationPreflight(rawInput: unknown) {
+  const input = githubRevocationReadInputSchema.parse(rawInput)
+  return githubRevocationControlSchema.parse(await platformAdminRequest(`/api/v1/admin/github-links/${input.linkId}`))
+}
+
+export async function revokeMinerGithubLink(actor: string, rawInput: unknown) {
+  const input = githubRevocationWriteInputSchema.parse(rawInput)
+  type Body = PlatformOperations['revoke_github_link_api_v1_admin_github_links__link_id__revoke_post']['requestBody']['content']['application/json']
+  const body = { actor, reason: input.reason, confirmation: input.confirmation } satisfies Body
+  return githubRevocationControlSchema.parse(await platformAdminRequest(`/api/v1/admin/github-links/${input.linkId}/revoke`, { method: 'POST', actor, body }))
+}
+
 export async function fetchMinerGithubLink(rawInput: unknown) {
   const input = contributorHotkeyInputSchema.parse(rawInput)
   return githubLinkStatusSchema.parse(await platformAdminRequest(`/api/v1/public/github-link/${encodeURIComponent(input.hotkey)}`))
