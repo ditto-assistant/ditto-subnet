@@ -257,6 +257,16 @@ func (q *Queries) IsHotkeyBanned(ctx context.Context, hotkey string) (bool, erro
 	return banned, err
 }
 
+const lockClaPolicy = `-- name: LockClaPolicy :exec
+SELECT pg_advisory_xact_lock(hashtextextended('cla-policy', 0))
+`
+
+// Matches Platform's policy publication and revision lock.
+func (q *Queries) LockClaPolicy(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockClaPolicy)
+	return err
+}
+
 const lockUploadAdmissionColdkey = `-- name: LockUploadAdmissionColdkey :exec
 SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
 `

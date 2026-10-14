@@ -207,6 +207,29 @@ async def eval_pricing(request: Request, session: SessionDep) -> EvalPricingResp
     )
 
 
+async def _cla_check_message(
+    session: AsyncSession, *, body: UploadCheckRequest, netuid: int
+) -> str | None:
+    cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=body.hotkey)
+    if cla.allowed:
+        return None
+    existing = None
+    if body.payment_block_hash is not None and body.payment_extrinsic_index is not None:
+        existing = await get_agent_for_payment_proof(
+            session,
+            block_hash=body.payment_block_hash,
+            extrinsic_index=body.payment_extrinsic_index,
+        )
+    if (
+        existing is not None
+        and existing.miner_hotkey == body.hotkey
+        and existing.sha256 == body.sha256
+        and (body.name is None or existing.name == body.name)
+    ):
+        return None
+    return cla.message
+
+
 @router.post("/check", response_model=UploadCheckResponse)
 async def check(
     request: Request,
@@ -270,27 +293,10 @@ async def check(
     # is a dry-run hint for newer clients; reservations bind hotkey/SHA, and
     # the multipart commit always rechecks the exact stored name.
     if signature_valid and not banned:
-        cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=body.hotkey)
-        if not cla.allowed:
-            existing_retry = None
-            if (
-                body.payment_block_hash is not None
-                and body.payment_extrinsic_index is not None
-            ):
-                existing_retry = await get_agent_for_payment_proof(
-                    session,
-                    block_hash=body.payment_block_hash,
-                    extrinsic_index=body.payment_extrinsic_index,
-                )
-            exact_retry = (
-                existing_retry is not None
-                and existing_retry.miner_hotkey == body.hotkey
-                and existing_retry.sha256 == body.sha256
-                and (body.name is None or existing_retry.name == body.name)
-            )
-            if not exact_retry:
-                codes.append(CLA_REQUIRED_ERROR_CODE)
-                messages.append(cla.message)
+        cla_message = await _cla_check_message(session, body=body, netuid=netuid)
+        if cla_message is not None:
+            codes.append(CLA_REQUIRED_ERROR_CODE)
+            messages.append(cla_message)
 
     # 5. Stop the common accidental duplicate before the miner pays. A second
     # independently seeded run remains available, but it must be explicit.
@@ -429,6 +435,12 @@ async def check(
                 await rollback_result
         try:
             async with session.begin():
+                await lock_identity_writes(session, namespace="cla-policy")
+                cla_message = await _cla_check_message(
+                    session, body=body, netuid=netuid
+                )
+                if cla_message is not None:
+                    raise ClaConsentRequired(cla_message)
                 settings = await effective_submission_settings(
                     session,
                     default_payment_address=request.app.state.config.upload_payment_address,
@@ -441,6 +453,9 @@ async def check(
                     settings=settings,
                     replace_existing=recovery_payment_verified,
                 )
+        except ClaConsentRequired as exc:
+            codes.append(CLA_REQUIRED_ERROR_CODE)
+            messages.append(str(exc))
         except SubmissionCooldownError as exc:
             retry_at = exc.retry_at
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)

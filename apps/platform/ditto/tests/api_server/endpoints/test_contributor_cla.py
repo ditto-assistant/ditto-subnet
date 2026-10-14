@@ -322,6 +322,50 @@ async def test_upload_check_modes_require_current_consent_before_payment(
     assert status["is_current"] is False and status["signature"]["cla_version"] == 1
 
 
+@pytest.mark.parametrize("mode", ["off", "shadow"])
+async def test_policy_change_before_admission_rechecks_consent(
+    app, client, session_maker, monkeypatch, mode
+):
+    from ditto.api_server.endpoints import upload
+
+    setup(app, session_maker)
+    await publish(client)
+    await policy(client, mode)
+    original_lock = upload.lock_identity_writes
+    original_gate = upload.evaluate_cla_gate
+    observed = []
+
+    async def changing_policy(session, *, namespace):
+        assert namespace == "cla-policy"
+        await policy(client, "enforce")
+        await original_lock(session, namespace=namespace)
+
+    async def observe_gate(session, *, netuid, hotkey):
+        decision = await original_gate(session, netuid=netuid, hotkey=hotkey)
+        observed.append(decision.mode)
+        return decision
+
+    monkeypatch.setattr(upload, "lock_identity_writes", changing_policy)
+    monkeypatch.setattr(upload, "evaluate_cla_gate", observe_gate)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    body = _signed_request_body(keypair=alice)
+    body["reserve_submission_slot"] = True
+    response = await client.post("/api/v1/upload/check", json=body)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["error_codes"] == [1106]
+    assert result["ok"] is False and result["payment_required"] is False
+    assert result["admission_token"] is None
+    assert observed == [mode, "enforce"]
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                text("SELECT count(*) FROM upload_admission_reservations")
+            )
+            == 0
+        )
+
+
 async def test_upload_agent_enforces_before_payment_verification_or_storage(
     app, client, session_maker
 ):

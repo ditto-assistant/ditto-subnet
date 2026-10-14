@@ -372,6 +372,29 @@ async def test_browser_binding_consent_and_session_binding_are_required(
     ).status_code == 400
 
 
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+async def test_live_identity_redirects_require_relink_without_forwarding_credentials(
+    app, session_maker, status
+):
+    setup(app, session_maker)
+    requests = []
+
+    def redirect(request):
+        requests.append(request)
+        return httpx.Response(
+            status, headers={"Location": f"https://untrusted.invalid/{SECRET}"}
+        )
+
+    github = GithubLinkClient(
+        app.state.github_link.config, transport=httpx.MockTransport(redirect)
+    )
+    with pytest.raises(GithubLinkRejected, match="re-link before claiming") as rejected:
+        await github.public_identity("miner-fixture")
+    assert len(requests) == 1
+    assert requests[0].url.host == "api.github.com"
+    assert SECRET not in str(rejected.value)
+
+
 async def test_live_identity_uses_app_auth_and_never_reuses_stale_results(
     app, session_maker
 ):

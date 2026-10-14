@@ -206,6 +206,64 @@ def test_unlink_signing_options_work_before_and_after_subcommand(after_unlink):
     )
 
 
+@pytest.mark.parametrize("stage", ["status", "start", "poll", "confirm", "wallet"])
+def test_github_malformed_responses_and_wallet_errors_exit_cleanly(stage, capsys):
+    api = client()
+    handle, live = wallet()
+    attempt = uuid4()
+    api.start_github_link.return_value = GithubLinkStart(
+        netuid=118,
+        attempt_id=attempt,
+        authorize_url="https://dittobench.ai/fixture",
+        expires_in=600,
+    )
+    api.get_github_link_attempt.return_value = GithubLinkAttemptStatus(
+        attempt_id=attempt,
+        status="accepted",
+        github_user_id=100,
+        github_login="fixture",
+    )
+    if stage != "wallet":
+        with pytest.raises(ValueError) as malformed:
+            GithubLinkAttemptStatus.model_validate({})
+        method = {
+            "status": "get_github_link",
+            "start": "start_github_link",
+            "poll": "get_github_link_attempt",
+            "confirm": "confirm_github_link",
+        }[stage]
+        getattr(api, method).side_effect = malformed.value
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(
+            link_github,
+            "load_wallet",
+            return_value=(handle, live),
+            side_effect=OSError("fixture wallet read failed")
+            if stage == "wallet"
+            else None,
+        ),
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={
+                "token": "fixture-session",
+                "hotkey": KEY.ss58_address,
+            },
+        ),
+    ):
+        assert (
+            link_github.run(
+                args(github_command="status" if stage == "status" else "link")
+            )
+            == 1
+        )
+    error = capsys.readouterr().err
+    assert (
+        "fixture wallet read failed" if stage == "wallet" else "validation errors"
+    ) in error
+
+
 @pytest.mark.parametrize("has_link", [True, False])
 @pytest.mark.parametrize("skip_confirmation", [True, False])
 def test_json_unlink_signs_current_context_for_a_global_link(

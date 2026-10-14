@@ -489,6 +489,96 @@ func TestCLAUploadGateParityBeforePayment(t *testing.T) {
 	}
 }
 
+func TestCLARevisionChangesBeforeReservation(t *testing.T) {
+	for _, mode := range []string{"off", "shadow"} {
+		t.Run(mode, func(t *testing.T) {
+			pool := testutil.NewTestPGPool(t)
+			secret, hotkey := newSignedHotkey(t)
+			now := time.Now().UTC()
+			d := uploadDeps(pool, "5Owner", now)
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_versions (version,sha256,text,published_at,effective_at,actor,reason)
+				VALUES (1,$1,'TEST FIXTURE ONLY',now(),$2,'fixture','test')`, strings.Repeat("a", 64), now.Add(-time.Minute))
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+				VALUES (1,0,$1,'fixture','test rollout',now())`, mode)
+			calls := 0
+			d.Now = func() time.Time {
+				calls++
+				if calls == 2 {
+					testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+						VALUES (2,1,'enforce','fixture','test rollout',now())`)
+				}
+				return now
+			}
+			result := serveCheck(t, d, signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), map[string]any{"reserve_submission_slot": true}))
+			if result.OK || result.PaymentRequired || result.AdmissionToken != nil || len(result.ErrorCodes) != 1 || result.ErrorCodes[0] != errorCLARequired {
+				t.Fatalf("changed policy admitted unsigned upload: %+v", result)
+			}
+			var reservations int
+			if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM upload_admission_reservations").Scan(&reservations); err != nil || reservations != 0 {
+				t.Fatalf("unexpected admission rows=%d err=%v", reservations, err)
+			}
+		})
+	}
+}
+
+func TestCLAReservationCoordinatesWithPlatformPolicyLock(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	now := time.Now().UTC()
+	d := uploadDeps(pool, "5Owner", now)
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(t.Context()) }()
+	// The exact SQL and namespace used by Platform's lock_identity_writes.
+	if _, err := tx.Exec(t.Context(), "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", "cla-policy"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := d.reserve(t.Context(), "5Owner", fixtureAddress, strings.Repeat("b", 64), now)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case err := <-done:
+			t.Fatalf("reservation bypassed policy lock: %v", err)
+		default:
+		}
+		var waiting bool
+		if err := pool.QueryRow(t.Context(), `SELECT EXISTS (
+			SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+		)`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reservation did not wait for the Platform policy lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := tx.Exec(t.Context(), `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+		VALUES (1,0,'enforce','fixture','test rollout',now())`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		var rejected *claRequiredError
+		if !errors.As(err, &rejected) {
+			t.Fatalf("reservation missed the committed policy revision: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reservation did not resume after policy publication")
+	}
+}
+
 func TestCLAShadowChecksDoNotFloodWarnings(t *testing.T) {
 	pool := testutil.NewTestPGPool(t)
 	secret, hotkey := newSignedHotkey(t)

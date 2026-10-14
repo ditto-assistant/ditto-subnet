@@ -289,6 +289,11 @@ def _run_upload(
     with ApiClient(base_url=network_api_url) as cla_client:
         consent = cla_client.get_cla_status(hotkey=handle.hotkey_ss58)
         if consent is not None and consent.mode == "enforce" and not consent.is_current:
+            if consent.current is None:
+                raise MinerCliError(
+                    "no effective contributor agreement is published; contact "
+                    "the operator before uploading"
+                )
             raise MinerCliError(
                 "the current contributor agreement is required; run `ditto cla "
                 "sign` before upload"

@@ -149,6 +149,10 @@ class GithubLinkClient:
                         "X-GitHub-Api-Version": "2022-11-28",
                     },
                 )
+                if response.is_redirect:
+                    raise GithubLinkRejected(
+                        "GitHub login has moved; re-link before claiming"
+                    )
                 response.raise_for_status()
                 user = response.json()
                 user_id, current_login = user.get("id"), user.get("login")

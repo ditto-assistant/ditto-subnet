@@ -112,6 +112,13 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
         assert exact_check.status_code == 200 and exact_check.json()["ok"], (
             exact_check.text
         )
+        legacy_reserved_retry = await client.post(
+            "/api/v1/upload/check",
+            json={**recovery, "name": None, "reserve_submission_slot": True},
+        )
+        assert legacy_reserved_retry.status_code == 200, legacy_reserved_retry.text
+        assert legacy_reserved_retry.json()["ok"]
+        assert not legacy_reserved_retry.json()["payment_required"]
         for name in (None, "different-name"):
             non_exact = await client.post(
                 "/api/v1/upload/check", json={**recovery, "name": name}

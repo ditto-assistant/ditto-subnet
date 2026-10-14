@@ -32,6 +32,7 @@ from ditto.api_models import (
     UploadCheckResponse,
 )
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.contributor_identity import ClaStatus, ClaVersionView
 from ditto.miner_cli import preferences
 from ditto.miner_cli.commands.upload import (
     _offer_owner_link,
@@ -298,6 +299,42 @@ class TestUploadHappyPath:
         assert str(client.post_upload_agent.return_value.agent_id) in out
         assert "alpha · submission v2" in captured.err
         assert "saved as this hotkey's local default" in captured.err
+
+    @pytest.mark.parametrize("published", [True, False])
+    def test_unsigned_enforcement_stops_before_packaging_or_payment(
+        self, good_tar: Path, capsys, published: bool
+    ) -> None:
+        client = MagicMock()
+        client.get_cla_status.return_value = ClaStatus(
+            netuid=118,
+            mode="enforce",
+            current=ClaVersionView(
+                version=1,
+                sha256="a" * 64,
+                published_at=datetime.now(UTC),
+                effective_at=datetime.now(UTC),
+            )
+            if published
+            else None,
+        )
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(MagicMock(hotkey_ss58=HOTKEY), MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient", _patch_api_client(client)
+            ),
+            patch("ditto.miner_cli.commands.upload.run_preflight") as preflight,
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+        ):
+            assert run(make_args(good_tar)) == 1
+        error = capsys.readouterr().err
+        assert ("ditto cla sign" in error) == published
+        assert ("contact the operator" in error) == (not published)
+        preflight.assert_not_called()
+        pay.assert_not_called()
+        client.post_upload_check.assert_not_called()
 
     def test_reuses_saved_name_when_name_flag_is_omitted(
         self, good_tar: Path, capsys: pytest.CaptureFixture[str]

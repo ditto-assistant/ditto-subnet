@@ -239,6 +239,21 @@ func (e *cooldownError) Error() string {
 	return "submission cooldown active until " + e.retryAt.String()
 }
 
+type claRequiredError struct{ message string }
+
+func (e *claRequiredError) Error() string { return e.message }
+
+func claGateRejection(consent postgres.GetClaUploadGateRow) *claRequiredError {
+	if consent.Mode != "enforce" || consent.HasSignature {
+		return nil
+	}
+	message := "No effective contributor agreement is published; contact the operator before submitting."
+	if consent.Version.Valid {
+		message = "Contributor agreement v" + itoa(int(consent.Version.Int32)) + " is required; run `ditto cla sign` before submitting."
+	}
+	return &claRequiredError{message: message}
+}
+
 func retryAt(ctx context.Context, q *postgres.Queries, coldkey string, cooldown int32, now time.Time) (*time.Time, error) {
 	latest, err := q.GetSubmissionLatestPaidCreatedAt(ctx, coldkey)
 	if err != nil {
@@ -268,11 +283,29 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := d.Queries.WithTx(tx)
+	// Policy writers use the same advisory lock. Keep it through commit so a
+	// policy revision cannot pass the final gate check before admission exists.
+	if err := q.LockClaPolicy(ctx); err != nil {
+		return nil, settings{}, err
+	}
 	// Match Python's transaction boundary: bind the reservation to the latest
 	// append-only settings revision inside the transaction that writes it.
 	current, err := d.effectiveSettings(ctx, q)
 	if err != nil {
 		return nil, settings{}, err
+	}
+	if d.Cfg.Chain.Netuid < 0 || int(int32(d.Cfg.Chain.Netuid)) != d.Cfg.Chain.Netuid {
+		return nil, current, errors.New("configured netuid is outside nonnegative int32 range")
+	}
+	consent, err := q.GetClaUploadGate(ctx, postgres.GetClaUploadGateParams{
+		Netuid: int32(d.Cfg.Chain.Netuid), Hotkey: hotkey,
+		ObservedAt: pgtype.Timestamptz{Time: d.now(), Valid: true},
+	})
+	if err != nil {
+		return nil, current, err
+	}
+	if rejection := claGateRejection(consent); rejection != nil {
+		return nil, current, rejection
 	}
 	if err := q.LockUploadAdmissionColdkey(ctx, coldkey); err != nil {
 		return nil, current, err
@@ -406,12 +439,8 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 			d.dbError(w, r, "CLA gate lookup", qerr)
 			return
 		}
-		if consent.Mode == "enforce" && !consent.HasSignature {
-			message := "No effective contributor agreement is published; contact the operator before submitting."
-			if consent.Version.Valid {
-				message = "Contributor agreement v" + itoa(int(consent.Version.Int32)) + " is required; run `ditto cla sign` before submitting."
-			}
-			appendFailure(&codes, &messages, errorCLARequired, message)
+		if rejection := claGateRejection(consent); rejection != nil {
+			appendFailure(&codes, &messages, errorCLARequired, rejection.message)
 		} else if consent.Mode == "shadow" && !consent.HasSignature {
 			d.Logger.Debug("unsigned CLA prepayment check in shadow mode", slog.String("hotkey", *payload.Hotkey))
 		}
@@ -461,7 +490,10 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 		current = boundSettings
 		if err != nil {
 			var cooldown *cooldownError
-			if errors.As(err, &cooldown) {
+			var consent *claRequiredError
+			if errors.As(err, &consent) {
+				appendFailure(&codes, &messages, errorCLARequired, consent.message)
+			} else if errors.As(err, &cooldown) {
 				wireValue := pydanticTime(cooldown.retryAt)
 				retryString = &wireValue
 				appendFailure(&codes, &messages, errorCooldown, "owner coldkey may submit again at "+pythonISOTime(cooldown.retryAt))

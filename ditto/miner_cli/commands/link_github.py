@@ -278,6 +278,6 @@ def run(args: argparse.Namespace) -> int:
             raise MinerCliError(
                 "timed out waiting for GitHub browser consent; start again"
             )
-    except (MinerCliError, EOFError) as exc:
+    except (MinerCliError, ValueError, EOFError, OSError) as exc:
         print(str(exc) or "GitHub linking cancelled", file=sys.stderr)
         return 1
