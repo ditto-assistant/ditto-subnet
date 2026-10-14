@@ -1,6 +1,6 @@
 import {
   contributorHotkeyInputSchema, githubAccountInputSchema, githubLinkStatusSchema,
-  claStatusSchema, claControlSchema, claPolicyReadInputSchema, claPolicyWriteInputSchema,
+  claStatusSchema, claControlSchema, claSettingsRevisionSchema, claPolicyReadInputSchema, claPolicyWriteInputSchema,
   claPublishInputSchema, claVersionSchema,
   githubRevocationReadInputSchema, githubRevocationWriteInputSchema, githubRevocationControlSchema,
 } from '../lib/contributor.schemas'
@@ -4173,8 +4173,19 @@ export async function updateClaPolicy(actor: string, rawInput: unknown) {
   const input = claPolicyWriteInputSchema.parse(rawInput)
   type Body = PlatformOperations['set_policy_api_v1_admin_cla_settings_post']['requestBody']['content']['application/json']
   const body = { expected_revision: input.expectedRevision, mode: input.mode, reason: input.reason, actor, confirmation: input.confirmation } satisfies Body
-  await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body })
-  return fetchClaPolicy()
+  const applied = claSettingsRevisionSchema.parse(
+    await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body }),
+  )
+  // The revision is committed once the POST returns. A failed refresh must not
+  // report the write as failed: a retry with the old revision would be stale.
+  try {
+    return { applied, policy: await fetchClaPolicy(), refresh_error: null }
+  } catch {
+    return {
+      applied, policy: null,
+      refresh_error: `CLA policy revision ${applied.revision} was committed, but reading the refreshed policy failed; call get_cla_policy.`,
+    }
+  }
 }
 
 export async function publishClaVersion(actor: string, rawInput: unknown) {

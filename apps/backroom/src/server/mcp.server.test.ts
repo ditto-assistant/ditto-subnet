@@ -1,4 +1,4 @@
-import { contributorFixture, claStatusFixture, claControlFixture, claVersionFixture } from './contributor.test-fixtures'
+import { contributorFixture, claStatusFixture, claControlFixture, claShadowRevisionFixture, claVersionFixture } from './contributor.test-fixtures'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -11488,7 +11488,7 @@ describe('contributor identity and CLA MCP tools', () => {
 
   it('attributes writes to the current signed-in operator', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({})).mockResolvedValueOnce(Response.json(claControlFixture)).mockResolvedValueOnce(Response.json(claVersionFixture))
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claShadowRevisionFixture)).mockResolvedValueOnce(Response.json(claControlFixture)).mockResolvedValueOnce(Response.json(claVersionFixture))
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
     await client.callTool({ name: 'set_cla_policy', arguments: { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' } })

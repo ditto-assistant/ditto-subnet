@@ -1,5 +1,5 @@
 import { fetchMinerGithubLink, fetchGithubContributor, fetchClaPolicy, updateClaPolicy, publishClaVersion, fetchGithubRevocationPreflight, revokeMinerGithubLink } from './admin.service'
-import { contributorFixture, claStatusFixture, claControlFixture, claVersionFixture, githubRevocationFixture, revokedGithubFixture } from './contributor.test-fixtures'
+import { contributorFixture, claStatusFixture, claControlFixture, claShadowRevisionFixture, claVersionFixture, githubRevocationFixture, revokedGithubFixture } from './contributor.test-fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   startBenchmarkRollout,
@@ -6000,10 +6000,31 @@ describe('verified contributors and CLA rollout', () => {
 
   it('forwards revision, confirmation and the signed-in operator on policy changes', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({})).mockResolvedValueOnce(Response.json(claControlFixture))
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claShadowRevisionFixture)).mockResolvedValueOnce(Response.json(claControlFixture))
     vi.stubGlobal('fetch', fetchMock)
-    await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' })
+    expect(await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
+      .toEqual({ applied: claShadowRevisionFixture, policy: claControlFixture, refresh_error: null })
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ expected_revision: 0, mode: 'shadow', reason: 'measure consent adoption', actor: 'operator@omniaura.ai', confirmation: 'SET CLA GATE SHADOW' })
+  })
+
+  it('reports a committed policy change even when the follow-up read fails', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claShadowRevisionFixture))
+      .mockResolvedValueOnce(Response.json({ detail: 'upstream exploded' }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const updated = await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' })
+    expect(updated).toMatchObject({ applied: claShadowRevisionFixture, policy: null })
+    expect(updated.refresh_error).toContain('revision 1 was committed')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not report success when the policy write itself fails', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ detail: 'CLA policy revision changed; refresh before applying' }, { status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
+      .rejects.toThrow()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('publishes only explicit immutable text metadata with operator attribution', async () => {
