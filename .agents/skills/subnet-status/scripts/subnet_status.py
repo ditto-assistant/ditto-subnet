@@ -12,9 +12,11 @@ No credentials, no writes. Standard library only, so it runs anywhere.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 from typing import Any
@@ -34,13 +36,35 @@ def fetch(base: str, path: str) -> Any:
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
             return json.load(response)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+    except (
+        urllib.error.URLError,
+        http.client.HTTPException,
+        ConnectionError,
+        TimeoutError,
+        json.JSONDecodeError,
+    ) as error:
         print(f"  ! {path}: {error}", file=sys.stderr)
         return None
 
 
+def number(value: Any) -> bool:
+    """A JSON number; ``bool`` is an ``int`` subclass and never a share."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def pct(value: Any) -> str:
-    return f"{float(value) * 100:.1f}%" if isinstance(value, (int, float)) else "?"
+    return f"{float(value) * 100:.1f}%" if number(value) else "?"
+
+
+def created_at(row: dict[str, Any]) -> datetime:
+    """Parse an RFC 3339 timestamp so mixed UTC offsets still sort in time."""
+    try:
+        parsed = datetime.fromisoformat(
+            str(row.get("created_at")).replace("Z", "+00:00")
+        )
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def collect(base: str, hotkey: str | None) -> dict[str, Any]:
@@ -53,12 +77,10 @@ def collect(base: str, hotkey: str | None) -> dict[str, Any]:
         "weights": fetch(base, "weights"),
     }
     if hotkey:
-        miner = fetch(base, f"miners/{hotkey}")
+        miner = fetch(base, f"miners/{urllib.parse.quote(hotkey, safe='')}")
         snapshot["miner"] = miner
         submissions = (miner or {}).get("submissions") or []
-        newest = sorted(
-            submissions, key=lambda row: row.get("created_at") or "", reverse=True
-        )[:5]
+        newest = sorted(submissions, key=created_at, reverse=True)[:5]
         snapshot["agents"] = [
             fetch(base, f"agent/{row['agent_id']}/summary")
             for row in newest
@@ -113,8 +135,7 @@ def render(snapshot: dict[str, Any], hotkey: str | None) -> None:
             share = recipient.get("share_of_miner_pool")
             of_all = (
                 f" = {pct(share * miner_share)} of all miner emission"
-                if isinstance(share, (int, float))
-                and isinstance(miner_share, (int, float))
+                if number(share) and number(miner_share)
                 else ""
             )
             print(
@@ -154,7 +175,7 @@ def render(snapshot: dict[str, Any], hotkey: str | None) -> None:
                 f"    status {agent.get('status')}"
                 f"  scores {agent.get('score_count')}/{agent.get('quorum')}"
                 f"  composite {agent.get('score_composite')}"
-                f"  board rank {ranks.get(agent.get('agent_id'), '-')}"
+                f"  top-10 board rank {ranks.get(agent.get('agent_id'), '-')}"
             )
             for key in ("screening_reason", "review_reason", "review_conclusion"):
                 if agent.get(key):
@@ -173,6 +194,10 @@ def main() -> int:
         print()
     else:
         render(snapshot, args.hotkey)
+    core = ("rollout", "bench_config", "treasury", "leaderboard", "weights")
+    if all(snapshot.get(key) is None for key in core):
+        print("  ! no public endpoint answered; nothing above is live", file=sys.stderr)
+        return 1
     return 0
 
 
