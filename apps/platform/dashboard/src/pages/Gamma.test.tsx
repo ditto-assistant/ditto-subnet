@@ -129,3 +129,44 @@ it("reports active routing with the share validators fold", async () => {
   expect(screen.getByText("Services, routed")).toBeInTheDocument();
   expect(screen.queryByText(/enforcement is armed/)).not.toBeInTheDocument();
 });
+
+it("shows the routed share and active routing even without a recorded runtime", async () => {
+  vi.mocked(getJSON).mockResolvedValue({
+    policy_revision: 4,
+    allocation_version: 2,
+    mode: "shadow",
+    routing_status: "active",
+    routing_epoch: 25800,
+    service_bps: 6500,
+    effective_service_share: 0.6,
+    forecast_service_share: 0.65,
+    forecast_burn_share: 0,
+    forecast_miner_share: 0.35,
+    buckets: [],
+  });
+  render(() => <GammaPage />);
+  expect(await screen.findByText(/Gamma routing is active/)).toBeInTheDocument();
+  expect(screen.getByText("Services, routed").nextElementSibling).toHaveTextContent("60%");
+  expect(screen.queryByText(/Funding is not activated/)).not.toBeInTheDocument();
+});
+
+it("warns when the newest enforcing pin is stale", async () => {
+  vi.mocked(getJSON).mockResolvedValue({
+    policy_revision: 4,
+    allocation_version: 2,
+    mode: "enforce",
+    routing_status: "stale",
+    routing_epoch: 25700,
+    service_bps: 6500,
+    effective_service_share: 0,
+    forecast_service_share: 0.65,
+    forecast_burn_share: 0,
+    forecast_miner_share: 0.35,
+    buckets: [],
+    runtime: { revision: 8, mode: "enforce", activation_epoch: 25708, allocation_matches: true },
+  });
+  render(() => <GammaPage />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("ledger epoch 25700");
+  expect(screen.queryByText(/Gamma routing is active/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/enforcement is armed/)).not.toBeInTheDocument();
+});

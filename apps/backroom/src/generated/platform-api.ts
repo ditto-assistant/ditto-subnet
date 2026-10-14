@@ -28716,7 +28716,7 @@ export interface components {
              * @default not_activated
              * @enum {string}
              */
-            routing_status: "not_activated" | "scheduled" | "active" | "paused";
+            routing_status: "not_activated" | "scheduled" | "active" | "stale" | "paused";
             runtime?: components["schemas"]["PublicTreasuryRuntime"];
             /** Service Bps */
             service_bps: number;

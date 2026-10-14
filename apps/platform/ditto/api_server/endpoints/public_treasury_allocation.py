@@ -1,5 +1,6 @@
 """Safe public projection of wallet policy and live routing. No actors."""
 
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -15,6 +16,7 @@ from ditto.api_models.treasury_allocation import (
 from ditto.api_models.treasury_settings import TreasurySettings, public_wallet_address
 from ditto.api_server.burn_settings import settings_from_row
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.koth import BLOCKS_PER_TEMPO
 from ditto.api_server.ledger_pin import LedgerPin, treasury_pin_from_context
 from ditto.api_server.treasury_runtime import (
     latest_runtime_row,
@@ -53,23 +55,42 @@ async def public_runtime(
         )
 
 
-RoutingStatus = Literal["not_activated", "scheduled", "active", "paused"]
+RoutingStatus = Literal["not_activated", "scheduled", "active", "stale", "paused"]
+
+# A pin is taken once per epoch (361 blocks of ~12 s). Older than one epoch
+# plus a grace window means the current epoch's pin is missing: scoring then
+# serves the previous pin flagged stale, and validators refuse the enforcing
+# fold, so the page must not claim the split is being folded.
+PIN_FRESH_FOR = timedelta(seconds=(BLOCKS_PER_TEMPO + 1) * 12 + 600)
 
 
 async def served_routing(
-    session: AsyncSession, *, netuid: int, runtime: PublicTreasuryRuntime
+    session: AsyncSession,
+    *,
+    netuid: int,
+    runtime: PublicTreasuryRuntime,
+    now: datetime | None = None,
 ) -> tuple[RoutingStatus, int | None, float]:
     """Routing as validators were told to fold it, read from the newest pin.
 
     The pin is what every validator folds, so it -- not the recorded runtime --
-    decides "active". An unreadable pin never reports routing as active.
+    decides "active". An unreadable or stale pin never reports routing as
+    active.
     """
+    now = now or datetime.now(UTC)
+    row = None
     try:
         row = await latest_pin(session, netuid=netuid)
         treasury = treasury_pin_from_context(LedgerPin.from_row(row)) if row else None
-    except (ValueError, SQLAlchemyError):
+    except (TypeError, ValueError, SQLAlchemyError):
+        # A malformed stored context never 500s the public page.
         treasury = None
     if isinstance(treasury, EnforcingTreasuryPin):
+        pinned_at = row.pinned_at if row is not None else None
+        if pinned_at is not None and pinned_at.tzinfo is None:
+            pinned_at = pinned_at.replace(tzinfo=UTC)
+        if pinned_at is None or now - pinned_at > PIN_FRESH_FOR:
+            return "stale", treasury.epoch_index, 0.0
         return "active", treasury.epoch_index, treasury.service_bps / 10_000
     if runtime.mode == "enforce":
         return "scheduled", None, 0.0

@@ -39,11 +39,13 @@ class PublicTreasuryAllocation(BaseModel):
     # Derived from the recorded runtime: "shadow" when none is recorded or it
     # cannot be verified.
     mode: Literal["shadow", "observe", "enforce", "pause"] = "shadow"
-    # "active" only when the newest served ledger pin carries an enforcing
-    # treasury pin, i.e. validators were handed the service split to fold.
-    routing_status: Literal["not_activated", "scheduled", "active", "paused"] = (
-        "not_activated"
-    )
+    # "active" only when the newest served ledger pin is fresh and carries an
+    # enforcing treasury pin, i.e. validators were handed the service split to
+    # fold. "stale" means that pin is from an earlier epoch, which validators
+    # refuse to fold.
+    routing_status: Literal[
+        "not_activated", "scheduled", "active", "stale", "paused"
+    ] = "not_activated"
     routing_epoch: int | None = Field(default=None, ge=0)
     denominator: Literal["miner_emission", "released_miner_emission"]
     service_bps: int
