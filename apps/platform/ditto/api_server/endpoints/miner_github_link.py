@@ -51,6 +51,7 @@ from ditto.db.models import (
     MinerGithubActionNonce,
     MinerGithubLink,
     MinerGithubLinkAttempt,
+    MinerSession,
 )
 from ditto.db.queries.contributor_identity import (
     active_github_link,
@@ -476,6 +477,95 @@ async def attempt_status(
         )
 
 
+async def _authorize_action(
+    request: Request,
+    session: AsyncSession,
+    body: GithubLinkRequest | GithubUnlinkRequest,
+    *,
+    now: datetime,
+) -> MinerSession:
+    miner, _ = await resolve_miner_session(request, session)
+    require_scope(miner, "profile")
+    action = "link" if isinstance(body, GithubLinkRequest) else "unlink"
+    if (
+        body.hotkey != miner.miner_hotkey
+        or body.netuid != request.app.state.config.chain.netuid
+    ):
+        raise HTTPException(
+            400, f"{action} hotkey or netuid does not match this miner session"
+        )
+    if isinstance(body, GithubLinkRequest):
+        payload = github_link_message(
+            netuid=body.netuid,
+            hotkey=body.hotkey,
+            github_user_id=body.github_user_id,
+            github_login=body.github_login,
+            link_attempt_id=body.link_attempt_id,
+            nonce=body.nonce,
+            issued_at=body.issued_at,
+            key_kind=body.proof.key_kind,
+            signer=body.proof.signer,
+        )
+    else:
+        payload = github_unlink_message(
+            netuid=body.netuid,
+            hotkey=body.hotkey,
+            link_id=body.link_id,
+            nonce=body.nonce,
+            issued_at=body.issued_at,
+            key_kind=body.proof.key_kind,
+            signer=body.proof.signer,
+        )
+    check_contributor_proof(
+        payload=payload,
+        hotkey=body.hotkey,
+        key_kind=body.proof.key_kind,
+        signer=body.proof.signer,
+        signature=body.proof.signature,
+        issued_at=body.issued_at,
+        now=now,
+    )
+    # Resolve the session's activity writes before taking attempt/global locks.
+    # Both actions must acquire those database locks in the same order.
+    await session.flush()
+    return miner
+
+
+async def _approved_attempt(
+    session: AsyncSession,
+    body: GithubLinkRequest,
+    miner: MinerSession,
+    *,
+    now: datetime,
+    for_update: bool = False,
+) -> MinerGithubLinkAttempt:
+    attempt = await session.get(
+        MinerGithubLinkAttempt,
+        body.link_attempt_id,
+        with_for_update=for_update,
+        populate_existing=True,
+    )
+    if (
+        attempt is None
+        or attempt.session_id != miner.session_id
+        or attempt.netuid != body.netuid
+    ):
+        raise HTTPException(404, "unknown GitHub link attempt")
+    if (
+        attempt.status != "accepted"
+        or attempt.expires_at <= now
+        or (
+            body.github_user_id,
+            body.github_login,
+        )
+        != (attempt.github_user_id, attempt.github_login)
+    ):
+        raise HTTPException(
+            409, "the exact GitHub identity must be approved before signing"
+        )
+    return attempt
+
+
 @router.post("/me/github-link/confirm", response_model=GithubLinkView)
 async def confirm(
     body: GithubLinkRequest,
@@ -486,57 +576,20 @@ async def confirm(
     now = datetime.now(UTC)
     try:
         async with session.begin():
-            miner, _ = await resolve_miner_session(request, session)
-            require_scope(miner, "profile")
-            if (
-                body.hotkey != miner.miner_hotkey
-                or body.netuid != request.app.state.config.chain.netuid
-            ):
-                raise HTTPException(
-                    400, "link hotkey or netuid does not match this miner session"
-                )
-            attempt = await session.get(
-                MinerGithubLinkAttempt, body.link_attempt_id, with_for_update=True
+            miner = await _authorize_action(request, session, body, now=now)
+            await _approved_attempt(session, body, miner, now=now)
+        # Release the connection before RPCs. Expire the first-phase identity
+        # map so session revocation cannot be hidden by cached ORM objects.
+        session.expire_all()
+        owner = await finalized_owner(request.app.state.chain, body.hotkey)
+        if body.proof.key_kind == "coldkey" and body.proof.signer != owner.coldkey:
+            raise ContributorProofRejected("signer is not the finalized Owner(hotkey)")
+        async with session.begin():
+            now = datetime.now(UTC)
+            miner = await _authorize_action(request, session, body, now=now)
+            attempt = await _approved_attempt(
+                session, body, miner, now=now, for_update=True
             )
-            if (
-                attempt is None
-                or attempt.session_id != miner.session_id
-                or attempt.netuid != body.netuid
-            ):
-                raise HTTPException(404, "unknown GitHub link attempt")
-            _expire(attempt)
-            if attempt.status != "accepted" or (
-                body.github_user_id,
-                body.github_login,
-            ) != (attempt.github_user_id, attempt.github_login):
-                raise HTTPException(
-                    409, "the exact GitHub identity must be approved before signing"
-                )
-            payload = github_link_message(
-                netuid=body.netuid,
-                hotkey=body.hotkey,
-                github_user_id=body.github_user_id,
-                github_login=body.github_login,
-                link_attempt_id=body.link_attempt_id,
-                nonce=body.nonce,
-                issued_at=body.issued_at,
-                key_kind=body.proof.key_kind,
-                signer=body.proof.signer,
-            )
-            check_contributor_proof(
-                payload=payload,
-                hotkey=body.hotkey,
-                key_kind=body.proof.key_kind,
-                signer=body.proof.signer,
-                signature=body.proof.signature,
-                issued_at=body.issued_at,
-                now=now,
-            )
-            owner = await finalized_owner(request.app.state.chain, body.hotkey)
-            if body.proof.key_kind == "coldkey" and body.proof.signer != owner.coldkey:
-                raise ContributorProofRejected(
-                    "signer is not the finalized Owner(hotkey)"
-                )
             await lock_identity_writes(session, namespace="github-link")
             now = datetime.now(UTC)
             previous = await active_github_link(session, hotkey=body.hotkey)
@@ -603,38 +656,17 @@ async def unlink(
     now = datetime.now(UTC)
     try:
         async with session.begin():
-            miner, _ = await resolve_miner_session(request, session)
-            require_scope(miner, "profile")
-            if (
-                body.hotkey != miner.miner_hotkey
-                or body.netuid != request.app.state.config.chain.netuid
-            ):
-                raise HTTPException(
-                    400, "unlink hotkey or netuid does not match this miner session"
-                )
-            payload = github_unlink_message(
-                netuid=body.netuid,
-                hotkey=body.hotkey,
-                link_id=body.link_id,
-                nonce=body.nonce,
-                issued_at=body.issued_at,
-                key_kind=body.proof.key_kind,
-                signer=body.proof.signer,
-            )
-            check_contributor_proof(
-                payload=payload,
-                hotkey=body.hotkey,
-                key_kind=body.proof.key_kind,
-                signer=body.proof.signer,
-                signature=body.proof.signature,
-                issued_at=body.issued_at,
-                now=now,
-            )
-            owner = await finalized_owner(request.app.state.chain, body.hotkey)
-            if body.proof.key_kind == "coldkey" and body.proof.signer != owner.coldkey:
-                raise ContributorProofRejected(
-                    "signer is not the finalized Owner(hotkey)"
-                )
+            await _authorize_action(request, session, body, now=now)
+            link = await active_github_link(session, hotkey=body.hotkey)
+            if link is None or link.link_id != body.link_id:
+                raise HTTPException(409, "unlink must name the exact active link")
+        session.expire_all()
+        owner = await finalized_owner(request.app.state.chain, body.hotkey)
+        if body.proof.key_kind == "coldkey" and body.proof.signer != owner.coldkey:
+            raise ContributorProofRejected("signer is not the finalized Owner(hotkey)")
+        async with session.begin():
+            now = datetime.now(UTC)
+            await _authorize_action(request, session, body, now=now)
             await lock_identity_writes(session, namespace="github-link")
             link = await active_github_link(session, hotkey=body.hotkey)
             if link is None or link.link_id != body.link_id:

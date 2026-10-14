@@ -21,6 +21,7 @@ from ditto.api_models.contributor_identity import (
     github_link_message,
     github_unlink_message,
 )
+from ditto.api_server.dependencies import get_session
 from ditto.api_server.github_link import (
     GithubLinkClient,
     GithubLinkConfig,
@@ -31,7 +32,9 @@ from ditto.db.models import (
     MinerGithubActionNonce,
     MinerGithubLink,
     MinerGithubLinkAttempt,
+    MinerSession,
 )
+from ditto.db.queries.contributor_identity import active_github_link
 from ditto.tests.api_server.endpoints.test_miner_ditto_link import _install, _sign_in
 
 pytestmark = pytest.mark.asyncio
@@ -216,6 +219,25 @@ async def test_roundtrip_uses_verified_numeric_id_and_never_stores_or_serves_tok
         assert attempt.code_verifier is None
         action = await session.get(MinerGithubActionNonce, UUID(body["nonce"]))
         assert action.netuid == linked.json()["netuid"] == 118
+        assert (
+            await active_github_link(
+                session, hotkey=alice.ss58_address, github_user_id=100
+            )
+        ).link_id == UUID(linked.json()["link_id"])
+        assert (
+            await active_github_link(
+                session, hotkey=alice.ss58_address, github_user_id=200
+            )
+            is None
+        )
+        assert (
+            await active_github_link(
+                session, hotkey="different-hotkey", github_user_id=100
+            )
+            is None
+        )
+        with pytest.raises(ValueError, match="hotkey or numeric GitHub user id"):
+            await active_github_link(session)
         rows = (
             (
                 await session.execute(
@@ -342,6 +364,98 @@ async def test_browser_binding_consent_and_session_binding_are_required(
             params={"state": params["state"][0], "code": "fixture-code"},
         )
     ).status_code == 400
+
+
+@pytest.mark.parametrize("action", ["confirm", "unlink"])
+@pytest.mark.parametrize(
+    "race", [None, "session_revoked", "scope_removed", "target_changed"]
+)
+async def test_signed_actions_release_database_during_rpc_and_revalidate(
+    app, client, session_maker, action, race
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    auth = {"authorization": f"Bearer {token}"}
+    started, _, _ = await browser_flow(client, token)
+    body = signed_link(alice, started["attempt_id"])
+    if action == "unlink":
+        linked = await client.post(
+            "/api/v1/me/github-link/confirm", headers=auth, json=body
+        )
+        assert linked.status_code == 200, linked.text
+        nonce, issued = uuid4(), datetime.now(UTC)
+        link_id = UUID(linked.json()["link_id"])
+        payload = github_unlink_message(
+            netuid=118,
+            hotkey=alice.ss58_address,
+            link_id=link_id,
+            nonce=nonce,
+            issued_at=issued,
+            key_kind="hotkey",
+            signer=alice.ss58_address,
+        )
+        body = {
+            "netuid": 118,
+            "hotkey": alice.ss58_address,
+            "link_id": str(link_id),
+            "nonce": str(nonce),
+            "issued_at": issued.isoformat(),
+            "proof": {
+                "key_kind": "hotkey",
+                "signer": alice.ss58_address,
+                "signature": alice.sign(payload).hex(),
+            },
+        }
+    active_sessions = []
+
+    async def tracked_session():
+        async with session_maker() as session:
+            active_sessions.append(session)
+            yield session
+
+    app.dependency_overrides[get_session] = tracked_session
+
+    async def finalized_block():
+        assert not active_sessions[-1].in_transaction()
+        if race:
+            async with session_maker() as session, session.begin():
+                attempt = await session.get(
+                    MinerGithubLinkAttempt, UUID(started["attempt_id"])
+                )
+                if race in ("session_revoked", "scope_removed"):
+                    miner = await session.get(MinerSession, attempt.session_id)
+                    if race == "session_revoked":
+                        miner.revoked_at = datetime.now(UTC)
+                    else:
+                        miner.scopes = "read"
+                elif action == "confirm":
+                    attempt.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                else:
+                    link = await session.get(MinerGithubLink, link_id)
+                    link.revoked_at = datetime.now(UTC)
+        return BlockInfo(number=123, hash="0x" + "ab" * 32)
+
+    async def coldkey(*_args):
+        assert not active_sessions[-1].in_transaction()
+        return bittensor.Keypair.create_from_uri("//Bob").ss58_address
+
+    app.state.chain.get_finalized_block = AsyncMock(side_effect=finalized_block)
+    app.state.chain.get_coldkey_for_hotkey = AsyncMock(side_effect=coldkey)
+    response = await client.post(
+        f"/api/v1/me/github-link/{action}", headers=auth, json=body
+    )
+    expected = {
+        None: 200 if action == "confirm" else 204,
+        "session_revoked": 401,
+        "scope_removed": 403,
+        "target_changed": 409,
+    }[race]
+    assert response.status_code == expected, response.text
+    app.state.chain.get_finalized_block.assert_awaited_once()
+    async with session_maker() as session:
+        saved = await session.get(MinerGithubActionNonce, UUID(body["nonce"]))
+        assert (saved is not None) == (race is None)
 
 
 @pytest.mark.parametrize("same_hotkey", [True, False])

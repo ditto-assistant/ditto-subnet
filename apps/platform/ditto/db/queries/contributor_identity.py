@@ -31,15 +31,15 @@ async def active_github_link(
     hotkey: str | None = None,
     github_user_id: int | None = None,
 ) -> MinerGithubLink | None:
+    if hotkey is None and github_user_id is None:
+        raise ValueError("a hotkey or numeric GitHub user id is required")
     # The signed proof retains its netuid, but the active identity mapping is
     # global, matching the partial unique indexes and the write lock.
     query = select(MinerGithubLink).where(MinerGithubLink.revoked_at.is_(None))
     if hotkey is not None:
         query = query.where(MinerGithubLink.hotkey == hotkey)
-    elif github_user_id is not None:
+    if github_user_id is not None:
         query = query.where(MinerGithubLink.github_user_id == github_user_id)
-    else:
-        raise ValueError("a hotkey or numeric GitHub user id is required")
     return await session.scalar(query)
 
 
