@@ -17,6 +17,7 @@ export const claControlFixture = {
   active_hotkeys_basis: 'non_retired_submissions', unsigned_shadow_uploads: 3,
   history_total: 1, history_limit: 25, history_offset: 0, history_has_more: false,
   minimum_enforced_notice_seconds: 86400, earliest_enforced_effective_at: null,
+  earliest_enforcement_at: '2026-10-14T00:00:00Z',
 }
 export const claShadowRevisionFixture = {
   revision: 1, parent_revision: 0, mode: 'shadow', actor: 'operator@omniaura.ai', reason: 'measure consent adoption', created_at: '2026-10-14T00:00:00Z',

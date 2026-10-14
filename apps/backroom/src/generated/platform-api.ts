@@ -15837,6 +15837,8 @@ export interface components {
             current: components["schemas"]["ClaSettingsRevision"];
             /** Earliest Enforced Effective At */
             earliest_enforced_effective_at: string | null;
+            /** Earliest Enforcement At */
+            earliest_enforcement_at: string | null;
             effective_version: components["schemas"]["ClaVersionView"] | null;
             /** History */
             history: components["schemas"]["ClaSettingsRevision"][];

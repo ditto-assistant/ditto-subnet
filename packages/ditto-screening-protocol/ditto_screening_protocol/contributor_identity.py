@@ -178,6 +178,9 @@ class ClaControl(WireModel):
     history_has_more: bool
     minimum_enforced_notice_seconds: int
     earliest_enforced_effective_at: datetime | None
+    # When off/shadow may switch to enforce; None while enforcing or before an
+    # effective version exists.
+    earliest_enforcement_at: datetime | None
 
 
 class ClaSettingsRequest(WireModel):

@@ -24,6 +24,7 @@ from ditto.api_server.storage import (
 from ditto.db.models import Agent, AgentClaBinding, ClaShadowUpload, EvaluationPayment
 from ditto.tests.api_server.conftest import make_api_server_config
 from ditto.tests.api_server.endpoints.test_contributor_cla import (
+    elapse_cla_notice,
     policy,
     publish,
     setup,
@@ -60,6 +61,7 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
     version = await publish(client)
     receipt = await client.post("/api/v1/cla/sign", json=signed(alice, version))
     assert receipt.status_code == 200, receipt.text
+    await elapse_cla_notice(session_maker)
     await policy(client, "enforce")
     block_hash = "0x" + "31" * 32
     verifier = SimpleNamespace(
@@ -96,6 +98,7 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
         # enforcement; publishing during enforcement now requires notice.
         await policy(client, "off")
         await publish(client, 2)
+        await elapse_cla_notice(session_maker)
         await policy(client, "enforce")
         stale = (
             await client.get(f"/api/v1/public/cla/status/{alice.ss58_address}")
@@ -198,6 +201,7 @@ async def test_check_and_artifact_commit_share_policy_then_coldkey_lock_order(
     assert (
         await client.post("/api/v1/cla/sign", json=signed(alice, version))
     ).status_code == 200
+    await elapse_cla_notice(session_maker)
     await policy(client, "enforce")
     block_hash = "0x" + "41" * 32
     verifier = SimpleNamespace(

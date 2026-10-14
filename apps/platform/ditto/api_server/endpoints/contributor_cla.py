@@ -60,6 +60,28 @@ def enforced_cla_notice_deadline(mode: str, *, now: datetime) -> datetime | None
     return now + ENFORCED_CLA_NOTICE if mode == "enforce" else None
 
 
+async def earliest_cla_enforcement(
+    session: AsyncSession, *, now: datetime
+) -> datetime | None:
+    """When enforcement may start, or None without an effective version.
+
+    Every current or scheduled version must have been published at least the
+    notice period before enforcement first applies to it: the current version
+    from the moment enforcement starts, a scheduled one from its effective date.
+    """
+    current = await current_cla_version(session, now=now)
+    if current is None:
+        return None
+    earliest = now
+    for row in await session.scalars(
+        select(ClaVersion).where(ClaVersion.version >= current.version)
+    ):
+        noticed_at = row.published_at + ENFORCED_CLA_NOTICE
+        if row.effective_at < noticed_at:
+            earliest = max(earliest, noticed_at)
+    return earliest
+
+
 def version_view(row: ClaVersion) -> ClaVersionView:
     return ClaVersionView(
         version=row.version,
@@ -325,8 +347,9 @@ async def control(
     history_limit: Annotated[int, Query(ge=1, le=100)] = 25,
     history_offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ClaControl:
+    now = datetime.now(UTC)
     settings = await current_cla_settings(session)
-    version = await current_cla_version(session)
+    version = await current_cla_version(session, now=now)
     history = list(
         await session.scalars(
             select(ClaSettingsRevision)
@@ -392,7 +415,12 @@ async def control(
         history_has_more=history_offset + len(history) < total,
         minimum_enforced_notice_seconds=int(ENFORCED_CLA_NOTICE.total_seconds()),
         earliest_enforced_effective_at=enforced_cla_notice_deadline(
-            settings.mode, now=datetime.now(UTC)
+            settings.mode, now=now
+        ),
+        earliest_enforcement_at=(
+            None
+            if settings.mode == "enforce"
+            else await earliest_cla_enforcement(session, now=now)
         ),
     )
 
@@ -410,10 +438,19 @@ async def set_policy(
             raise HTTPException(
                 409, "CLA policy revision changed; refresh before applying"
             )
-        if body.mode == "enforce" and await current_cla_version(session) is None:
-            raise HTTPException(
-                409, "publish an effective approved CLA before enforcing"
-            )
+        if body.mode == "enforce" and previous.mode != "enforce":
+            now = datetime.now(UTC)
+            earliest = await earliest_cla_enforcement(session, now=now)
+            if earliest is None:
+                raise HTTPException(
+                    409, "publish an effective approved CLA before enforcing"
+                )
+            if earliest > now:
+                raise HTTPException(
+                    409,
+                    "CLA enforcement requires 24 hours notice for every current "
+                    f"or scheduled version; earliest allowed {earliest.isoformat()}",
+                )
         row = ClaSettingsRevision(
             revision=previous.revision + 1,
             parent_revision=previous.revision,

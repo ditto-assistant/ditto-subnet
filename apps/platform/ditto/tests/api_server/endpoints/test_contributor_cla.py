@@ -172,6 +172,27 @@ async def policy(client, mode):
     return response.json()
 
 
+async def elapse_cla_notice(maker):
+    """Backdate every publication past the enforcement notice period.
+
+    Publication time is server-assigned and the history is append-only, so
+    tests age it directly instead of waiting a day.
+    """
+    async with maker() as session, session.begin():
+        await session.execute(
+            text("ALTER TABLE cla_versions DISABLE TRIGGER cla_versions_immutable")
+        )
+        await session.execute(
+            text(
+                "UPDATE cla_versions "
+                "SET published_at = published_at - interval '25 hours'"
+            )
+        )
+        await session.execute(
+            text("ALTER TABLE cla_versions ENABLE TRIGGER cla_versions_immutable")
+        )
+
+
 async def test_higher_version_can_supersede_same_future_activation_date(
     app, client, session_maker
 ):
@@ -381,6 +402,7 @@ async def test_upload_check_modes_require_current_consent_before_payment(
 ):
     setup(app, session_maker)
     version = await publish(client)
+    await elapse_cla_notice(session_maker)
     await policy(client, mode)
     alice = bittensor.Keypair.create_from_uri("//Alice")
     response = await client.post(
@@ -409,6 +431,7 @@ async def test_upload_check_modes_require_current_consent_before_payment(
         await policy(client, "off")
     await publish(client, 2)
     if mode == "enforce":
+        await elapse_cla_notice(session_maker)
         await policy(client, "enforce")
     outdated = await client.post(
         "/api/v1/upload/check", json=_signed_request_body(keypair=alice)
@@ -428,6 +451,7 @@ async def test_policy_change_before_admission_rechecks_consent(
 
     setup(app, session_maker)
     await publish(client)
+    await elapse_cla_notice(session_maker)
     await policy(client, mode)
     original_lock = upload.lock_identity_writes
     original_gate = upload.evaluate_cla_gate
@@ -470,6 +494,7 @@ async def test_upload_agent_enforces_before_payment_verification_or_storage(
 ):
     setup(app, session_maker)
     await publish(client)
+    await elapse_cla_notice(session_maker)
     await policy(client, "enforce")
     verifier, storage = (
         SimpleNamespace(verify_payment=AsyncMock()),
@@ -730,6 +755,7 @@ async def test_enforced_cla_publication_requires_one_day_notice(
 
     setup(app, session_maker)
     await publish(client)
+    await elapse_cla_notice(session_maker)
     await policy(client, "enforce")
     now = datetime.now(UTC)
 
@@ -763,3 +789,65 @@ async def test_enforced_cla_publication_requires_one_day_notice(
         assert "24 hours notice" in result.text
     current = (await client.get("/api/v1/public/cla")).json()
     assert current["current"]["version"] == 1
+
+
+async def enforce_attempt(client):
+    current = (await client.get("/api/v1/admin/cla/settings", headers=_HEADERS)).json()
+    return await client.post(
+        "/api/v1/admin/cla/settings",
+        headers=_HEADERS,
+        json={
+            "expected_revision": current["current"]["revision"],
+            "mode": "enforce",
+            "actor": "operator-fixture",
+            "reason": "test the enforcement notice window",
+            "confirmation": "SET CLA GATE ENFORCE",
+        },
+    )
+
+
+async def test_enabling_enforcement_requires_notice_for_the_current_version(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    empty = (await client.get("/api/v1/admin/cla/settings", headers=_HEADERS)).json()
+    assert empty["earliest_enforcement_at"] is None
+    version = await publish(client)
+    await policy(client, "shadow")
+    control = (await client.get("/api/v1/admin/cla/settings", headers=_HEADERS)).json()
+    assert datetime.fromisoformat(
+        control["earliest_enforcement_at"]
+    ) == datetime.fromisoformat(version["published_at"]) + timedelta(hours=24)
+    rejected = await enforce_attempt(client)
+    assert rejected.status_code == 409, rejected.text
+    assert "24 hours notice" in rejected.text
+    await elapse_cla_notice(session_maker)
+    ready = (await client.get("/api/v1/admin/cla/settings", headers=_HEADERS)).json()
+    assert datetime.fromisoformat(ready["earliest_enforcement_at"]) <= datetime.now(UTC)
+    accepted = await enforce_attempt(client)
+    assert accepted.status_code == 200, accepted.text
+    enforced = (await client.get("/api/v1/admin/cla/settings", headers=_HEADERS)).json()
+    assert enforced["earliest_enforcement_at"] is None
+
+
+@pytest.mark.parametrize("notice_hours,accepted", [(1, False), (25, True)])
+async def test_enabling_enforcement_requires_notice_for_scheduled_versions(
+    app, client, session_maker, notice_hours, accepted
+):
+    setup(app, session_maker)
+    await publish(client)
+    await elapse_cla_notice(session_maker)
+    # Off and shadow accept short notice; enforcement must not inherit it.
+    scheduled = await publish(
+        client, 2, effective=datetime.now(UTC) + timedelta(hours=notice_hours)
+    )
+    result = await enforce_attempt(client)
+    assert result.status_code == (200 if accepted else 409), result.text
+    if not accepted:
+        assert "24 hours notice" in result.text
+        control = (
+            await client.get("/api/v1/admin/cla/settings", headers=_HEADERS)
+        ).json()
+        assert datetime.fromisoformat(
+            control["earliest_enforcement_at"]
+        ) == datetime.fromisoformat(scheduled["published_at"]) + timedelta(hours=24)

@@ -547,7 +547,12 @@ do not retry with the old `expectedRevision`.
 When enforcement is on, new versions require at least 24 hours notice.
 `get_cla_policy` returns `minimum_enforced_notice_seconds` and
 `earliest_enforced_effective_at`; the publication transaction rechecks that
-deadline under the policy lock.
+deadline under the policy lock. Turning enforcement on requires the same notice:
+the current version must have been published at least 24 hours earlier, and
+each scheduled version at least 24 hours before its effective date.
+`earliest_enforcement_at` reports the earliest allowed switch (null while
+enforcing or before an effective version exists), and `set_cla_policy` rechecks
+it under the policy lock.
 
 For a hostile or compromised identity link, read
 `get_github_link_revocation_preflight` with the exact `linkId`. It returns the

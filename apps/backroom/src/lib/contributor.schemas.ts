@@ -43,6 +43,7 @@ export const claControlSchema = z.object({
   history_offset: z.number().int().nonnegative(), history_has_more: z.boolean(),
   minimum_enforced_notice_seconds: z.number().int().positive(),
   earliest_enforced_effective_at: z.string().nullable(),
+  earliest_enforcement_at: z.string().nullable(),
 })
 export const claPolicyReadInputSchema = z.object({ historyLimit: z.number().int().min(1).max(100).default(25), historyOffset: z.number().int().nonnegative().default(0) })
 export const claPolicyWriteInputSchema = z.object({ expectedRevision: z.number().int().nonnegative(), mode: claModeSchema,
