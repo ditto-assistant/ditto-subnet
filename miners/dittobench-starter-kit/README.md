@@ -804,10 +804,8 @@ memory cases + 60 tool cases, with 2 staged seeding waves, a substantial
 Tier-B raw-pairs share, and a handful of isolation cases across
 separate user graphs. Exact counts can change with `bench_version`.
 
-6. Economics (king-of-the-hill). Competitive weight is distributed by the
-payout curve the public leaderboard reports as `rank_shares` (default
-`65% / 14% / 10% / 7% / 4%`, operator-adjustable) to the champion and the next
-four distinct miners;
+6. Economics (king-of-the-hill). Competitive weight is distributed
+`65% / 14% / 10% / 7% / 4%` to the champion and the next four distinct miners;
 everyone else earns nothing. The competitive vector takes 100% of the available
 miner emission, so nothing is burned while eligible miners exist (with no
 eligible miners, 100% is burned). A challenger dethrones the incumbent only after

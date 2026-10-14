@@ -1475,7 +1475,9 @@ class TestCrownIncumbency:
 
 
 def test_operator_rank_shares_replace_the_frozen_curve() -> None:
-    entries = [_entry(marker, 0.9 - marker / 100, minutes=marker) for marker in range(5)]
+    entries = [
+        _entry(marker, 0.9 - marker / 100, minutes=marker) for marker in range(5)
+    ]
     projection = project_koth(entries)
     assert projection is not None
     curve = (0.50, 0.20, 0.13, 0.10, 0.07)
