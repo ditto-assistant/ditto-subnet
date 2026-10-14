@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -31,14 +32,16 @@ from ditto.api_models.treasury_settings import TreasurySettings
 from ditto.chain.treasury_ledger_read import TreasuryLedgerReading, read_treasury_ledger
 from ditto.db.models import (
     TreasuryLedgerSample,
-    TreasuryPublicEvent,
     TreasurySettingsRevision,
+    TreasuryVerifiedReceipt,
 )
 
 logger = logging.getLogger(__name__)
 
 # Balance moves below this are dust, never an unattributed outflow.
 DUST_RAO = 1_000_000
+# Only SN118 alpha leaves the sampled balance; other assets cannot attribute it.
+LEDGER_ASSET = "SN118_ALPHA"
 SamplerState = Literal["running", "not_configured", "blocked", "stopped"]
 LockStatus = Literal["none", "perpetual", "decaying"]
 
@@ -128,13 +131,15 @@ class TreasuryLedgerSampler:
                 self.status = "blocked"
                 # Class name only: provider URLs and credentials stay private.
                 self.last_error = type(error).__name__
-                logger.warning("treasury ledger sample blocked: %r", error)
+                logger.warning("treasury ledger sample blocked: %s", self.last_error)
             with suppress(TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), self.interval_seconds)
 
-    async def read(self, policy: TreasurySettings) -> TreasuryLedgerReading:
-        from async_substrate_interface import AsyncSubstrateInterface
-
+    async def read(
+        self,
+        policy: TreasurySettings,
+        should_read: Callable[[int], Awaitable[bool]] | None = None,
+    ) -> TreasuryLedgerReading | None:
         assert policy.treasury_hotkey and policy.treasury_coldkey
         holdings = [
             (bucket.bucket_id, bucket.holding_coldkey)
@@ -142,16 +147,27 @@ class TreasuryLedgerSampler:
             if bucket.holding_coldkey
         ]
         async with asyncio.timeout(120):
-            async with AsyncSubstrateInterface(
-                url=self.state.chain._substrate_url()
-            ) as substrate:
+            # The shared runtime cache keeps metadata decoding off the event
+            # loop after the first connection.
+            async with self.state.chain._new_treasury_substrate() as substrate:
                 return await read_treasury_ledger(
                     substrate,
                     netuid=self.state.config.chain.netuid,
                     collector_hotkey=policy.treasury_hotkey,
                     collector_coldkey=policy.treasury_coldkey,
                     holdings=holdings,
+                    should_read=should_read,
                 )
+
+    async def _epoch_unsampled(self, epoch_index: int) -> bool:
+        async with self.sessions() as session:
+            existing = await session.scalar(
+                select(TreasuryLedgerSample.id).where(
+                    TreasuryLedgerSample.netuid == self.state.config.chain.netuid,
+                    TreasuryLedgerSample.epoch_index == epoch_index,
+                )
+            )
+        return existing is None
 
     async def tick(self) -> bool:
         async with self.sessions() as session:
@@ -159,9 +175,11 @@ class TreasuryLedgerSampler:
         if not policy.treasury_hotkey or not policy.treasury_coldkey:
             self.status = "not_configured"
             return False
-        reading = await self.read(policy)
-        async with self.sessions() as session, session.begin():
-            inserted = await record_sample(session, reading)
+        reading = await self.read(policy, self._epoch_unsampled)
+        inserted = False
+        if reading is not None:
+            async with self.sessions() as session, session.begin():
+                inserted = await record_sample(session, reading)
         self.status = "running"
         self.last_error = None
         self.last_sampled_at = datetime.now(UTC)
@@ -210,10 +228,14 @@ def _current(sample: TreasuryLedgerSample) -> TreasuryLedgerCurrent:
     )
 
 
+def _receipt_block(receipt: TreasuryVerifiedReceipt) -> int:
+    return int(receipt.proof["block"])
+
+
 def _interval(
     current: TreasuryLedgerSample,
     previous: TreasuryLedgerSample,
-    receipts: list[TreasuryPublicEvent],
+    receipts: list[TreasuryVerifiedReceipt],
 ) -> TreasuryLedgerInterval:
     gap = current.epoch_index - previous.epoch_index
     per_epoch = current.collector_emission_rao
@@ -221,25 +243,30 @@ def _interval(
     earned = per_epoch * gap if per_epoch is not None else None
     change = current.collector_total_rao - previous.collector_total_rao
     outflow = max(0, (earned or 0) - change)
+    reported_outflow = outflow if outflow >= DUST_RAO else 0
     window = [
         receipt
         for receipt in receipts
-        if previous.block_at < receipt.event_at <= current.block_at
+        if receipt.proof.get("sender") == current.collector_coldkey
+        and previous.block_number < _receipt_block(receipt) <= current.block_number
     ]
-    attributed = sum(receipt.allocated_alpha_rao for receipt in window)
-    unattributed = max(0, outflow - attributed)
+    # A receipt explains at most the outflow this interval measured.
+    attributed = min(sum(r.amount_atomic for r in window), reported_outflow)
+    unattributed = reported_outflow - attributed
     return TreasuryLedgerInterval(
         epoch_index=current.epoch_index,
         previous_epoch_index=previous.epoch_index,
         block_number=current.block_number,
         block_at=current.block_at,
         earned_rao=earned,
-        estimated=gap > 1,
+        estimated=gap > 1 and earned is not None,
         balance_change_rao=change,
-        outflow_rao=outflow if outflow > DUST_RAO else 0,
+        outflow_rao=reported_outflow,
         attributed_rao=attributed,
-        unattributed_rao=unattributed if unattributed > DUST_RAO else 0,
-        receipt_ids=[receipt.id for receipt in window],
+        unattributed_rao=unattributed if unattributed >= DUST_RAO else 0,
+        receipt_count=len(window),
+        # Unpublished buckets attribute by amount only; ids stay private.
+        receipt_ids=[r.public_event_id for r in window if r.public_event_id],
     )
 
 
@@ -274,30 +301,36 @@ async def ledger_view(
             sampler=sampler,
         )
     newest, oldest = samples[0], samples[-1]
-    receipts = list(
-        (
+    # Verified distributions out of the collector, published or not.
+    receipts = [
+        receipt
+        for receipt in (
             await session.scalars(
-                select(TreasuryPublicEvent).where(
-                    TreasuryPublicEvent.state == "chain_finalized",
-                    TreasuryPublicEvent.public_sender.in_(
-                        {sample.collector_coldkey for sample in samples}
-                    ),
-                    TreasuryPublicEvent.event_at > oldest.block_at,
-                    TreasuryPublicEvent.event_at <= newest.block_at,
+                select(TreasuryVerifiedReceipt).where(
+                    TreasuryVerifiedReceipt.stage == "service_distribution",
+                    TreasuryVerifiedReceipt.proof["block"].as_integer()
+                    > oldest.block_number,
+                    TreasuryVerifiedReceipt.proof["block"].as_integer()
+                    <= newest.block_number,
                 )
             )
         ).all()
-    )
-    intervals = [
-        _interval(current, previous, receipts)
+        if receipt.proof.get("asset") == LEDGER_ASSET
+        and receipt.proof.get("sender")
+        in {sample.collector_coldkey for sample in samples}
+        and oldest.block_number < _receipt_block(receipt) <= newest.block_number
+    ]
+    pairs = [
+        (current, previous)
         for current, previous in zip(samples, samples[1:], strict=False)
         # A rotated collector is a new account, not an outflow.
         if current.collector_coldkey == previous.collector_coldkey
     ]
+    intervals = [_interval(current, previous, receipts) for current, previous in pairs]
     return PublicTreasuryLedger(
         current=_current(newest),
         totals=TreasuryLedgerTotals(
-            window_epochs=newest.epoch_index - oldest.epoch_index,
+            window_epochs=sum(c.epoch_index - p.epoch_index for c, p in pairs),
             earned_rao=sum(item.earned_rao or 0 for item in intervals),
             outflow_rao=sum(item.outflow_rao for item in intervals),
             attributed_rao=sum(item.attributed_rao for item in intervals),

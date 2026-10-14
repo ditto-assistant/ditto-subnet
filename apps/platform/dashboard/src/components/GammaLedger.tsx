@@ -5,8 +5,8 @@ import { useEndpoint } from "../data/useEndpoint";
 interface LedgerHolding {
   bucket_id: string;
   coldkey: string;
-  alpha_total_rao: number;
-  tao_free_rao: number;
+  alpha_total_rao: string;
+  tao_free_rao: string;
 }
 
 interface LedgerInterval {
@@ -14,12 +14,13 @@ interface LedgerInterval {
   previous_epoch_index: number;
   block_number: number;
   block_at: string;
-  earned_rao: number | null;
+  earned_rao: string | null;
   estimated: boolean;
-  balance_change_rao: number;
-  outflow_rao: number;
-  attributed_rao: number;
-  unattributed_rao: number;
+  balance_change_rao: string;
+  outflow_rao: string;
+  attributed_rao: string;
+  unattributed_rao: string;
+  receipt_count: number;
   receipt_ids: number[];
 }
 
@@ -30,30 +31,42 @@ export interface TreasuryLedger {
     block_at: string;
     collector_uid: number | null;
     collector_incentive: number | null;
-    earned_per_epoch_rao: number | null;
-    total_rao: number;
-    locked_rao: number;
-    available_rao: number;
+    earned_per_epoch_rao: string | null;
+    total_rao: string;
+    locked_rao: string;
+    available_rao: string;
     lock_status: "none" | "perpetual" | "decaying";
-    owner_conviction_rao: number | null;
+    owner_conviction_rao: string | null;
     owner_holds_most_conviction: boolean | null;
     holdings: LedgerHolding[];
   } | null;
   totals: {
     window_epochs: number;
-    earned_rao: number;
-    outflow_rao: number;
-    attributed_rao: number;
-    unattributed_rao: number;
+    earned_rao: string;
+    outflow_rao: string;
+    attributed_rao: string;
+    unattributed_rao: string;
   };
   intervals: LedgerInterval[];
   sampler: { enabled: boolean; state: string; last_sampled_at: string | null };
 }
 
-const alpha = (rao: number | null) =>
-  rao === null
-    ? "Unknown"
-    : new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(rao / 1e9) + " α";
+const RAO_PER_ALPHA = 1_000_000_000n;
+
+/** Exact rao decimal string → alpha with up to 6 decimals; never rounds a positive amount to 0. */
+export function alpha(rao: string | null): string {
+  if (rao === null || !/^-?[0-9]+$/.test(rao)) return "Unknown";
+  const value = BigInt(rao);
+  const sign = value < 0n ? "-" : "";
+  const magnitude = value < 0n ? -value : value;
+  const whole = new Intl.NumberFormat().format(magnitude / RAO_PER_ALPHA);
+  const fraction = (magnitude % RAO_PER_ALPHA).toString().padStart(9, "0");
+  let shown = fraction.slice(0, 6).replace(/0+$/, "");
+  if (!shown && magnitude > 0n && magnitude < RAO_PER_ALPHA) shown = fraction.replace(/0+$/, "");
+  return `${sign}${whole}${shown ? "." + shown : ""} α`;
+}
+
+const positive = (rao: string) => /^[0-9]+$/.test(rao) && BigInt(rao) > 0n;
 
 const lockText: Record<"none" | "perpetual" | "decaying", string> = {
   none: "No conviction lock",
@@ -62,7 +75,9 @@ const lockText: Record<"none" | "perpetual" | "decaying", string> = {
 };
 
 export function GammaLedger(): JSX.Element {
-  const ledger = useEndpoint<TreasuryLedger>("/public/treasury-ledger?limit=48");
+  const ledger = useEndpoint<TreasuryLedger>("/public/treasury-ledger?limit=48", {
+    pollMs: 60_000,
+  });
   const data = () => (ledger.error() ? undefined : ledger.data());
   return (
     <section class="gamma-policy" aria-label="Gamma ledger">
@@ -110,6 +125,12 @@ export function GammaLedger(): JSX.Element {
                   {current().block_number}. Collector UID{" "}
                   {current().collector_uid ?? "unregistered"}.
                 </p>
+                <Show when={!view().sampler.enabled || view().sampler.state !== "running"}>
+                  <p role="status" class="gamma-caption">
+                    The ledger sampler is {view().sampler.enabled ? view().sampler.state : "off"};
+                    this reading may be out of date.
+                  </p>
+                </Show>
                 <Show when={current().owner_holds_most_conviction !== null}>
                   <p class="gamma-caption">
                     {current().owner_holds_most_conviction
@@ -132,13 +153,13 @@ export function GammaLedger(): JSX.Element {
                     <dd>{alpha(view().totals.unattributed_rao)}</dd>
                   </div>
                 </dl>
-                <Show when={view().totals.unattributed_rao > 0}>
+                <Show when={positive(view().totals.unattributed_rao)}>
                   <p role="alert">
                     Some collector outflow has no verified receipt yet. Each one stays listed below
                     until an operator records its receipt.
                   </p>
                 </Show>
-                <Show when={view().intervals.some((item) => item.outflow_rao > 0)}>
+                <Show when={view().intervals.some((item) => positive(item.outflow_rao))}>
                   <div class="gamma-table-scroll">
                     <table class="gamma-table">
                       <caption>Epochs where alpha left the collector</caption>
@@ -152,7 +173,7 @@ export function GammaLedger(): JSX.Element {
                         </tr>
                       </thead>
                       <tbody>
-                        <For each={view().intervals.filter((item) => item.outflow_rao > 0)}>
+                        <For each={view().intervals.filter((item) => positive(item.outflow_rao))}>
                           {(item) => (
                             <tr>
                               <td>
@@ -181,10 +202,7 @@ export function GammaLedger(): JSX.Element {
                       {(holding) => (
                         <li>
                           {holding.bucket_id} holding wallet: {alpha(holding.alpha_total_rao)},{" "}
-                          {new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(
-                            holding.tao_free_rao / 1e9,
-                          )}{" "}
-                          TAO
+                          {alpha(holding.tao_free_rao).replace(" α", "")} TAO
                         </li>
                       )}
                     </For>

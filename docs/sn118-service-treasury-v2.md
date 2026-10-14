@@ -175,13 +175,20 @@ and each holding wallet's alpha and free TAO.
 
 `GET /api/v1/public/treasury-ledger` (and the Backroom `get_treasury_ledger`
 read) compares consecutive readings. An interval's outflow is what the
-collector earned minus how much its balance grew. Verified receipts from the
-collector coldkey inside the interval attribute that outflow; the remainder is
-reported as unattributed until Backroom records the receipt with
-`record_treasury_receipt`. A skipped epoch is extrapolated and flagged
-`estimated`, and a collector rotation is never counted as an outflow. The
+collector earned minus how much its balance grew. Gross `Emission[uid]` is
+exactly the credit that lands: across epoch boundary 9,280,429 the collector
+total grew by `Emission[21]` to the rao.
+
+Verified SN118-alpha `service_distribution` receipts sent by the collector
+attribute that outflow. They are matched by transfer block and capped at the
+measured outflow. Receipts for buckets that do not publish payments attribute
+by amount only, without exposing their ids. The remainder is reported as
+unattributed until Backroom records the receipt with `record_treasury_receipt`.
+
+A skipped epoch is extrapolated and flagged `estimated`, and a collector
+rotation is never counted as an outflow. Rao amounts are decimal strings. The
 dashboard Gamma page shows the balance, lock, conviction, window totals and
-every interval with an outflow.
+every interval with an outflow, and warns when the sampler is not running.
 
 A rule matches the holding coldkey plus exact payee, asset and, for stake,
 recipient hotkey. Disabled/ambiguous rules must not classify a payment. A

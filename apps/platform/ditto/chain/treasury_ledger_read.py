@@ -7,11 +7,12 @@ signs, moves funds or needs a credential.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 # u16-normalized vectors (Incentive) and U64F64 conviction bits.
+_U16_MAX = 65_535
 _U64F64_ONE = 1 << 64
 
 
@@ -91,8 +92,13 @@ async def read_treasury_ledger(
     collector_hotkey: str,
     collector_coldkey: str,
     holdings: Sequence[tuple[str, str]] = (),
-) -> TreasuryLedgerReading:
-    """Read one sample at the finalized head of ``substrate``."""
+    should_read: Callable[[int], Awaitable[bool]] | None = None,
+) -> TreasuryLedgerReading | None:
+    """Read one sample at the finalized head of ``substrate``.
+
+    ``should_read`` sees the head's epoch first; returning False skips the
+    rest of the reads, so an already-sampled epoch costs one storage query.
+    """
     block_hash = await substrate.get_chain_finalised_head()
     block_number = int(await substrate.get_block_number(block_hash))
 
@@ -107,6 +113,8 @@ async def read_treasury_ledger(
         )
 
     epoch_index = int(await query("SubtensorModule", "SubnetEpochIndex", [netuid]))
+    if should_read is not None and not await should_read(epoch_index):
+        return None
     timestamp_ms = int(await query("Timestamp", "Now", []))
     uid_raw = await query("SubtensorModule", "Uids", [netuid, collector_hotkey])
     uid = int(uid_raw) if uid_raw is not None else None
@@ -114,9 +122,8 @@ async def read_treasury_ledger(
     emission: int | None = None
     if uid is not None:
         vector = await query("SubtensorModule", "Incentive", [netuid]) or []
-        total = sum(int(item) for item in vector)
-        if uid < len(vector) and total > 0:
-            incentive = int(vector[uid]) / total
+        if uid < len(vector):
+            incentive = int(vector[uid]) / _U16_MAX
         emissions = await query("SubtensorModule", "Emission", [netuid]) or []
         if uid < len(emissions):
             emission = int(emissions[uid])

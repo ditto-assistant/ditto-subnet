@@ -81,7 +81,7 @@ async def test_reads_one_block_and_decodes_every_field(pairs):
     assert reading.block_hash == HEAD.lower()
     assert reading.epoch_index == 25_710
     assert reading.collector_uid == 2
-    assert reading.collector_incentive == pytest.approx(0.75, abs=1e-4)
+    assert reading.collector_incentive == 49_149 / 65_535
     assert reading.collector_emission_rao == 110_701_901_792
     assert (reading.collector_total_rao, reading.collector_locked_rao) == (8_549, 0)
     assert reading.collector_lock_perpetual is None
@@ -98,3 +98,25 @@ async def test_lock_mode_follows_decaying_lock_storage(decaying, perpetual):
     assert reading.collector_locked_rao == 8_000
     assert reading.collector_available_rao == 549
     assert reading.collector_lock_perpetual is perpetual
+
+
+@pytest.mark.asyncio
+async def test_sampled_epoch_costs_one_query():
+    substrate = Substrate()
+    seen = []
+
+    async def should_read(epoch):
+        seen.append(epoch)
+        return False
+
+    assert (
+        await read_treasury_ledger(
+            substrate,
+            netuid=118,
+            collector_hotkey=HOTKEY,
+            collector_coldkey=COLDKEY,
+            should_read=should_read,
+        )
+        is None
+    )
+    assert seen == [25_710]

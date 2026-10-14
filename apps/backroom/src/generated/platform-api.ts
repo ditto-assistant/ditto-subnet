@@ -34169,7 +34169,7 @@ export interface components {
         /** TreasuryLedgerCurrent */
         TreasuryLedgerCurrent: {
             /** Available Rao */
-            available_rao: number;
+            available_rao: string;
             /**
              * Block At
              * Format: date-time
@@ -34188,7 +34188,7 @@ export interface components {
             /** Collector Uid */
             collector_uid: number | null;
             /** Earned Per Epoch Rao */
-            earned_per_epoch_rao: number | null;
+            earned_per_epoch_rao: string | null;
             /** Epoch Index */
             epoch_index: number;
             /** Holdings */
@@ -34199,26 +34199,26 @@ export interface components {
              */
             lock_status: "none" | "perpetual" | "decaying";
             /** Locked Rao */
-            locked_rao: number;
+            locked_rao: string;
             /** Owner Conviction Rao */
-            owner_conviction_rao: number | null;
+            owner_conviction_rao: string | null;
             /** Owner Holds Most Conviction */
             owner_holds_most_conviction: boolean | null;
             /** Owner Hotkey */
             owner_hotkey: string | null;
             /** Total Rao */
-            total_rao: number;
+            total_rao: string;
         };
         /** TreasuryLedgerHoldingView */
         TreasuryLedgerHoldingView: {
             /** Alpha Total Rao */
-            alpha_total_rao: number;
+            alpha_total_rao: string;
             /** Bucket Id */
             bucket_id: string;
             /** Coldkey */
             coldkey: string;
             /** Tao Free Rao */
-            tao_free_rao: number;
+            tao_free_rao: string;
         };
         /**
          * TreasuryLedgerInterval
@@ -34226,9 +34226,9 @@ export interface components {
          */
         TreasuryLedgerInterval: {
             /** Attributed Rao */
-            attributed_rao: number;
+            attributed_rao: string;
             /** Balance Change Rao */
-            balance_change_rao: number;
+            balance_change_rao: string;
             /**
              * Block At
              * Format: date-time
@@ -34237,19 +34237,21 @@ export interface components {
             /** Block Number */
             block_number: number;
             /** Earned Rao */
-            earned_rao: number | null;
+            earned_rao: string | null;
             /** Epoch Index */
             epoch_index: number;
             /** Estimated */
             estimated: boolean;
             /** Outflow Rao */
-            outflow_rao: number;
+            outflow_rao: string;
             /** Previous Epoch Index */
             previous_epoch_index: number;
+            /** Receipt Count */
+            receipt_count: number;
             /** Receipt Ids */
             receipt_ids: number[];
             /** Unattributed Rao */
-            unattributed_rao: number;
+            unattributed_rao: string;
         };
         /**
          * TreasuryLedgerPin
@@ -34378,13 +34380,13 @@ export interface components {
         /** TreasuryLedgerTotals */
         TreasuryLedgerTotals: {
             /** Attributed Rao */
-            attributed_rao: number;
+            attributed_rao: string;
             /** Earned Rao */
-            earned_rao: number;
+            earned_rao: string;
             /** Outflow Rao */
-            outflow_rao: number;
+            outflow_rao: string;
             /** Unattributed Rao */
-            unattributed_rao: number;
+            unattributed_rao: string;
             /** Window Epochs */
             window_epochs: number;
         };
