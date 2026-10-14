@@ -176,7 +176,11 @@ async def public_text(
     )
 
 
-@router.post("/cla/sign", response_model=ClaSignatureView)
+@router.post(
+    "/cla/sign",
+    response_model=ClaSignatureView,
+    responses={status: {"model": HttpErrorEnvelope} for status in (400, 409, 503)},
+)
 async def sign_cla(
     body: ClaSignRequest, request: Request, session: SessionDep
 ) -> ClaSignatureView:

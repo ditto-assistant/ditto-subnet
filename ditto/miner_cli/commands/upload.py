@@ -43,7 +43,7 @@ from ditto.api_models import (
 )
 from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.commands.verify import _print_result
-from ditto.miner_cli.confirm import confirm_payment, confirm_registration
+from ditto.miner_cli.confirm import confirm_payment, confirm_registration, prompt_input
 from ditto.miner_cli.errors import (
     ApiResponseError,
     MinerCliError,
@@ -293,7 +293,7 @@ def _run_upload(
     with ApiClient(base_url=network_api_url) as cla_client:
         try:
             consent = cla_client.get_cla_status(hotkey=handle.hotkey_ss58)
-        except ApiResponseError:
+        except (ApiResponseError, ValueError):
             # An unavailable advisory endpoint must not prevent the server's
             # authoritative pre-payment policy check below.
             consent = None
@@ -321,7 +321,9 @@ def _run_upload(
                 file=sys.stderr,
             )
         elif sys.stdin.isatty():
-            agent_name = input("Agent name (reuse this for future versions): ").strip()
+            agent_name = prompt_input(
+                "Agent name (reuse this for future versions): "
+            ).strip()
         else:
             raise MinerCliError(
                 "agent name required for the first upload; pass --name. "

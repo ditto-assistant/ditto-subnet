@@ -600,6 +600,7 @@ async def truncate_test_tables(
         for table in tables
     ):
         raise ValueError("invalid fixture table names")
+    await conn.execute(text("SET LOCAL lock_timeout = '10s'"))
     rows = (await conn.execute(text(_TRUNCATE_GUARDS_SQL))).all()
     guards = [(row[0], row[1], row[2]) for row in rows]
     body = _truncate_fixture_body(tables, guards)

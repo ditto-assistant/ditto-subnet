@@ -191,6 +191,29 @@ async def test_default_https_port_accepts_browser_consent(app, session_maker):
     assert accepted.status_code == 200, accepted.text
 
 
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"state": ""},
+        {"state": "short"},
+        {"state": "x" * 129},
+        {"state": "x" * 20, "code": "x" * 4097},
+    ],
+)
+async def test_malformed_callback_returns_html_without_provider_exchange(
+    app, client, session_maker, params
+):
+    provider = setup(app, session_maker)
+    response = await client.get("/api/v1/miner-auth/github/callback", params=params)
+    assert response.status_code == 400
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["cache-control"] == "no-store"
+    assert "Invalid sign-in" in response.text
+    assert "Start a new link from the CLI" in response.text
+    assert not provider.requests
+
+
 def signed_link(
     key,
     attempt_id,

@@ -14,7 +14,6 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
-    Query,
     Request,
     Response,
 )
@@ -131,7 +130,11 @@ def _has_binding(request: Request, attempt: MinerGithubLinkAttempt) -> bool:
     )
 
 
-@router.get("/me/github-link", response_model=GithubLinkStatus)
+@router.get(
+    "/me/github-link",
+    response_model=GithubLinkStatus,
+    responses={status: {"model": HttpErrorEnvelope} for status in (401, 403)},
+)
 async def my_link(
     request: Request,
     session: SessionDep,
@@ -178,7 +181,11 @@ async def account_link(
     )
 
 
-@router.post("/me/github-link/start", response_model=GithubLinkStart)
+@router.post(
+    "/me/github-link/start",
+    response_model=GithubLinkStart,
+    responses={status: {"model": HttpErrorEnvelope} for status in (401, 403, 429, 503)},
+)
 async def start_link(
     request: Request,
     session: SessionDep,
@@ -315,10 +322,20 @@ async def authorize(
 async def callback(
     request: Request,
     session: SessionDep,
-    state: Annotated[str, Query(min_length=20, max_length=128)],
-    code: Annotated[str | None, Query(max_length=4096)] = None,
+    state: str | None = None,
+    code: str | None = None,
     error: str | None = None,
 ) -> Response:
+    if (
+        not state
+        or not 20 <= len(state) <= 128
+        or (code is not None and len(code) > 4096)
+    ):
+        return _page(
+            "Invalid sign-in",
+            "<p>Start a new link from the CLI in this browser.</p>",
+            status=400,
+        )
     client = _client(request)
     async with session.begin():
         attempt = await session.scalar(
@@ -458,10 +475,12 @@ async def accept(
     "/me/github-link/attempts/{attempt_id}",
     response_model=GithubLinkAttemptStatus,
     responses={
+        401: {"model": HttpErrorEnvelope},
+        403: {"model": HttpErrorEnvelope},
         404: {
             "model": HttpErrorEnvelope,
             "description": "No GitHub link attempt for this session.",
-        }
+        },
     },
 )
 async def attempt_status(
@@ -585,10 +604,13 @@ async def _approved_attempt(
     "/me/github-link/confirm",
     response_model=GithubLinkView,
     responses={
+        **{
+            status: {"model": HttpErrorEnvelope} for status in (400, 401, 403, 409, 503)
+        },
         404: {
             "model": HttpErrorEnvelope,
             "description": "No GitHub link attempt for this session.",
-        }
+        },
     },
 )
 async def confirm(
@@ -670,7 +692,13 @@ async def confirm(
         ) from None
 
 
-@router.post("/me/github-link/unlink", status_code=204)
+@router.post(
+    "/me/github-link/unlink",
+    status_code=204,
+    responses={
+        status: {"model": HttpErrorEnvelope} for status in (400, 401, 403, 409, 503)
+    },
+)
 async def unlink(
     body: GithubUnlinkRequest,
     request: Request,

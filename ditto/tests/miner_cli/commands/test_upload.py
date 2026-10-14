@@ -18,6 +18,7 @@ Invariants pinned:
 from __future__ import annotations
 
 import argparse
+import io
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -247,7 +248,7 @@ def _reusable_credit_response() -> UploadAgentResponse:
 
 
 class TestUploadHappyPath:
-    @pytest.mark.parametrize("error", [ApiResponseError, TransientApiError])
+    @pytest.mark.parametrize("error", [ApiResponseError, TransientApiError, ValueError])
     @pytest.mark.parametrize("allowed", [False, True])
     def test_unavailable_cla_probe_defers_to_authoritative_check_before_payment(
         self, good_tar: Path, error, allowed
@@ -300,8 +301,13 @@ class TestUploadHappyPath:
             client.get_eval_pricing.assert_not_called()
             client.post_upload_agent.assert_not_called()
 
+    @pytest.mark.parametrize("first_interactive", [False, True])
     def test_full_flow_exits_zero_and_prints_agent_id(
-        self, good_tar: Path, capsys: pytest.CaptureFixture[str]
+        self,
+        good_tar: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch,
+        first_interactive,
     ) -> None:
         client = MagicMock()
         client.post_upload_check.return_value = _ok_check()
@@ -309,6 +315,8 @@ class TestUploadHappyPath:
         client.post_upload_agent.return_value = _upload_response()
 
         fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        monkeypatch.setattr("sys.stdin", io.StringIO("alpha\n"))
+        monkeypatch.setattr("sys.stdin.isatty", lambda: first_interactive)
 
         with (
             patch(
@@ -331,8 +339,9 @@ class TestUploadHappyPath:
                 "ditto.miner_cli.commands.upload.ApiClient",
                 _patch_api_client(client),
             ),
+            patch("ditto.miner_cli.commands.upload.load_agent_name", return_value=None),
         ):
-            rc = run(make_args(good_tar))
+            rc = run(make_args(good_tar, name=None if first_interactive else "alpha"))
 
         captured = capsys.readouterr()
         out = captured.out
@@ -350,6 +359,11 @@ class TestUploadHappyPath:
             client.post_upload_agent.return_value
         )
         assert str(client.post_upload_agent.return_value.agent_id) in out
+        assert out.strip().splitlines()[-1] == str(
+            client.post_upload_agent.return_value.agent_id
+        )
+        assert "Agent name (reuse this" not in out
+        assert ("Agent name (reuse this" in captured.err) == first_interactive
         assert "alpha · submission v2" in captured.err
         assert "saved as this hotkey's local default" in captured.err
 

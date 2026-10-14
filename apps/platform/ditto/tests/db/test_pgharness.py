@@ -42,6 +42,7 @@ async def test_reset_restores_original_truncate_guard_mode(
         await conn.execute(text(enable[mode]))
         if reset == "legacy":
             await truncate_test_tables(conn, "agents")
+            assert await conn.scalar(text("SHOW lock_timeout")) == "10s"
         else:
             raw = await conn.get_raw_connection()
             driver = raw.driver_connection

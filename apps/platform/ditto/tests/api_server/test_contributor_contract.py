@@ -74,6 +74,17 @@ def test_expected_not_found_responses_use_the_actual_error_envelope(app):
         parameter["name"] == "If-None-Match" and parameter["in"] == "header"
         for parameter in text_operation["parameters"]
     )
+    for path, statuses in (
+        ("/api/v1/me/github-link/start", (401, 403, 429, 503)),
+        ("/api/v1/me/github-link/confirm", (400, 401, 403, 404, 409, 503)),
+        ("/api/v1/me/github-link/unlink", (400, 401, 403, 409, 503)),
+        ("/api/v1/cla/sign", (400, 409, 503)),
+    ):
+        for status in statuses:
+            error_schema = paths[path]["post"]["responses"][str(status)]["content"][
+                "application/json"
+            ]["schema"]
+            assert error_schema["$ref"] == "#/components/schemas/HttpErrorEnvelope"
     assert (
         HttpErrorEnvelope.model_validate(
             {
