@@ -283,21 +283,29 @@ def _run_upload(
         coldkey_name=args.coldkey_name, hotkey_name=args.hotkey_name
     )
 
-    # Do this before archive packaging/preflight or any registration/payment.
+    saved_recovery_candidates: tuple[PendingUploadPayment, ...] | None = None
+    # Reject ordinary unsigned contributions before packaging or payment.
+    # Recoveries need the artifact digest before the server can recognize an
+    # already accepted contribution; they still pass /check before any fee.
     # Older Platform releases return 404 while the feature rolls out default-off;
     # the authoritative upload endpoints still enforce the deployed policy.
     with ApiClient(base_url=network_api_url) as cla_client:
         consent = cla_client.get_cla_status(hotkey=handle.hotkey_ss58)
         if consent is not None and consent.mode == "enforce" and not consent.is_current:
-            if consent.current is None:
-                raise MinerCliError(
-                    "no effective contributor agreement is published; contact "
-                    "the operator before uploading"
+            if explicit_recovery_receipt is None:
+                saved_recovery_candidates = load_pending_payments_for_hotkey(
+                    network=network_name, hotkey=handle.hotkey_ss58
                 )
-            raise MinerCliError(
-                "the current contributor agreement is required; run `ditto cla "
-                "sign` before upload"
-            )
+            if explicit_recovery_receipt is None and not saved_recovery_candidates:
+                if consent.current is None:
+                    raise MinerCliError(
+                        "no effective contributor agreement is published; contact "
+                        "the operator before uploading"
+                    )
+                raise MinerCliError(
+                    "the current contributor agreement is required; run `ditto cla "
+                    "sign` before upload"
+                )
 
     agent_name = args.name
     if agent_name is None:
@@ -371,9 +379,13 @@ def _run_upload(
         if receipt is not None:
             receipt_source = "saved"
         else:
-            candidates = load_pending_payments_for_hotkey(
-                network=network_name,
-                hotkey=handle.hotkey_ss58,
+            candidates = (
+                saved_recovery_candidates
+                if saved_recovery_candidates is not None
+                else load_pending_payments_for_hotkey(
+                    network=network_name,
+                    hotkey=handle.hotkey_ss58,
+                )
             )
             if len(candidates) > 1:
                 raise MinerCliError(

@@ -141,6 +141,8 @@ class GithubLinkClient:
             ) as client:
                 response = await client.get(
                     f"https://api.github.com/users/{login}",
+                    # Documented OAuth app authentication for public data:
+                    # https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#primary-rate-limit-for-oauth-apps
                     auth=httpx.BasicAuth(
                         self.config.client_id, self.config.client_secret
                     ),
