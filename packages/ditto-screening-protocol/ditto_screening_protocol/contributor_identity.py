@@ -12,6 +12,8 @@ ADDRESS_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 Address = Annotated[str, Field(pattern=ADDRESS_PATTERN)]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Signature = Annotated[str, Field(pattern=r"^[0-9a-fA-F]{128}$")]
+# Signed messages embed the netuid, so a wire value must already be an integer.
+Netuid = Annotated[int, Field(strict=True, ge=0)]
 GithubLogin = Annotated[
     str,
     # Existing GitHub accounts can have consecutive or trailing hyphens.
@@ -33,7 +35,7 @@ class ContributorProof(WireModel):
 
 
 class GithubLinkRequest(WireModel):
-    netuid: Annotated[int, Field(ge=0)]
+    netuid: Netuid
     hotkey: Address
     github_user_id: Annotated[int, Field(strict=True, ge=1, le=9223372036854775807)]
     github_login: GithubLogin
@@ -44,7 +46,7 @@ class GithubLinkRequest(WireModel):
 
 
 class GithubUnlinkRequest(WireModel):
-    netuid: Annotated[int, Field(ge=0)]
+    netuid: Netuid
     hotkey: Address
     link_id: UUID
     nonce: UUID
@@ -122,7 +124,7 @@ class ClaVersionView(WireModel):
 
 
 class ClaSignRequest(WireModel):
-    netuid: Annotated[int, Field(ge=0)]
+    netuid: Netuid
     hotkey: Address
     cla_version: Annotated[int, Field(strict=True, ge=1, le=2147483647)]
     cla_sha256: Digest
