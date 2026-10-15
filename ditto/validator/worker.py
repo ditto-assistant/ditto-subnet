@@ -990,8 +990,15 @@ class ValidatorWorker:
         next sweep start, or the drain acknowledgement's resume.
         """
         drain = self._drain_requested
-        if drain is not None and drain.is_set() and self._admission != "paused":
-            self._admission = "draining"
+        if drain is not None and drain.is_set():
+            if self._admission != "paused":
+                self._admission = "draining"
+        elif self._admission == "draining":
+            # The drain was withdrawn mid-sweep: stop advertising it, and fall
+            # back to whatever the resource gate last decided.
+            self._admission = (
+                "resource_constrained" if self._constrained_resources else "accepting"
+            )
 
     def _capacity_snapshot(self) -> BenchmarkCapacity:
         active = []
@@ -4627,6 +4634,10 @@ class ValidatorWorker:
                 await weight_task
             with contextlib.suppress(asyncio.CancelledError):
                 await longmem_task
+            # The remembered event belongs to this run's lifetime; a later
+            # standalone ``run_once`` must not inherit a drain that ended here.
+            if self._drain_requested is drain_requested:
+                self._drain_requested = None
             write_update_state("stopping")
 
     async def _run_longmem_forever(

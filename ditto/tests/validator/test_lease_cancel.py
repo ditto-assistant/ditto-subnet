@@ -642,3 +642,18 @@ class TestDrainAdvertisesImmediately:
 
         dittobench.score_tarball.assert_not_awaited()
         assert heartbeat.requests[-1].benchmark_capacity.admission == "draining"
+
+    async def test_a_withdrawn_drain_stops_advertising_draining(self) -> None:
+        """Clearing the event mid-sweep restores ``accepting``."""
+        heartbeat = _RosterHeartbeat()
+        worker, _, _ = _worker_with_scorer(AsyncMock(), heartbeat=heartbeat.mock)
+        drain = asyncio.Event()
+        worker._drain_requested = drain
+
+        drain.set()
+        await worker._report_heartbeat("running_benchmark")
+        assert heartbeat.requests[-1].benchmark_capacity.admission == "draining"
+
+        drain.clear()
+        await worker._report_heartbeat("running_benchmark")
+        assert heartbeat.requests[-1].benchmark_capacity.admission == "accepting"
