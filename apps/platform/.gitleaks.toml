@@ -35,6 +35,14 @@ regexes = ['''^5ColdkeyOwner$''']
 paths = ['''^ditto/tests/db/queries/test_scores\.py$''']
 
 [[allowlists]]
+description = "Payment-time coldkey owner in the ATH attest replay test fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^5ChampionOwner$''']
+paths = ['''^ditto/tests/api_server/endpoints/test_admin_ath_rulings\.py$''']
+
+[[allowlists]]
 description = "Git revision used by the dashboard entity-panel test fixture"
 targetRules = ["generic-api-key"]
 condition = "AND"

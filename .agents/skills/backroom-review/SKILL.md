@@ -217,7 +217,9 @@ published policy or transfer a finding to another artifact.
    row mixed because I4 or I7 passed while I3 or I5 still fails.
 5. Re-fetch `get_screening_submission` immediately before writing.
 6. `open_ath_review` with the exact SHA-256 and score count, then
-   `resolve_ath_review` `clear` or `reject`.
+   `resolve_ath_review` `clear` or `reject`. To record a clean review of an
+   unheld scored or live row, use a batched `clear` ruling instead: it
+   attests without holding, so the row never leaves the board.
 7. Write a specific miner-visible reason: pattern, file:line, which limb or
    engine test failed or passed, and the cited precedent.
 8. Re-read the agent. A timeout is ambiguous; verify before retrying.
@@ -228,8 +230,9 @@ published policy or transfer a finding to another artifact.
 ### Batched rulings (5-20 decisions from one board review)
 
 Use the rulings court instead of walking `open_ath_review` /
-`resolve_ath_review` one row at a time. It is the same two writers behind the
-quarantine court's shape, with the crown re-read on both legs.
+`resolve_ath_review` one row at a time. It is the same writers behind the
+quarantine court's shape (plus the hold-free `attest` writer for a clear on
+an unheld row), with the crown re-read on both legs.
 
 1. Write the rulings document (Platform wire shape, snake_case):
 
@@ -244,7 +247,11 @@ quarantine court's shape, with the crown re-read on both legs.
    `action` is `open` (hold for investigation), `clear`, or `reject`. A
    `reject` on a scored, live, or still-evaluating agent opens and resolves
    in one item (set `expected_score_count` to the current partial count, which
-   may be 0); on a held agent it resolves only. Each agent appears once; every reject cites at
+   may be 0); on a held agent it resolves only. A `clear` on a held agent
+   resolves the hold (`["clear"]`); on an unheld scored or live agent with no
+   ATH review it attests (`["attest"]`): the terminal clear is recorded, the
+   agent keeps its status and board position, and `would_change_crown` is
+   false. Each agent appears once; every reject cites at
    least one `path:line`. The replay of the 2026-09-13 top-5 rejects lives at
    `apps/platform/ditto/tests/fixtures/ath_rulings_replay_2026-09-13.json`.
 2. `create_ath_rulings_upload` (backroom:write), then

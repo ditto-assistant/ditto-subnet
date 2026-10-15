@@ -1179,6 +1179,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/copy-reviews/{agent_id}/attest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attest Copy Review
+         * @description Record a board-review CLEAR on an unheld scored or live agent.
+         *
+         *     A board review that finds no violation used to have no write path short
+         *     of holding the agent first (``open``) and clearing it afterwards, which
+         *     takes a paid row -- and for the champion, the crown -- off the board
+         *     between the two calls. This records the same terminal ``clear`` directly.
+         */
+        post: operations["attest_copy_review_api_v1_admin_copy_reviews__agent_id__attest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/copy-reviews/{agent_id}/audit": {
         parameters: {
             query?: never;
@@ -8749,7 +8774,7 @@ export interface components {
              */
             status: "applied" | "already_applied" | "failed";
             /** Steps Applied */
-            steps_applied?: ("open" | "clear" | "reject")[];
+            steps_applied?: ("open" | "clear" | "attest" | "reject")[];
             /** Would Change Crown */
             would_change_crown: boolean;
         };
@@ -8797,7 +8822,7 @@ export interface components {
             /** Stale Guard */
             stale_guard: boolean;
             /** Steps */
-            steps?: ("open" | "clear" | "reject")[];
+            steps?: ("open" | "clear" | "attest" | "reject")[];
             /** Would Change Crown */
             would_change_crown: boolean;
         };
@@ -40746,6 +40771,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCopyReviewItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attest_copy_review_api_v1_admin_copy_reviews__agent_id__attest_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCopyReviewOpenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCopyReviewResolveResponse"];
                 };
             };
             /** @description Validation Error */

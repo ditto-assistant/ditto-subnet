@@ -118,6 +118,30 @@ Nothing is deleted or rewritten to produce this. `original_reason`,
 `agents.review_reason`, and the full action history are unchanged, and the
 audit endpoint still returns the whole `action_history` chain.
 
+## A clean board review is recorded without a hold
+
+A board review that finds no violation on a scored or live agent records a
+terminal `clear` through `POST /api/v1/admin/copy-reviews/{agent_id}/attest`,
+or as a `clear` ruling in the batched rulings court, where it previews with
+`steps: ["attest"]`. The write takes the same guards as `open`
+(`expected_sha256`, `expected_score_count`, a miner-visible `reason`) and, in
+one transaction, adds a `resolved` / `clear` review row and one `clear` action.
+Both carry `hold_free: true` (the row's `algorithm_provenance` and the action's
+`evidence`).
+
+- `agents.status`, the score set and the board position are untouched, so
+  `would_change_crown` is always false. Before this, recording a clean row meant
+  `open` then `clear`, which pulled a paid row -- and for the champion, the
+  crown -- off the board between the two calls.
+- Only an agent with no review row is attested. An existing clear replays as
+  `already_applied` (single-row: `idempotent: true`). A pending review is
+  resolved with `resolve`, and a rejected or below-quorum agent stays a
+  conflict, so an attestation never resolves a hold or lifts a ban.
+- It is an ordinary resolved clear afterwards: `get_ath_review` returns it,
+  precedents list it, and the emission gate reads it as terminal. A later
+  `open` (manual or automated) reopens the row and a reject supersedes it,
+  leaving `clear`, `reopen`, `reject` in the action history.
+
 ## Precedents are the resolved holdings
 
 `GET /api/v1/admin/copy-reviews/precedents` is the court reporter, not the

@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.368.0 (2026-10-15)
+
+### Features
+
+- **platform,backroom**: Record a board-review clear without holding the agent
+  ([#2932](https://github.com/ditto-assistant/ditto-subnet/pull/2932),
+  [`2f8e476`](https://github.com/ditto-assistant/ditto-subnet/commit/2f8e4765c1107cd9eecd317baeac5e311999246f))
+
+
 ## v0.367.0 (2026-10-15)
 
 ### Features
