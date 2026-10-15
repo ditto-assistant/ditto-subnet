@@ -51,6 +51,6 @@
     "tests/store_concurrency.rs": "7cf956ffa08d2632ecb400f1f5aa7580df6e684fa831861beca8ba947c8578cd"
   },
   "origin": "ditto-assistant/ditto-subnet/miners/dittobench-starter-kit",
-  "revision": "49b3c570f05633bf764f0f3035f3bfc885605c4b",
+  "revision": "2b6e78105af3890cf242bb37fc0c8dedb6aa21a4",
   "version": 1
 }
