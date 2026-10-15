@@ -6132,6 +6132,18 @@ describe('verified contributors and CLA rollout', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2)
     })
 
+    it('finds its revision beyond the first history page', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const later = { ...claShadowRevisionFixture, revision: 31, parent_revision: 30, actor: 'someone-else@omniaura.ai' }
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later, history: [later], history_total: 32 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later, history: [claShadowRevisionFixture], history_total: 32 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later }))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock.mock.calls[2][0]).toContain('history_limit=1&history_offset=30')
+    })
+
     it('fails as not applied when another operator wrote the next revision', async () => {
       process.env.DITTO_ADMIN_API_TOKEN = 'secret'
       vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))

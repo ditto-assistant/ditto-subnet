@@ -4217,7 +4217,13 @@ export async function updateClaPolicy(actor: string, rawInput: unknown) {
     readBack: async () => {
       observed = await fetchClaPolicy()
       const target = input.expectedRevision + 1
-      const row = [observed.current, ...observed.history].find((item) => item.revision === target)
+      if (observed.current.revision < target) return { state: 'absent' }
+      // Revisions are contiguous and history is newest-first, so the target's
+      // offset is exact however many revisions followed it.
+      const page = [observed.current, ...observed.history].some((item) => item.revision === target)
+        ? observed
+        : await fetchClaPolicy({ historyLimit: 1, historyOffset: observed.current.revision - target })
+      const row = [observed.current, ...page.history].find((item) => item.revision === target)
       if (!row) return { state: 'absent' }
       if (row.actor === actor.trim() && row.mode === input.mode && row.reason === input.reason) return { state: 'applied', value: row }
       return { state: 'superseded', detail: `Revision ${target} was already written by ${row.actor}` }
