@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from urllib.parse import urlencode, urlsplit
 
 import httpx
@@ -21,6 +22,8 @@ ATTEMPT_TTL_SECONDS = 600
 EXCHANGE_WINDOW_SECONDS = 180
 EXCHANGE_DEADLINE_SECONDS = 150
 TOKEN_REVOCATION_DEADLINE_SECONDS = 15
+# One public identity lookup, connection to body, before a bounty claim.
+PUBLIC_IDENTITY_DEADLINE_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -54,9 +57,11 @@ class GithubLinkRejected(Exception):
 
 
 class GithubProviderUnavailable(GithubLinkRejected):
-    """GitHub did not answer usably (network, timeout, 5xx, malformed body).
+    """Platform could not get a usable answer from GitHub.
 
-    A provider fault, not a decision by the miner or a rejected identity.
+    The app has no credentials, or GitHub failed: network, timeout, an error
+    status, a malformed body. A provider fault to retry, never a decision by
+    the miner or a verdict on an identity.
     """
 
 
@@ -69,10 +74,31 @@ class GithubLinkClient:
     ) -> None:
         self.config = config
         self.transport = transport
+        self._public: httpx.AsyncClient | None = None
 
     @property
     def enabled(self) -> bool:
         return self.config.enabled
+
+    def _public_client(self) -> httpx.AsyncClient:
+        """One pooled client for app-authenticated public lookups.
+
+        Only server credentials pass through it, and it keeps no cookies, so a
+        lookup never carries state from another miner's. OAuth exchanges hold
+        a miner's token and keep their own short-lived clients.
+        """
+        if self._public is None or self._public.is_closed:
+            self._public = httpx.AsyncClient(
+                transport=self.transport,
+                timeout=self.config.timeout_seconds,
+                follow_redirects=False,
+                cookies=CookieJar(DefaultCookiePolicy(allowed_domains=[])),
+            )
+        return self._public
+
+    async def aclose(self) -> None:
+        if self._public is not None:
+            await self._public.aclose()
 
     def authorize_url(self, *, state: str, verifier: str) -> str:
         query = urlencode(
@@ -145,7 +171,8 @@ class GithubLinkClient:
                         type(user_id) is not int
                         or not 0 < user_id <= 9223372036854775807
                     ):
-                        raise GithubLinkRejected(
+                        # A malformed body, like an invalid login below.
+                        raise GithubProviderUnavailable(
                             "GitHub returned an invalid account id"
                         )
                     login = TypeAdapter(GithubLogin).validate_python(login)
@@ -213,21 +240,25 @@ class GithubLinkClient:
 
         Numeric id must still match the immutable OAuth link. The server-only
         app credentials use its own public-data rate budget; no miner token or
-        stale identity cache is used. Provider failures never prove identity.
+        stale identity cache is used. Provider failures never prove identity:
+        ``GithubLinkRejected`` means the account itself is gone or moved, and
+        ``GithubProviderUnavailable`` means GitHub could not answer usably.
         """
         if not self.config.client_id or not self.config.client_secret:
-            raise GithubLinkRejected(
+            raise GithubProviderUnavailable(
                 "live GitHub identity verification requires configured "
                 "OAuth app credentials"
             )
         try:
             login = TypeAdapter(GithubLogin).validate_python(login)
-            async with httpx.AsyncClient(
-                transport=self.transport,
-                timeout=self.config.timeout_seconds,
-                follow_redirects=False,
-            ) as client:
-                response = await client.get(
+        except ValueError:
+            # The recorded label itself is unusable; GitHub was never asked.
+            raise GithubLinkRejected(
+                "GitHub account identity is unavailable; re-link before claiming"
+            ) from None
+        try:
+            async with asyncio.timeout(PUBLIC_IDENTITY_DEADLINE_SECONDS):
+                response = await self._public_client().get(
                     f"https://api.github.com/users/{login}",
                     # Documented OAuth app authentication for public data:
                     # https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#primary-rate-limit-for-oauth-apps
@@ -239,23 +270,29 @@ class GithubLinkClient:
                         "X-GitHub-Api-Version": "2022-11-28",
                     },
                 )
-                if response.status_code == 404:
-                    raise GithubLinkRejected(
-                        "GitHub account was not found; re-link before claiming"
-                    )
-                if response.is_redirect:
-                    raise GithubLinkRejected(
-                        "GitHub login has moved; re-link before claiming"
-                    )
-                response.raise_for_status()
-                user = response.json()
-                user_id, current_login = user.get("id"), user.get("login")
-                if type(user_id) is not int or not 0 < user_id <= 9223372036854775807:
-                    raise GithubLinkRejected("GitHub account identity is unavailable")
-                return GithubIdentity(
-                    user_id, TypeAdapter(GithubLogin).validate_python(current_login)
+            if response.status_code == 404:
+                raise GithubLinkRejected(
+                    "GitHub account was not found; re-link before claiming"
                 )
-        except (httpx.HTTPError, ValueError, TypeError, AttributeError):
-            raise GithubLinkRejected(
+            # Only a redirect that names a new location says the account
+            # moved; any other 3xx is a provider fault, like an error status.
+            if response.has_redirect_location:
+                raise GithubLinkRejected(
+                    "GitHub login has moved; re-link before claiming"
+                )
+            # Rate limits, credential errors and outages are provider faults.
+            response.raise_for_status()
+            user = response.json()
+            user_id, current_login = user.get("id"), user.get("login")
+            if type(user_id) is not int or not 0 < user_id <= 9223372036854775807:
+                raise ValueError("invalid account id")
+            return GithubIdentity(
+                user_id, TypeAdapter(GithubLogin).validate_python(current_login)
+            )
+        except GithubLinkRejected:
+            raise
+        except (TimeoutError, httpx.HTTPError, ValueError, TypeError, AttributeError):
+            # Provider exceptions and bodies can carry secrets. Discard them.
+            raise GithubProviderUnavailable(
                 "GitHub account identity is unavailable; retry before claiming"
             ) from None

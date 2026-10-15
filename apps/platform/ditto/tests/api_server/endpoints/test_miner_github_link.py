@@ -25,12 +25,14 @@ from ditto.api_models.contributor_identity import (
     github_unlink_message,
 )
 from ditto.api_models.http_errors import HttpErrorEnvelope
+from ditto.api_server import github_link as github_link_module
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.github_link import (
     ATTEMPT_TTL_SECONDS,
     GithubLinkClient,
     GithubLinkConfig,
     GithubLinkRejected,
+    GithubProviderUnavailable,
 )
 from ditto.chain.models import BlockInfo
 from ditto.db.models import (
@@ -56,6 +58,10 @@ class Provider:
     revoke_transport_error = False
     user_status = 200
     user_delay = 0.0
+    # Public lookups (/users/{login}): a replacement reply, a delay, headers.
+    users_reply = None
+    users_delay = 0.0
+    users_headers: dict[str, str] = {}
 
     def __init__(self):
         self.requests = []
@@ -94,8 +100,14 @@ class Provider:
                     f"fixture-client:{SECRET}".encode()
                 ).decode()
                 assert request.headers["authorization"] == f"Basic {expected}"
+                if self.users_delay:
+                    await asyncio.sleep(self.users_delay)
+                if self.users_reply is not None:
+                    return self.users_reply()
                 return httpx.Response(
-                    200, json={"id": self.user_id, "login": self.login}
+                    200,
+                    json={"id": self.user_id, "login": self.login},
+                    headers=self.users_headers,
                 )
             return httpx.Response(404)
 
@@ -717,9 +729,88 @@ async def test_live_identity_unavailable_or_redirected_requires_relink(
     )
     with pytest.raises(GithubLinkRejected, match="re-link before claiming") as rejected:
         await github.public_identity("miner-fixture")
+    # The account itself is gone or moved: a verdict, not a provider fault.
+    assert not isinstance(rejected.value, GithubProviderUnavailable)
     assert len(requests) == 1
     assert requests[0].url.host == "api.github.com"
     assert SECRET not in str(rejected.value)
+
+
+def _raise(exc):
+    raise exc
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        lambda: httpx.Response(500),
+        lambda: httpx.Response(503),
+        lambda: httpx.Response(403, json={"message": "API rate limit exceeded"}),
+        lambda: httpx.Response(429),
+        lambda: httpx.Response(401, json={"message": SECRET}),
+        lambda: httpx.Response(304),
+        lambda: httpx.Response(200, content=b"<html>not json</html>"),
+        lambda: httpx.Response(200, json=["not", "an", "object"]),
+        lambda: httpx.Response(200, json={"id": 0, "login": "miner-fixture"}),
+        lambda: httpx.Response(200, json={"id": "100", "login": "miner-fixture"}),
+        lambda: httpx.Response(200, json={"id": 100, "login": "bad/login"}),
+        lambda: _raise(httpx.ConnectError(f"fixture network {SECRET}")),
+        lambda: _raise(httpx.ReadTimeout(f"fixture timeout {SECRET}")),
+    ],
+    ids=[
+        "500",
+        "503",
+        "rate-limit-403",
+        "429",
+        "credentials-401",
+        "bare-304",
+        "not-json",
+        "not-an-object",
+        "invalid-id",
+        "string-id",
+        "invalid-login",
+        "network",
+        "timeout",
+    ],
+)
+async def test_public_identity_provider_faults_stay_retryable(
+    app, session_maker, reply
+):
+    provider = setup(app, session_maker)
+    provider.users_reply = reply
+    with pytest.raises(GithubProviderUnavailable, match="retry before claiming") as e:
+        await app.state.github_link.public_identity(provider.login)
+    assert SECRET not in str(e.value)
+    assert e.value.__cause__ is None and e.value.__suppress_context__
+
+
+async def test_public_identity_has_one_total_deadline(app, session_maker, monkeypatch):
+    provider = setup(app, session_maker)
+    monkeypatch.setattr(github_link_module, "PUBLIC_IDENTITY_DEADLINE_SECONDS", 0.05)
+    provider.users_delay = 5
+    with pytest.raises(GithubProviderUnavailable, match="retry before claiming"):
+        await app.state.github_link.public_identity(provider.login)
+
+
+async def test_public_lookups_share_one_pool_and_never_carry_cookies(
+    app, session_maker
+):
+    provider = setup(app, session_maker)
+    # A cookie set while serving one miner must never reach another's lookup.
+    provider.users_headers = {"set-cookie": "session=other-miner; Path=/"}
+    github = app.state.github_link
+    await github.public_identity(provider.login)
+    pooled = github._public_client()
+    await github.public_identity(provider.login)
+    assert github._public_client() is pooled
+    lookups = [r for r in provider.requests if r.url.path.startswith("/users/")]
+    assert len(lookups) == 2
+    assert all("cookie" not in request.headers for request in lookups)
+    await github.aclose()
+    assert pooled.is_closed
+    # A lookup after shutdown opens a fresh pool instead of failing.
+    assert (await github.public_identity(provider.login)).user_id == 100
+    assert github._public_client() is not pooled
 
 
 @pytest.mark.parametrize("login", ["", "invalid/name", "invalid:login", "a" * 40])
@@ -729,6 +820,9 @@ async def test_malformed_stored_login_is_rejected_without_network_or_input_detai
     provider = setup(app, session_maker)
     with pytest.raises(GithubLinkRejected, match="identity is unavailable") as rejected:
         await app.state.github_link.public_identity(login)
+    # A bad recorded label needs a re-link; retrying GitHub cannot fix it.
+    assert not isinstance(rejected.value, GithubProviderUnavailable)
+    assert "re-link" in str(rejected.value)
     assert provider.requests == []
     assert "validation" not in str(rejected.value)
 
@@ -744,7 +838,10 @@ async def test_live_identity_uses_app_auth_and_never_reuses_stale_results(
     assert len(requests) == 2
     assert all(SECRET not in str(r.url) for r in requests)
     unconfigured = GithubLinkClient(GithubLinkConfig(), transport=provider.transport())
-    with pytest.raises(GithubLinkRejected, match="configured OAuth app credentials"):
+    # Platform cannot ask GitHub: retryable after an operator fix, not a verdict.
+    with pytest.raises(
+        GithubProviderUnavailable, match="configured OAuth app credentials"
+    ):
         await unconfigured.public_identity(provider.login)
     assert len(provider.requests) == 2
 
@@ -1304,6 +1401,7 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
 ):
     from ditto.api_server.bounty_identity import (
         BountyIdentityRejected,
+        BountyIdentityUnavailable,
         prepare_bounty_identity,
         require_verified_bounty_contributor,
     )
@@ -1374,12 +1472,18 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
     provider.user_id = 200
     with pytest.raises(BountyIdentityRejected, match="renamed or reassigned"):
         await verify(provider.login)
-    app.state.github_link.public_identity = AsyncMock(
-        side_effect=GithubLinkRejected("fixture provider unavailable")
-    )
-    with pytest.raises(BountyIdentityRejected, match="provider unavailable") as caught:
+    provider.user_id = 100
+    # A GitHub outage stays retryable and is never reported as a rejection.
+    provider.users_reply = lambda: httpx.Response(503)
+    with pytest.raises(BountyIdentityUnavailable, match="retry before claiming") as e:
         await verify(provider.login)
-    assert isinstance(caught.value.__cause__, GithubLinkRejected)
+    assert not isinstance(e.value, BountyIdentityRejected)
+    assert isinstance(e.value.__cause__, GithubProviderUnavailable)
+    # An account that is gone is the rejection.
+    provider.users_reply = lambda: httpx.Response(404)
+    with pytest.raises(BountyIdentityRejected, match="not found") as gone:
+        await verify(provider.login)
+    assert type(gone.value.__cause__) is GithubLinkRejected
 
 
 @pytest.mark.parametrize("failure", ["origin", "binding", "token", "decision"])

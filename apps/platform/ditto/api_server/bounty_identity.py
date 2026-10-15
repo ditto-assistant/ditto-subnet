@@ -13,7 +13,10 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from ditto.api_server.cla import ClaConsentRequired, evaluate_cla_gate
-from ditto.api_server.github_link import GithubLinkRejected
+from ditto.api_server.github_link import (
+    GithubLinkRejected,
+    GithubProviderUnavailable,
+)
 from ditto.db.queries.contributor_identity import (
     active_github_link,
     lock_identity_writes,
@@ -30,6 +33,10 @@ _MAX_EVIDENCE_AGE = timedelta(minutes=2)
 
 class BountyIdentityRejected(Exception):
     pass
+
+
+class BountyIdentityUnavailable(Exception):
+    """GitHub could not confirm the identity now; retry. Never a rejection."""
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,8 @@ async def prepare_bounty_identity(
         )
     try:
         identity = await github.public_identity(recorded_login)
+    except GithubProviderUnavailable as exc:
+        raise BountyIdentityUnavailable(str(exc)) from exc
     except GithubLinkRejected as exc:
         raise BountyIdentityRejected(str(exc)) from exc
     if (

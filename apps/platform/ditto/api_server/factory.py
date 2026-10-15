@@ -559,6 +559,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
+            # Built with the app (tests swap it); its pooled public lookup
+            # client closes with the process.
+            stack.push_async_callback(app.state.github_link.aclose)
             if _process_role() == PLATFORM_ROLE:
                 await validator_names.start(app.state.session_maker)
 
