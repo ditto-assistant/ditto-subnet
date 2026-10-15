@@ -797,6 +797,28 @@ def test_github_user_interrupt_exits_130_without_signing(stage, capsys):
     api.unlink_github.assert_not_called()
 
 
+@pytest.mark.parametrize("existing", [False, True])
+def test_cla_sign_reports_an_existing_receipt(tmp_path, capsys, existing):
+    api = client()
+    signer = api.sign_cla.side_effect
+    if existing:
+        api.sign_cla.side_effect = lambda body: signer(body).model_copy(
+            update={"nonce": uuid4()}
+        )
+    handle, live = wallet()
+    v = api.get_cla_status.return_value.current
+    with (
+        patch.object(cla, "load_wallet", return_value=(handle, live)),
+        patch.object(cla, "ApiClient", return_value=api),
+    ):
+        code = cla.run(
+            args(output=tmp_path / "CLA.md", confirmation=f"SIGN CLA 1 {v.sha256}")
+        )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert out.startswith("Already signed CLA v1" if existing else "Signed CLA v1")
+
+
 def test_parser_exposes_commands_without_implicit_cla_acceptance():
     parser = _build_parser()
     assert parser.parse_args(["cla", "status"]).cla_command == "status"

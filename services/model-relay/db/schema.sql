@@ -8919,6 +8919,14 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 
 --
+-- Name: cla_signatures uq_cla_signatures_hotkey_version; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_signatures
+    ADD CONSTRAINT uq_cla_signatures_hotkey_version UNIQUE (netuid, hotkey, cla_version);
+
+
+--
 -- Name: cla_signatures uq_cla_signatures_nonce; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9319,13 +9327,6 @@ CREATE UNIQUE INDEX burn_settings_scope_revision_idx ON public.burn_settings_rev
 --
 
 CREATE INDEX cla_shadow_uploads_netuid_idx ON public.cla_shadow_uploads USING btree (netuid);
-
-
---
--- Name: cla_signatures_hotkey_version_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX cla_signatures_hotkey_version_idx ON public.cla_signatures USING btree (netuid, hotkey, cla_version, signed_at);
 
 
 --

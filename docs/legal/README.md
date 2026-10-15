@@ -25,12 +25,17 @@ hours notice. `get_cla_policy` exposes the minimum notice and earliest allowed
 activation time. Miners can sign a published future version with
 `ditto cla sign --version <N>` before activation. Configure a positive
 `DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE` to limit public CLA signing as well as
-uploads; invalid documents and used nonces are rejected before chain lookup.
+uploads. Signing is idempotent: each hotkey has at most one receipt per
+version, and signing again returns it. Invalid documents, used nonces and
+already-signed versions are answered before chain lookup.
 
-The CLI downloads the registry's exact published bytes, independently verifies
-the hash, saves the complete document for review, and requires explicit typed
-version/digest confirmation. It signs only with the miner hotkey. Public
-receipts retain the signing inputs and finalized ownership snapshot.
+The CLI downloads the registry's exact published bytes, checks them against
+the SHA-256 that the same Platform publishes, saves the complete document for
+review, and requires explicit typed version/digest confirmation. The check
+catches transfer corruption, not a dishonest Platform: compare the digest with
+the reviewed `CLA-v<N>.md` in this directory for independent assurance. It
+signs only with the miner hotkey. Public receipts retain the signing inputs
+and finalized ownership snapshot.
 
 Upload checks enforce the same policy in Python and the Go relay. The CLI
 checks it before preflight, registration or payment, and Platform checks it

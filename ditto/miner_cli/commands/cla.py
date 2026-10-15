@@ -185,8 +185,11 @@ def run(args: argparse.Namespace) -> int:
                     json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True)
                 )
             else:
+                # Platform keeps one receipt per hotkey and version, so an
+                # earlier signature comes back instead of a new one.
+                already = "Already signed" if result.nonce != nonce else "Signed"
                 print(
-                    f"Signed CLA v{result.cla_version} at "
+                    f"{already} CLA v{result.cla_version} at "
                     f"{result.signed_at.isoformat()}"
                 )
             return 0

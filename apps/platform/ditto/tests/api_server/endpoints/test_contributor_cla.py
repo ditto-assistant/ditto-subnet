@@ -7,7 +7,7 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import bittensor
 import httpx
@@ -292,15 +292,20 @@ async def test_registry_off_default_pinned_bytes_signature_status_and_immutable_
     )
     assert result.json()["owner_block"] == 123
     replay = await client.post("/api/v1/cla/sign", json=body)
-    assert replay.status_code == 409 and "nonce already used" in replay.text
+    assert replay.status_code == 200 and replay.json() == result.json()
     async with session_maker() as session:
-        nonce_constraints = await session.scalars(
-            text(
-                "SELECT conname FROM pg_constraint "
-                "WHERE conrelid = 'cla_signatures'::regclass AND contype = 'u'"
+        unique_constraints = set(
+            await session.scalars(
+                text(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conrelid = 'cla_signatures'::regclass AND contype = 'u'"
+                )
             )
         )
-        assert "uq_cla_signatures_nonce" in nonce_constraints
+        assert {
+            "uq_cla_signatures_nonce",
+            "uq_cla_signatures_hotkey_version",
+        } <= unique_constraints
     status = (
         await client.get(f"/api/v1/public/cla/status/{alice.ss58_address}")
     ).json()
@@ -692,7 +697,7 @@ async def test_nonexistent_owner_is_rejected_without_uid_registration(
     ).headers["cache-control"] == "no-store"
 
 
-@pytest.mark.parametrize("case", ["missing", "digest", "nonce"])
+@pytest.mark.parametrize("case", ["missing", "digest", "signed", "nonce"])
 async def test_invalid_document_and_nonce_replay_do_not_spend_chain_rpcs(
     app, client, session_maker, case
 ):
@@ -705,21 +710,41 @@ async def test_invalid_document_and_nonce_replay_do_not_spend_chain_rpcs(
     elif case == "digest":
         body = signed(alice, {**version, "sha256": "cd" * 32})
     else:
-        assert (await client.post("/api/v1/cla/sign", json=body)).status_code == 200
+        first = await client.post("/api/v1/cla/sign", json=body)
+        assert first.status_code == 200
+        if case == "signed":
+            body = signed(alice, version)
+        else:
+            later = await publish(client, 2)
+            body = signed(alice, later, nonce=UUID(body["nonce"]))
     chain.get_finalized_block.reset_mock()
     chain.get_coldkey_for_hotkey.reset_mock()
-    rejected = await client.post("/api/v1/cla/sign", json=body)
-    assert rejected.status_code == 409, rejected.text
+    response = await client.post("/api/v1/cla/sign", json=body)
+    if case == "signed":
+        # A fresh nonce for an already-signed version returns the existing
+        # receipt and adds no append-only row.
+        assert response.status_code == 200 and response.json() == first.json()
+    else:
+        assert response.status_code == 409, response.text
+    if case == "nonce":
+        assert "nonce already used" in response.text
     chain.get_finalized_block.assert_not_awaited()
     chain.get_coldkey_for_hotkey.assert_not_awaited()
+    async with session_maker() as session:
+        assert await session.scalar(select(func.count()).select_from(ClaSignature)) == (
+            0 if case in ("missing", "digest") else 1
+        )
 
 
-async def test_concurrent_nonce_replay_still_returns_conflict_after_both_prechecks(
-    app, client, session_maker
+@pytest.mark.parametrize("same_nonce", [True, False])
+async def test_concurrent_signing_records_one_receipt_after_both_prechecks(
+    app, client, session_maker, same_nonce
 ):
     chain = setup(app, session_maker)
     version = await publish(client)
-    body = signed(bittensor.Keypair.create_from_uri("//Alice"), version)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    body = signed(alice, version)
+    bodies = [body, body if same_nonce else signed(alice, version)]
     arrivals = 0
     ready = asyncio.Event()
 
@@ -734,15 +759,12 @@ async def test_concurrent_nonce_replay_still_returns_conflict_after_both_prechec
     chain.get_coldkey_for_hotkey.side_effect = owner
     results = await asyncio.wait_for(
         asyncio.gather(
-            client.post("/api/v1/cla/sign", json=body),
-            client.post("/api/v1/cla/sign", json=body),
+            *(client.post("/api/v1/cla/sign", json=item) for item in bodies)
         ),
         15,
     )
-    assert sorted(result.status_code for result in results) == [200, 409]
-    assert "nonce already used" in next(
-        result.text for result in results if result.status_code == 409
-    )
+    assert [result.status_code for result in results] == [200, 200]
+    assert results[0].json() == results[1].json()
     async with session_maker() as session:
         assert await session.scalar(select(func.count()).select_from(ClaSignature)) == 1
 

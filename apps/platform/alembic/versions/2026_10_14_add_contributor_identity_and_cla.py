@@ -133,11 +133,13 @@ def upgrade() -> None:
         sa.Column("owner_block_hash", sa.Text(), nullable=False),
         sa.ForeignKeyConstraint(["cla_version"], ["cla_versions.version"]),
         sa.UniqueConstraint("nonce", name=op.f("uq_cla_signatures_nonce")),
-    )
-    op.create_index(
-        "cla_signatures_hotkey_version_idx",
-        "cla_signatures",
-        ["netuid", "hotkey", "cla_version", "signed_at"],
+        # One immutable receipt per hotkey and version keeps the history bounded.
+        sa.UniqueConstraint(
+            "netuid",
+            "hotkey",
+            "cla_version",
+            name=op.f("uq_cla_signatures_hotkey_version"),
+        ),
     )
     op.create_table(
         "cla_settings_revisions",

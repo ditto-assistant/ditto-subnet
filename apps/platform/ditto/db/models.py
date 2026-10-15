@@ -11880,12 +11880,11 @@ class ClaSignature(Base):
     owner_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
     __table_args__ = (
         ForeignKeyConstraint(["cla_version"], ["cla_versions.version"]),
-        Index(
-            "cla_signatures_hotkey_version_idx",
+        UniqueConstraint(
             "netuid",
             "hotkey",
             "cla_version",
-            "signed_at",
+            name="uq_cla_signatures_hotkey_version",
         ),
     )
 

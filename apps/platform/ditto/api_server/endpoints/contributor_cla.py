@@ -245,14 +245,19 @@ async def sign_cla(
             issued_at=body.issued_at,
             now=now,
         )
-        # Reject unpublished/mismatched documents and known replays before
-        # spending chain RPCs. The insert constraint still closes nonce races.
+        # Reject unpublished/mismatched documents and known replays, and return
+        # an existing receipt, before spending chain RPCs. Signing is idempotent
+        # per (netuid, hotkey, version): the history is append-only, so a fresh
+        # nonce must never add a row. The insert constraints close both races.
         async with session.begin():
             version = await session.get(ClaVersion, body.cla_version)
             if version is None or version.sha256 != body.cla_sha256:
                 raise HTTPException(
                     409, "CLA version or digest is not the published document"
                 )
+            existing = await existing_receipt(session, body)
+            if existing is not None:
+                return existing
             if (
                 await session.scalar(
                     select(ClaSignature.signature_id).where(
@@ -296,18 +301,37 @@ async def sign_cla(
     except IntegrityError as exc:
         # SQLAlchemy's asyncpg adapter chains the original PostgreSQL error.
         driver_error = getattr(exc.orig, "__cause__", None)
-        if (
-            getattr(driver_error, "sqlstate", None) == "23505"
-            and getattr(driver_error, "constraint_name", None)
-            == "uq_cla_signatures_nonce"
+        constraint = getattr(driver_error, "constraint_name", None)
+        if getattr(driver_error, "sqlstate", None) != "23505" or constraint not in (
+            "uq_cla_signatures_hotkey_version",
+            "uq_cla_signatures_nonce",
         ):
-            raise HTTPException(409, "CLA signature nonce already used") from None
-        raise
+            raise
+        # A concurrent request committed first. Either constraint can report a
+        # same-body race, so prefer the receipt that won.
+        async with session.begin():
+            existing = await existing_receipt(session, body)
+        if existing is not None:
+            return existing
+        raise HTTPException(409, "CLA signature nonce already used") from None
+
+
+async def existing_receipt(
+    session: AsyncSession, body: ClaSignRequest
+) -> ClaSignatureView | None:
+    row = await session.scalar(
+        select(ClaSignature).where(
+            ClaSignature.netuid == body.netuid,
+            ClaSignature.hotkey == body.hotkey,
+            ClaSignature.cla_version == body.cla_version,
+        )
+    )
+    return signature_view(row) if row is not None else None
 
 
 @router.post("/admin/cla/versions", response_model=ClaVersionView)
 async def publish(
-    body: ClaPublishRequest, _admin: AdminDep, session: SessionDep
+    body: ClaPublishRequest, _admin: AdminDep, actor: ActorDep, session: SessionDep
 ) -> ClaVersionView:
     raw = body.text.encode("utf-8")
     if len(raw) > 262144 or hashlib.sha256(raw).hexdigest() != body.sha256:
