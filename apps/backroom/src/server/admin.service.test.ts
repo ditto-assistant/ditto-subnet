@@ -5991,6 +5991,14 @@ describe('verified contributors and CLA rollout', () => {
     expect(fetchMock.mock.calls[1][0]).toContain('/public/github-account/100')
   })
 
+  it.each([2 ** 53, Number.MAX_VALUE])('rejects an unsafe GitHub id %s instead of looking up a rounded one', async (githubUserId) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchGithubContributor({ githubUserId })).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('pages policy history and reads adoption without synthesizing consent', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ ...claControlFixture, history_limit: 10, history_offset: 10 }))
