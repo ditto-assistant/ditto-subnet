@@ -1112,3 +1112,163 @@ async def test_refetch_does_not_touch_a_payout_resolved_meanwhile(
     async with session_maker() as session:
         row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
         assert row.proof["receipt"] is None and row.last_checked_at is None
+
+
+def _sparse_plan(current, end, interesting, *, full_scan=False):
+    from ditto.chain.source_emission_verifier import SourceEmissionRangePlan
+
+    return SourceEmissionRangePlan(
+        current + 1,
+        end,
+        {b: _hash(b) for b in range(current, end + 1)},
+        tuple(interesting),
+        full_scan,
+        "runtime",
+    )
+
+
+async def _deep_backlog(app, session_maker, cursor_block):
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, _ = await _prepare(app, session_maker)
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        cursor.block = cursor_block
+        cursor.block_hash = _hash(cursor_block)
+    substrate = SimpleNamespace(
+        get_chain_finalised_head=AsyncMock(return_value=_hash(15000)),
+        get_block_header=AsyncMock(return_value={"header": {"number": 15000}}),
+    )
+    return a, substrate
+
+
+async def test_sparse_catchup_reads_only_planned_blocks_and_skips_the_rest(
+    app, session_maker, monkeypatch
+):
+    """Quiet blocks commit as cursor skips; planned blocks get the full reader."""
+    from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionCollectorCursor, SourceEmissionPayout
+
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    planned = (150, 151)
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range",
+        AsyncMock(return_value=_sparse_plan(100, end, planned)),
+    )
+    read_blocks = []
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        read_blocks.append(block)
+        if block == 150:
+            return _observed(a, block, reveal=True)
+        if block == 151:
+            return _observed(a, block, payout=True)
+        return _observed(a, block)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    monkeypatch.setattr(module.random, "sample", lambda seq, k: list(seq)[:k])
+    receipt = AsyncMock(return_value=_payout(a, 151))
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=receipt, _safe_rpc_error=str
+    )
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    await collector._sweep_provider(substrate)
+
+    # Two audit samples (the first quiet blocks) plus the two planned blocks.
+    assert read_blocks == [101, 102, 150, 151]
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert (cursor.block, cursor.block_hash) == (end, _hash(end))
+        assert cursor.runtime_code_hash == "runtime"
+        payout = await session.get(SourceEmissionPayout, (a["netuid"], _hash(151)))
+        assert payout is not None and payout.proof["receipt"]["block"] == 151
+
+
+async def test_sparse_audit_disagreement_fails_closed(app, session_maker, monkeypatch):
+    from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range",
+        AsyncMock(return_value=_sparse_plan(100, end, ())),
+    )
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        # The full reader sees a reveal the plan called quiet.
+        return _observed(a, block, reveal=True)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    with pytest.raises(ValueError, match="audit disagreed"):
+        await collector._sweep_provider(substrate)
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert cursor.block == 100
+
+
+@pytest.mark.parametrize("plan_outcome", ["full_scan", "unavailable"])
+async def test_sparse_catchup_falls_back_to_the_per_block_scan(
+    app, session_maker, monkeypatch, plan_outcome
+):
+    from ditto.api_server import source_emission_collector as module
+
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    plan = (
+        AsyncMock(
+            return_value=_sparse_plan(
+                100, 100 + module._SWEEP_SPARSE_BATCH_BLOCKS, (), full_scan=True
+            )
+        )
+        if plan_outcome == "full_scan"
+        else AsyncMock(side_effect=RuntimeError("RPC call is unsafe"))
+    )
+    monkeypatch.setattr(module, "plan_source_emission_range", plan)
+    scanned = []
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        scanned.append(block)
+        return _observed(a, block)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    await collector._sweep_provider(substrate)
+
+    assert scanned == list(range(101, 101 + module._SWEEP_CATCHUP_BATCH_BLOCKS))
+
+
+async def test_sparse_plan_must_start_at_the_durable_cursor(
+    app, session_maker, monkeypatch
+):
+    from ditto.api_server import source_emission_collector as module
+    from ditto.chain.source_emission_verifier import SourceEmissionRangePlan
+
+    _, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    hashes = {b: _hash(b) for b in range(100, end + 1)}
+    hashes[100] = "0x" + "ee" * 32  # a different chain than the cursor's
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range",
+        AsyncMock(
+            return_value=SourceEmissionRangePlan(101, end, hashes, (), False, "runtime")
+        ),
+    )
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    with pytest.raises(ValueError, match="does not match the planned range"):
+        await collector._sweep_provider(substrate)

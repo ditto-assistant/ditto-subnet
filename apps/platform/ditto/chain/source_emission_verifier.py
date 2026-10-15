@@ -575,6 +575,204 @@ async def read_source_emission_block(
     )
 
 
+# SubtensorModule events that can move identities or subnets. The endpoint Keys
+# comparison already routes a net change through the full scan; these names only
+# add full reads (never skips), so matching more than needed is harmless.
+_STRUCTURAL_EVENT_MARKERS = ("Swap", "Register", "Dissolv", "NetworkRemoved")
+_FILTERED_WRITE_EVENTS = {
+    "WeightsSet": ("netuid", "uid"),
+    "TimelockedWeightsRevealed": ("netuid", "who"),
+    "IncentiveAlphaEmittedToMiners": ("netuid", "emissions"),
+}
+
+
+@dataclass(frozen=True)
+class SourceEmissionRangePlan:
+    """Which blocks of a finalized range need the full per-block reader.
+
+    ``hashes`` covers ``first_block - 1`` through ``last_block``. With
+    ``full_scan`` the caller reads every block as before; otherwise only
+    ``interesting`` blocks are read and every other block is provably quiet:
+    ``read_source_emission_block`` would return no payout, no vector update and
+    no reset for it, so committing it changes nothing but the cursor.
+    """
+
+    first_block: int
+    last_block: int
+    hashes: dict[int, str]
+    interesting: tuple[int, ...]
+    full_scan: bool
+    runtime_code_hash: str | None
+
+
+def _valid_uid_mapping(rows: list[tuple[Any, Any]]) -> dict[int, str] | None:
+    keys = dict(rows)
+    if (
+        not keys
+        or len(keys) != len(rows)
+        or set(keys) != set(range(len(keys)))
+        or len(set(keys.values())) != len(keys)
+    ):
+        return None
+    return keys
+
+
+def _quiet_block_events(events: Any, netuid: int) -> bool:
+    """True only when no event can change what the per-block reader returns."""
+    if not isinstance(events, list):
+        return False
+    for event in events:
+        if not isinstance(event, dict):
+            return False
+        module, name = event.get("module_id"), event.get("event_id")
+        if not isinstance(name, str):
+            return False
+        if module == "System" and name == "CodeUpdated":
+            return False
+        if module != "SubtensorModule":
+            continue
+        if name in _FILTERED_WRITE_EVENTS:
+            try:
+                subnet = _uint(_attrs(event, _FILTERED_WRITE_EVENTS[name])[0])
+            except ValueError:
+                # Let the full reader apply its own fail-closed validation.
+                return False
+            if subnet == netuid:
+                return False
+        elif any(marker in name for marker in _STRUCTURAL_EVENT_MARKERS):
+            return False
+    return True
+
+
+async def plan_source_emission_range(
+    substrate: Any,
+    *,
+    netuid: int,
+    first_block: int,
+    last_block: int,
+    concurrency: int = 8,
+) -> SourceEmissionRangePlan:
+    """Find the blocks of ``[first_block, last_block]`` that need a full read.
+
+    Endpoint invariants first: if the runtime code, the mode controls or the
+    ``Keys`` map differ between ``first_block - 1`` and ``last_block``, or are
+    not valid at either end, the plan requests the unchanged full scan. Equal
+    endpoints rule out a net change; a code change and revert inside the range
+    is caught by ``System.CodeUpdated`` and an identity flip-flop is caught by
+    the structural event markers. Each block's events and payout marker are
+    then read with one ``state_queryStorageAt`` call.
+    """
+    if not 0 < first_block <= last_block:
+        raise ValueError("invalid source-emission range")
+    numbers = list(range(first_block - 1, last_block + 1))
+    response = await substrate.rpc_request("chain_getBlockHash", [numbers])
+    raw_hashes = response.get("result") if isinstance(response, dict) else None
+    if (
+        not isinstance(raw_hashes, list)
+        or len(raw_hashes) != len(numbers)
+        or not all(isinstance(h, str) and h.startswith("0x") for h in raw_hashes)
+    ):
+        raise ValueError("missing historical block hashes")
+    hashes = dict(zip(numbers, raw_hashes, strict=True))
+    start, end = hashes[first_block - 1], hashes[last_block]
+
+    def full(code_hash: str | None = None) -> SourceEmissionRangePlan:
+        return SourceEmissionRangePlan(
+            first_block, last_block, hashes, (), True, code_hash
+        )
+
+    async def read(name: str, at: str) -> Any:
+        return _unwrap(
+            await substrate.query(
+                module="SubtensorModule",
+                storage_function=name,
+                params=[netuid],
+                block_hash=at,
+            )
+        )
+
+    async def keys_at(at: str) -> list[tuple[Any, Any]]:
+        rows = await substrate.query_map(
+            module="SubtensorModule",
+            storage_function="Keys",
+            params=[netuid],
+            block_hash=at,
+            fully_exhaust=True,
+        )
+        return [(_unwrap(k), _unwrap(v)) async for k, v in rows]
+
+    code = []
+    for at in (start, end):
+        result = await substrate.rpc_request(
+            "state_getStorageHash", ["0x3a636f6465", at]
+        )
+        code.append(result.get("result") if isinstance(result, dict) else None)
+    if code[0] != code[1] or code[0] not in AUDITED_RUNTIME_CODE_HASHES:
+        return full()
+    for at in (start, end):
+        if await read("MechanismCountCurrent", at) != 1:
+            return full(code[0])
+        if await read("CommitRevealWeightsEnabled", at) is not True:
+            return full(code[0])
+    start_keys, end_keys = await keys_at(start), await keys_at(end)
+    if (
+        _valid_uid_mapping(start_keys) is None
+        or _valid_uid_mapping(end_keys) is None
+        or dict(start_keys) != dict(end_keys)
+    ):
+        return full(code[0])
+
+    events_key = await substrate.create_storage_key(
+        "System", "Events", [], block_hash=end
+    )
+    step_key = await substrate.create_storage_key(
+        "SubtensorModule", "LastMechansimStepBlock", [netuid], block_hash=end
+    )
+    events_hex, step_hex = events_key.to_hex(), step_key.to_hex()
+    gate = asyncio.Semaphore(concurrency)
+
+    async def interesting(block: int) -> bool:
+        at = hashes[block]
+        async with gate:
+            result = await substrate.rpc_request(
+                "state_queryStorageAt", [[events_hex, step_hex], at]
+            )
+        sets = result.get("result") if isinstance(result, dict) else None
+        if not isinstance(sets, list) or len(sets) != 1:
+            raise ValueError("invalid storage read")
+        changes = dict(sets[0].get("changes") or [])
+        raw_events, raw_step = changes.get(events_hex), changes.get(step_hex)
+        if not isinstance(raw_events, str) or not isinstance(raw_step, str):
+            # A missing payout marker or events value is not provably quiet.
+            return True
+        step = _unwrap(
+            await substrate.decode_scale(
+                step_key.value_scale_type, bytes.fromhex(raw_step[2:]), block_hash=at
+            )
+        )
+        if _uint(step) == block:
+            return True
+        events = _unwrap(
+            await substrate.decode_scale(
+                events_key.value_scale_type,
+                bytes.fromhex(raw_events[2:]),
+                block_hash=at,
+            )
+        )
+        return not _quiet_block_events(events, netuid)
+
+    blocks = list(range(first_block, last_block + 1))
+    flags = await asyncio.gather(*(interesting(block) for block in blocks))
+    return SourceEmissionRangePlan(
+        first_block,
+        last_block,
+        hashes,
+        tuple(block for block, flag in zip(blocks, flags, strict=True) if flag),
+        False,
+        code[0],
+    )
+
+
 async def verify_finalized_weight_commit(substrate: Any, receipt: Any) -> None:
     """Verify direct CR commit inclusion against canonical finalized chain data.
 

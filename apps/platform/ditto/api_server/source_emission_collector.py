@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from contextlib import suppress
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -32,6 +33,7 @@ from ditto.chain.source_emission_verifier import (
     VotingStake,
     WinnerBacking,
     evaluate_winner_payout,
+    plan_source_emission_range,
     read_source_emission_block,
     vector_digest,
 )
@@ -48,6 +50,7 @@ from ditto.db.queries.source_emission_collector import (
     advance_source_emission_cursor,
     list_source_emission_vector_bindings,
     record_source_emission_payout,
+    skip_quiet_source_emission_blocks,
     upsert_source_emission_vector_binding,
 )
 from ditto.db.queries.weight_receipts import get_finalized_weight_receipts
@@ -67,6 +70,11 @@ _SWEEP_CATCHUP_MIN_BACKLOG = 1000
 # Each reopened payout re-reads a full historical receipt. Bound that work so a
 # rescan cannot consume the sweep deadline that also covers the block scan.
 _RECEIPT_REFETCH_LIMIT = 5
+# Sparse replay reads one storage call per quiet block and the full reader only
+# for the few blocks that can matter, so a catch-up range can span two tempos.
+_SWEEP_SPARSE_BATCH_BLOCKS = 720
+# Quiet blocks re-read in full per sparse range; any disagreement fails closed.
+_SPARSE_AUDIT_SAMPLES = 2
 
 
 def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
@@ -230,36 +238,16 @@ class SourceEmissionCollector:
         batch = _SWEEP_CATCHUP_BATCH_BLOCKS if catchup else _SWEEP_BATCH_BLOCKS
         reads = SourceEmissionReadCache()
         try:
-            for block in range(current + 1, min(finalized, current + batch) + 1):
-                observed = await read_source_emission_block(
-                    substrate,
-                    netuid=self.netuid,
-                    block=block,
-                    finalized_block=finalized,
-                    cache=reads,
-                )
-                payout = None
-                payout_blocked_reason = None
-                if (
-                    observed.is_payout
-                    and (not observed.updates or observed.payout_initialization_reveals)
-                    and not observed.reset_reason
-                ):
-                    from ditto.chain.errors import ChainEmissionReceiptUnavailable
-
-                    try:
-                        payout = await self._confirmed_receipt(
-                            substrate,
-                            block=block,
-                            allow_initialization_reveals=observed.payout_initialization_reveals,
-                        )
-                    except ChainEmissionReceiptUnavailable as error:
-                        payout_blocked_reason = (
-                            f"unverifiable_payout: {str(error)[:200]}"
-                        )
-                await self.process_block(
-                    observed, payout, payout_blocked_reason=payout_blocked_reason
-                )
+            replayed = catchup and await self._sweep_sparse(
+                substrate,
+                current=current,
+                end=min(finalized, current + _SWEEP_SPARSE_BATCH_BLOCKS),
+                finalized=finalized,
+                reads=reads,
+            )
+            if not replayed:
+                for block in range(current + 1, min(finalized, current + batch) + 1):
+                    await self._scan_block(substrate, block, finalized, reads)
         except Exception:
             # A failed scan must not starve payout resolution: the resolver
             # cycles pending rows by last_checked_at with its own archive
@@ -267,6 +255,128 @@ class SourceEmissionCollector:
             await self.resolve_pending_payouts(substrate)
             raise
         await self.resolve_pending_payouts(substrate)
+
+    async def _sweep_sparse(
+        self,
+        substrate: Any,
+        *,
+        current: int,
+        end: int,
+        finalized: int,
+        reads: SourceEmissionReadCache,
+    ) -> bool:
+        """Replay ``(current, end]`` reading only blocks that can matter.
+
+        Returns False when no range plan is available (unsupported provider,
+        transient read failure, or a structural change inside the range); the
+        caller then runs the unchanged per-block scan. Quiet blocks commit as
+        one cursor skip; every other block goes through ``_scan_block``.
+        """
+        if end <= current:
+            return False
+        try:
+            plan = await plan_source_emission_range(
+                substrate,
+                netuid=self.netuid,
+                first_block=current + 1,
+                last_block=end,
+            )
+        except Exception as error:
+            chain = getattr(self.state, "chain", None)
+            logger.warning(
+                "source emission sparse plan unavailable; scanning per block: %s",
+                chain._safe_rpc_error(error)[:200]
+                if chain is not None
+                else type(error).__name__,
+            )
+            return False
+        if plan.full_scan:
+            return False
+        async with self.sessions() as session:
+            cursor = await session.get(SourceEmissionCollectorCursor, self.netuid)
+        if (
+            cursor is None
+            or cursor.block != current
+            or cursor.block_hash != plan.hashes[current]
+        ):
+            raise ValueError("durable cursor does not match the planned range")
+        interesting = set(plan.interesting)
+        quiet = [b for b in range(current + 1, end + 1) if b not in interesting]
+        # Continuous self-audit: the full reader must agree a sampled skip is quiet.
+        for block in random.sample(quiet, min(_SPARSE_AUDIT_SAMPLES, len(quiet))):
+            observed = await read_source_emission_block(
+                substrate,
+                netuid=self.netuid,
+                block=block,
+                finalized_block=finalized,
+                cache=SourceEmissionReadCache(),
+            )
+            if (
+                observed.is_payout
+                or observed.updates
+                or observed.reset_reason
+                or observed.block_hash != plan.hashes[block]
+            ):
+                raise ValueError(f"sparse replay audit disagreed at block {block}")
+        cursor_block, cursor_hash = current, plan.hashes[current]
+        stops: list[int | None] = [*sorted(interesting), None]
+        for stop in stops:
+            target = end if stop is None else stop - 1
+            if target > cursor_block:
+                async with self.sessions() as session, session.begin():
+                    if not await skip_quiet_source_emission_blocks(
+                        session,
+                        netuid=self.netuid,
+                        block=target,
+                        block_hash=plan.hashes[target],
+                        expected_block=cursor_block,
+                        expected_block_hash=cursor_hash,
+                        runtime_code_hash=plan.runtime_code_hash,
+                        now=datetime.now(UTC),
+                    ):
+                        raise ValueError("durable cursor moved during sparse replay")
+                cursor_block, cursor_hash = target, plan.hashes[target]
+            if stop is None:
+                break
+            await self._scan_block(substrate, stop, finalized, reads)
+            cursor_block, cursor_hash = stop, plan.hashes[stop]
+        return True
+
+    async def _scan_block(
+        self,
+        substrate: Any,
+        block: int,
+        finalized: int,
+        reads: SourceEmissionReadCache,
+    ) -> None:
+        """Read one finalized block in full and commit it to the cursor."""
+        observed = await read_source_emission_block(
+            substrate,
+            netuid=self.netuid,
+            block=block,
+            finalized_block=finalized,
+            cache=reads,
+        )
+        payout = None
+        payout_blocked_reason = None
+        if (
+            observed.is_payout
+            and (not observed.updates or observed.payout_initialization_reveals)
+            and not observed.reset_reason
+        ):
+            from ditto.chain.errors import ChainEmissionReceiptUnavailable
+
+            try:
+                payout = await self._confirmed_receipt(
+                    substrate,
+                    block=block,
+                    allow_initialization_reveals=observed.payout_initialization_reveals,
+                )
+            except ChainEmissionReceiptUnavailable as error:
+                payout_blocked_reason = f"unverifiable_payout: {str(error)[:200]}"
+        await self.process_block(
+            observed, payout, payout_blocked_reason=payout_blocked_reason
+        )
 
     async def _confirmed_receipt(
         self, substrate: Any, *, block: int, allow_initialization_reveals: bool
