@@ -226,6 +226,51 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
             )
 
 
+async def test_upload_while_the_gate_is_off_binds_nothing(
+    app, client, session_maker, object_storage
+):
+    """A signed miner's upload stays unbound, so it remains deletable."""
+    del object_storage
+    setup(app, session_maker)
+    app.state.session_maker = session_maker
+    app.state.embedder = SimpleNamespace(embed=AsyncMock(return_value=None))
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    owner = bittensor.Keypair.create_from_uri("//Bob").ss58_address
+    version = await publish(client)
+    receipt = await client.post("/api/v1/cla/sign", json=signed(alice, version))
+    assert receipt.status_code == 200, receipt.text
+    block_hash = "0x" + "41" * 32
+    verifier = SimpleNamespace(
+        verify_payment=AsyncMock(
+            return_value=VerifiedPayment(
+                block_hash=block_hash,
+                extrinsic_index=0,
+                miner_hotkey=alice.ss58_address,
+                miner_coldkey=owner,
+                amount_rao=40_000_000,
+                tao_usd_rate=Decimal("400"),
+                dest_address=app.state.config.upload_payment_address,
+                block_timestamp=datetime.now(UTC),
+            )
+        )
+    )
+    app.dependency_overrides[get_payment_verifier] = lambda: verifier
+    async with create_storage_client(parse_storage_config_from_env()) as storage:
+
+        async def get_storage():
+            return storage
+
+        app.dependency_overrides[get_storage_client] = get_storage
+        data, files = _build_form(keypair=alice, block_hash=block_hash)
+        uploaded = await client.post("/api/v1/upload/agent", data=data, files=files)
+    assert uploaded.status_code == 200, uploaded.text
+    async with session_maker() as session:
+        assert await session.get(Agent, UUID(uploaded.json()["agent_id"])) is not None
+        assert (
+            await session.scalar(select(func.count()).select_from(AgentClaBinding)) == 0
+        )
+
+
 async def test_policy_then_coldkey_lock_order_survives_a_queued_policy_writer(
     app, client, session_maker, object_storage, monkeypatch
 ):

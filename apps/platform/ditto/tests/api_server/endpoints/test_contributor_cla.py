@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 import bittensor
 import httpx
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from ditto.api_models.contributor_identity import cla_message
@@ -1016,3 +1016,40 @@ async def test_cla_audit_rows_name_the_header_actor_not_the_body(
     async with session_maker() as session:
         actors = set(await session.scalars(text("SELECT actor FROM cla_versions")))
     assert actors == {"operator-fixture"}
+
+
+async def test_off_gate_reads_only_the_policy_and_offers_nothing_to_bind(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    version = await publish(client)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    receipt = await client.post("/api/v1/cla/sign", json=signed(alice, version))
+    assert receipt.status_code == 200, receipt.text
+    engine = session_maker.kw["bind"].sync_engine
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_args) -> None:
+        if "cla_" in statement:
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        async with session_maker() as session:
+            off = await evaluate_cla_gate(
+                session, netuid=118, hotkey=alice.ss58_address
+            )
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    # Even a signed miner gets no signature to bind while the gate is off.
+    assert (off.mode, off.allowed, off.signature_id, off.required_version) == (
+        "off",
+        True,
+        None,
+        None,
+    )
+    assert len(statements) == 1 and "cla_settings_revisions" in statements[0]
+    await policy(client, "shadow")
+    async with session_maker() as session:
+        shadow = await evaluate_cla_gate(session, netuid=118, hotkey=alice.ss58_address)
+    assert shadow.signature_id == UUID(receipt.json()["signature_id"])

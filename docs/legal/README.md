@@ -44,8 +44,8 @@ again when committing a new artifact. Exact retries of an already accepted
 artifact remain idempotent. Existing scored agents retain their lifecycle and
 scores; no consent is synthesized for old submissions.
 
-New artifact rows are linked to their exact consent receipt through
-`agent_cla_bindings`. This binds the stored artifact SHA and hotkey to the
+While the gate is shadow or enforce, new artifact rows are linked to their
+exact consent receipt through `agent_cla_bindings`. This binds the stored artifact SHA and hotkey to the
 receipt without changing old agent rows. Model/base-licence validation is a
 separate artifact-validation policy, not a conclusion drawn from a signature.
 
@@ -58,12 +58,13 @@ accepted-artifact retries add none.
 
 ## Activation and deploy order
 
-`off` means nothing is refused or counted, not that upload admission is
-untouched. In every mode, Python and the Go relay read the policy in
-`/upload/check`, and evaluate it under a shared `cla-policy` advisory lock when
-reserving a payment; Python evaluates it again when committing the artifact. A miner who has already signed the current version also gets an
-`agent_cla_bindings` row for each new artifact, recording consent provenance
-before enforcement starts.
+`off` is inert. Python and the Go relay still read the policy in
+`/upload/check`, under a shared `cla-policy` advisory lock when reserving a
+payment, and Python reads it again when committing the artifact. With the gate
+off, each of those is a single policy read: no agreement or receipt lookup,
+nothing refused or counted, and no `agent_cla_bindings` row, so uploads made
+before activation stay deletable even for miners who have already signed.
+Bindings are recorded only once the gate is shadow or enforce.
 
 The gate fails closed: without the migrated tables and the seeded policy
 revision, every non-recovery upload check returns 500. Apply the migration

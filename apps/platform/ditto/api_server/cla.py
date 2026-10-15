@@ -39,18 +39,28 @@ async def evaluate_cla_gate(
     session: AsyncSession, *, netuid: int, hotkey: str
 ) -> ClaGateDecision:
     settings = await current_cla_settings(session)
+    if settings.mode not in ("off", "shadow", "enforce"):
+        raise RuntimeError("invalid CLA mode")
+    if settings.mode == "off":
+        # Off is inert: one policy read, no agreement or receipt lookups, and
+        # no signature for an upload to bind before anyone enables the gate.
+        return ClaGateDecision(
+            mode="off",
+            allowed=True,
+            signature_id=None,
+            required_version=None,
+            message="Uploads are accepted while the CLA gate is off.",
+        )
     version = await current_cla_version(session)
     signature = await current_cla_signature(
         session, netuid=netuid, hotkey=hotkey, version=version
     )
-    if settings.mode not in ("off", "shadow", "enforce"):
-        raise RuntimeError("invalid CLA mode")
-    if settings.mode != "enforce":
+    if settings.mode == "shadow":
         message = (
             f"Contributor agreement v{version.version} is published. "
             if version
             else "No effective contributor agreement is published. "
-        ) + f"Uploads are accepted while the CLA gate is {settings.mode}."
+        ) + "Uploads are accepted while the CLA gate is shadow."
     elif signature is not None:
         message = "The current contributor agreement is signed."
     elif version is not None:

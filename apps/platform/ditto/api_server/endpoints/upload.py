@@ -873,6 +873,8 @@ async def upload_agent(
                 code_embedding=code_embedding,
                 code_embed_model=code_embed_model,
             )
+            # Only shadow and enforce return a signature, so an upload while
+            # the gate is off binds nothing and stays deletable.
             if final_cla.signature_id is not None:
                 session.add(
                     AgentClaBinding(
