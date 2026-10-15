@@ -33,8 +33,12 @@ def admin_actor(
     activity also records, so both audit trails name the same operator.
     """
     actor = (x_admin_actor or "").strip()
-    if not 1 <= len(actor) <= 120 or not actor.isprintable():
+    if not actor:
         raise HTTPException(422, "X-Admin-Actor is required")
+    if len(actor) > 120 or not actor.isprintable():
+        raise HTTPException(
+            422, "X-Admin-Actor must be at most 120 printable characters"
+        )
     return actor
 
 

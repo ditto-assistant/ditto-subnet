@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from fastapi import HTTPException
 
 from ditto.api_models.contributor_identity import cla_message, github_link_message
 from ditto.api_models.http_errors import HttpErrorEnvelope
@@ -15,6 +16,7 @@ from ditto.api_server.config import (
     check_github_link_config,
     parse_github_link_config_from_env,
 )
+from ditto.api_server.contributor_identity import admin_actor
 from ditto.api_server.github_link import GithubLinkConfig
 
 
@@ -159,3 +161,19 @@ def test_oauth_defaults_off_and_requires_secret_when_enabled(monkeypatch):
             redirect_url="http://localhost/api/v1/miner-auth/github/callback",
         )
     )
+
+
+@pytest.mark.parametrize(
+    "header,detail",
+    [
+        (None, "X-Admin-Actor is required"),
+        ("   ", "X-Admin-Actor is required"),
+        ("a" * 121, "X-Admin-Actor must be at most 120 printable characters"),
+        ("op\terator", "X-Admin-Actor must be at most 120 printable characters"),
+    ],
+)
+def test_admin_actor_names_a_missing_or_invalid_header(header, detail):
+    with pytest.raises(HTTPException) as rejected:
+        admin_actor(header)
+    assert (rejected.value.status_code, rejected.value.detail) == (422, detail)
+    assert admin_actor("  operator@example.com ") == "operator@example.com"
