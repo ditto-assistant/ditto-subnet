@@ -1029,7 +1029,13 @@ class ValidatorWorker:
         # counter that accumulated across sweeps would report every failure the
         # process had ever seen against this sweep's failure total.
         self._sweep_failures_with_log_tail = 0
-        if drain_requested is not None:
+        # A sweep called without an event still honours the one a previous
+        # sweep (or ``run_forever``) remembered: the heartbeat already reads
+        # ``self._drain_requested``, so the slot loop must gate on the same
+        # event or it would advertise ``draining`` while claiming new work.
+        if drain_requested is None:
+            drain_requested = self._drain_requested
+        else:
             self._drain_requested = drain_requested
         self._admission = (
             "draining"

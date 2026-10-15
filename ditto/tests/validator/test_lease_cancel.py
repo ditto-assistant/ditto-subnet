@@ -622,3 +622,23 @@ class TestDrainAdvertisesImmediately:
         capacity = heartbeat.requests[-1].benchmark_capacity
         assert capacity.admission == "draining"
         assert capacity.healthy_slots == []
+
+    async def test_a_remembered_drain_blocks_new_work_in_a_later_sweep(
+        self,
+    ) -> None:
+        """A sweep called without an event gates on the one it remembered.
+
+        The heartbeat reads the remembered event, so the slot loop must too;
+        otherwise the validator says ``draining`` while still claiming work.
+        """
+        heartbeat = _RosterHeartbeat()
+        scorer = AsyncMock()
+        worker, _, dittobench = _worker_with_scorer(scorer, heartbeat=heartbeat.mock)
+        drain = asyncio.Event()
+        drain.set()
+        worker._drain_requested = drain
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=20)
+
+        dittobench.score_tarball.assert_not_awaited()
+        assert heartbeat.requests[-1].benchmark_capacity.admission == "draining"
