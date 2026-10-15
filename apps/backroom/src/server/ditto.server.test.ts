@@ -133,6 +133,25 @@ describe('platformAdminRequest', () => {
     expect((error as PlatformAdminError).failure).toBe(failure)
   })
 
+  it.each([
+    [409, 'request', new TypeError('terminated')],
+    [403, 'auth', new TypeError('terminated')],
+    [502, 'server', new DOMException('The operation was aborted due to timeout', 'TimeoutError')],
+  ] as const)('keeps a %i status when its body cannot be read', async (status, failure, cause) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    const body = new ReadableStream({ start(controller) { controller.error(cause) } })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status })))
+
+    const error = await platformAdminRequest('/api/v1/admin/cla/settings', {
+      method: 'POST',
+      body: { mode: 'shadow' },
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(PlatformAdminError)
+    expect((error as PlatformAdminError).failure).toBe(failure)
+    expect((error as PlatformAdminError).status).toBe(status)
+  })
+
   it('retries a GET whose response body times out', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
     const stalled = new ReadableStream({
