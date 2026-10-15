@@ -6106,6 +6106,50 @@ describe('verified contributors and CLA rollout', () => {
     expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
   })
 
+  describe('when the publish outcome is not a plain success', () => {
+    const publishInput = { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test-only publication transport', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) }
+    const envelope = (message: string, status: number) => Response.json({ error_code: 3000, message, request_id: null }, { status })
+
+    it('returns the committed version after a timeout or a duplicate retry', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json(claVersionFixture))
+        .mockResolvedValueOnce(envelope('CLA versions must increase and effective dates must not move backwards', 409))
+        .mockResolvedValueOnce(Response.json(claVersionFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).resolves.toEqual(claVersionFixture)
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).resolves.toEqual(claVersionFixture)
+      expect(fetchMock.mock.calls[1][0]).toMatch(/\/api\/v1\/public\/cla\/versions\/1$/)
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+    })
+
+    it('reports a possible commit that is not visible yet', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('upstream exploded', 502))
+        .mockResolvedValueOnce(envelope('CLA version is not published', 404)))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput))
+        .rejects.toThrow(/may have committed \(upstream exploded\), but it is not visible yet\. Retry publish_cla_version with the same input/)
+    })
+
+    it('keeps a conflicting 409 when the version holds different text', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('CLA versions must increase and effective dates must not move backwards', 409))
+        .mockResolvedValueOnce(Response.json({ ...claVersionFixture, sha256: 'cd'.repeat(32) })))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).rejects.toThrow('CLA versions must increase')
+    })
+
+    it.each([
+      [envelope('CLA policy is busy with in-flight uploads; retry shortly', 503), 'Nothing was applied: retry with the same input.'],
+      [envelope('CLA text does not match the supplied digest or exceeds the size limit', 400), 'does not match the supplied digest'],
+    ])('fails without a read-back when nothing was applied (%#)', async (response, message) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockResolvedValueOnce(response)
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).rejects.toThrow(message)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it.each(['tomorrow', '2026-10-14', '2026-10-14T00:00:00'])('rejects effectiveAt %s before publishing', async (effectiveAt) => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi.fn()

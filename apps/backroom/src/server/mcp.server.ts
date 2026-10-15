@@ -1695,7 +1695,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('publish_cla_version', {
     title: 'Publish approved pinned CLA text',
-    description: 'Publish the exact UTF-8 bytes of maintainer-approved docs/legal/CLA-vN.md with its SHA-256, version, effective date and operator reason. Supply confirmation PUBLISH CLA {version} {sha256}. Text and digest are immutable; versions and effective dates advance monotonically. Never publish test fixtures or draft legal wording. This only publishes the registry entry and does not change rollout mode. Requires backroom:write.',
+    description: 'Publish the exact UTF-8 bytes of maintainer-approved docs/legal/CLA-vN.md with its SHA-256, version, effective date and operator reason. Supply confirmation PUBLISH CLA {version} {sha256}. Text and digest are immutable; versions and effective dates advance monotonically. Never publish test fixtures or draft legal wording. This only publishes the registry entry and does not change rollout mode. After a timeout, 5xx or lost connection, Backroom reads the version back and returns it if it committed; otherwise retry with the same input, which returns an already committed publication instead of failing. Requires backroom:write.',
     // The service still parses effectiveAt strictly; the catalog needs only its format.
     inputSchema: claPublishInputSchema.extend({ effectiveAt: z.string().meta({ format: 'date-time' }) }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => publishClaVersion(props.session.email, input)))

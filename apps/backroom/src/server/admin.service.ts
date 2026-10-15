@@ -4215,5 +4215,40 @@ export async function publishClaVersion(actor: string, rawInput: unknown) {
   type Body = PlatformOperations['publish_api_v1_admin_cla_versions_post']['requestBody']['content']['application/json']
   const body = { version: input.version, sha256: input.sha256, text: input.text, effective_at: input.effectiveAt,
     reason: input.reason, confirmation: input.confirmation } satisfies Body
-  return claVersionSchema.parse(await platformAdminRequest('/api/v1/admin/cla/versions', { method: 'POST', actor, body }))
+  try {
+    return claVersionSchema.parse(await platformAdminRequest('/api/v1/admin/cla/versions', { method: 'POST', actor, body }))
+  } catch (error) {
+    if (!(error instanceof PlatformAdminError) || error.failure === 'auth') throw error
+    if (error.status === 503 && error.message.startsWith(CLA_POLICY_BUSY_MESSAGE)) {
+      throw new Error(`${error.message}. Nothing was applied: retry with the same input.`)
+    }
+    // A 409 can be this same publication committed by an earlier attempt; a
+    // timeout, 5xx or transport failure may follow the commit. Any other 4xx
+    // applied nothing. Versions are immutable, so a matching row is this write.
+    if (error.failure === 'request' && error.status !== 409) throw error
+    let existing: z.infer<typeof claVersionSchema> | null | undefined
+    try {
+      existing = await readPublishedClaVersion(input.version)
+    } catch {
+      existing = undefined
+    }
+    if (existing && existing.sha256 === input.sha256 && Date.parse(existing.effective_at) === Date.parse(input.effectiveAt)) {
+      return existing
+    }
+    if (error.failure === 'request') throw error
+    throw new Error(
+      `The CLA version ${input.version} publish may have committed (${error.message}), but ` +
+        `${existing === undefined ? 'reading it back failed' : 'it is not visible yet'}. ` +
+        'Retry publish_cla_version with the same input: an already committed publication is returned, not duplicated.',
+    )
+  }
+}
+
+async function readPublishedClaVersion(version: number) {
+  try {
+    return claVersionSchema.parse(await platformAdminRequest(`/api/v1/public/cla/versions/${version}`))
+  } catch (error) {
+    if (error instanceof PlatformAdminError && error.status === 404) return null
+    throw error
+  }
 }

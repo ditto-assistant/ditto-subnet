@@ -549,6 +549,15 @@ a revision conflict, still fails: nothing was applied. So does Platform's 503
 "CLA policy is busy with in-flight uploads", which is raised before the write;
 retry it with the same `expectedRevision`.
 
+`publish_cla_version` cannot leave an operator guessing either. After a
+timeout, 5xx or lost connection, Backroom reads
+`/api/v1/public/cla/versions/{version}` and returns the version if the same
+digest and effective date are already published. If the version is not
+visible yet, the error says the publish may have committed: retry with the
+same input. A retry that Platform rejects with 409 because the identical
+version is already published returns that version instead of failing. A 409
+for different text, a 400 or the policy busy 503 applies nothing.
+
 When enforcement is on, new versions require at least 24 hours notice.
 `get_cla_policy` returns `minimum_enforced_notice_seconds` and
 `earliest_enforced_effective_at`; the publication transaction rechecks that
