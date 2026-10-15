@@ -42,7 +42,7 @@ from ditto.api_server.contributor_identity import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.api_server.endpoints.miner_github_link import no_store
+from ditto.api_server.no_store import no_store
 from ditto.chain import ChainError
 from ditto.db.models import (
     Agent,

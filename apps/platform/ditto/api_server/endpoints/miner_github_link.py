@@ -54,6 +54,7 @@ from ditto.api_server.github_link import (
     GithubLinkClient,
     GithubLinkRejected,
 )
+from ditto.api_server.no_store import no_store
 from ditto.chain import ChainError
 from ditto.db.models import (
     MinerGithubActionNonce,
@@ -74,10 +75,6 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 # Private handlers declare Authorization for OpenAPI; resolve_miner_session
 # validates that same Request header inside their transaction.
-
-
-def no_store(response: Response) -> None:
-    response.headers["Cache-Control"] = "no-store"
 
 
 router = APIRouter(tags=["contributor-github"], dependencies=[Depends(no_store)])

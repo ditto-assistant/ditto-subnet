@@ -1822,3 +1822,18 @@ async def test_attempt_status_rejects_a_malformed_attempt_id(
     )
     assert response.status_code == 422, response.text
     assert HttpErrorEnvelope.model_validate(response.json()).error_code != 3000
+
+
+async def test_private_link_and_cla_errors_are_never_cached(app, client, session_maker):
+    setup(app, session_maker)
+    token = await _sign_in(client, bittensor.Keypair.create_from_uri("//Alice"))
+    auth = {"authorization": f"Bearer {token}"}
+    for path, headers, status in (
+        (f"/api/v1/me/github-link/attempts/{uuid4()}", auth, 404),
+        ("/api/v1/me/github-link/attempts/not-a-uuid", auth, 422),
+        (f"/api/v1/me/github-link/attempts/{uuid4()}", {}, 401),
+        ("/api/v1/public/cla/versions/9", {}, 404),
+    ):
+        response = await client.get(path, headers=headers)
+        assert response.status_code == status, (path, response.text)
+        assert response.headers.get("cache-control") == "no-store", path
