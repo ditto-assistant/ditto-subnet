@@ -12447,6 +12447,22 @@ class TestPublicArtifactRelease:
         app.dependency_overrides[get_storage_client] = _storage
 
         # A ban does not withhold a king that earned verified winner emissions.
+        # A banned king that never reached a quorum is terminal, not "retry later".
+        unscored_banned_king = await _seed_k3(
+            session_maker,
+            miner=_MINER_B,
+            composites=[0.7],
+            status=AgentStatus.BANNED,
+        )
+        await _crown(
+            session_maker,
+            agent_id=unscored_banned_king,
+            first_crowned_at=now - timedelta(hours=49),
+        )
+        terminal = await client.get(
+            f"/api/v1/public/agent/{unscored_banned_king}/artifact"
+        )
+        assert terminal.status_code == 404
         released = await client.get(f"/api/v1/public/agent/{banned_king}/artifact")
         assert released.status_code == 200
         for withheld in (rejected_king, banned_commoner):

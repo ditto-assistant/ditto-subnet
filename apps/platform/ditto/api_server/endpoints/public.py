@@ -8583,6 +8583,10 @@ async def agent_artifact(
         king_reveal=king_reveal,
         now=now,
     )
+    if release.status == "unavailable":
+        # Terminal (e.g. a banned submission that never reached a quorum): a
+        # 425 would invite retries that can never succeed.
+        raise HTTPException(status_code=404, detail="source is not publicly available")
     if release.status != "available" or score_quorum is None:
         detail = "source is awaiting a three-validator score quorum"
         if king_reveal.emission_confirmed_at is None:
