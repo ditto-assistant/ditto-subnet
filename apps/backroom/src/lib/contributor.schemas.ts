@@ -5,12 +5,14 @@ const signature = z.string().regex(/^[0-9a-fA-F]{128}$/)
 const keyKind = z.enum(['hotkey', 'coldkey'])
 export const claModeSchema = z.enum(['off', 'shadow', 'enforce'])
 export const contributorHotkeyInputSchema = z.object({ hotkey: z.string().min(1).max(128) })
-// Platform stores int64, but an id above 2^53 cannot round-trip a JS number.
-export const githubAccountInputSchema = z.object({ githubUserId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })
+// Platform stores int64, but an id above 2^53 cannot round-trip a JS number:
+// JSON.parse rounds it silently. Inputs and responses share this one bound.
+const githubUserId = z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
+export const githubAccountInputSchema = z.object({ githubUserId })
 
 const githubLinkSchema = z.object({
   link_id: z.string().uuid(), netuid: z.number().int(), hotkey: z.string(), coldkey: z.string(),
-  github_user_id: z.number().int().positive(), github_login: z.string(),
+  github_user_id: githubUserId, github_login: z.string(),
   link_attempt_id: z.string().uuid(), key_kind: keyKind, signer: z.string(), signature,
   nonce: z.string().uuid(), issued_at: z.string(), linked_at: z.string(), revoked_at: z.string().nullable(),
   owner_block: z.number().int(), owner_block_hash: z.string(),
