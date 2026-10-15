@@ -24,7 +24,13 @@ from ditto.api_server.dependencies import (
 )
 from ditto.chain import ChainConnectionError, ExtrinsicNotFoundError
 from ditto.chain.models import BlockInfo
-from ditto.db.models import Agent, AgentStatus, ClaShadowUpload, ClaSignature
+from ditto.db.models import (
+    Agent,
+    AgentStatus,
+    ClaShadowUpload,
+    ClaSignature,
+    ClaVersion,
+)
 from ditto.db.queries.contributor_identity import current_cla_version
 from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
     _HEADERS as _ADMIN_TOKEN,
@@ -813,6 +819,46 @@ async def test_enforced_cla_publication_requires_one_day_notice(
         assert "24 hours notice" in result.text
     current = (await client.get("/api/v1/public/cla")).json()
     assert current["current"]["version"] == 1
+
+
+async def test_publication_rejects_a_naive_effective_date(app, client, session_maker):
+    setup(app, session_maker)
+    await publish(client)
+    await elapse_cla_notice(session_maker)
+    await policy(client, "enforce")
+    content = FIXTURE.format(version=2)
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    # Both the notice and ordering checks compare against aware datetimes, so a
+    # naive date must fail validation before either comparison runs.
+    result = await client.post(
+        "/api/v1/admin/cla/versions",
+        headers=_HEADERS,
+        json={
+            "version": 2,
+            "text": content,
+            "sha256": digest,
+            "effective_at": (datetime.now() + timedelta(days=2)).isoformat(),
+            "reason": "test a naive effective date",
+            "confirmation": f"PUBLISH CLA 2 {digest}",
+        },
+    )
+    assert result.status_code == 422, result.text
+    async with session_maker() as session:
+        assert (await current_cla_version(session, now=datetime.now(UTC))).version == 1
+        assert await session.scalar(select(func.count()).select_from(ClaVersion)) == 1
+
+
+async def test_signing_rejects_an_out_of_range_version(app, client, session_maker):
+    setup(app, session_maker)
+    version = await publish(client)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    body = signed(alice, {**version, "version": 2147483648})
+    result = await client.post("/api/v1/cla/sign", json=body)
+    # A correctly signed version above int4 must never reach the database.
+    assert result.status_code == 422, result.text
+    assert HttpErrorEnvelope.model_validate(result.json()).error_code != 3000
+    async with session_maker() as session:
+        assert await session.scalar(select(func.count()).select_from(ClaSignature)) == 0
 
 
 async def enforce_attempt(client):

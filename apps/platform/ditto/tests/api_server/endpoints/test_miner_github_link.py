@@ -24,6 +24,7 @@ from ditto.api_models.contributor_identity import (
     github_link_message,
     github_unlink_message,
 )
+from ditto.api_models.http_errors import HttpErrorEnvelope
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.github_link import (
     ATTEMPT_TTL_SECONDS,
@@ -1769,3 +1770,16 @@ async def test_start_prunes_abandoned_attempts_without_touching_links(
     assert scrubbed.status == "expired"
     assert scrubbed.code_verifier is None and scrubbed.accept_token_hash is None
     assert rows[live.attempt_id].code_verifier == "live-verifier"
+
+
+async def test_attempt_status_rejects_a_malformed_attempt_id(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    token = await _sign_in(client, bittensor.Keypair.create_from_uri("//Alice"))
+    response = await client.get(
+        "/api/v1/me/github-link/attempts/not-a-uuid",
+        headers={"authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 422, response.text
+    assert HttpErrorEnvelope.model_validate(response.json()).error_code != 3000
