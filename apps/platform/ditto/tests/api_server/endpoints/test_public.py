@@ -54,6 +54,7 @@ from ditto.api_models.screener import (
     SourceReviewFinding,
 )
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_models.stack_health import (
     ComponentHealthState,
     ValidatorComponentHealth,
@@ -71,7 +72,10 @@ from ditto.api_server.dependencies import (
     get_storage_client,
 )
 from ditto.api_server.endpoints import public as public_endpoint
-from ditto.api_server.endpoints.public import _fleet_classification
+from ditto.api_server.endpoints.public import (
+    _fleet_classification,
+    _public_artifact_release,
+)
 from ditto.api_server.koth import TOP5_MAX_CONFIRMATION_SEEDS
 from ditto.api_server.storage import ObjectDownloadFailedError
 from ditto.api_server.validator_names import ValidatorNamesSnapshot
@@ -111,6 +115,7 @@ from ditto.db.models import (
     ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
+from ditto.db.queries.artifact_release_settings import ArtifactReleasePolicy
 from ditto.db.queries.audit import (
     EVENT_SCORE,
     GENESIS_HASH,
@@ -12448,6 +12453,25 @@ class TestPublicArtifactRelease:
             response = await client.get(f"/api/v1/public/agent/{withheld}/artifact")
             assert response.status_code == 404
         storage.presigned_get_url.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        ("status", "expected"),
+        [
+            (AgentStatus.BANNED, "unavailable"),
+            (AgentStatus.SCORED, "awaiting_quorum"),
+        ],
+    )
+    def test_banned_submission_without_quorum_is_not_awaiting_one(
+        self, status: AgentStatus, expected: str
+    ) -> None:
+        release = _public_artifact_release(
+            status=status,
+            score_quorum=None,
+            policy=ArtifactReleasePolicy(SourceDisclosure.PUBLIC, 48),
+            king_reveal=None,
+            now=datetime.now(UTC),
+        )
+        assert release.status == expected
 
     async def test_king_source_is_embargoed_until_the_window_elapses(
         self,

@@ -1178,7 +1178,10 @@ def _public_artifact_release(
     if status in (AgentStatus.ATH_PENDING_REVIEW, AgentStatus.QUARANTINED):
         release_status = "under_review"
     elif score_quorum is None:
-        release_status = "awaiting_quorum"
+        # A banned submission never reaches a quorum; do not imply it is waiting.
+        release_status = (
+            "unavailable" if status == AgentStatus.BANNED else "awaiting_quorum"
+        )
     elif status not in SOURCE_RELEASE_STATUSES:
         release_status = "unavailable"
     elif king_reveal is None:
