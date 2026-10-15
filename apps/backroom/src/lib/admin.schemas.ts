@@ -7684,6 +7684,17 @@ export const copyReviewSimilaritySchema = z.object({
   decision_role: z.string(),
 })
 
+// Private per-artifact language mix of the fingerprinted members (#436):
+// counts keyed by a fixed language label, never a path or content. Null when
+// the row was fingerprinted before Platform recorded it. Provenance only.
+export const copyReviewLanguageInventorySchema = z.object({
+  version: z.string(),
+  files: z.record(z.string(), z.number().int().nonnegative()),
+  bytes: z.record(z.string(), z.number().int().nonnegative()),
+  excluded_files: z.number().int().nonnegative().nullish().default(null),
+  excluded_bytes: z.number().int().nonnegative().nullish().default(null),
+})
+
 export const availableCopyReviewComparisonSchema = z.object({
   availability: z.literal('available'),
   bulk_eligible: z.boolean(),
@@ -7708,6 +7719,8 @@ export const availableCopyReviewComparisonSchema = z.object({
   triggered: z.boolean(),
   triggered_signal: z.string().nullable(),
   current_decision: z.string(),
+  candidate_languages: copyReviewLanguageInventorySchema.nullish().default(null),
+  reference_languages: copyReviewLanguageInventorySchema.nullish().default(null),
 })
 
 export const unavailableCopyReviewComparisonSchema = z.object({
@@ -8481,6 +8494,7 @@ export type CopyReviewItem = z.infer<typeof copyReviewItemSchema>
 export type CopyReviewGeneration = z.infer<typeof copyReviewGenerationSchema>
 export type CopyReviewConsoleItem = z.infer<typeof copyReviewConsoleItemSchema>
 export type CopyReviewCurrentComparison = z.infer<typeof copyReviewCurrentComparisonSchema>
+export type CopyReviewLanguageInventory = z.infer<typeof copyReviewLanguageInventorySchema>
 export type CopyReviewResolution = z.infer<typeof copyReviewResolutionSchema>
 export type AthReviewAudit = z.infer<typeof athReviewAuditSchema>
 export type OpenAthReviewInput = z.infer<typeof openAthReviewInputSchema>

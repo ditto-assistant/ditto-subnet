@@ -1344,6 +1344,43 @@ async def test_current_comparison_returns_only_corrected_aggregate_wire(
         }
 
 
+async def test_current_comparison_carries_label_only_language_inventory(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id, _ = await _seed_current_comparison(maker)
+    async with maker() as session, session.begin():
+        candidate = await session.get(Agent, agent_id)
+        assert candidate is not None
+        candidate.content_fingerprint = {
+            **_fingerprint("c"),
+            "languages": {
+                "v": "lang1",
+                "files": {"python": 4, "typescript": 1, "agent/secret.py": 1},
+                "bytes": {"python": 9000, "typescript": 300},
+                "excluded_files": 3,
+                "excluded_bytes": 1200,
+            },
+        }
+    _install(app, maker)
+    response = await client.get(
+        f"/api/v1/admin/copy-reviews/{agent_id}/current-comparison", headers=_HEADERS
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["candidate_languages"] == {
+        "version": "lang1",
+        "files": {"python": 4, "typescript": 1},
+        "bytes": {"python": 9000, "typescript": 300},
+        "excluded_files": 3,
+        "excluded_bytes": 1200,
+    }
+    # The reference was fingerprinted before the inventory existed.
+    assert body["reference_languages"] is None
+    assert body["current_decision"] == "clear"
+    assert "secret" not in response.text
+
+
 async def test_incompatible_current_comparison_is_never_bulk_eligible(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
