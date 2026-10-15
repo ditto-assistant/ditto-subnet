@@ -11976,6 +11976,19 @@ BOUNTY_EVENT_KINDS = (
     "fee_refund_owed",
     "claims_paused",
     "claims_resumed",
+    "submitted",
+    "withdrawn",
+    "deadline_missed",
+    "review_overdue",
+    "rework_requested",
+    "accepted",
+    "rejected",
+    "reviewer_reassigned",
+    "appeal_filed",
+    "appeal_upheld",
+    "appeal_denied",
+    "slot_cancelled",
+    "slot_reopened",
 )
 # Slots a claim occupies or once occupied; an open slot has no claim.
 BOUNTY_CLAIMED_SLOT_STATUSES = (
@@ -11993,7 +12006,10 @@ BOUNTY_REFUND_REASONS = (
     "slot_lost",
     "identity_changed",
     "duplicate_payment",
+    "cancelled",
+    "system_fault",
 )
+BOUNTY_NONCE_ACTIONS = ("claim", "submit", "withdraw", "appeal")
 
 
 class Bounty(Base):
@@ -12104,6 +12120,9 @@ class BountySlot(Base):
     deadline_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    review_due_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     __table_args__ = (
         UniqueConstraint("bounty_id", "round", "position"),
         ForeignKeyConstraint(
@@ -12119,7 +12138,9 @@ class BountySlot(Base):
             "(status <> 'open' OR claim_id IS NULL) AND (status NOT IN ("
             + ",".join(f"'{s}'" for s in BOUNTY_CLAIMED_SLOT_STATUSES)
             + ") OR claim_id IS NOT NULL)"
-            " AND (status <> 'claimed' OR deadline_at IS NOT NULL)",
+            " AND (status <> 'claimed' OR deadline_at IS NOT NULL)"
+            " AND (status <> 'rework' OR deadline_at IS NOT NULL)"
+            " AND (status <> 'submitted' OR review_due_at IS NOT NULL)",
             name="claim",
         ),
     )
@@ -12141,10 +12162,16 @@ class BountyEvent(Base):
         TIMESTAMP(timezone=True), nullable=False
     )
     claim_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    submission_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    appeal_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
     __table_args__ = (
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
         ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        ForeignKeyConstraint(["submission_id"], ["bounty_submissions.submission_id"]),
+        ForeignKeyConstraint(["appeal_id"], ["bounty_appeals.appeal_id"]),
         CheckConstraint(
             "kind IN (" + ",".join(f"'{k}'" for k in BOUNTY_EVENT_KINDS) + ")",
             name="kind",
@@ -12182,7 +12209,12 @@ class BountyActionNonce(Base):
     recorded_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
-    __table_args__ = (CheckConstraint("action IN ('claim')", name="action"),)
+    __table_args__ = (
+        CheckConstraint(
+            "action IN (" + ",".join(f"'{a}'" for a in BOUNTY_NONCE_ACTIONS) + ")",
+            name="action",
+        ),
+    )
 
 
 class BountyClaim(Base):
@@ -12312,4 +12344,192 @@ class BountyObligation(Base):
             name="obligation",
         ),
         Index("bounty_obligations_claim_idx", "claim_id"),
+    )
+
+
+class BountyWithdrawal(Base):
+    """A claimant's signed withdrawal; the entry fee is retained. Append-only."""
+
+    __tablename__ = "bounty_withdrawals"
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    withdrawn_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("nonce"),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
+        CheckConstraint("key_kind IN ('hotkey','coldkey')", name="withdrawal"),
+    )
+
+
+class BountySubmission(Base):
+    """A signed submission of one exact commit for review. Append-only."""
+
+    __tablename__ = "bounty_submissions"
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    review_due_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("nonce"),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
+        CheckConstraint(
+            "pr_number > 0 AND head_sha ~ '^[0-9a-f]{40}$'"
+            " AND key_kind IN ('hotkey','coldkey') AND review_due_at > submitted_at",
+            name="submission",
+        ),
+        Index("bounty_submissions_claim_idx", "claim_id"),
+    )
+
+
+class BountyReview(Base):
+    """The reviewer's one decision on one submission. Append-only."""
+
+    __tablename__ = "bounty_reviews"
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    attribution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rework_deadline_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    # Private: the operator who decided.
+    reviewer_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["submission_id"], ["bounty_submissions.submission_id"]),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        CheckConstraint(
+            "decision IN ('accept','changes_requested','reject')"
+            " AND (decision = 'changes_requested') = (rework_deadline_at IS NOT NULL)"
+            " AND (decision = 'accept' OR attribution IS NULL)",
+            name="review",
+        ),
+    )
+
+
+class BountyReviewerAssignment(Base):
+    """An operator reassignment of a bounty's reviewer. Append-only; latest wins."""
+
+    __tablename__ = "bounty_reviewer_assignments"
+    assignment_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    reviewer_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        Index("bounty_reviewer_assignments_bounty_idx", "bounty_id", "assignment_id"),
+    )
+
+
+class BountyAppeal(Base):
+    """A claimant's signed appeal of one public decision. Append-only."""
+
+    __tablename__ = "bounty_appeals"
+    appeal_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    subject_event_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Private unless the appellant publishes it; the digest is public.
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    filed_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("nonce"),
+        UniqueConstraint("subject_event_id"),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        ForeignKeyConstraint(["subject_event_id"], ["bounty_events.event_id"]),
+        ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
+        CheckConstraint(
+            "length(reason_digest) = 64 AND key_kind IN ('hotkey','coldkey')",
+            name="appeal",
+        ),
+    )
+
+
+class BountyAppealDecision(Base):
+    """An operator's decision on one appeal. Append-only."""
+
+    __tablename__ = "bounty_appeal_decisions"
+    appeal_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    upheld: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["appeal_id"], ["bounty_appeals.appeal_id"]),
+    )
+
+
+class BountySlotAction(Base):
+    """An operator cancellation or reopening of one slot. Append-only."""
+
+    __tablename__ = "bounty_slot_actions"
+    action_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    slot_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    claim_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    cancel_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The slot's status when the action applied; a reopened claim keeps it as
+    # its own outcome.
+    prior_status: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        CheckConstraint(
+            "action IN ('cancel','reopen')"
+            " AND (action = 'cancel') = (cancel_kind IS NOT NULL)"
+            " AND (cancel_kind IS NULL OR cancel_kind IN ('team','system_fault'))"
+            " AND (action <> 'cancel'"
+            " OR prior_status IN ('open','claimed','submitted','rework'))"
+            " AND (action <> 'reopen'"
+            " OR prior_status IN ('expired','withdrawn','rejected','cancelled'))",
+            name="slot_action",
+        ),
     )

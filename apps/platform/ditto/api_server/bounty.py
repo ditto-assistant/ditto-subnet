@@ -35,7 +35,7 @@ from ditto.api_models.bounty import (
     bounty_spec_digest,
 )
 from ditto.api_server import bounty_claims
-from ditto.api_server.bounty_claims import effective_slot_status
+from ditto.api_server.bounty_deadlines import effective_slot_status, review_overdue
 from ditto.db.models import (
     Bounty,
     BountyClaim,
@@ -308,6 +308,7 @@ def _summary(
     current_round: int,
     paused: bool,
     statuses: Counter[str],
+    overdue: int,
 ) -> BountySummary:
     return BountySummary(
         bounty_id=bounty.bounty_id,
@@ -325,6 +326,7 @@ def _summary(
         current_round=current_round,
         claims_paused=paused,
         slots=_slot_counts(statuses),
+        reviews_overdue=overdue,
         published_at=first.published_at,
         updated_at=current.published_at,
     )
@@ -381,6 +383,7 @@ async def board(
     }
     now = bounty_claims.utcnow()
     statuses: dict[UUID, Counter[str]] = {}
+    overdue: Counter[UUID] = Counter()
     for slot, holder in (
         await session.execute(
             select(BountySlot, BountyClaim)
@@ -390,6 +393,7 @@ async def board(
     ).all():
         status = effective_slot_status(slot, holder, now=now)
         statuses.setdefault(slot.bounty_id, Counter())[status] += 1
+        overdue[slot.bounty_id] += review_overdue(slot, now=now)
     paused = await _paused(session, ids)
     items = [
         _summary(
@@ -399,6 +403,7 @@ async def board(
             current_round=int(rounds.get(bounty.bounty_id, 0)),
             paused=paused.get(bounty.bounty_id, False),
             statuses=statuses.get(bounty.bounty_id, Counter()),
+            overdue=overdue[bounty.bounty_id],
         )
         for bounty in bounties
     ]
@@ -438,15 +443,20 @@ def _slot_view(
         round=slot.round,
         position=slot.position,
         status=status,  # type: ignore[arg-type]
+        # A deadline a read projects is stamped where a write would stamp it.
         status_changed_at=(
             holder.hold_expires_at
             if holder is not None and slot.status == "held" and status == "open"
+            else slot.deadline_at
+            if status != slot.status and slot.deadline_at is not None
             else slot.status_changed_at
         ),
         hold_expires_at=claimant.hold_expires_at
         if status == "held" and claimant
         else None,
         deadline_at=slot.deadline_at if claimant else None,
+        review_due_at=slot.review_due_at if status == "submitted" else None,
+        review_overdue=review_overdue(slot, now=now),
         claimant=(
             BountySlotClaimant(
                 claim_id=claimant.claim_id,
@@ -504,6 +514,7 @@ async def detail(session: AsyncSession, bounty_id: UUID) -> BountyDetail:
             current_round=rounds[-1].round if rounds else 0,
             paused=(await _paused(session, [bounty_id])).get(bounty_id, False),
             statuses=Counter(view.status for view in views),
+            overdue=sum(view.review_overdue for view in views),
         ),
         revisions=[revision_view(row) for row in revisions],
         rounds=[

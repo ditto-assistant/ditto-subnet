@@ -388,7 +388,7 @@ async def test_published_history_is_append_only(app, client, session_maker):
         "DELETE FROM bounty_slots": "bounty slots cannot be deleted",
         "TRUNCATE bounties CASCADE": history,
         "TRUNCATE bounty_slots CASCADE": history,
-        "TRUNCATE bounty_events": history,
+        "TRUNCATE bounty_events CASCADE": history,
     }
     for statement, refusal in blocked.items():
         async with session_maker() as session:

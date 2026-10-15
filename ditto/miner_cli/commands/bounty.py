@@ -1,9 +1,13 @@
-"""Browse build bounties and claim a paid slot.
+"""Browse build bounties, claim a paid slot and deliver the work.
 
 ``claim`` shows the exact terms of the bounty's current revision, saves them
 for review, and signs only after a typed confirmation naming that revision
 and its digest. It then holds a slot, pays the entry fee and confirms it.
 Every write is an exact retry, so a lost response is resent safely.
+
+``submit`` signs the exact commit of a pull request for review, ``withdraw``
+gives up a slot (the fee is retained) and ``appeal`` contests a rejection or a
+missed deadline. Each names its target in a typed confirmation first.
 
 In v1 every bounty runs in rehearsal funding: the fee is simulated, no funds
 move, and Platform records any refund it would owe.
@@ -25,12 +29,19 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from ditto.api_models.bounty import (
+    BountyAppealRequest,
     BountyClaimRequest,
     BountyClaimView,
     BountyConfirmRequest,
     BountyDetail,
+    BountySubmitRequest,
+    BountyWithdrawRequest,
+    bounty_appeal_message,
     bounty_claim_message,
+    bounty_reason_digest,
+    bounty_submit_message,
     bounty_team_digest,
+    bounty_withdraw_message,
 )
 from ditto.api_models.contributor_identity import ContributorProof
 from ditto.miner_cli.api_client import ApiClient
@@ -75,24 +86,7 @@ def add_subparser(
         required=True,
         help="The GitHub login linked to this hotkey with `ditto link-github`.",
     )
-    claim.add_argument(
-        "--wallet.name",
-        "--coldkey",
-        dest="coldkey_name",
-        default=os.environ.get("WALLET_NAME"),
-    )
-    claim.add_argument(
-        "--wallet.hotkey",
-        "--hotkey",
-        dest="hotkey_name",
-        default=os.environ.get("HOTKEY_NAME"),
-    )
-    claim.add_argument(
-        "--key-kind",
-        choices=("hotkey", "coldkey"),
-        default="hotkey",
-        help="Prove the claim with the hotkey (default) or its owner coldkey.",
-    )
+    _signing_options(claim, confirmation=False)
     claim.add_argument(
         "--confirmation",
         help=(
@@ -108,9 +102,59 @@ def add_subparser(
         sub = subs.add_parser(name, parents=parents or [], help=text)
         sub.add_argument("claim_id", type=UUID)
         sub.add_argument("--json", action="store_true")
+    for name, text in (
+        ("submit", "Submit the exact commit of a pull request for review."),
+        ("withdraw", "Give up a claimed slot; the entry fee is retained."),
+        ("appeal", "Appeal a rejection or a missed deadline of your claim."),
+    ):
+        sub = subs.add_parser(name, parents=parents or [], help=text)
+        sub.add_argument("claim_id", type=UUID)
+        _signing_options(sub)
+        if name == "submit":
+            sub.add_argument("--pr", type=int, required=True, dest="pr_number")
+            sub.add_argument("--head-sha", required=True, help="Full 40-hex commit")
+        if name == "appeal":
+            sub.add_argument(
+                "--event", type=int, required=True, help="The decision's event id"
+            )
+            sub.add_argument(
+                "--reason-file",
+                type=Path,
+                required=True,
+                help="Your appeal statement (UTF-8). It stays private unless you "
+                "publish it; Platform shows only its digest.",
+            )
     for sub in subs.choices.values():
         sub.set_defaults(func=run)
     return parser
+
+
+def _signing_options(
+    parser: argparse.ArgumentParser, *, confirmation: bool = True
+) -> None:
+    parser.add_argument(
+        "--wallet.name",
+        "--coldkey",
+        dest="coldkey_name",
+        default=os.environ.get("WALLET_NAME"),
+    )
+    parser.add_argument(
+        "--wallet.hotkey",
+        "--hotkey",
+        dest="hotkey_name",
+        default=os.environ.get("HOTKEY_NAME"),
+    )
+    parser.add_argument(
+        "--key-kind",
+        choices=("hotkey", "coldkey"),
+        default="hotkey",
+        help="Prove the action with the hotkey (default) or the payee coldkey.",
+    )
+    if confirmation:
+        parser.add_argument(
+            "--confirmation", help="The exact typed confirmation; no --yes shortcut."
+        )
+        parser.add_argument("--json", action="store_true")
 
 
 def alpha(rao: int) -> str:
@@ -382,6 +426,13 @@ def run(args: argparse.Namespace) -> int:
                 return 0
             if command == "claim":
                 return _claim(client, args, network.name)
+            if command in ("submit", "withdraw", "appeal"):
+                result = _act(client, args)
+                if args.json:
+                    _print_json(result)
+                else:
+                    _print_claim(result)
+                return 0
             view = client.get_bounty_claim(args.claim_id)
             if command == "confirm":
                 view = _confirm_fee(client, view)
@@ -393,3 +444,144 @@ def run(args: argparse.Namespace) -> int:
     except (MinerCliError, ValueError, EOFError, OSError) as exc:
         print(str(exc) or "bounty command cancelled", file=sys.stderr)
         return 1
+
+
+def _consent(args: argparse.Namespace, phrase: str, action: str) -> None:
+    value = (
+        args.confirmation
+        if args.confirmation is not None
+        else prompt_input(f"Type exactly '{phrase}' to {action}: ")
+    )
+    if value != phrase:
+        raise MinerCliError(
+            f"nothing was signed: the typed confirmation did not match '{phrase}'"
+        )
+
+
+def _signed(args: argparse.Namespace, view: BountyClaimView) -> tuple[str, Any]:
+    """The wallet key that may act on this claim, after checking it is ours."""
+    names = resolve_wallet_names(
+        coldkey_name=args.coldkey_name,
+        hotkey_name=args.hotkey_name,
+        interactive=sys.stdin.isatty(),
+    )
+    handle, wallet = load_wallet(coldkey_name=names[0], hotkey_name=names[1])
+    if handle.hotkey_ss58 != view.hotkey:
+        raise MinerCliError(
+            f"claim {view.claim_id} belongs to hotkey {view.hotkey}, not this "
+            f"wallet's {handle.hotkey_ss58}"
+        )
+    try:
+        key = wallet.hotkey if args.key_kind == "hotkey" else wallet.coldkey
+        signer = key.ss58_address
+    except Exception:
+        raise MinerCliError(
+            f"cannot load or unlock the {args.key_kind} signing key; check the "
+            "wallet keyfile and passphrase"
+        ) from None
+    if args.key_kind == "coldkey" and signer != view.payee_coldkey:
+        raise MinerCliError(
+            "a coldkey proof must come from the claim's payee of record "
+            f"{view.payee_coldkey}"
+        )
+    return signer, key
+
+
+def _signature(key: Any, payload: bytes) -> str:
+    try:
+        return key.sign(payload).hex()
+    except Exception:
+        # Wallet SDK errors can echo keyfile details; keep them private.
+        raise MinerCliError("cannot sign; check the signing key and retry") from None
+
+
+def _act(client: ApiClient, args: argparse.Namespace) -> BountyClaimView:
+    """Sign and send one submit, withdraw or appeal action."""
+    view = client.get_bounty_claim(args.claim_id)
+    netuid = network_netuid(client)
+    command, claim_id = args.bounty_command, view.claim_id
+    reason = ""
+    head_sha = ""
+    if command == "submit":
+        head_sha = args.head_sha.lower()
+        phrase = f"SUBMIT BOUNTY CLAIM {claim_id} PR {args.pr_number} {head_sha}"
+        print(
+            f"Submitting {view.repo}#{args.pr_number} at commit {head_sha} for "
+            "review. The reviewer decides on this exact commit; after a new push, "
+            "submit again.",
+            file=sys.stderr,
+        )
+    elif command == "withdraw":
+        phrase = f"WITHDRAW BOUNTY CLAIM {claim_id}"
+        print(
+            f"Withdrawing gives up round {view.round} slot {view.position}. The "
+            f"entry fee of {alpha(view.fee_alpha_rao)} is retained.",
+            file=sys.stderr,
+        )
+    else:
+        reason = args.reason_file.read_text(encoding="utf-8")
+        if not reason.strip():
+            raise MinerCliError("the appeal statement is empty")
+        phrase = f"APPEAL BOUNTY EVENT {args.event}"
+        print(
+            f"Appealing event {args.event} of claim {claim_id}; the statement's "
+            f"digest is {bounty_reason_digest(reason)}",
+            file=sys.stderr,
+        )
+    _consent(args, phrase, command)
+    signer, key = _signed(args, view)
+    nonce, issued = uuid4(), datetime.now(UTC)
+    common: dict[str, Any] = {
+        "netuid": netuid,
+        "claim_id": claim_id,
+        "hotkey": view.hotkey,
+        "nonce": nonce,
+        "issued_at": issued,
+    }
+
+    def proof(payload: bytes) -> ContributorProof:
+        return ContributorProof(
+            key_kind=args.key_kind, signer=signer, signature=_signature(key, payload)
+        )
+
+    if command == "submit":
+        submitted = BountySubmitRequest(
+            **common,
+            repo=view.repo,
+            pr_number=args.pr_number,
+            head_sha=head_sha,
+            proof=proof(
+                bounty_submit_message(
+                    **common,
+                    repo=view.repo,
+                    pr_number=args.pr_number,
+                    head_sha=head_sha,
+                    key_kind=args.key_kind,
+                    signer=signer,
+                )
+            ),
+        )
+        return _retrying(lambda: client.submit_bounty_work(claim_id, submitted))
+    if command == "withdraw":
+        withdrawn = BountyWithdrawRequest(
+            **common,
+            proof=proof(
+                bounty_withdraw_message(**common, key_kind=args.key_kind, signer=signer)
+            ),
+        )
+        return _retrying(lambda: client.withdraw_bounty_claim(claim_id, withdrawn))
+    appealed = BountyAppealRequest(
+        **common,
+        subject_event_id=args.event,
+        reason=reason,
+        proof=proof(
+            bounty_appeal_message(
+                **common,
+                subject_event_id=args.event,
+                reason_digest=bounty_reason_digest(reason),
+                key_kind=args.key_kind,
+                signer=signer,
+            )
+        ),
+    )
+    return _retrying(lambda: client.appeal_bounty_decision(claim_id, appealed))

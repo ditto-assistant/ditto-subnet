@@ -13,12 +13,21 @@ from ditto_screening_protocol.bounty import (
     BountyClaimRequest,
     BountyFeeReceipt,
     BountyPublishRequest,
+    BountySubmitRequest,
     BountyTerms,
+    bounty_appeal_decision_confirmation,
+    bounty_appeal_message,
     bounty_claim_message,
     bounty_pause_confirmation,
     bounty_publish_confirmation,
+    bounty_reason_digest,
+    bounty_reassign_confirmation,
+    bounty_review_confirmation,
+    bounty_slot_confirmation,
     bounty_spec_digest,
+    bounty_submit_message,
     bounty_team_digest,
+    bounty_withdraw_message,
     simulated_fee_block_hash,
 )
 
@@ -313,3 +322,109 @@ def test_pause_confirmation_names_the_bounty_and_direction():
         == "PAUSE BOUNTY CLAIMS ditto-assistant/ditto-subnet#2942"
     )
     assert bounty_pause_confirmation(**kwargs, paused=False).startswith("RESUME ")
+
+
+CLAIM = UUID("00000000-0000-4000-8000-0000000000aa")
+
+
+def test_submit_message_binds_the_exact_commit():
+    message = bounty_submit_message(
+        netuid=118,
+        claim_id=CLAIM,
+        hotkey=HOTKEY,
+        repo="ditto-assistant/ditto-subnet",
+        pr_number=61,
+        head_sha="3f" * 20,
+        nonce=NONCE,
+        issued_at=ISSUED,
+        key_kind="coldkey",
+        signer=COLDKEY,
+    )
+    assert (
+        message
+        == (
+            f"ditto-bounty-submit:v1:118:{CLAIM}:{HOTKEY}:ditto-assistant/ditto-subnet:"
+            f"61:{'3f' * 20}:{NONCE}:2026-09-21T12:00:00.000000+00:00:coldkey:{COLDKEY}"
+        ).encode()
+    )
+
+
+def test_withdraw_and_appeal_messages():
+    assert (
+        bounty_withdraw_message(
+            netuid=118,
+            claim_id=CLAIM,
+            hotkey=HOTKEY,
+            nonce=NONCE,
+            issued_at=ISSUED,
+            key_kind="hotkey",
+            signer=HOTKEY,
+        )
+        == (
+            f"ditto-bounty-withdraw:v1:118:{CLAIM}:{HOTKEY}:{NONCE}:"
+            f"2026-09-21T12:00:00.000000+00:00:hotkey:{HOTKEY}"
+        ).encode()
+    )
+    digest = bounty_reason_digest("The deadline fell during an outage.")
+    assert digest == hashlib.sha256(b"The deadline fell during an outage.").hexdigest()
+    assert (
+        bounty_appeal_message(
+            netuid=118,
+            claim_id=CLAIM,
+            hotkey=HOTKEY,
+            subject_event_id=42,
+            reason_digest=digest,
+            nonce=NONCE,
+            issued_at=ISSUED,
+            key_kind="hotkey",
+            signer=HOTKEY,
+        )
+        == (
+            f"ditto-bounty-appeal:v1:118:{CLAIM}:{HOTKEY}:42:{digest}:{NONCE}:"
+            f"2026-09-21T12:00:00.000000+00:00:hotkey:{HOTKEY}"
+        ).encode()
+    )
+
+
+@pytest.mark.parametrize("sha", ["3F" * 20, "3f" * 19, "3f" * 21, "zz" * 20])
+def test_submissions_need_a_full_lowercase_commit_sha(sha):
+    with pytest.raises(ValidationError):
+        BountySubmitRequest.model_validate(
+            {
+                "netuid": 118,
+                "claim_id": str(CLAIM),
+                "hotkey": HOTKEY,
+                "repo": "ditto-assistant/ditto-subnet",
+                "pr_number": 61,
+                "head_sha": sha,
+                "nonce": str(NONCE),
+                "issued_at": "2026-09-21T12:00:00+00:00",
+                "proof": {
+                    "key_kind": "hotkey",
+                    "signer": HOTKEY,
+                    "signature": "ab" * 64,
+                },
+            }
+        )
+
+
+def test_operator_confirmations_name_their_target():
+    repo, issue = "ditto-assistant/ditto-subnet", 2942
+    assert (
+        bounty_review_confirmation(
+            repo=repo, issue=issue, claim_id=CLAIM, decision="changes_requested"
+        )
+        == f"REQUEST CHANGES ON BOUNTY CLAIM {repo}#{issue} {CLAIM}"
+    )
+    assert (
+        bounty_slot_confirmation(
+            action="cancel", repo=repo, issue=issue, round_number=1, position=3
+        )
+        == f"CANCEL BOUNTY SLOT {repo}#{issue} ROUND 1 SLOT 3"
+    )
+    assert bounty_appeal_decision_confirmation(appeal_id=CLAIM, upheld=False) == (
+        f"DENY BOUNTY APPEAL {CLAIM}"
+    )
+    assert bounty_reassign_confirmation(repo=repo, issue=issue) == (
+        f"REASSIGN BOUNTY REVIEWER {repo}#{issue}"
+    )
