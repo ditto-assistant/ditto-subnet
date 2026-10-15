@@ -219,7 +219,7 @@
       "read": [".agents/skills/backroom-board-sweep/SKILL.md", ".agents/skills/backroom-review/SKILL.md", ".agents/skills/backroom-review/references/review-bar.md", ".agents/skills/backroom-review/references/decision-path-review.md", "workers/screener/docs/policy-v13.md"],
       "search": ["python3 .agents/skills/backroom-review/scripts/search-precedents.py --list", "rg -n 'preview_ath_rulings_batch|execute_ath_rulings_batch' apps/backroom/src/server"],
       "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/backroom-board-sweep", "uv run pytest ditto/tests/test_agent_skills.py -q"],
-      "invariants": ["Re-read get_leaderboard after every executed batch; a reject can promote a same-hotkey sibling into a paid slot.", "Rule each sibling on its own downloaded bytes; never transfer a ruling by lineage.", "A clear needs a held row; do not open paid rows to record a clear without operator approval."],
+      "invariants": ["Re-read get_leaderboard after every executed batch; a reject can promote a same-hotkey sibling into a paid slot.", "Rule each sibling on its own downloaded bytes; never transfer a ruling by lineage.", "A clear on an unheld scored or live row attests without holding; do not open paid rows just to record a clear."],
       "related": ["backroom-review"]
     },
     {
