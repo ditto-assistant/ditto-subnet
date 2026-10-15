@@ -692,10 +692,13 @@ async def confirm(
             )
             await lock_identity_writes(session, namespace="github-link")
             now = datetime.now(UTC)
+            # Only link history is clamped; the action nonce keeps this
+            # replica's time.
+            linked_at = now
             previous = await active_github_link(session, hotkey=body.hotkey)
             if previous:
-                now = revocation_time(previous, now)
-                previous.revoked_at = now
+                linked_at = revocation_time(previous, now)
+                previous.revoked_at = linked_at
                 await session.flush()
             link_id = uuid4()
             session.add(
@@ -726,7 +729,7 @@ async def confirm(
                 key_kind=body.proof.key_kind,
                 signer=body.proof.signer,
                 signature=body.proof.signature,
-                linked_at=now,
+                linked_at=linked_at,
                 owner_block=owner.block,
                 owner_block_hash=owner.block_hash,
             )

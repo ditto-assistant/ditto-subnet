@@ -1142,6 +1142,55 @@ async def test_unique_account_relink_rename_nonce_replay_and_signed_unlink(
             await session.rollback()
 
 
+async def test_relink_clamps_link_history_but_not_the_action_nonce(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    auth = {"authorization": f"Bearer {token}"}
+    first, _, _ = await browser_flow(client, token)
+    linked = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers=auth,
+        json=signed_link(alice, first["attempt_id"]),
+    )
+    assert linked.status_code == 200, linked.text
+    previous_id = UUID(linked.json()["link_id"])
+    # Another replica's clock ran ahead when it recorded the first link.
+    ahead = datetime.now(UTC) + timedelta(minutes=5)
+    async with session_maker() as session, session.begin():
+        await session.execute(
+            text("ALTER TABLE miner_github_links DISABLE TRIGGER USER")
+        )
+        await session.execute(
+            text("UPDATE miner_github_links SET linked_at = :at WHERE link_id = :id"),
+            {"at": ahead, "id": previous_id},
+        )
+        await session.execute(
+            text("ALTER TABLE miner_github_links ENABLE TRIGGER USER")
+        )
+    second, _, _ = await browser_flow(client, token)
+    before = datetime.now(UTC)
+    relinked = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers=auth,
+        json=signed_link(alice, second["attempt_id"]),
+    )
+    assert relinked.status_code == 200, relinked.text
+    async with session_maker() as session:
+        previous = await session.get(MinerGithubLink, previous_id)
+        current = await session.get(MinerGithubLink, UUID(relinked.json()["link_id"]))
+        assert previous is not None and current is not None
+        assert previous.revoked_at == current.linked_at == ahead
+        action = await session.scalar(
+            select(MinerGithubActionNonce).where(
+                MinerGithubActionNonce.link_id == current.link_id
+            )
+        )
+        assert action is not None and before <= action.created_at < ahead
+
+
 @pytest.mark.parametrize("uri,expected", [("//Bob", 200), ("//Charlie", 400)])
 async def test_coldkey_link_requires_finalized_owner(
     app, client, session_maker, uri, expected
