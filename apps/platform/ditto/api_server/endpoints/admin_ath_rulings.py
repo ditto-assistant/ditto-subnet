@@ -3,8 +3,9 @@
 A board review yields 5-20 open / clear / reject rulings at once, and the
 one-at-a-time ``/copy-reviews/{agent_id}/open`` and ``/resolve`` routes made
 that a manual ladder with a stale-crown trap on every rung. This module keeps
-those two routes as the ONLY writers -- every ruling is applied by calling
-them -- and adds the quarantine court's shape around them:
+those routes, plus ``/attest`` for a clear on an unheld scored or live agent,
+as the ONLY writers -- every ruling is applied by calling them -- and adds the
+quarantine court's shape around them:
 
 1. ``POST /admin/ath-rulings/upload-url`` -- a five-minute presigned PUT for a
    <= 1 MiB rulings JSON under an operator-scoped prefix of the private
@@ -42,7 +43,7 @@ import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -66,6 +67,7 @@ from ditto.api_models.admin_ath_rulings import (
     AdminAthRulingsPreviewResponse,
     AdminAthRulingsUploadRequest,
     AdminAthRulingsUploadResponse,
+    AthRulingStep,
 )
 from ditto.api_models.admin_copy_review import (
     AdminCopyReviewOpenRequest,
@@ -74,6 +76,7 @@ from ditto.api_models.admin_copy_review import (
 from ditto.api_server.continual_retest_settings import tie_weighting_is_active
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_copy_review import (
+    attest_review,
     open_review,
     resolve_copy_review,
 )
@@ -384,12 +387,16 @@ async def _crown_effect(
 ) -> tuple[bool, BoardSnapshot]:
     """``(would_change_crown, board after this ruling)`` for one ready item.
 
-    Holding or rejecting removes the agent from the fold; it moves the crown
-    when the agent is the champion or the raw leader. Clearing is estimated:
+    An ``attest`` leaves the agent exactly where it is on the board, so it never
+    moves the crown. Holding or rejecting removes the agent from the fold; it
+    moves the crown when the agent is the champion or the raw leader. Clearing
+    a held agent is estimated:
     the held agent re-enters at its canonical quorum median (the median-score
     rule the anti-copy gate uses) anchored at its upload time, and moves the
     crown when that re-projected board makes it champion or raw leader.
     """
+    if action == "attest":
+        return False, board
     if action in {"open", "reject"}:
         return board.touches_crown(agent.agent_id), board.without(agent.agent_id)
     composites = list(
@@ -576,7 +583,7 @@ async def _preview_ruling(
             )
     scored_or_live = agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
     resolved_as = review.resolution if review and review.status == "resolved" else None
-    steps: list[Literal["open", "clear", "reject"]]
+    steps: list[AthRulingStep]
     if ruling.action == "open":
         if held:
             return _blocked(
@@ -607,6 +614,10 @@ async def _preview_ruling(
                 disposition="already_applied",
                 message="review already resolved clear",
             )
+        elif scored_or_live and review is None:
+            # A board review that found no violation: record the clear without
+            # holding the row, so it never leaves the board (attest_review).
+            steps = ["attest"]
         else:
             reason = (
                 "agent is held but its review is not pending"
@@ -647,7 +658,10 @@ async def _preview_ruling(
                 message="neither open nor resolve would be accepted",
             )
     base["would_change_crown"], after = await _crown_effect(
-        session, board=board, agent=agent, action=ruling.action
+        session,
+        board=board,
+        agent=agent,
+        action="attest" if steps == ["attest"] else ruling.action,
     )
     return (
         AdminAthRulingPreviewItem(
@@ -655,7 +669,11 @@ async def _preview_ruling(
             ok=True,
             disposition="ready",
             steps=steps,
-            message="will " + " then ".join(steps),
+            message=(
+                "will clear without holding (the agent stays on the board)"
+                if steps == ["attest"]
+                else "will " + " then ".join(steps)
+            ),
         ),
         after,
     )
@@ -812,10 +830,10 @@ async def _annotate_batch_audit(
 ) -> None:
     """Attach the batch identity and citations to the audit rows just written.
 
-    ``open_copy_review`` / ``resolve_copy_review`` record the operator action;
-    this adds ``batch_id``, ``evidence_references`` and the document digest so
-    a ruling can be traced back to the exact previewed batch. Additive JSON
-    merges only -- nothing the two routes wrote is rewritten.
+    ``open_review`` / ``resolve_copy_review`` / ``attest_review`` record the
+    operator action; this adds ``batch_id``, ``evidence_references`` and the
+    document digest so a ruling can be traced back to the exact previewed batch.
+    Additive JSON merges only -- nothing the writers recorded is rewritten.
     """
     async with session.begin():
         review = await session.scalar(
@@ -846,11 +864,22 @@ async def _apply_step(
     session: AsyncSession,
     *,
     ruling: AdminAthRuling,
-    step: Literal["open", "clear", "reject"],
+    step: AthRulingStep,
     actor: str,
 ) -> None:
-    """Apply one step through the only two writers, then end their autobegin."""
-    if step == "open":
+    """Apply one step through the review writers, then end their autobegin."""
+    if step == "attest":
+        await attest_review(
+            ruling.agent_id,
+            AdminCopyReviewOpenRequest(
+                expected_sha256=ruling.expected_sha256,
+                expected_score_count=ruling.expected_score_count,
+                reason=ruling.reason,
+            ),
+            session,
+            x_admin_actor=actor,
+        )
+    elif step == "open":
         await open_review(
             ruling.agent_id,
             AdminCopyReviewOpenRequest(
@@ -871,7 +900,7 @@ async def _apply_step(
             session,
             x_admin_actor=actor,
         )
-    # Both routes read coldkeys after their own transaction commits, which
+    # Every writer reads coldkeys after its own transaction commits, which
     # autobegins another; end it before the next begin().
     await session.rollback()
 
@@ -1036,7 +1065,7 @@ async def execute_ath_rulings_batch(
             )
             continue
 
-        steps_applied: list[Literal["open", "clear", "reject"]] = []
+        steps_applied: list[AthRulingStep] = []
         try:
             for step in preview.steps:
                 await _apply_step(session, ruling=ruling, step=step, actor=actor)

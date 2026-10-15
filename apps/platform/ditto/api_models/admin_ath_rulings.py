@@ -14,6 +14,10 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 AthRulingAction = Literal["open", "clear", "reject"]
+# What execute performs for one ruling. ``attest`` is a ``clear`` on an unheld
+# scored or live agent: it records the terminal clear without holding the row,
+# so the agent never leaves the board and the crown cannot move.
+AthRulingStep = Literal["open", "clear", "attest", "reject"]
 AthRulingDisposition = Literal[
     "ready", "already_applied", "stale_guard", "conflict", "not_found", "invalid"
 ]
@@ -156,16 +160,16 @@ class AdminAthRulingPreviewItem(BaseModel):
     # True when expected_sha256 / expected_score_count no longer match the row.
     stale_guard: bool
     # True when applying this ruling moves the champion or raw leader: rejecting
-    # or holding either of them, or clearing an agent whose canonical score
-    # would re-enter as champion or raw leader. Judged against the board AFTER
-    # the earlier rulings in the batch, so a champion reject flags the
-    # runner-up that a later ruling then touches.
+    # or holding either of them, or clearing a held agent whose canonical score
+    # would re-enter as champion or raw leader; never for ``attest``. Judged
+    # against the board AFTER the earlier rulings in the batch, so a champion
+    # reject flags the runner-up that a later ruling then touches.
     would_change_crown: bool
     # The 409 detail the underlying open/resolve route would answer with (or
     # the preview-time refusal reason); None when the item is ready.
     conflict_reason: str | None = None
     # What execute will perform for this item, in order.
-    steps: list[Literal["open", "clear", "reject"]] = Field(default_factory=list)
+    steps: list[AthRulingStep] = Field(default_factory=list)
     reason: str
     evidence_references: list[str] = Field(default_factory=list)
     message: str
@@ -208,9 +212,7 @@ class AdminAthRulingExecuteItem(BaseModel):
     status: Literal["applied", "already_applied", "failed"]
     agent_status: str | None = None
     would_change_crown: bool
-    steps_applied: list[Literal["open", "clear", "reject"]] = Field(
-        default_factory=list
-    )
+    steps_applied: list[AthRulingStep] = Field(default_factory=list)
     # False on an applied row means the ruling landed but the batch_id /
     # evidence_references annotation on its audit rows did not; the ruling is
     # NOT to be re-run.

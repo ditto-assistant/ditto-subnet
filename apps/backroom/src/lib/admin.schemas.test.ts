@@ -26,6 +26,8 @@ import {
   ATH_RULINGS_CONFIRMATION,
   athRulingSchema,
   athRulingPreviewItemSchema,
+  athRulingStepSchema,
+  athRulingExecuteItemSchema,
   athRulingsPreviewResponseSchema,
   athRulingsExecuteResponseSchema,
   athRulingsUploadResponseSchema,
@@ -4865,6 +4867,35 @@ describe('batched ATH rulings schemas', () => {
     ).toThrow()
   })
 
+  it('parses a hold-free clear as an attest step', () => {
+    const preview = athRulingPreviewItemSchema.parse({
+      index: 0,
+      action: 'clear',
+      agent_id: ruling.agent_id,
+      ok: true,
+      disposition: 'ready',
+      stale_guard: false,
+      would_change_crown: false,
+      steps: ['attest'],
+      reason: 'Reviewed: clean',
+      message: 'will clear without holding (the agent stays on the board)',
+    })
+    expect(preview.steps).toEqual(['attest'])
+    const executed = athRulingExecuteItemSchema.parse({
+      index: 0,
+      action: 'clear',
+      agent_id: ruling.agent_id,
+      status: 'applied',
+      agent_status: 'scored',
+      would_change_crown: false,
+      steps_applied: ['attest'],
+      annotated: true,
+      message: 'ruling applied and audit rows annotated',
+    })
+    expect(executed.steps_applied).toEqual(['attest'])
+    expect(() => athRulingStepSchema.parse('withdraw')).toThrow()
+  })
+
   // The drift guard: every Platform response field has an explicit validator
   // and the key sets match the generated contract in both directions.
   it('mirrors the generated Platform contract field-for-field', () => {
@@ -4885,6 +4916,14 @@ describe('batched ATH rulings schemas', () => {
     >()
     expectTypeOf<ZodInput<typeof athRulingSchema>>().toMatchTypeOf<
       PlatformComponents['schemas']['AdminAthRuling']
+    >()
+    // A step Platform sends must parse here: Zod fails the whole response on
+    // one unknown enum value, which would blank every item of a preview.
+    expectTypeOf<ZodOutput<typeof athRulingStepSchema>>().toEqualTypeOf<
+      NonNullable<PlatformComponents['schemas']['AdminAthRulingPreviewItem']['steps']>[number]
+    >()
+    expectTypeOf<ZodOutput<typeof athRulingStepSchema>>().toEqualTypeOf<
+      NonNullable<PlatformComponents['schemas']['AdminAthRulingExecuteItem']['steps_applied']>[number]
     >()
     expect(
       Object.keys(

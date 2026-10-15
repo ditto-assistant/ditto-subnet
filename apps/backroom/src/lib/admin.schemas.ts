@@ -8028,6 +8028,10 @@ type GeneratedAthRulingsExecuteResponse =
 
 export const athRulingActionSchema = z.enum(['open', 'clear', 'reject'])
 
+// What execute performs for one ruling. `attest` is a clear on an unheld
+// scored or live agent: the terminal clear is recorded without holding the row.
+export const athRulingStepSchema = z.enum(['open', 'clear', 'attest', 'reject'])
+
 export const athRulingDispositionSchema = z.enum([
   'ready',
   'already_applied',
@@ -8123,7 +8127,7 @@ export const athRulingPreviewItemSchema = z.object({
   stale_guard: z.boolean(),
   would_change_crown: z.boolean(),
   conflict_reason: z.string().nullable().default(null),
-  steps: z.array(athRulingActionSchema).default([]),
+  steps: z.array(athRulingStepSchema).default([]),
   reason: z.string(),
   evidence_references: z.array(z.string()).default([]),
   message: z.string(),
@@ -8160,7 +8164,7 @@ export const athRulingExecuteItemSchema = z.object({
   status: z.enum(['applied', 'already_applied', 'failed']),
   agent_status: z.string().nullable().default(null),
   would_change_crown: z.boolean(),
-  steps_applied: z.array(athRulingActionSchema).default([]),
+  steps_applied: z.array(athRulingStepSchema).default([]),
   // False on an applied row: the ruling landed, only the audit annotation
   // failed. Never re-run it.
   annotated: z.boolean().default(false),

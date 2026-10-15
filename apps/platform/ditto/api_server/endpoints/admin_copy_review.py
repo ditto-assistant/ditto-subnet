@@ -1220,6 +1220,168 @@ async def resolve_copy_review(
     )
 
 
+@router.post(
+    "/copy-reviews/{agent_id}/attest",
+    response_model=AdminCopyReviewResolveResponse,
+)
+async def attest_copy_review(
+    agent_id: UUID,
+    payload: AdminCopyReviewOpenRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminCopyReviewResolveResponse:
+    """Record a board-review CLEAR on an unheld scored or live agent.
+
+    A board review that finds no violation used to have no write path short
+    of holding the agent first (``open``) and clearing it afterwards, which
+    takes a paid row -- and for the champion, the crown -- off the board
+    between the two calls. This records the same terminal ``clear`` directly.
+    """
+    return await attest_review(agent_id, payload, session, x_admin_actor=x_admin_actor)
+
+
+async def attest_review(
+    agent_id: UUID,
+    payload: AdminCopyReviewOpenRequest,
+    session: AsyncSession,
+    *,
+    x_admin_actor: str | None,
+) -> AdminCopyReviewResolveResponse:
+    """Write a resolved-``clear`` review for an exact scored/live artifact.
+
+    The agent's status, score set and board position are untouched, so the
+    crown cannot move. Only an agent with no ATH review row is attested: an
+    existing clear answers idempotently, and a pending or rejected review is
+    refused so this never resolves a hold (use ``resolve``) or overrides a
+    ban. A later ``open`` reopens this row like any other resolved clear, so a
+    subsequent hold or reject still lands and supersedes the attestation.
+    """
+    actor = x_admin_actor.strip() if x_admin_actor is not None else ""
+    if not 1 <= len(actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+
+    async with session.begin():
+        agent = await session.scalar(
+            select(Agent)
+            .options(undefer_group("anticopy"))
+            .where(Agent.agent_id == agent_id)
+            .with_for_update()
+        )
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        score_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(Score)
+                .where(Score.agent_id == agent_id)
+            )
+            or 0
+        )
+        if agent.sha256 != payload.expected_sha256:
+            raise HTTPException(status_code=409, detail="artifact sha256 changed")
+        if score_count != payload.expected_score_count:
+            raise HTTPException(status_code=409, detail="score count changed")
+
+        existing = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == agent_id).with_for_update()
+        )
+        scored_or_live = agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+        if existing is not None:
+            if (
+                existing.status == "resolved"
+                and existing.resolution == "clear"
+                and scored_or_live
+            ):
+                return AdminCopyReviewResolveResponse(
+                    review=_item(
+                        existing,
+                        agent,
+                        actions=await _review_actions(session, existing.review_id),
+                    ),
+                    agent_status=agent.status.value,
+                    idempotent=True,
+                )
+            if existing.status == "pending":
+                raise HTTPException(
+                    status_code=409,
+                    detail="ATH review is pending; resolve the hold instead",
+                )
+            raise HTTPException(
+                status_code=409,
+                detail=f"review already resolved {existing.resolution}",
+            )
+        if not scored_or_live:
+            raise HTTPException(
+                status_code=409,
+                detail=f"agent is {agent.status.value}, not scored or live",
+            )
+
+        now = datetime.now(UTC)
+        evidence = {
+            "sha256": agent.sha256,
+            "score_count": score_count,
+            "previous_status": agent.status.value,
+            "hold_free": True,
+        }
+        review = AthReview(
+            review_id=uuid4(),
+            agent_id=agent.agent_id,
+            status="resolved",
+            opened_at=now,
+            resolved_at=now,
+            resolved_by=actor,
+            resolution="clear",
+            resolution_reason=payload.reason,
+            original_duplicate_of=None,
+            original_reason=payload.reason,
+            original_policy_version=agent.screening_policy_version,
+            original_evidence={
+                **evidence,
+                "content_fingerprint_version": (agent.content_fingerprint or {}).get(
+                    "v"
+                ),
+                "structural_fingerprint_version": (
+                    agent.structural_fingerprint or {}
+                ).get("v"),
+                "prompt_fingerprint_version": (agent.prompt_fingerprint or {}).get("v"),
+            },
+            algorithm_provenance={
+                "snapshot": "board-review-attestation",
+                "review_kind": "benchmark_overfit",
+                "algorithm_version": "board-attestation-v1",
+                "opened_by": actor,
+                "backfilled": False,
+                "opened_at_source": "admin-request",
+                "hold_free": True,
+            },
+        )
+        session.add(review)
+        # Flush the review before its action: the action's review_id foreign
+        # key needs the parent row, and both share this one transaction.
+        await session.flush()
+        session.add(
+            AthReviewAction(
+                action_id=uuid4(),
+                review_id=review.review_id,
+                action="clear",
+                reason=payload.reason,
+                actor=actor,
+                evidence=evidence,
+                created_at=now,
+            )
+        )
+        await session.flush()
+        actions = await _review_actions(session, review.review_id)
+
+    candidate_coldkey, _reference_coldkey = await _review_coldkeys(session, agent, None)
+    return AdminCopyReviewResolveResponse(
+        review=_item(review, agent, actions=actions, miner_coldkey=candidate_coldkey),
+        agent_status=agent.status.value,
+        idempotent=False,
+    )
+
+
 async def _open_inspector(agent: Agent, storage: S3StorageClient) -> TarSourceInspector:
     """Fetch one agent's stored tarball, verify its digest, open a bounded reader."""
     try:
