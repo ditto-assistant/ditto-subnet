@@ -5,7 +5,7 @@ primary key is unchanged); only the pinned membership that may claim those
 seats widens. Pins and rotations stay append-only and immutable.
 
 Revision ID: 15b4db69f2ce
-Revises: 3f1c9a7d2b6e
+Revises: ac176f7e64fc
 Create Date: 2026-10-15
 """
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "15b4db69f2ce"
-down_revision: str | Sequence[str] | None = "3f1c9a7d2b6e"
+down_revision: str | Sequence[str] | None = "ac176f7e64fc"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
