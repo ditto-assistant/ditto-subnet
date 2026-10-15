@@ -64,6 +64,9 @@ logger = logging.getLogger(__name__)
 _SWEEP_BATCH_BLOCKS = 16
 _SWEEP_CATCHUP_BATCH_BLOCKS = 128
 _SWEEP_CATCHUP_MIN_BACKLOG = 1000
+# Each reopened payout re-reads a full historical receipt. Bound that work so a
+# rescan cannot consume the sweep deadline that also covers the block scan.
+_RECEIPT_REFETCH_LIMIT = 5
 
 
 def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
@@ -245,12 +248,10 @@ class SourceEmissionCollector:
                     from ditto.chain.errors import ChainEmissionReceiptUnavailable
 
                     try:
-                        payout = await self.state.chain.get_miner_emission_receipt(
-                            self.netuid,
-                            payout_block=block,
-                            target_hotkeys=frozenset(),
+                        payout = await self._confirmed_receipt(
+                            substrate,
+                            block=block,
                             allow_initialization_reveals=observed.payout_initialization_reveals,
-                            substrate=substrate,
                         )
                     except ChainEmissionReceiptUnavailable as error:
                         payout_blocked_reason = (
@@ -266,6 +267,116 @@ class SourceEmissionCollector:
             await self.resolve_pending_payouts(substrate)
             raise
         await self.resolve_pending_payouts(substrate)
+
+    async def _confirmed_receipt(
+        self, substrate: Any, *, block: int, allow_initialization_reveals: bool
+    ) -> ChainMinerEmissionReceipt:
+        """Read a payout receipt, requiring a terminal ambiguity to reproduce.
+
+        Chain state at a finalized block is immutable, so a genuine ambiguity
+        reads identically twice. Rate-limited archives have returned one-off
+        inconsistent reads that looked like an ownership change, permanently
+        discarding real payouts. A second clean read is accepted; a different
+        verdict is transport noise and stays retryable.
+        """
+        from ditto.chain.errors import ChainEmissionReceiptUnavailable
+
+        verdicts: list[str] = []
+        for _ in range(2):
+            try:
+                return await self.state.chain.get_miner_emission_receipt(
+                    self.netuid,
+                    payout_block=block,
+                    target_hotkeys=frozenset(),
+                    allow_initialization_reveals=allow_initialization_reveals,
+                    substrate=substrate,
+                )
+            except ChainEmissionReceiptUnavailable as error:
+                if verdicts and verdicts[0] == str(error):
+                    raise
+                verdicts.append(str(error))
+        raise ValueError(
+            f"payout {block} ambiguity did not reproduce: " + " / ".join(verdicts)
+        )
+
+    async def _refetch_receipt(
+        self, substrate: Any, *, block: int, block_hash: str, snapshot: dict
+    ) -> ChainMinerEmissionReceipt | None:
+        """Re-read a reopened payout recorded without a receipt.
+
+        Returns the receipt after persisting it, or None when the row must wait
+        (transient failure) or was settled terminally here.
+        """
+        from ditto.chain.errors import ChainEmissionReceiptUnavailable
+
+        # The scan applied same-block reveals with this marker before snapshotting.
+        allow = any(
+            binding["block"] == block
+            and binding["evidence"].get("payout_initialization_reveal")
+            for binding in snapshot["bindings"]
+        )
+        terminal_reason: str | None = None
+        receipt: ChainMinerEmissionReceipt | None = None
+        try:
+            receipt = await self._confirmed_receipt(
+                substrate, block=block, allow_initialization_reveals=allow
+            )
+        except ChainEmissionReceiptUnavailable as error:
+            terminal_reason = f"unverifiable_payout: {str(error)[:200]}"
+        except Exception as error:
+            retry_reason = "receipt_retry: " + self.state.chain._safe_rpc_error(error)
+            async with self.sessions() as session, session.begin():
+                await session.execute(
+                    self._pending_payout_update(block_hash).values(
+                        last_checked_at=datetime.now(UTC),
+                        blocked_reason=retry_reason[:300],
+                    )
+                )
+            return None
+        if receipt is not None and (
+            receipt.block != block
+            or receipt.block_hash != block_hash
+            or receipt.netuid != self.netuid
+        ):
+            terminal_reason = "payout receipt does not match finalized block"
+        if terminal_reason is None and not any(
+            binding["evidence"].get("commit_ciphertext_hash")
+            and snapshot["vector_digests"].get(binding["validator_hotkey"])
+            == binding["vector_digest"]
+            for binding in snapshot["bindings"]
+        ):
+            # The scan skips this check once a receipt is unavailable.
+            terminal_reason = "no_verified_reveal_provenance"
+        async with self.sessions() as session, session.begin():
+            values: dict[str, Any] = {"last_checked_at": datetime.now(UTC)}
+            if receipt is not None:
+                values["proof"] = {**snapshot, "receipt": asdict(receipt)}
+            if terminal_reason is not None:
+                values |= {"terminal": True, "blocked_reason": terminal_reason}
+            updated = await session.execute(
+                self._pending_payout_update(block_hash)
+                .values(**values)
+                .returning(SourceEmissionPayout.block_hash)
+            )
+            if updated.scalar_one_or_none() is None:
+                # Another collector settled this payout during the read.
+                return None
+        return None if terminal_reason is not None else receipt
+
+    def _pending_payout_update(self, block_hash: str) -> Any:
+        """Update one payout only while it is still pending and unresolved."""
+        return update(SourceEmissionPayout).where(
+            SourceEmissionPayout.netuid == self.netuid,
+            SourceEmissionPayout.block_hash == block_hash,
+            SourceEmissionPayout.terminal.is_(False),
+            ~select(SourceEmissionPayoutResolution.netuid)
+            .where(
+                SourceEmissionPayoutResolution.netuid == SourceEmissionPayout.netuid,
+                SourceEmissionPayoutResolution.block_hash
+                == SourceEmissionPayout.block_hash,
+            )
+            .exists(),
+        )
 
     async def process_block(
         self,
@@ -562,7 +673,19 @@ class SourceEmissionCollector:
             )
             snapshots = [(row.block, row.block_hash, dict(row.proof)) for row in rows]
         confirmed = 0
+        refetched = 0
         for block, block_hash, snapshot in snapshots:
+            if snapshot.get("receipt") is None:
+                # Reopened after a non-reproducible ambiguity verdict.
+                if refetched >= _RECEIPT_REFETCH_LIMIT:
+                    continue
+                refetched += 1
+                receipt = await self._refetch_receipt(
+                    substrate, block=block, block_hash=block_hash, snapshot=snapshot
+                )
+                if receipt is None:
+                    continue
+                snapshot = {**snapshot, "receipt": asdict(receipt)}
             payout = _receipt_from_json(snapshot["receipt"])
             resolved = []
             for binding in snapshot["bindings"]:
