@@ -24,13 +24,25 @@ from uuid import UUID
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import ChainMinerEmissionReceipt
 
+# v475 adds a per-subnet epoch consensus (Yuma or Null). Payout-critical Yuma
+# semantics are unchanged through v478 (docs/source-runtime-v475.md); Null
+# changes permits, weights and payouts, so these runtimes are audited only while
+# SubnetEpochConsensus is Yuma and the reader fails closed otherwise.
+_YUMA_GATED_RUNTIME_CODE_HASHES = frozenset(
+    {
+        "0x557634c8c31bc639ea6552e297dcfb781cd7d9bdd491a5352c151305db33d3a0",
+        "0x18b52484d9c5d7523f704c86b17b2ab959fffbc6edb6766a77e9877f0ad19387",
+        "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1",
+    }
+)
+
 # https://github.com/RaoFoundation/subtensor/releases/download/v464/subtensor-digest.json
 # Compressed/compact WASM for v464 and v459, plus verified compressed
 # v466/v467 and v468-v473 (v472 was an untagged deploy of the v471 runtime).
 # Reveal, weights, epoch math and block_step are unchanged through v471; v473
 # only drops a redundant root-coldkey map population from block_step.
 # Artifact verification and scoped runtime audits:
-# docs/source-runtime-v{466,467,468}.md.
+# docs/source-runtime-v{466,467,468,475}.md.
 AUDITED_RUNTIME_CODE_HASHES = frozenset(
     {
         "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2",
@@ -44,6 +56,7 @@ AUDITED_RUNTIME_CODE_HASHES = frozenset(
         "0xd32f5c4347c58f0c5e68dc3e5dd53a26d4e5a24b770fb01279d1b05ec0612218",
         "0x558275958401c026fa4a4159466d49eabd08c761f0c801390593fcba91dee69b",
         "0x148088864116a7bc8bd18af140f522152890e0b7ee33fc979717deb1b48b5e07",
+        *_YUMA_GATED_RUNTIME_CODE_HASHES,
     }
 )
 
@@ -357,6 +370,18 @@ async def read_source_emission_block(
         raise ValueError("unsupported mechanism count")
     if controls[1] is not True or controls[3] is not True:
         raise ValueError("unsupported direct/manual weights mode")
+    if runtime_hashes[1] in _YUMA_GATED_RUNTIME_CODE_HASHES:
+        modes = await asyncio.gather(
+            *(
+                cache.get(
+                    (netuid, "SubnetEpochConsensus", at),
+                    functools.partial(read, "SubnetEpochConsensus", at, [netuid]),
+                )
+                for at in (parent_hash, block_hash)
+            )
+        )
+        if any(mode != "Yuma" for mode in modes):
+            raise ValueError("unsupported epoch consensus")
     key_maps = await asyncio.gather(
         *(
             cache.get((netuid, "Keys", at), functools.partial(mapping, "Keys", at))
@@ -580,7 +605,14 @@ async def read_source_emission_block(
 # add full reads (never skips), so matching more than needed is harmless.
 # Matched case-insensitively ("regist" covers NeuronRegistered and
 # NeuronDeregistered; "prun" covers explicit UID pruning).
-_STRUCTURAL_EVENT_MARKERS = ("swap", "regist", "dissolv", "networkremoved", "prun")
+_STRUCTURAL_EVENT_MARKERS = (
+    "swap",
+    "regist",
+    "dissolv",
+    "networkremoved",
+    "prun",
+    "epochconsensus",
+)
 _FILTERED_WRITE_EVENTS = {
     "WeightsSet": ("netuid", "uid"),
     "TimelockedWeightsRevealed": ("netuid", "who"),
@@ -715,6 +747,11 @@ async def plan_source_emission_range(
         if await read("MechanismCountCurrent", at) != 1:
             return full(code[0])
         if await read("CommitRevealWeightsEnabled", at) is not True:
+            return full(code[0])
+        if (
+            code[0] in _YUMA_GATED_RUNTIME_CODE_HASHES
+            and await read("SubnetEpochConsensus", at) != "Yuma"
+        ):
             return full(code[0])
     start_keys, end_keys = await keys_at(start), await keys_at(end)
     if (
