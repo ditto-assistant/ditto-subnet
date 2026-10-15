@@ -1,4 +1,4 @@
-"""Mandatory two-phase identity/consent guard for the proposed claim engine.
+"""Mandatory two-phase identity/consent guard for bounty claims.
 
 Prepare GitHub evidence without an acceptance transaction, then revalidate it
 under locks in the transaction that records the claim. Neither phase chooses a
@@ -12,13 +12,15 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from ditto.api_server.cla import ClaConsentRequired, evaluate_cla_gate
+from ditto.api_server.cla import ClaConsentRequired
 from ditto.api_server.github_link import (
     GithubLinkRejected,
     GithubProviderUnavailable,
 )
 from ditto.db.queries.contributor_identity import (
     active_github_link,
+    current_cla_signature,
+    current_cla_version,
     lock_identity_writes,
 )
 
@@ -57,7 +59,7 @@ class VerifiedBountyContributor:
     github_link_id: UUID
     github_user_id: int
     github_login: str
-    cla_signature_id: UUID | None
+    cla_signature_id: UUID
 
 
 async def prepare_bounty_identity(
@@ -140,13 +142,24 @@ async def require_verified_bounty_contributor(
             "verified GitHub link changed during verification; re-link or retry"
         )
     await lock_identity_writes(session, namespace="cla-policy", shared=True)
-    consent = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
-    if not consent.allowed:
-        raise ClaConsentRequired(consent.message)
+    # Bounty work is a code contribution to this repository, so a claim
+    # always needs the current CLA, whatever the upload gate's rollout mode.
+    version = await current_cla_version(session)
+    signature = await current_cla_signature(
+        session, netuid=netuid, hotkey=hotkey, version=version
+    )
+    if signature is None:
+        raise ClaConsentRequired(
+            f"Contributor agreement v{version.version} is required; run `ditto "
+            "cla sign` before claiming a bounty."
+            if version is not None
+            else "No effective contributor agreement is published; bounty claims "
+            "open once one is."
+        )
     return VerifiedBountyContributor(
         hotkey=hotkey,
         github_link_id=link.link_id,
         github_user_id=link.github_user_id,
         github_login=evidence.github_login,
-        cla_signature_id=consent.signature_id,
+        cla_signature_id=signature.signature_id,
     )

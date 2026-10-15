@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 import ditto
+from ditto.api_server.bounty_claims import SimulatedBountyFeeVerifier
 from ditto.api_server.burn_settings import BurnSettingsResolver
 from ditto.api_server.coding_artifact_capabilities import (
     CodingArtifactCapabilityMinter,
@@ -123,6 +124,7 @@ from ditto.api_server.endpoints import (
     admin_validator_weights_router,
     attestation_router,
     bounties_admin_router,
+    bounties_claims_router,
     bounties_public_router,
     contributor_cla_router,
     ditto_callback_challenge_router,
@@ -657,6 +659,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # DITTO_LINK_* names the DittoBench app; tests swap in a mock transport.
     app.state.ditto_link = DittoLinkClient(config.ditto_link)
     app.state.github_link = GithubLinkClient(config.github_link)
+    # v1 bounties run in rehearsal funding only: fees are simulated, no funds
+    # move. A live verifier is a separately approved change (#2944).
+    app.state.bounty_fee_verifier = SimulatedBountyFeeVerifier()
 
     # Starlette inserts each middleware at position 0, so the LAST
     # add_middleware call ends up outermost on the wire. RequestIDMiddleware
@@ -741,6 +746,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(contributor_cla_router, prefix="/api/v1")
     app.include_router(bounties_public_router, prefix="/api/v1")
     app.include_router(bounties_admin_router, prefix="/api/v1")
+    app.include_router(bounties_claims_router, prefix="/api/v1")
     app.include_router(feedback_track_router, prefix="/api/v1")
     app.include_router(miner_mcp_router)
     # Root path (no /api/v1): Ditto fetches the challenge at the origin root.

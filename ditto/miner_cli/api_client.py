@@ -49,6 +49,13 @@ from ditto.api_models import (
     UploadCheckRequest,
     UploadCheckResponse,
 )
+from ditto.api_models.bounty import (
+    BountyBoardPage,
+    BountyClaimRequest,
+    BountyClaimView,
+    BountyConfirmRequest,
+    BountyDetail,
+)
 from ditto.api_models.contributor_identity import (
     ClaSignatureView,
     ClaSignRequest,
@@ -668,6 +675,70 @@ class ApiClient:
         return ClaSignatureView.model_validate(
             self._contributor_response("POST", "/api/v1/cla/sign", body=body).json()
         )
+
+    # ---- build bounties -------------------------------------------------
+
+    def list_bounties(
+        self,
+        *,
+        repo: str | None = None,
+        issue: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> BountyBoardPage:
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if repo is not None:
+            params["repo"] = repo
+        if issue is not None:
+            params["issue"] = issue
+        response = self._request("GET", "/api/v1/public/bounties", params=params)
+        if not response.is_success:
+            raise ApiResponseError(_format_error(response, prefix="bounties"))
+        return BountyBoardPage.model_validate(response.json())
+
+    def get_bounty(self, bounty_id: UUID) -> BountyDetail:
+        response = self._request("GET", f"/api/v1/public/bounties/{bounty_id}")
+        if not response.is_success:
+            raise ApiResponseError(_format_error(response, prefix="bounty"))
+        return BountyDetail.model_validate(response.json())
+
+    def hold_bounty_claim(self, body: BountyClaimRequest) -> BountyClaimView:
+        """Send a signed claim; resending the same body returns the same hold."""
+        return BountyClaimView.model_validate(
+            self._bounty_response(
+                "POST", "/api/v1/bounties/claims", body.model_dump(mode="json")
+            ).json()
+        )
+
+    def confirm_bounty_claim(
+        self, claim_id: UUID, body: BountyConfirmRequest
+    ) -> BountyClaimView:
+        """Send a fee receipt; resending it returns the recorded outcome."""
+        return BountyClaimView.model_validate(
+            self._bounty_response(
+                "POST",
+                f"/api/v1/bounties/claims/{claim_id}/confirm",
+                body.model_dump(mode="json"),
+            ).json()
+        )
+
+    def get_bounty_claim(self, claim_id: UUID) -> BountyClaimView:
+        return BountyClaimView.model_validate(
+            self._bounty_response("GET", f"/api/v1/bounties/claims/{claim_id}").json()
+        )
+
+    def _bounty_response(
+        self, method: str, path: str, body: Any = None
+    ) -> httpx.Response:
+        response = self._request(
+            method, path, **({"json": body} if body is not None else {})
+        )
+        if response.is_success:
+            return response
+        if response.status_code in (429, 500, 502, 503, 504):
+            # Every bounty write is an exact retry: resending is always safe.
+            raise TransientApiError(_format_error(response, prefix="bounty claim"))
+        raise ApiResponseError(_format_error(response, prefix="bounty claim"))
 
     def clear_miner_avatar(self, body: MinerAvatarClearRequest) -> MinerAvatarResponse:
         response = self._request(

@@ -14,6 +14,8 @@ session, so no authenticated caller can be turned away here:
   Rejection happens before the multipart body is read.
 - ``/api/v1/retrieval/*``: the miner CLI's status polls, each a DB read.
 - ``/api/v1/cla/*``: public signed consent, including chain ownership lookup.
+- ``/api/v1/bounties/*``: signed bounty claims and fee confirmations, including
+  chain ownership and GitHub identity lookups.
 - ``/api/v1/public/*``: the dashboard read API. This middleware sits inside
   :class:`PublicCacheMiddleware`, so cache hits never count; what is limited is
   exactly the traffic that reaches the database (misses, cache-busting query
@@ -58,6 +60,7 @@ _LIMITED_PREFIXES = {
     "/api/v1/retrieval/": "retrieval",
     "/api/v1/public/": "public",
     "/api/v1/cla/": "cla",
+    "/api/v1/bounties/": "bounties",
 }
 
 # Backstop on distinct clients held at once. Idle buckets are already dropped

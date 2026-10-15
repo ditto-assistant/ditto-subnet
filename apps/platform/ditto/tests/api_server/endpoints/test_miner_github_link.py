@@ -43,6 +43,13 @@ from ditto.db.models import (
     MinerSession,
 )
 from ditto.db.queries.contributor_identity import active_github_link
+from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
+    _install as admin_install,
+)
+from ditto.tests.api_server.endpoints.test_contributor_cla import (
+    publish as publish_cla,
+)
+from ditto.tests.api_server.endpoints.test_contributor_cla import signed as signed_cla
 from ditto.tests.api_server.endpoints.test_miner_ditto_link import _install, _sign_in
 
 pytestmark = pytest.mark.asyncio
@@ -60,7 +67,9 @@ class Provider:
     user_delay = 0.0
     # Replaces the code exchange's JSON body when set.
     token_reply: dict | None = None
-    # Public lookups (/users/{login}): a replacement reply, a delay, headers.
+    # Public lookups (/users/{login}): a replacement reply, a delay, headers,
+    # and further accounts by login beside the current one.
+    accounts: dict[str, int] = {}
     users_reply = None
     users_delay = 0.0
     users_headers: dict[str, str] = {}
@@ -108,9 +117,14 @@ class Provider:
                     await asyncio.sleep(self.users_delay)
                 if self.users_reply is not None:
                     return self.users_reply()
+                login = request.url.path.removeprefix("/users/")
                 return httpx.Response(
                     200,
-                    json={"id": self.user_id, "login": self.login},
+                    json=(
+                        {"id": self.accounts[login], "login": login}
+                        if login in self.accounts
+                        else {"id": self.user_id, "login": self.login}
+                    ),
                     headers=self.users_headers,
                 )
             return httpx.Response(404)
@@ -1498,6 +1512,11 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
         json=signed_link(alice, started["attempt_id"]),
     )
     assert linked.status_code == 200, linked.text
+    # A bounty claim always needs the current CLA, even with the gate off.
+    admin_install(app, session_maker)
+    agreement = await publish_cla(client)
+    receipt = await client.post("/api/v1/cla/sign", json=signed_cla(alice, agreement))
+    assert receipt.status_code == 200, receipt.text
     original = app.state.github_link.public_identity
 
     async def lookup_without_connection(login):
@@ -1525,6 +1544,7 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
 
     verified = await verify(provider.login)
     assert verified.github_user_id == 100 and verified.hotkey == alice.ss58_address
+    assert verified.cla_signature_id == UUID(receipt.json()["signature_id"])
     assert not hasattr(verified, "coldkey")
     evidence = await prepare_bounty_identity(
         session_maker,
