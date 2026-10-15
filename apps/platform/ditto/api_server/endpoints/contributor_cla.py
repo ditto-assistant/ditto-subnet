@@ -353,7 +353,11 @@ async def existing_receipt(
     return signature_view(row) if row is not None else None
 
 
-@router.post("/admin/cla/versions", response_model=ClaVersionView)
+@router.post(
+    "/admin/cla/versions",
+    response_model=ClaVersionView,
+    responses={status: {"model": HttpErrorEnvelope} for status in (400, 409, 503)},
+)
 async def publish(
     body: ClaPublishRequest, _admin: AdminDep, actor: ActorDep, session: SessionDep
 ) -> ClaVersionView:
@@ -487,7 +491,11 @@ async def control(
     )
 
 
-@router.post("/admin/cla/settings", response_model=SettingsView)
+@router.post(
+    "/admin/cla/settings",
+    response_model=SettingsView,
+    responses={status: {"model": HttpErrorEnvelope} for status in (409, 503)},
+)
 async def set_policy(
     body: ClaSettingsRequest, _admin: AdminDep, actor: ActorDep, session: SessionDep
 ) -> SettingsView:
