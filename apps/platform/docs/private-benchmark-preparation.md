@@ -64,6 +64,10 @@ The separate worker environment requires `DITTO_PRIVATE_PRODUCER_EXECUTABLE`,
 same `DITTO_PRIVATE_PRODUCER_` prefix), plus `OPENROUTER_API_KEY` and ordinary
 Platform database configuration. Optional prefixed `REWRITE_REASONING`,
 `VALIDATOR_REASONING`, and `CONCURRENCY` bind explicit producer settings.
+Optional `REWRITE_MODE=literal-text-v1` selects an experimental natural-text
+writer; empty retains the legacy mode. Mode selection is included in profile
+inspection and inference arguments and changes the producer profile digest.
+Selecting a mode does not qualify it or grant permission to lease its output.
 No database/admin environment is inherited by the child. Profile inspection
 receives no provider credential. Child stdout/stderr are not forwarded.
 
