@@ -35,6 +35,12 @@ def _app() -> FastAPI:
         # An explicit policy (the public CLA text) is kept as declared.
         return Response(b"fixture", headers={"Cache-Control": "public, max-age=60"})
 
+    @private.get("/declared-error")
+    async def declared_error() -> dict:
+        raise HTTPException(
+            404, "not yet", headers={"Cache-Control": "public, max-age=60"}
+        )
+
     @private.get("/boom")
     async def boom() -> dict:
         raise RuntimeError("fixture failure")
@@ -58,6 +64,7 @@ async def test_private_responses_are_no_store_unless_declared() -> None:
                 "/private/ok",
                 "/private/redirect",
                 "/private/declared",
+                "/private/declared-error",
                 "/private/missing",
                 "/private/item/not-a-number",
                 "/private/boom",
@@ -69,12 +76,17 @@ async def test_private_responses_are_no_store_unless_declared() -> None:
         302,
         200,
         404,
+        404,
         422,
         500,
         404,
     ]
     for path, response in responses.items():
-        expected = {"/public/missing": None, "/private/declared": "public, max-age=60"}
+        expected = {
+            "/public/missing": None,
+            "/private/declared": "public, max-age=60",
+            "/private/declared-error": "public, max-age=60",
+        }
         assert response.headers.get("cache-control") == expected.get(
             path, "no-store"
         ), path

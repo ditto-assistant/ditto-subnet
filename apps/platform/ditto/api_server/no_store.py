@@ -23,9 +23,13 @@ def no_store(request: Request, response: Response) -> None:
 
 
 def mark_error_no_store(request: Request, response: Response | None) -> None:
-    """Apply a private route's cache policy to its error response."""
+    """Apply a private route's cache policy to its error response.
+
+    Like :class:`NoStoreMiddleware`, an explicitly declared policy (for
+    example an ``HTTPException`` raised with its own headers) is kept.
+    """
     if response is not None and getattr(request.state, "no_store", False):
-        response.headers["Cache-Control"] = NO_STORE
+        response.headers.setdefault("Cache-Control", NO_STORE)
 
 
 class NoStoreMiddleware:
