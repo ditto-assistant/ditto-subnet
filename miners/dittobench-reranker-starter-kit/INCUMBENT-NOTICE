@@ -1,0 +1,4 @@
+model.onnx and vocab.txt are a dynamic-INT8 ONNX export of
+cross-encoder/ms-marco-TinyBERT-L2-v2 (https://huggingface.co/cross-encoder/ms-marco-TinyBERT-L2-v2),
+licensed under the Apache License 2.0. They are byte-identical to the model the
+Ditto product embeds (backend pkg/services/retrieval/crossencoder/model/).
