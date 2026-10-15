@@ -28,6 +28,7 @@ from ditto.db.models import (
     AgentStatus,
     ClaShadowUpload,
     EvaluationPayment,
+    UploadAdmissionReservation,
 )
 from ditto.tests.api_server.conftest import make_api_server_config
 from ditto.tests.api_server.endpoints.test_contributor_cla import (
@@ -375,6 +376,28 @@ async def test_lost_race_to_an_identical_retry_returns_the_original(
         data, files = _build_form(keypair=alice, block_hash=block_hash)
         winner = await client.post("/api/v1/upload/agent", data=data, files=files)
         assert winner.status_code == 200, winner.text
+        # The loser carries the temporary reservation that a recovery check
+        # issues for an exact retry. Every recovery must release it.
+        check_data, _ = _build_form(keypair=alice, block_hash=block_hash)
+        reserved = await client.post(
+            "/api/v1/upload/check",
+            json={
+                "hotkey": alice.ss58_address,
+                "sha256": _TAR_SHA,
+                "name": check_data["name"],
+                "signature": check_data["signature"],
+                "signature_timestamp": check_data["signature_timestamp"],
+                "signature_nonce": check_data["signature_nonce"],
+                "file_size_bytes": 100,
+                "payment_block_hash": block_hash,
+                "payment_block_number": 123,
+                "payment_extrinsic_index": 0,
+                "reserve_submission_slot": True,
+            },
+        )
+        assert reserved.status_code == 200, reserved.text
+        token = reserved.json()["admission_token"]
+        assert token is not None
         # Replay the race: the loser's first proof lookup ran before the
         # winner committed. Later steps then meet the winner's commit.
         real_lookup = upload_endpoint.get_agent_for_payment_proof
@@ -422,6 +445,7 @@ async def test_lost_race_to_an_identical_retry_returns_the_original(
                 upload_endpoint, "consume_or_enforce_upload_admission", cooldown
             )
         retry_data, retry_files = _build_form(keypair=alice, block_hash=block_hash)
+        retry_data["admission_token"] = token
         loser = await client.post(
             "/api/v1/upload/agent", data=retry_data, files=retry_files
         )
@@ -429,6 +453,15 @@ async def test_lost_race_to_an_identical_retry_returns_the_original(
     assert loser.json()["agent_id"] == winner.json()["agent_id"]
     async with session_maker() as session:
         assert await session.scalar(select(func.count()).select_from(Agent)) == 1
+        # The reservation never outlives the recovered retry.
+        assert (
+            await session.scalar(
+                select(UploadAdmissionReservation).where(
+                    UploadAdmissionReservation.token == UUID(token)
+                )
+            )
+            is None
+        )
 
 
 async def test_upload_while_the_gate_is_off_binds_nothing(

@@ -106,6 +106,7 @@ from ditto.db.queries.submission_settings import (
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
+    from ditto.db.models import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -614,53 +615,30 @@ async def upload_agent(
     # commit. Authenticate and re-hash first, then recover only an *exact* retry.
     # The payment proof remains non-transferable: changing hotkey, name, or bytes
     # keeps the existing 3207 replay rejection.
-    existing = await get_agent_for_payment_proof(
-        session,
-        block_hash=payment_block_hash,
-        extrinsic_index=payment_extrinsic_index,
-    )
-    if existing:
-        if (
-            existing.miner_hotkey == hotkey
-            and existing.name == name
-            and existing.sha256 == sha256
-        ):
-            assert existing.version is not None
-            existing_agent_id = existing.agent_id
-            existing_version = existing.version
-            existing_status = existing.status
-            if admission_token is not None:
-                await release_upload_admission_for_exact_retry(
-                    session,
-                    token=admission_token,
-                    miner_hotkey=hotkey,
-                    sha256=sha256,
-                )
-                await session.commit()
-            logger.info(
-                "upload retry recovered hotkey=%s agent_id=%s version=%s block_hash=%s",
-                hotkey,
-                existing_agent_id,
-                existing_version,
-                payment_block_hash,
-            )
-            return UploadAgentResponse(
-                agent_id=existing_agent_id,
-                version=existing_version,
-                status=existing_status,
-            )
-        raise PaymentReplayedError("payment proof already used by a different upload")
-
-    # From here on, a concurrent identical request that commits first can
-    # cause a refusal (consent, the proof, the admission). Every such refusal
-    # goes through the exact-retry check so the loser reports the original.
     retry_identity = _RetryIdentity(
         payment_block_hash=payment_block_hash,
         payment_extrinsic_index=payment_extrinsic_index,
         hotkey=hotkey,
         name=name,
         sha256=sha256,
+        admission_token=admission_token,
     )
+    existing = await get_agent_for_payment_proof(
+        session,
+        block_hash=payment_block_hash,
+        extrinsic_index=payment_extrinsic_index,
+    )
+    if existing:
+        recovered = await _exact_retry_of_accepted_upload(
+            session, retry_identity, existing=existing
+        )
+        if recovered is not None:
+            return recovered
+        raise PaymentReplayedError("payment proof already used by a different upload")
+
+    # From here on, a concurrent identical request that commits first can
+    # cause a refusal (consent, the proof, the admission). Every such refusal
+    # goes through the exact-retry check so the loser reports the original.
     # Refusals about the proof itself come before consent: signing the CLA
     # cannot make another upload's proof or another hotkey's credit usable, so
     # the caller must learn that first (the 3207 replay contract).
@@ -974,6 +952,8 @@ class _RetryIdentity:
     hotkey: str
     name: str
     sha256: str
+    # The temporary reservation a recovery check issued for this retry.
+    admission_token: uuid.UUID | None
 
 
 async def _refuse_unless_exact_retry(
@@ -987,20 +967,23 @@ async def _refuse_unless_exact_retry(
 
 
 async def _exact_retry_of_accepted_upload(
-    session: AsyncSession, identity: _RetryIdentity
+    session: AsyncSession, identity: _RetryIdentity, *, existing: Agent | None = None
 ) -> UploadAgentResponse | None:
     """The original agent when this request exactly repeats an accepted upload.
 
     The proof stays non-transferable: a different hotkey, name or SHA is not a
-    retry. Used after any refusal that a concurrent identical request can cause
-    by committing first (the proof, its admission or a policy change), so the
-    loser of that race reports the original upload instead of the refusal.
+    retry. Used by the first proof lookup and after any refusal that a
+    concurrent identical request can cause by committing first (the proof, its
+    admission or a policy change), so every recovery behaves the same: it
+    releases the reservation the retry carried, so that never blocks the next
+    upload, and reports the original upload instead of the refusal.
     """
-    existing = await get_agent_for_payment_proof(
-        session,
-        block_hash=identity.payment_block_hash,
-        extrinsic_index=identity.payment_extrinsic_index,
-    )
+    if existing is None:
+        existing = await get_agent_for_payment_proof(
+            session,
+            block_hash=identity.payment_block_hash,
+            extrinsic_index=identity.payment_extrinsic_index,
+        )
     if not existing or (existing.miner_hotkey, existing.name, existing.sha256) != (
         identity.hotkey,
         identity.name,
@@ -1008,11 +991,28 @@ async def _exact_retry_of_accepted_upload(
     ):
         return None
     assert existing.version is not None
-    return UploadAgentResponse(
+    # Read the row before a commit expires it.
+    recovered = UploadAgentResponse(
         agent_id=existing.agent_id,
         version=existing.version,
         status=existing.status,
     )
+    if identity.admission_token is not None:
+        await release_upload_admission_for_exact_retry(
+            session,
+            token=identity.admission_token,
+            miner_hotkey=identity.hotkey,
+            sha256=identity.sha256,
+        )
+        await session.commit()
+    logger.info(
+        "upload retry recovered hotkey=%s agent_id=%s version=%s block_hash=%s",
+        identity.hotkey,
+        recovered.agent_id,
+        recovered.version,
+        identity.payment_block_hash,
+    )
+    return recovered
 
 
 def _verify_upload_signature(
