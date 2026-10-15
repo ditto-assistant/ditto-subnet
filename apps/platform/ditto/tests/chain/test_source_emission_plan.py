@@ -140,6 +140,8 @@ async def test_only_blocks_the_reader_acts_on_are_interesting() -> None:
         108: [_event("SubtensorModule", "HotkeySwapped", ("c", "a", "b"))],
         109: [_event("SubtensorModule", "NeuronRegistered", (7, 3, "x"))],
         110: [_event("SubtensorModule", "StakeAdded", ("c", "h", 1, 1, NETUID, 0))],
+        114: [_event("SubtensorModule", "NeuronDeregistered", (NETUID, 2))],
+        117: [_event("SubtensorModule", "NullUidsPruningProgress", {"netuid": 7})],
         111: [_event("SubtensorModule", "WeightsSet", ("malformed",))],
         112: ["not an event"],
         113: None,
@@ -151,7 +153,21 @@ async def test_only_blocks_the_reader_acts_on_are_interesting() -> None:
 
     assert plan.full_scan is False
     assert plan.runtime_code_hash == CODE
-    assert plan.interesting == (103, 105, 106, 107, 108, 109, 111, 112, 113, 115, 118)
+    assert plan.interesting == (
+        103,
+        105,
+        106,
+        107,
+        108,
+        109,
+        111,
+        112,
+        113,
+        114,
+        115,
+        117,
+        118,
+    )
     assert set(plan.hashes) == set(range(100, 121))
     assert sorted(chain.storage_reads) == list(range(101, 121))
 
@@ -204,3 +220,31 @@ async def test_invalid_range_is_rejected() -> None:
         await plan_source_emission_range(
             FakeChain(first=5, last=4), netuid=NETUID, first_block=5, last_block=4
         )
+
+
+async def test_a_failed_block_read_cancels_its_siblings() -> None:
+    import asyncio
+
+    chain = FakeChain(first=101, last=140)
+    original = chain.rpc_request
+    started: list[int] = []
+    finished: list[int] = []
+
+    async def rpc_request(method, params):
+        if method != "state_queryStorageAt":
+            return await original(method, params)
+        block = chain.block_of(params[1])
+        started.append(block)
+        if block == 101:
+            raise RuntimeError("Historical work rate limit exceeded")
+        await asyncio.sleep(0.05)
+        finished.append(block)
+        return await original(method, params)
+
+    chain.rpc_request = rpc_request  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="rate limit"):
+        await _plan(chain)
+    await asyncio.sleep(0.2)
+    # The failure stops queued reads instead of letting all 40 run.
+    assert len(started) < 40
+    assert finished == []

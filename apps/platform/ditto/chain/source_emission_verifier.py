@@ -578,7 +578,9 @@ async def read_source_emission_block(
 # SubtensorModule events that can move identities or subnets. The endpoint Keys
 # comparison already routes a net change through the full scan; these names only
 # add full reads (never skips), so matching more than needed is harmless.
-_STRUCTURAL_EVENT_MARKERS = ("Swap", "Register", "Dissolv", "NetworkRemoved")
+# Matched case-insensitively ("regist" covers NeuronRegistered and
+# NeuronDeregistered; "prun" covers explicit UID pruning).
+_STRUCTURAL_EVENT_MARKERS = ("swap", "regist", "dissolv", "networkremoved", "prun")
 _FILTERED_WRITE_EVENTS = {
     "WeightsSet": ("netuid", "uid"),
     "TimelockedWeightsRevealed": ("netuid", "who"),
@@ -639,7 +641,7 @@ def _quiet_block_events(events: Any, netuid: int) -> bool:
                 return False
             if subnet == netuid:
                 return False
-        elif any(marker in name for marker in _STRUCTURAL_EVENT_MARKERS):
+        elif any(marker in name.lower() for marker in _STRUCTURAL_EVENT_MARKERS):
             return False
     return True
 
@@ -762,7 +764,15 @@ async def plan_source_emission_range(
         return not _quiet_block_events(events, netuid)
 
     blocks = list(range(first_block, last_block + 1))
-    flags = await asyncio.gather(*(interesting(block) for block in blocks))
+    tasks = [asyncio.create_task(interesting(block)) for block in blocks]
+    try:
+        flags = await asyncio.gather(*tasks)
+    except BaseException:
+        # Stop sibling reads before the caller falls back to its own scan.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
     return SourceEmissionRangePlan(
         first_block,
         last_block,

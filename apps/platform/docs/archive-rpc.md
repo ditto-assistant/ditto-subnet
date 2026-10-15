@@ -90,7 +90,8 @@ range of up to 720 blocks before reading it (#2939):
    and `LastMechansimStepBlock`. Only payout blocks, blocks with a
    netuid-scoped `WeightsSet`, `TimelockedWeightsRevealed` or
    `IncentiveAlphaEmittedToMiners`, `System.CodeUpdated`, or a structural
-   SubtensorModule event (swap, registration, dissolution) get the full
+   SubtensorModule event (swap, registration or deregistration, dissolution,
+   pruning) get the full
    per-block reader. Every other block commits as part of one cursor skip.
 4. Two sampled skipped blocks per range are re-read in full. Any disagreement
    fails the sweep closed without moving the cursor.
