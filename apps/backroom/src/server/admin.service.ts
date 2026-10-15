@@ -4184,7 +4184,8 @@ export async function updateClaPolicy(actor: string, rawInput: unknown) {
   try {
     response = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body })
   } catch (error) {
-    if (error instanceof PlatformAdminError && error.failure !== 'timeout' && error.failure !== 'server') throw error
+    // Only an auth failure or a 4xx proves nothing was applied.
+    if (error instanceof PlatformAdminError && (error.failure === 'auth' || error.failure === 'request')) throw error
     unknownOutcome = error instanceof Error ? error.message : String(error)
   }
   const parsed = unknownOutcome === null ? claSettingsRevisionSchema.safeParse(response) : null
