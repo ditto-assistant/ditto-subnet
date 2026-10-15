@@ -6056,6 +6056,17 @@ describe('verified contributors and CLA rollout', () => {
     expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
+  it('reports an unknown outcome when the policy write fails in transport', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(Response.json(claControlFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' })
+    expect(result).toMatchObject({ applied: null, policy: claControlFixture })
+    expect(result.refresh_error).toContain('may have committed (fetch failed)')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   it('does not report success when the policy write itself fails', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ detail: 'CLA policy revision changed; refresh before applying' }, { status: 409 }))

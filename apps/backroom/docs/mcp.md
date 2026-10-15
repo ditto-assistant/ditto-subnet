@@ -540,8 +540,9 @@ signed-in operator's audit identity. Publication preserves exact UTF-8 text and
 SHA-256 and never activates enforcement. Maintain approved versioned text in
 `docs/legal`; never publish a test fixture or draft legal wording.
 `set_cla_policy` returns the committed revision as `applied` with the refreshed
-`policy`. If the write times out, fails upstream (5xx) or returns an unreadable
-revision, `applied` is null; if the follow-up read fails, `policy` is null. In
+`policy`. If the write times out, fails upstream (5xx), loses its connection
+or returns an unreadable revision, `applied` is null; if the follow-up read
+fails, `policy` is null. In
 each case `refresh_error` explains that the write may have committed. Read
 `get_cla_policy`; do not retry with the old `expectedRevision`. A 4xx, such as
 a revision conflict, still fails: nothing was applied.
