@@ -14,6 +14,9 @@ from ditto_screening_protocol.contributor_identity import GithubLogin
 
 logger = logging.getLogger(__name__)
 ATTEMPT_TTL_SECONDS = 600
+# A consumed callback must finish its provider exchange within this window:
+# three requests (token, user, revocation) at the 60-second timeout cap.
+EXCHANGE_WINDOW_SECONDS = 180
 
 
 @dataclass(frozen=True)

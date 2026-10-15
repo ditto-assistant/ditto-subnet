@@ -26,6 +26,7 @@ from ditto.api_models.contributor_identity import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.github_link import (
+    ATTEMPT_TTL_SECONDS,
     GithubLinkClient,
     GithubLinkConfig,
     GithubLinkRejected,
@@ -1514,6 +1515,55 @@ async def test_slow_callback_is_single_use_and_does_not_block_status_polling(
         result = await asyncio.wait_for(task, 10)
     assert result.status_code == (409 if expire_during_exchange else 200), result.text
     exchange.assert_awaited_once()
+    if not expire_during_exchange:
+        # A verified identity gets the attempt's full TTL back to finish linking.
+        async with session_maker() as session:
+            attempt = await session.get(
+                MinerGithubLinkAttempt, UUID(started["attempt_id"])
+            )
+            assert attempt.expires_at == attempt.created_at + timedelta(
+                seconds=ATTEMPT_TTL_SECONDS
+            )
+
+
+async def test_abandoned_exchange_expires_and_frees_its_pending_slot(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.api_server.endpoints import miner_github_link
+
+    setup(app, session_maker)
+    monkeypatch.setattr(miner_github_link, "EXCHANGE_WINDOW_SECONDS", 0)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    auth = {"authorization": f"Bearer {token}"}
+    started = (await client.post("/api/v1/me/github-link/start", headers=auth)).json()
+    state = (await launch_in_browser(client, started))["state"][0]
+    entered = asyncio.Event()
+
+    async def hung_exchange(**_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(app.state.github_link, "exchange", hung_exchange)
+    task = asyncio.create_task(
+        client.get(
+            "/api/v1/miner-auth/github/callback",
+            params={"state": state, "code": "fixture-code"},
+        )
+    )
+    await asyncio.wait_for(entered.wait(), 10)
+    # The worker dies after consuming the verifier, before recording an outcome.
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    polled = await client.get(
+        f"/api/v1/me/github-link/attempts/{started['attempt_id']}", headers=auth
+    )
+    assert polled.json()["status"] == "expired"
+    # The abandoned attempt no longer counts against the five pending attempts.
+    for _ in range(5):
+        fresh = await client.post("/api/v1/me/github-link/start", headers=auth)
+        assert fresh.status_code == 200, fresh.text
 
 
 @pytest.mark.parametrize("action", ["unlink", "relink"])

@@ -50,6 +50,7 @@ from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.miner_auth import require_scope, resolve_miner_session
 from ditto.api_server.github_link import (
     ATTEMPT_TTL_SECONDS,
+    EXCHANGE_WINDOW_SECONDS,
     GithubLinkClient,
     GithubLinkRejected,
 )
@@ -382,6 +383,12 @@ async def callback(
                 status=409,
             )
         verifier, attempt.code_verifier = attempt.code_verifier, None
+        # If this process dies mid-exchange, the attempt expires after the
+        # exchange window instead of holding a pending slot for the full TTL.
+        attempt.expires_at = min(
+            attempt.expires_at,
+            datetime.now(UTC) + timedelta(seconds=EXCHANGE_WINDOW_SECONDS),
+        )
         attempt_id = attempt.attempt_id
     # Consuming the verifier commits before network I/O. A second callback
     # cannot exchange the code, and CLI polling retains access to the row.
@@ -427,6 +434,7 @@ async def callback(
             )
         attempt.github_user_id, attempt.github_login = identity.user_id, identity.login
         attempt.status = "identity_verified"
+        attempt.expires_at = attempt.created_at + timedelta(seconds=ATTEMPT_TTL_SECONDS)
         accept = secrets.token_urlsafe(32)
         attempt.accept_token_hash = hash_state(accept)
         content = (
