@@ -7198,7 +7198,12 @@ class ScreenerL2ReportCanary(Base):
 
 
 class V13ScorerCohortPin(Base):
-    """Immutable, operator-audited V13 scorer and runtime packet admission."""
+    """Immutable, operator-audited V13 scorer and runtime packet admission.
+
+    ``hotkeys`` names three to sixteen members; the per-agent quorum stays three
+    distinct validators. The constraint keeps its historical ``three_hotkeys``
+    name so the deployed constraint is replaced in place.
+    """
 
     __tablename__ = "v13_scorer_cohort_pins"
 
@@ -7216,7 +7221,8 @@ class V13ScorerCohortPin(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_pin_version_check"),
         CheckConstraint(
-            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            "jsonb_typeof(hotkeys) = 'array' "
+            "AND jsonb_array_length(hotkeys) BETWEEN 3 AND 16",
             name="v13_scorer_pin_three_hotkeys_check",
         ),
         CheckConstraint(
@@ -7247,7 +7253,8 @@ class V13ScorerCohortRotation(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_rotation_version_check"),
         CheckConstraint(
-            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            "jsonb_typeof(hotkeys) = 'array' "
+            "AND jsonb_array_length(hotkeys) BETWEEN 3 AND 16",
             name="v13_scorer_rotation_three_hotkeys_check",
         ),
         CheckConstraint(

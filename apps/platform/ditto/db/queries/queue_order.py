@@ -904,26 +904,76 @@ async def miner_has_newer_canonical_work(
     )
 
 
+V13_SCORER_COHORT_BENCH_VERSION = 13
+"""The only version a scorer cohort pin can name (a schema check constraint)."""
+
+
 async def quorum_capable_validator_hotkeys(
     session: AsyncSession, *, bench_version: int, now: datetime
 ) -> set[str]:
-    """Validators whose fresh signed heartbeat advertises ``bench_version``.
+    """Validators that can actually be issued new work at ``bench_version``.
 
-    The fleet that could actually contribute a score at this version, which is
-    the denominator for asking whether a submission can still reach quorum.
-    Same notion of "capable" the previous-generation gate feeds into
-    :func:`~ditto.db.queries.desired_era_backlog.desired_era_work_outstanding`.
+    The fleet that could still contribute a score at this version, which is the
+    denominator for asking whether a submission can still reach quorum. A
+    validator belongs to it only when all three hold:
+
+    * its fresh signed heartbeat advertises ``bench_version`` -- the same
+      capability test the previous-generation gate feeds into
+      :func:`~ditto.db.queries.desired_era_backlog.desired_era_work_outstanding`;
+    * the operator has not paused its issuance, read through the same slot
+      policy and :func:`validator_issuance_paused` the job handler applies;
+    * at v13, once a scorer cohort is pinned, it is a pinned member. Issuance
+      (``pinned_validator_allowed``) refuses every nonmember, so a nonmember's
+      heartbeat is a quorum slot nobody can ever fill. Before activation there
+      is no pin and the version check alone decides, exactly as it did.
+
+    Counting a validator that can never be handed the work inflates the
+    reachability ceiling in :func:`selected_owner_agent_id`: a generation whose
+    only remaining cohort member had spent its budget still looked reachable,
+    stayed pinned, and held its owner's newer upload at ``owner_serialized``.
+
+    Membership, not packet convergence, is the cohort test: a fleet auto-update
+    briefly splits the members' signed packets, and that pause in issuance is
+    transient rather than a slot that is gone for good.
 
     Read once per issuance or preview and passed down, so the owner loop in
     :func:`preview_queue_order` does not re-read the heartbeat table per owner.
     """
     from ditto.db.queries.benchmark_rollout import heartbeat_supports_version
 
-    return {
+    capable = {
         heartbeat.validator_hotkey
         for heartbeat in (await session.scalars(select(ValidatorHeartbeat))).all()
         if heartbeat_supports_version(heartbeat, now=now, version=bench_version)
     }
+    if not capable:
+        return capable
+    # Imported lazily: importing ``ditto.api_server`` assembles the whole app,
+    # and ``v13_scorer_cohort`` itself imports from ``ditto.db.queries``. These
+    # are the job handler's own definitions, so the two cannot drift.
+    from ditto.api_server.validator_slot_settings import (
+        settings_from_row,
+        validator_issuance_paused,
+    )
+    from ditto.db.queries.validator_slot_settings import (
+        latest_validator_slot_settings_revision,
+    )
+
+    slot_settings = settings_from_row(
+        await latest_validator_slot_settings_revision(session)
+    )
+    capable = {
+        hotkey
+        for hotkey in capable
+        if not validator_issuance_paused(slot_settings, validator_hotkey=hotkey)
+    }
+    if bench_version == V13_SCORER_COHORT_BENCH_VERSION:
+        from ditto.api_server.v13_scorer_cohort import current_pin
+
+        pin = await current_pin(session)
+        if pin is not None:
+            capable &= set(pin.hotkeys)
+    return capable
 
 
 async def selected_owner_agent_id(

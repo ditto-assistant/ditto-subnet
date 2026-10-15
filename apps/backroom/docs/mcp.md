@@ -331,7 +331,7 @@ a fresh connect, while the server's `tools/list` and `get_backroom_tool_help`
 still show it. Do not use `z.tuple`: it serializes to draft-07 array-form
 `items`, which is what kept `activate_v13_scorer_cohort` and
 `rotate_v13_scorer_cohort` out of refreshed Codex catalogs (#2490, #2559). Use
-a bounded array such as `z.array(z.string()).length(3)` instead. The catalog
+a bounded array such as `z.array(z.string()).min(3).max(16)` instead. The catalog
 test fails on any array-form `items`, `prefixItems`, or `additionalItems`.
 The catalog itself does not depend on scope: a read-only connection lists the
 write tools too, and the scope check refuses the call.
