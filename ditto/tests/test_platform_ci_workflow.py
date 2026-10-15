@@ -174,7 +174,9 @@ def test_shared_verification_shards_the_complete_suite_without_deselection() -> 
         "data-contract-integration": ("--ignore=ditto/tests/api_server", True),
     }
     pytest_step = _step(test_job, "pytest")
-    assert pytest_step["run"] == "uv run pytest ${{ matrix.pytest_args }}"
+    assert pytest_step["run"] == (
+        "uv run --group browser pytest ${{ matrix.pytest_args }}"
+    )
     assert pytest_step["env"]["DITTO_REQUIRE_POSTGRES"] == "1"
     assert pytest_step["env"]["DITTO_REQUIRE_OBJECT_STORAGE"] == "1"
     assert _step(test_job, "Start MinIO")["if"] == "matrix.object_storage"
