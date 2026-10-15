@@ -75,3 +75,27 @@ Production uses Taostats. Its configuration needs no separate archive secret:
 
 Configuring a provider does not reset the durable cursor, synthesize a payout,
 or change source-disclosure policy.
+
+## Sparse catch-up replay
+
+When the collector is more than 1,000 blocks behind, it plans each catch-up
+range of up to 720 blocks before reading it (#2939):
+
+1. One batched `chain_getBlockHash` fetches every hash in the range.
+2. The runtime code hash, `MechanismCountCurrent`, `CommitRevealWeightsEnabled`
+   and the `Keys` map are compared at the two ends of the range. Any
+   difference, or an invalid value at either end, runs the unchanged
+   per-block scan for that range.
+3. Otherwise each block costs one `state_queryStorageAt` for `System.Events`
+   and `LastMechansimStepBlock`. Only payout blocks, blocks with a
+   netuid-scoped `WeightsSet`, `TimelockedWeightsRevealed` or
+   `IncentiveAlphaEmittedToMiners`, `System.CodeUpdated`, or a structural
+   SubtensorModule event (swap, registration or deregistration, dissolution,
+   pruning) get the full
+   per-block reader. Every other block commits as part of one cursor skip.
+4. Two sampled skipped blocks per range are re-read in full. Any disagreement
+   fails the sweep closed without moving the cursor.
+
+A provider that rejects any of these calls falls back to the per-block scan.
+`LastUpdate` cannot replace the event filter: under commit-reveal, a reveal
+write does not update it.

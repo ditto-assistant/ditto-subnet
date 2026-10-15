@@ -336,6 +336,7 @@ from ditto.db.queries.artifact_fetch_audit import (
     record_artifact_fetch,
 )
 from ditto.db.queries.artifact_release import (
+    SOURCE_RELEASE_STATUSES,
     ArtifactScoreQuorum,
     available_public_source_agent_ids,
     list_first_score_quorums,
@@ -1147,7 +1148,7 @@ def _public_artifact_release(
     revealed weights alone never establish earnings or an unlock time.
 
     Subnet policy short-circuits all of that. It is checked first, ahead of
-    even the rejected/banned branch, because it is the one input whose answer
+    even the rejected branch, because it is the one input whose answer
     does not depend on the submission: under ``never`` every submission is
     withheld identically, and checking it first means a future branch added
     above the ladder cannot accidentally publish one.
@@ -1155,7 +1156,7 @@ def _public_artifact_release(
     if not policy.releases_publicly:
         return PublicArtifactRelease(status="withheld", disclosure="never")
 
-    if status in (AgentStatus.REJECTED, AgentStatus.BANNED):
+    if status == AgentStatus.REJECTED:
         return PublicArtifactRelease(status="unavailable")
 
     finalized_at = score_quorum.finalized_at if score_quorum is not None else None
@@ -1177,8 +1178,11 @@ def _public_artifact_release(
     if status in (AgentStatus.ATH_PENDING_REVIEW, AgentStatus.QUARANTINED):
         release_status = "under_review"
     elif score_quorum is None:
-        release_status = "awaiting_quorum"
-    elif status not in (AgentStatus.SCORED, AgentStatus.LIVE):
+        # A banned submission never reaches a quorum; do not imply it is waiting.
+        release_status = (
+            "unavailable" if status == AgentStatus.BANNED else "awaiting_quorum"
+        )
+    elif status not in SOURCE_RELEASE_STATUSES:
         release_status = "unavailable"
     elif king_reveal is None:
         # Never held the crown: the source stays private (king-only release).
@@ -8535,7 +8539,7 @@ async def agent_artifact(
     """Return a short-lived source URL after the configured cleared-score embargo."""
     response.headers["Cache-Control"] = "private, no-store"
     agent = await session.get(Agent, agent_id)
-    if agent is None or agent.status not in (AgentStatus.SCORED, AgentStatus.LIVE):
+    if agent is None or agent.status not in SOURCE_RELEASE_STATUSES:
         raise HTTPException(status_code=404, detail="source is not publicly available")
 
     now = datetime.now(UTC)
@@ -8579,6 +8583,10 @@ async def agent_artifact(
         king_reveal=king_reveal,
         now=now,
     )
+    if release.status == "unavailable":
+        # Terminal (e.g. a banned submission that never reached a quorum): a
+        # 425 would invite retries that can never succeed.
+        raise HTTPException(status_code=404, detail="source is not publicly available")
     if release.status != "available" or score_quorum is None:
         detail = "source is awaiting a three-validator score quorum"
         if king_reveal.emission_confirmed_at is None:
