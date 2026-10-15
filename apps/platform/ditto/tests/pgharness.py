@@ -556,6 +556,7 @@ async def truncate_test_tables(
 
     CASCADE can reach append-only artifact history. Bypass only enabled
     statement guards, restoring them atomically, on a private worker clone.
+    Identities restart as in the full reset, so a truncated table is fresh.
     """
     database = await conn.scalar(text("SELECT current_database()"))
     if (
@@ -569,7 +570,9 @@ async def truncate_test_tables(
         for table in tables
     ):
         raise ValueError("invalid fixture table names")
-    await truncate_past_guards(conn, tables, lock_timeout_ms=TRUNCATE_LOCK_TIMEOUT_MS)
+    await truncate_past_guards(
+        conn, tables, restart_identity=True, lock_timeout_ms=TRUNCATE_LOCK_TIMEOUT_MS
+    )
 
 
 async def _build_reset_sql(conn: asyncpg.Connection) -> str:

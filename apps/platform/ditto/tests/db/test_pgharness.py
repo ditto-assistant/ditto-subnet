@@ -28,6 +28,21 @@ async def test_legacy_truncate_restores_append_only_guard(session_maker) -> None
         await session.rollback()
 
 
+async def test_legacy_truncate_restarts_identity_like_the_full_reset(
+    session_maker,
+) -> None:
+    insert = text(
+        "INSERT INTO admin_activity (action, method, details, source) "
+        "VALUES ('fixture', 'POST', '{}', 'test') RETURNING id"
+    )
+    async with session_maker() as session, session.begin():
+        await session.execute(insert)
+        await session.execute(insert)
+        await truncate_test_tables(session, "admin_activity")
+        # A truncated table is fresh: its identity starts over at 1.
+        assert (await session.execute(insert)).scalar_one() == 1
+
+
 @pytest.mark.parametrize("mode", ["O", "A"])
 @pytest.mark.parametrize("reset", ["legacy", "template"])
 async def test_reset_restores_original_truncate_guard_mode(
