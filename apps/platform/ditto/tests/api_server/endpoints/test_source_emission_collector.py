@@ -1074,3 +1074,41 @@ async def test_receiptless_refetches_are_bounded_per_resolution(app, session_mak
     )
     await collector.resolve_pending_payouts(SimpleNamespace())
     assert receipt.await_count == module._RECEIPT_REFETCH_LIMIT
+
+
+async def test_refetch_does_not_touch_a_payout_resolved_meanwhile(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.db.models import SourceEmissionPayout
+
+    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
+    aid = UUID(a["provenance"]["champion_agent_id"])
+
+    async def receipt(*_args, **_kwargs):
+        # Another collector settles the payout while this read is in flight.
+        async with session_maker() as session, session.begin():
+            session.add(
+                SourceEmissionPayoutResolution(
+                    netuid=a["netuid"],
+                    block_hash=_hash(201),
+                    agent_id=aid,
+                    artifact_sha256=a["provenance"]["champion_artifact_sha256"],
+                    proof={},
+                    created_at=datetime.now(UTC),
+                )
+            )
+        return _payout(a, 201)
+
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=receipt, _safe_rpc_error=str
+    )
+    async with session_maker() as session:
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        snapshot = dict(row.proof)
+    got = await collector._refetch_receipt(
+        SimpleNamespace(), block=201, block_hash=_hash(201), snapshot=snapshot
+    )
+    assert got is None
+    async with session_maker() as session:
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        assert row.proof["receipt"] is None and row.last_checked_at is None

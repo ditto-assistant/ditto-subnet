@@ -30,9 +30,11 @@ async def test_reopen_targets_only_receiptless_unverifiable_rows(engine, session
     now = datetime.now(UTC)
     rows = {
         "reopen": (True, _OWNERSHIP, {"receipt": None}),
-        "has_receipt": (True, _OWNERSHIP, {"receipt": {"block": 2}}),
+        # Closed again by a downgrade; a later upgrade must reopen it too.
+        "retry": (True, "receipt_retry: provider unavailable", {"receipt": None}),
+        "has_receipt": (True, _OWNERSHIP, {"receipt": {"block": 3}}),
         "other_terminal": (True, "payout_has_vector_writes", {"receipt": None}),
-        "pending": (False, "missing_or_duplicate_miner_payout", {"receipt": None}),
+        "pending": (False, "missing_or_duplicate_miner_payout", {"receipt": {}}),
     }
     async with session_maker() as session, session.begin():
         for block, (key, (terminal, reason, proof)) in enumerate(rows.items(), 1):
@@ -64,6 +66,7 @@ async def test_reopen_targets_only_receiptless_unverifiable_rows(engine, session
         await connection.run_sync(run, migration.upgrade)
     assert await state() == {
         "reopen": (False, True),
+        "retry": (False, True),
         "has_receipt": (True, False),
         "other_terminal": (True, False),
         "pending": (False, False),
@@ -72,6 +75,7 @@ async def test_reopen_targets_only_receiptless_unverifiable_rows(engine, session
         await connection.run_sync(run, migration.downgrade)
     assert {key: terminal for key, (terminal, _) in (await state()).items()} == {
         "reopen": True,
+        "retry": True,
         "has_receipt": True,
         "other_terminal": True,
         "pending": False,

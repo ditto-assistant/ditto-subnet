@@ -327,12 +327,7 @@ class SourceEmissionCollector:
             retry_reason = "receipt_retry: " + self.state.chain._safe_rpc_error(error)
             async with self.sessions() as session, session.begin():
                 await session.execute(
-                    update(SourceEmissionPayout)
-                    .where(
-                        SourceEmissionPayout.netuid == self.netuid,
-                        SourceEmissionPayout.block_hash == block_hash,
-                    )
-                    .values(
+                    self._pending_payout_update(block_hash).values(
                         last_checked_at=datetime.now(UTC),
                         blocked_reason=retry_reason[:300],
                     )
@@ -358,15 +353,30 @@ class SourceEmissionCollector:
                 values["proof"] = {**snapshot, "receipt": asdict(receipt)}
             if terminal_reason is not None:
                 values |= {"terminal": True, "blocked_reason": terminal_reason}
-            await session.execute(
-                update(SourceEmissionPayout)
-                .where(
-                    SourceEmissionPayout.netuid == self.netuid,
-                    SourceEmissionPayout.block_hash == block_hash,
-                )
+            updated = await session.execute(
+                self._pending_payout_update(block_hash)
                 .values(**values)
+                .returning(SourceEmissionPayout.block_hash)
             )
+            if updated.scalar_one_or_none() is None:
+                # Another collector settled this payout during the read.
+                return None
         return None if terminal_reason is not None else receipt
+
+    def _pending_payout_update(self, block_hash: str) -> Any:
+        """Update one payout only while it is still pending and unresolved."""
+        return update(SourceEmissionPayout).where(
+            SourceEmissionPayout.netuid == self.netuid,
+            SourceEmissionPayout.block_hash == block_hash,
+            SourceEmissionPayout.terminal.is_(False),
+            ~select(SourceEmissionPayoutResolution.netuid)
+            .where(
+                SourceEmissionPayoutResolution.netuid == SourceEmissionPayout.netuid,
+                SourceEmissionPayoutResolution.block_hash
+                == SourceEmissionPayout.block_hash,
+            )
+            .exists(),
+        )
 
     async def process_block(
         self,

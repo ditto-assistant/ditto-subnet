@@ -33,7 +33,8 @@ def upgrade() -> None:
         UPDATE source_emission_payouts
         SET terminal = false, last_checked_at = NULL
         WHERE terminal
-          AND blocked_reason LIKE 'unverifiable_payout:%'
+          AND (blocked_reason LIKE 'unverifiable_payout:%'
+               OR blocked_reason LIKE 'receipt_retry:%')
           AND {_RECEIPTLESS}
           AND {_UNRESOLVED}
         """
@@ -41,14 +42,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Restore the old terminal state for rows the rescan has not settled.
+    # The previous resolver cannot read a pending row without a receipt and
+    # would fail every resolution pass. Only reopened rows lack one (the scan
+    # never leaves a receipt-less row pending), so close all of them.
     op.execute(
         f"""
         UPDATE source_emission_payouts
         SET terminal = true
         WHERE NOT terminal
-          AND (blocked_reason LIKE 'unverifiable_payout:%'
-               OR blocked_reason LIKE 'receipt_retry:%')
           AND {_RECEIPTLESS}
           AND {_UNRESOLVED}
         """
