@@ -398,8 +398,9 @@ class TestUploadHappyPath:
             assert run(make_args(good_tar)) == 1
         error = capsys.readouterr().err
         assert ("ditto cla sign" in error) == published
-        # Signing needs an on-chain owner, so the fix for a new hotkey is shown.
-        assert ("btcli subnets register --netuid 118" in error) == published
+        # Signing needs only Owner(hotkey), which a registered hotkey already
+        # has, so the consent error never suggests a paid registration.
+        assert "btcli subnets register" not in error
         assert ("contact the operator" in error) == (not published)
         preflight.assert_not_called()
         pay.assert_not_called()

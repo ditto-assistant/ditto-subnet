@@ -298,17 +298,15 @@ def _run_upload(
             # authoritative pre-payment policy check below.
             consent = None
         if consent is not None and consent.mode == "enforce" and not consent.is_current:
-            register_hint = _btcli_register_hint(
-                args, subtensor_network, netuid=consent.netuid
-            )
+            # Signing needs only the hotkey's on-chain Owner entry, which every
+            # registered hotkey already has; `ditto cla sign` reports the rare
+            # ownerless hotkey itself, so never suggest a paid registration.
             cla_error = (
                 "no effective contributor agreement is published; contact "
                 "the operator before uploading"
                 if consent.current is None
                 else "the current contributor agreement is required; run "
-                "`ditto cla sign` before upload. Signing needs an on-chain "
-                "hotkey owner, so register a new hotkey first:\n"
-                f"{register_hint}"
+                "`ditto cla sign` before upload"
             )
             if explicit_recovery_receipt is None:
                 saved_recovery_candidates = load_pending_payments_for_hotkey(
