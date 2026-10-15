@@ -855,6 +855,20 @@ async def verify_finalized_weight_commit(substrate: Any, receipt: Any) -> None:
             raise ChainConnectionError("missing historical commit runtime")
         if code["result"] not in AUDITED_RUNTIME_CODE_HASHES:
             raise ValueError("commit runtime is not audited")
+        if code["result"] in _YUMA_GATED_RUNTIME_CODE_HASHES:
+            # Null consensus queues commits differently; only Yuma is audited.
+            mode = _unwrap(
+                await substrate.query(
+                    module="SubtensorModule",
+                    storage_function="SubnetEpochConsensus",
+                    params=[receipt.netuid],
+                    block_hash=at,
+                )
+            )
+            if mode is None:
+                raise ChainConnectionError("missing historical epoch consensus")
+            if mode != "Yuma":
+                raise ValueError("commit epoch consensus is not audited")
     raw, decoded, events = await asyncio.gather(
         substrate.rpc_request("chain_getBlock", [canonical]),
         substrate.get_block(block_hash=canonical),

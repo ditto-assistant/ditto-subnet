@@ -173,7 +173,7 @@ def chain(request: pytest.FixtureRequest) -> tuple[AsyncMock, dict]:
             "ValidatorPermit": [True, False, False],
             "SubnetOwnerHotkey": "owner",
             "SubnetEpochConsensus": state.get("consensus", {}).get(
-                kw["block_hash"], "Yuma"
+                kw["block_hash"], state.get("consensus_default", "Yuma")
             ),
         }[kw["storage_function"]]
 
@@ -651,3 +651,21 @@ async def test_pre_v475_runtime_never_reads_epoch_consensus(chain: tuple) -> Non
         c.kwargs["storage_function"] == "SubnetEpochConsensus"
         for c in substrate.query.call_args_list
     )
+
+
+@pytest.mark.parametrize(
+    ("mode", "accepted"), [("Yuma", True), ("Null", False)], ids=["yuma", "null"]
+)
+async def test_v475_commit_inclusion_requires_yuma(
+    commit_chain: tuple, mode: str, accepted: bool
+) -> None:
+    from ditto.chain.source_emission_verifier import verify_finalized_weight_commit
+
+    substrate, state, claim = commit_chain
+    state["runtime"] = _V475
+    state["consensus_default"] = mode
+    if accepted:
+        await verify_finalized_weight_commit(substrate, claim)
+    else:
+        with pytest.raises(ValueError, match="commit epoch consensus"):
+            await verify_finalized_weight_commit(substrate, claim)

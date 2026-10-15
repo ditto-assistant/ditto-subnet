@@ -75,6 +75,9 @@ head on 2026-10-15.
   the block for these runtimes, and raises `unsupported epoch consensus`
   unless both are `Yuma`. Pre-v475 runtimes never read the storage, which
   does not exist there.
+- `verify_finalized_weight_commit` requires `Yuma` at the commit block and its
+  parent for these runtimes. Null queues commits differently, so a commit
+  under Null is rejected as unaudited evidence.
 - The sparse-replay planner requires `Yuma` at both range endpoints, or else
   requests the full scan. It also flags `EpochConsensusSet` (and the new
   pruning events) as structural, so a switch inside a range reaches the
