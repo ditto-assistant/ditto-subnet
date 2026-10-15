@@ -51,6 +51,7 @@ locals {
       google_secret_manager_secret.moderation_audit_signing_key.secret_id,
       google_secret_manager_secret.github_deploy_key.secret_id,
       google_secret_manager_secret.taostats_api_key.secret_id,
+      google_secret_manager_secret.subtensor_archive_rpc_api_key.secret_id,
       google_secret_manager_secret.hippius_access_key_id.secret_id,
       google_secret_manager_secret.hippius_secret_access_key.secret_id,
       google_secret_manager_secret.backblaze_key_id.secret_id,
@@ -381,6 +382,21 @@ resource "google_secret_manager_secret" "taostats_api_key" {
 import {
   to = google_secret_manager_secret.taostats_api_key
   id = "projects/${var.project}/secrets/platform-taostats-api-key"
+}
+
+# Optional Finney archive credential. Container and runtime access only: the
+# operator adds the selected provider key as a version after a reviewed apply.
+# Never put provider credentials in Terraform state. Creating this container
+# does not select an archive provider or change source-release policy.
+resource "google_secret_manager_secret" "subtensor_archive_rpc_api_key" {
+  project   = var.project
+  secret_id = "platform-subtensor-archive-rpc-api-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Optional Hippius S3 credentials for miner profile pictures. CONTAINER ONLY:

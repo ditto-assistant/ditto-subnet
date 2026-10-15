@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticReport
 from ditto.api_models.source_disclosure import SourceDisclosure
+from ditto.chain.models import ArchiveRpcAuthMode
 
 
 class ArtifactReleaseSettingsRevision(BaseModel):
@@ -51,11 +52,23 @@ class ReceiptDiagnosticRow(BaseModel):
     stale: bool
 
 
+class SourceArchiveProviderStatus(BaseModel):
+    """Served configuration only; never a URL, credential, or health claim."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    configured: bool
+    host: str | None
+    auth_mode: ArchiveRpcAuthMode
+    credential_configured: bool
+
+
 class SourceReleaseGateStatus(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     version: str
     automatic_confirmation_enabled: bool = False
+    archive_provider: SourceArchiveProviderStatus | None = None
     collector_cursor_block: int | None = None
     collector_cursor_hash: str | None = None
     collector_runtime_code_hash: str | None = None

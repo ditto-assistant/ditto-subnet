@@ -57,6 +57,9 @@
 {% if platform_upload_admission_relay_enabled | bool and platform_public_rate_limit_per_minute | int == 0 %}
     @goUploadAdmission path /api/v1/upload/eval-pricing /api/v1/upload/check
     handle @goUploadAdmission {
+        request_body {
+            max_size {{ platform_request_body_max_size }}
+        }
         reverse_proxy {% for port in platform_inference_relay_ports %}localhost:{{ port }} {% endfor %}{
             lb_policy least_conn
             fail_duration 10s
@@ -67,6 +70,9 @@
 {% endif %}
 
     handle /api/v1/inference/* {
+        request_body {
+            max_size {{ platform_request_body_max_size }}
+        }
         reverse_proxy {% for port in platform_inference_relay_ports %}localhost:{{ port }} {% endfor %}{
             lb_policy least_conn
             fail_duration 10s
@@ -76,11 +82,29 @@
     }
 
     handle {
+        request_body {
+            max_size {{ platform_request_body_max_size }}
+        }
         reverse_proxy localhost:{{ platform_api_port }}
     }
 {% else %}
+    request_body {
+        max_size {{ platform_request_body_max_size }}
+    }
     reverse_proxy localhost:{{ platform_api_port }}
 {% endif %}
+
+    # request_body bounds streamed reads while proxying. Format these edge
+    # errors consistently across every proxy above; other statuses keep
+    # Caddy's default error handler. Route-specific app limits still apply.
+    handle_errors 413 {
+        header Content-Type application/json
+        header Connection close
+        header X-Request-ID {err.id}
+        respond `{"error_code":3004,"message":"request body exceeds {{ platform_request_body_max_size }}","request_id":"{err.id}"}` 413 {
+            close
+        }
+    }
 
     log {
         output file /opt/ditto/logs/caddy/platform.log {

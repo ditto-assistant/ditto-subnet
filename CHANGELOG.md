@@ -2,6 +2,166 @@
 
 <!-- version list -->
 
+## v0.369.1 (2026-10-15)
+
+### Bug Fixes
+
+- **platform**: Admit audited Subtensor v475-v478 source receipts under Yuma
+  ([#2941](https://github.com/ditto-assistant/ditto-subnet/pull/2941),
+  [`85ac8fa`](https://github.com/ditto-assistant/ditto-subnet/commit/85ac8fac165191f089ec0ccaff0235adabe4d9fe))
+
+
+## v0.369.0 (2026-10-15)
+
+### Features
+
+- **platform**: Release banned kings' source under the same gate
+  ([#2938](https://github.com/ditto-assistant/ditto-subnet/pull/2938),
+  [`f2fb697`](https://github.com/ditto-assistant/ditto-subnet/commit/f2fb697eec716a29c0b74dc75306b3489fe16ccf))
+
+- **platform**: Replay the source-emission backlog sparsely
+  ([#2940](https://github.com/ditto-assistant/ditto-subnet/pull/2940),
+  [`9783aba`](https://github.com/ditto-assistant/ditto-subnet/commit/9783aba1a0b941a67a33a5f228198404aeb169ab))
+
+
+## v0.368.1 (2026-10-15)
+
+### Bug Fixes
+
+- **backroom**: Accept the fail-once zero infra-grant cap on reinstatements
+  ([#2937](https://github.com/ditto-assistant/ditto-subnet/pull/2937),
+  [`dbc7ad2`](https://github.com/ditto-assistant/ditto-subnet/commit/dbc7ad23729a637a6b12e681c49299e1bd41ec45))
+
+
+## v0.368.0 (2026-10-15)
+
+### Features
+
+- **platform,backroom**: Record a board-review clear without holding the agent
+  ([#2932](https://github.com/ditto-assistant/ditto-subnet/pull/2932),
+  [`2f8e476`](https://github.com/ditto-assistant/ditto-subnet/commit/2f8e4765c1107cd9eecd317baeac5e311999246f))
+
+
+## v0.367.0 (2026-10-15)
+
+### Features
+
+- **platform**: Widen the v13 scorer cohort to 3-16 validators and count only issuable validators
+  toward owner quorum ([#2908](https://github.com/ditto-assistant/ditto-subnet/pull/2908),
+  [`eb08e70`](https://github.com/ditto-assistant/ditto-subnet/commit/eb08e70e621b80ab25fa9b8e04f13631b1a7283d))
+
+
+## v0.366.1 (2026-10-15)
+
+### Bug Fixes
+
+- **platform**: Require payout ambiguity to reproduce and rescan discarded payouts
+  ([#2935](https://github.com/ditto-assistant/ditto-subnet/pull/2935),
+  [`d7bcc8e`](https://github.com/ditto-assistant/ditto-subnet/commit/d7bcc8e50963d44b965e9dc50f6247a27ae69200))
+
+
+## v0.366.0 (2026-10-14)
+
+### Bug Fixes
+
+- **platform**: Report live Gamma routing on the public treasury page
+  ([#2916](https://github.com/ditto-assistant/ditto-subnet/pull/2916),
+  [`79a5ccb`](https://github.com/ditto-assistant/ditto-subnet/commit/79a5ccb3d73bcf0062ed5afdbf77a7d04797aed6))
+
+### Features
+
+- **skills**: Add a miner-facing subnet-status skill
+  ([#2914](https://github.com/ditto-assistant/ditto-subnet/pull/2914),
+  [`ccc78d0`](https://github.com/ditto-assistant/ditto-subnet/commit/ccc78d0b16f415137ee3f756b628796f84ec61d0))
+
+
+## v0.365.0 (2026-10-14)
+
+### Features
+
+- **treasury**: Support cold-approved manual transfers up to 2500 alpha
+  ([#2923](https://github.com/ditto-assistant/ditto-subnet/pull/2923),
+  [`a408ab3`](https://github.com/ditto-assistant/ditto-subnet/commit/a408ab3acabe7f532b9bfe684567f6e04f8d35d4))
+
+
+## v0.364.0 (2026-10-14)
+
+### Features
+
+- **validator,platform**: Make the KOTH payout curve an operator setting
+  ([#2913](https://github.com/ditto-assistant/ditto-subnet/pull/2913),
+  [`6c2c0f7`](https://github.com/ditto-assistant/ditto-subnet/commit/6c2c0f7f2906558cc96ab797ec04884231509820))
+
+
+## v0.363.0 (2026-10-14)
+
+### Bug Fixes
+
+- **treasury**: Refresh manual readiness during receipt catch-up
+  ([#2920](https://github.com/ditto-assistant/ditto-subnet/pull/2920),
+  [`b989fea`](https://github.com/ditto-assistant/ditto-subnet/commit/b989fea368ec3ca8d7e97cabfce89c3e42cfa4af))
+
+### Features
+
+- **platform,backroom**: Record a per-epoch Gamma ledger from chain state
+  ([#2917](https://github.com/ditto-assistant/ditto-subnet/pull/2917),
+  [`cc184ec`](https://github.com/ditto-assistant/ditto-subnet/commit/cc184ec9fbd9e79ee72848f6e13081881a928eec))
+
+
+## v0.362.2 (2026-10-14)
+
+### Bug Fixes
+
+- **infra**: Provision the Finney archive credential container
+  ([#2915](https://github.com/ditto-assistant/ditto-subnet/pull/2915),
+  [`90cff09`](https://github.com/ditto-assistant/ditto-subnet/commit/90cff09f301a5dc3df716e73205e33d1cf6c1c77))
+
+- **platform**: Cap request bodies before they are spooled
+  ([#2771](https://github.com/ditto-assistant/ditto-subnet/pull/2771),
+  [`62a7692`](https://github.com/ditto-assistant/ditto-subnet/commit/62a76927a4c242a081d4d4d1e91e7deca19fe640))
+
+- **treasury**: Accept complete signed WAL-mode backups
+  ([#2919](https://github.com/ditto-assistant/ditto-subnet/pull/2919),
+  [`45f5e83`](https://github.com/ditto-assistant/ditto-subnet/commit/45f5e83471538009f2adfbf127cba6bd9339b018))
+
+- **treasury**: Recover custody across audited Finney runtimes
+  ([#2918](https://github.com/ditto-assistant/ditto-subnet/pull/2918),
+  [`d278823`](https://github.com/ditto-assistant/ditto-subnet/commit/d2788232ffbe37af05f0279b55c2a8d6dc13837d))
+
+
+## v0.362.1 (2026-10-14)
+
+### Bug Fixes
+
+- **screener**: Name the provider's fault code on a parked L2/L3 review
+  ([#2907](https://github.com/ditto-assistant/ditto-subnet/pull/2907),
+  [`ca5ec54`](https://github.com/ditto-assistant/ditto-subnet/commit/ca5ec54246a0bd0265291bbe731d5dcca3167b1d))
+
+
+## v0.362.0 (2026-10-13)
+
+### Features
+
+- **platform**: Accept ATH rejects on agents still below scoring quorum
+  ([#2906](https://github.com/ditto-assistant/ditto-subnet/pull/2906),
+  [`92e3dcf`](https://github.com/ditto-assistant/ditto-subnet/commit/92e3dcfb460c566ae5c66a26cfbffb18bd1f3fab))
+
+
+## v0.361.0 (2026-10-13)
+
+### Bug Fixes
+
+- **relay**: Match chat RPM env fallbacks to the board defaults
+  ([#2854](https://github.com/ditto-assistant/ditto-subnet/pull/2854),
+  [`cec8c70`](https://github.com/ditto-assistant/ditto-subnet/commit/cec8c70dd69bb5f1fdd06aa31ef589f01da81e64))
+
+### Features
+
+- **platform**: Report the configured source archive provider
+  ([#2870](https://github.com/ditto-assistant/ditto-subnet/pull/2870),
+  [`d9b0ae8`](https://github.com/ditto-assistant/ditto-subnet/commit/d9b0ae81f0e1076e21e89036e8a198bd7927f063))
+
+
 ## v0.360.1 (2026-10-13)
 
 ### Bug Fixes

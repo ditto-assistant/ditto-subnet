@@ -179,3 +179,127 @@ async def test_a_malformed_revision_degrades_to_no_burn() -> None:
 
 async def test_resolver_without_a_session_maker_returns_the_default() -> None:
     assert (await BurnSettingsResolver().resolve(None)).burn_share == 0.0
+
+
+async def test_rank_shares_must_be_a_five_slot_curve_summing_to_one() -> None:
+    from pydantic import ValidationError
+
+    from ditto.api_models.burn_settings import BurnSettings
+
+    assert BurnSettings().rank_shares is None
+    curve = BurnSettings.model_validate(
+        {"burn_share": 0.0, "rank_shares": [0.5, 0.2, 0.13, 0.1, 0.07]}
+    )
+    assert curve.rank_shares == (0.5, 0.2, 0.13, 0.1, 0.07)
+    for bad in (
+        [0.5, 0.2, 0.3],
+        [0.5, 0.2, 0.13, 0.1, 0.0],
+        [0.5, 0.2, 0.13, 0.1, 0.08],
+        [0.6, 0.2, 0.13, 0.1, -0.03],
+        # Numeric strings are refused, never coerced.
+        [0.5, "0.2", 0.13, 0.1, 0.07],
+    ):
+        with pytest.raises(ValidationError):
+            BurnSettings.model_validate({"burn_share": 0.0, "rank_shares": bad})
+
+
+_CURVE = [0.5, 0.2, 0.13, 0.1, 0.07]
+
+
+async def test_a_burn_only_write_keeps_the_payout_curve(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The console dial posts burn_share alone; that must not reset the curve."""
+    _install(app, settings_maker)
+    curved = _payload(burn_share=0.0)
+    curved["settings"] = {"burn_share": 0.0, "rank_shares": _CURVE}
+    first = await client.post(_URL, headers=_HEADERS, json=curved)
+    assert first.status_code == 200, first.text
+
+    burn_only = await client.post(
+        _URL, headers=_HEADERS, json=_payload(expected_revision=1, burn_share=0.1)
+    )
+    assert burn_only.status_code == 200, burn_only.text
+    assert burn_only.json()["settings"] == {"burn_share": 0.1, "rank_shares": _CURVE}
+
+    effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
+    assert effective["settings"]["rank_shares"] == _CURVE
+    # No live v31 weight setter: the curve is configured but not yet served.
+    assert effective["rank_shares_served"] is False
+
+    cleared = _payload(expected_revision=2, burn_share=0.1)
+    cleared["settings"] = {"burn_share": 0.1, "rank_shares": None}
+    reset = await client.post(_URL, headers=_HEADERS, json=cleared)
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["settings"] == {"burn_share": 0.1}
+
+
+async def test_an_increasing_curve_is_refused_on_write_but_still_reads(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Ordering guards writes; a stored legacy curve must not reset the policy."""
+    from ditto.api_models.burn_settings import BurnSettings
+    from ditto.api_server.burn_settings import settings_from_row
+    from ditto.db.models import BurnSettingsRevision as Row
+
+    _install(app, settings_maker)
+    for increasing in ([0.07, 0.1, 0.13, 0.2, 0.5], [0.5, 0.13, 0.2, 0.1, 0.07]):
+        refused = _payload(burn_share=0.25)
+        refused["settings"] = {"burn_share": 0.25, "rank_shares": increasing}
+        response = await client.post(_URL, headers=_HEADERS, json=refused)
+        assert response.status_code == 422, response.text
+
+    legacy = Row(
+        revision=1,
+        parent_revision=0,
+        scope="*",
+        settings={"burn_share": 0.25, "rank_shares": [0.07, 0.1, 0.13, 0.2, 0.5]},
+        checksum="ab" * 32,
+        reason="a revision written before the ordering rule",
+        actor="operator@example.com",
+    )
+    assert settings_from_row(legacy) == BurnSettings(
+        burn_share=0.25, rank_shares=(0.07, 0.1, 0.13, 0.2, 0.5)
+    )
+
+    # A burn-only write must not republish that legacy curve either.
+    async with settings_maker() as session, session.begin():
+        session.add(legacy)
+    burn_only = await client.post(
+        _URL, headers=_HEADERS, json=_payload(expected_revision=1, burn_share=0.1)
+    )
+    assert burn_only.status_code == 409, burn_only.text
+    assert "increasing" in burn_only.text
+
+
+async def test_an_unreadable_latest_revision_is_never_carried_as_a_clear(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.db.models import BurnSettingsRevision as Row
+
+    _install(app, settings_maker)
+    async with settings_maker() as session, session.begin():
+        session.add(
+            Row(
+                parent_revision=0,
+                scope="*",
+                settings={"burn_share": 7.0, "rank_shares": _CURVE},
+                checksum="ab" * 32,
+                reason="a malformed stored revision",
+                actor="operator@example.com",
+            )
+        )
+    burn_only = await client.post(
+        _URL, headers=_HEADERS, json=_payload(expected_revision=1, burn_share=0.1)
+    )
+    assert burn_only.status_code == 409, burn_only.text
+    assert "rank_shares explicitly" in burn_only.text
+    explicit = _payload(expected_revision=1, burn_share=0.1)
+    explicit["settings"] = {"burn_share": 0.1, "rank_shares": _CURVE}
+    assert (await client.post(_URL, headers=_HEADERS, json=explicit)).status_code == 200

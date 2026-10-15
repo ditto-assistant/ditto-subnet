@@ -119,6 +119,15 @@ disputes, validator queue/slot/inference policy, the scoring lease TTL,
 benchmark rollouts, scoring policy, scores and leaderboards, and the emission
 burn.
 
+`get_source_release_policy` reads the public source policy and completed-payout
+gate diagnostics. `release_gate.archive_provider`, when present, reports the
+running Platform's configured archive host, authentication mode (`none`,
+`query`, or `path`), and credential presence. It never returns the
+provider URL or key. This is configuration evidence, not a provider health or
+authentication result; older responses without the field mean unknown. Use
+the durable collector cursor and exact-agent payout receipts to verify source
+release recovery. Requires `backroom:read` and changes nothing.
+
 `get_scoring_lease_settings` / `set_scoring_lease_settings` (#1156) read and
 revise the deadline stamped on new canonical and score-retest replacement
 tickets (default 180 minutes, bounded 60-240 so it stays inside the validator
@@ -322,7 +331,7 @@ a fresh connect, while the server's `tools/list` and `get_backroom_tool_help`
 still show it. Do not use `z.tuple`: it serializes to draft-07 array-form
 `items`, which is what kept `activate_v13_scorer_cohort` and
 `rotate_v13_scorer_cohort` out of refreshed Codex catalogs (#2490, #2559). Use
-a bounded array such as `z.array(z.string()).length(3)` instead. The catalog
+a bounded array such as `z.array(z.string()).min(3).max(16)` instead. The catalog
 test fails on any array-form `items`, `prefixItems`, or `additionalItems`.
 The catalog itself does not depend on scope: a read-only connection lists the
 write tools too, and the scope check refuses the call.

@@ -903,3 +903,372 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
     await collector.sweep()
     assert timeouts == [120.0, 600.0]
     assert rescheduled == [600, 600]
+
+
+_OWNERSHIP = "subnet ownership changed during distribution block"
+
+
+async def test_receipt_ambiguity_must_reproduce_before_terminal(app, session_maker):
+    """One inconsistent archive read must not discard a real payout."""
+    from ditto.chain.errors import ChainEmissionReceiptUnavailable
+
+    a, _ = await _prepare(app, session_maker)
+    collector = _collector(app, session_maker)
+
+    def chain(*outcomes):
+        calls = []
+
+        async def receipt(*_args, **kwargs):
+            calls.append(kwargs["payout_block"])
+            outcome = outcomes[len(calls) - 1]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        app.state.chain = SimpleNamespace(get_miner_emission_receipt=receipt)
+        return calls
+
+    calls = chain(ChainEmissionReceiptUnavailable(_OWNERSHIP), _payout(a, 201))
+    got = await collector._confirmed_receipt(
+        SimpleNamespace(), block=201, allow_initialization_reveals=False
+    )
+    assert got == _payout(a, 201) and calls == [201, 201]
+
+    chain(
+        ChainEmissionReceiptUnavailable(_OWNERSHIP),
+        ChainEmissionReceiptUnavailable("weights changed during distribution block"),
+    )
+    with pytest.raises(ValueError, match="did not reproduce"):
+        await collector._confirmed_receipt(
+            SimpleNamespace(), block=201, allow_initialization_reveals=False
+        )
+
+    chain(
+        ChainEmissionReceiptUnavailable(_OWNERSHIP),
+        ChainEmissionReceiptUnavailable(_OWNERSHIP),
+    )
+    with pytest.raises(ChainEmissionReceiptUnavailable, match="ownership"):
+        await collector._confirmed_receipt(
+            SimpleNamespace(), block=201, allow_initialization_reveals=False
+        )
+
+
+async def _reopened_payout(app, client, session_maker, monkeypatch):
+    from ditto.db.models import SourceEmissionPayout
+
+    monkeypatch.setattr(
+        "ditto.chain.source_emission_verifier.verify_finalized_weight_commit",
+        AsyncMock(),
+    )
+    a, _ = await _prepare(app, session_maker)
+    assert (await _post(client, _signed(a))).status_code == 200
+    collector = _collector(app, session_maker)
+    await collector.process_block(_observed(a, 200, reveal=True), None)
+    await collector.process_block(
+        _observed(a, 201, payout=True),
+        None,
+        payout_blocked_reason=f"unverifiable_payout: {_OWNERSHIP}",
+    )
+    async with session_maker() as session, session.begin():
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        assert row.terminal is True and row.proof["receipt"] is None
+        # What the reopening migration does for each false verdict.
+        row.terminal = False
+    return a, collector
+
+
+async def test_reopened_receiptless_payout_refetches_and_confirms(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.db.models import SourceEmissionPayout
+
+    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
+    receipt = AsyncMock(return_value=_payout(a, 201))
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=receipt, _safe_rpc_error=str
+    )
+    assert await collector.resolve_pending_payouts(SimpleNamespace()) == 1
+    assert receipt.await_args.kwargs["payout_block"] == 201
+    assert receipt.await_args.kwargs["allow_initialization_reveals"] is False
+    aid = UUID(a["provenance"]["champion_agent_id"])
+    async with session_maker() as session:
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        assert row.terminal is False
+        assert row.proof["receipt"]["block"] == 201
+        assert row.proof["receipt"]["earnings"] == [
+            {"uid": 1, "hotkey": "miner", "amount_rao": 123}
+        ]
+        reveals = await get_king_reveal(session, agent_ids=[aid])
+        assert reveals[aid].emission_confirmed_at == datetime.fromtimestamp(
+            _payout(a, 201).block_timestamp, UTC
+        )
+    # The persisted receipt is reused; no further historical reads.
+    assert await collector.resolve_pending_payouts(SimpleNamespace()) == 0
+    receipt.assert_awaited_once()
+
+
+async def test_reopened_payout_reproduced_ambiguity_is_terminal_again(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.chain.errors import ChainEmissionReceiptUnavailable
+    from ditto.db.models import SourceEmissionPayout
+
+    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
+    receipt = AsyncMock(side_effect=ChainEmissionReceiptUnavailable(_OWNERSHIP))
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=receipt, _safe_rpc_error=str
+    )
+    assert await collector.resolve_pending_payouts(SimpleNamespace()) == 0
+    assert receipt.await_count == 2
+    async with session_maker() as session:
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        assert row.terminal is True
+        assert row.blocked_reason == f"unverifiable_payout: {_OWNERSHIP}"
+        assert row.proof["receipt"] is None
+
+
+async def test_reopened_payout_transient_failure_stays_pending(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.db.models import SourceEmissionPayout
+
+    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=AsyncMock(
+            side_effect=RuntimeError("Historical work rate limit exceeded")
+        ),
+        _safe_rpc_error=str,
+    )
+    assert await collector.resolve_pending_payouts(SimpleNamespace()) == 0
+    async with session_maker() as session:
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        assert row.terminal is False
+        assert row.last_checked_at is not None
+        assert row.blocked_reason.startswith("receipt_retry: Historical work")
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=AsyncMock(return_value=_payout(a, 201)),
+        _safe_rpc_error=str,
+    )
+    assert await collector.resolve_pending_payouts(SimpleNamespace()) == 1
+
+
+async def test_receiptless_refetches_are_bounded_per_resolution(app, session_maker):
+    from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionPayout
+
+    a, _ = await _prepare(app, session_maker)
+    collector = _collector(app, session_maker)
+    await collector.process_block(_observed(a, 200, reveal=True), None)
+    for block in range(201, 201 + module._RECEIPT_REFETCH_LIMIT + 2):
+        await collector.process_block(
+            _observed(a, block, payout=True),
+            None,
+            payout_blocked_reason=f"unverifiable_payout: {_OWNERSHIP}",
+        )
+    async with session_maker() as session, session.begin():
+        for row in await session.scalars(select(SourceEmissionPayout)):
+            row.terminal = False
+    receipt = AsyncMock(side_effect=RuntimeError("provider unavailable"))
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=receipt, _safe_rpc_error=str
+    )
+    await collector.resolve_pending_payouts(SimpleNamespace())
+    assert receipt.await_count == module._RECEIPT_REFETCH_LIMIT
+
+
+async def test_refetch_does_not_touch_a_payout_resolved_meanwhile(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.db.models import SourceEmissionPayout
+
+    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
+    aid = UUID(a["provenance"]["champion_agent_id"])
+
+    async def receipt(*_args, **_kwargs):
+        # Another collector settles the payout while this read is in flight.
+        async with session_maker() as session, session.begin():
+            session.add(
+                SourceEmissionPayoutResolution(
+                    netuid=a["netuid"],
+                    block_hash=_hash(201),
+                    agent_id=aid,
+                    artifact_sha256=a["provenance"]["champion_artifact_sha256"],
+                    proof={},
+                    created_at=datetime.now(UTC),
+                )
+            )
+        return _payout(a, 201)
+
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=receipt, _safe_rpc_error=str
+    )
+    async with session_maker() as session:
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        snapshot = dict(row.proof)
+    got = await collector._refetch_receipt(
+        SimpleNamespace(), block=201, block_hash=_hash(201), snapshot=snapshot
+    )
+    assert got is None
+    async with session_maker() as session:
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        assert row.proof["receipt"] is None and row.last_checked_at is None
+
+
+def _sparse_plan(current, end, interesting, *, full_scan=False):
+    from ditto.chain.source_emission_verifier import SourceEmissionRangePlan
+
+    return SourceEmissionRangePlan(
+        current + 1,
+        end,
+        {b: _hash(b) for b in range(current, end + 1)},
+        tuple(interesting),
+        full_scan,
+        "runtime",
+    )
+
+
+async def _deep_backlog(app, session_maker, cursor_block):
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, _ = await _prepare(app, session_maker)
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        cursor.block = cursor_block
+        cursor.block_hash = _hash(cursor_block)
+    substrate = SimpleNamespace(
+        get_chain_finalised_head=AsyncMock(return_value=_hash(15000)),
+        get_block_header=AsyncMock(return_value={"header": {"number": 15000}}),
+    )
+    return a, substrate
+
+
+async def test_sparse_catchup_reads_only_planned_blocks_and_skips_the_rest(
+    app, session_maker, monkeypatch
+):
+    """Quiet blocks commit as cursor skips; planned blocks get the full reader."""
+    from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionCollectorCursor, SourceEmissionPayout
+
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    planned = (150, 151)
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range",
+        AsyncMock(return_value=_sparse_plan(100, end, planned)),
+    )
+    read_blocks = []
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        read_blocks.append(block)
+        if block == 150:
+            return _observed(a, block, reveal=True)
+        if block == 151:
+            return _observed(a, block, payout=True)
+        return _observed(a, block)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    monkeypatch.setattr(module.random, "sample", lambda seq, k: list(seq)[:k])
+    receipt = AsyncMock(return_value=_payout(a, 151))
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=receipt, _safe_rpc_error=str
+    )
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    await collector._sweep_provider(substrate)
+
+    # Two audit samples (the first quiet blocks) plus the two planned blocks.
+    assert read_blocks == [101, 102, 150, 151]
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert (cursor.block, cursor.block_hash) == (end, _hash(end))
+        assert cursor.runtime_code_hash == "runtime"
+        payout = await session.get(SourceEmissionPayout, (a["netuid"], _hash(151)))
+        assert payout is not None and payout.proof["receipt"]["block"] == 151
+
+
+async def test_sparse_audit_disagreement_fails_closed(app, session_maker, monkeypatch):
+    from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range",
+        AsyncMock(return_value=_sparse_plan(100, end, ())),
+    )
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        # The full reader sees a reveal the plan called quiet.
+        return _observed(a, block, reveal=True)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    with pytest.raises(ValueError, match="audit disagreed"):
+        await collector._sweep_provider(substrate)
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert cursor.block == 100
+
+
+@pytest.mark.parametrize("plan_outcome", ["full_scan", "unavailable"])
+async def test_sparse_catchup_falls_back_to_the_per_block_scan(
+    app, session_maker, monkeypatch, plan_outcome
+):
+    from ditto.api_server import source_emission_collector as module
+
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    plan = (
+        AsyncMock(
+            return_value=_sparse_plan(
+                100, 100 + module._SWEEP_SPARSE_BATCH_BLOCKS, (), full_scan=True
+            )
+        )
+        if plan_outcome == "full_scan"
+        else AsyncMock(side_effect=RuntimeError("RPC call is unsafe"))
+    )
+    monkeypatch.setattr(module, "plan_source_emission_range", plan)
+    scanned = []
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        scanned.append(block)
+        return _observed(a, block)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    await collector._sweep_provider(substrate)
+
+    assert scanned == list(range(101, 101 + module._SWEEP_CATCHUP_BATCH_BLOCKS))
+
+
+async def test_sparse_plan_must_start_at_the_durable_cursor(
+    app, session_maker, monkeypatch
+):
+    from ditto.api_server import source_emission_collector as module
+    from ditto.chain.source_emission_verifier import SourceEmissionRangePlan
+
+    _, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    hashes = {b: _hash(b) for b in range(100, end + 1)}
+    hashes[100] = "0x" + "ee" * 32  # a different chain than the cursor's
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range",
+        AsyncMock(
+            return_value=SourceEmissionRangePlan(101, end, hashes, (), False, "runtime")
+        ),
+    )
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    with pytest.raises(ValueError, match="does not match the planned range"):
+        await collector._sweep_provider(substrate)

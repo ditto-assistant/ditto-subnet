@@ -53,7 +53,7 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	if ip.TicketConcurrency != 16 || ip.ValidatorConcurrency != 48 || ip.GlobalConcurrency != 96 {
 		t.Errorf("chat concurrency defaults wrong: %+v", ip)
 	}
-	if ip.TicketRPM != 240 || ip.ValidatorRPM != 960 || ip.GlobalRPM != 2880 {
+	if ip.TicketRPM != 1920 || ip.ValidatorRPM != 7680 || ip.GlobalRPM != 23040 {
 		t.Errorf("chat rpm defaults wrong: %+v", ip)
 	}
 	if ip.EmbeddingTicketConcurrency != 12 || ip.EmbeddingValidatorConcurrency != 48 || ip.EmbeddingGlobalConcurrency != 96 {

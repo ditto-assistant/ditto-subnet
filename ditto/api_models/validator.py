@@ -1958,6 +1958,19 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
+    rank_shares: Annotated[
+        list[float] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-31 operator payout curve: the champion's share, then "
+                "each tail slot's, summing to 1. Served only once every "
+                "recently-live weight setter reports v31. Absent keeps the "
+                "frozen 65/14/10/7/4 curve."
+            ),
+        ),
+    ] = None
     count: Annotated[int, Field(ge=0, description="Number of entries returned.")]
     generated_at: Annotated[
         datetime | None,

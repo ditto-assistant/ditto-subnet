@@ -344,7 +344,7 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
     async with session_maker() as session:
         assert await get_report_only_current_packet(None, session) is None
     async with session_maker() as session:
-        with pytest.raises(HTTPException, match="not accepting"):
+        with pytest.raises(HTTPException, match="fewer than three proposed members"):
             await rotate_pin(request, None, session)
     async with session_maker() as session, session.begin():
         heartbeat = await session.get(ValidatorHeartbeat, _HOTKEYS[0])
@@ -362,7 +362,7 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
         heartbeat.stack = replacement.stack
         heartbeat.capabilities = replacement.capabilities
     async with session_maker() as session:
-        with pytest.raises(HTTPException, match="member signed packet"):
+        with pytest.raises(HTTPException, match="not signed by a live majority"):
             await rotate_pin(request, None, session)
     async with session_maker() as session, session.begin():
         heartbeat = await session.get(ValidatorHeartbeat, _HOTKEYS[0])

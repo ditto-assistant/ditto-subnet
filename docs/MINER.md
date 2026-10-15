@@ -371,8 +371,10 @@ result.
   only ever lowers the bar, never raises it, and the leaderboard's "beat this
   to contend" figure already includes it. A near-miss is settled by re-scoring
   both agents on shared seeds rather than dataset luck.
-- Competitive weight is distributed 65% / 14% / 10% / 7% / 4% to the champion
-  and next four distinct miners, respectively. Evidence-tied occupied positions
+- Competitive weight is distributed to the champion and next four distinct
+  miners by the payout curve the public leaderboard reports as `rank_shares`
+  (default 65% / 14% / 10% / 7% / 4%; operators can set another curve, which
+  validators fold once the whole fleet runs protocol 31). Evidence-tied occupied positions
   pool their shares. If at least two highest-scoring miners are evidence-tied and
   the dethrone threshold cannot be exceeded within the score range, they form an
   uncapped joint crown and split the full competitive pool equally, including

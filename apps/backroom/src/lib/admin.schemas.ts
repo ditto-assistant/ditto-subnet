@@ -1191,6 +1191,12 @@ export const artifactReleaseRevisionSchema = z.object({
 export const sourceReleaseGateSchema = z.object({
   version: z.string(),
   automatic_confirmation_enabled: z.boolean(),
+  archive_provider: z.object({
+    configured: z.boolean(),
+    host: z.string().nullable(),
+    auth_mode: z.enum(['none', 'query', 'path']),
+    credential_configured: z.boolean(),
+  }).nullish(),
   collector_cursor_block: z.number().nullable().optional(),
   collector_cursor_hash: z.string().nullable().optional(),
   collector_runtime_code_hash: z.string().nullable().optional(),
@@ -1606,12 +1612,36 @@ export const BURN_CONFIRMATION = 'APPLY BURN SETTINGS'
 export const MIN_BURN_SHARE = 0
 export const MAX_BURN_SHARE = 1
 
+// Protocol-31 operator payout curve: champion then the four tail slots,
+// positive and summing to one within the validator fold's 1e-12 tolerance,
+// and non-increasing on writes. Omitting it on a write keeps the current
+// curve; null clears it back to the frozen 65/14/10/7/4.
+export const RANK_SHARES_SLOTS = 5
+const rankSharesSchema = z
+  .array(z.number().positive())
+  .length(RANK_SHARES_SLOTS)
+  .refine(
+    (shares) => Math.abs(shares.reduce((total, share) => total + share, 0) - 1) <= 1e-12,
+    'rank_shares must sum to 1',
+  )
+
 const burnSettingsBaseSchema = z.object({
   burn_share: z.number().min(MIN_BURN_SHARE).max(MAX_BURN_SHARE),
+  rank_shares: rankSharesSchema.nullable().optional(),
 })
 
 export const burnSettingsSchema = burnSettingsBaseSchema
-export const burnSettingsWriteSchema = burnSettingsBaseSchema
+// Ordering is enforced on writes only, so a stored revision always reads.
+export const burnSettingsWriteSchema = burnSettingsBaseSchema.superRefine((settings, ctx) => {
+  const shares = settings.rank_shares
+  if (shares && shares.some((share, index) => index > 0 && share > shares[index - 1])) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['rank_shares'],
+      message: 'rank_shares must not increase from the champion down',
+    })
+  }
+})
 
 export const burnSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -1640,6 +1670,9 @@ export const effectiveBurnSettingsSchema = z.object({
   // Zero live validators means the dial is not attached to anything, which is
   // worth seeing before rather than after applying a burn.
   live_validator_count: z.number().int().nonnegative().nullable().default(null),
+  // Whether the configured curve is on the ledger now (every live weight
+  // setter reports protocol 31); null when readiness could not be read.
+  rank_shares_served: z.boolean().nullable().default(null),
 })
 
 export const burnSettingsControlSchema = z.object({
@@ -6055,7 +6088,10 @@ export const reinstatementRetryBudgetSchema = z.object({
   // the per-agent bound they count against. Reinstatement adds to neither; these
   // are recorded so that claim is checkable rather than merely asserted.
   agent_infra_retry_grants: z.number().int().nonnegative(),
-  max_agent_infra_retry_grants: z.number().int().positive(),
+  // Zero, not a bug: Platform's fail-once retry policy pins the per-agent
+  // infra-grant cap at 0 (ditto/db/queries/retry_budget.py), so every live
+  // reinstatement records 0 here.
+  max_agent_infra_retry_grants: z.number().int().nonnegative(),
   manual_retry_grants: z.number().int().nonnegative(),
   operator_recoveries: z.number().int().nonnegative(),
   // Nullable: operator-recovery bounding moved off a fixed per-agent count. The
@@ -7995,6 +8031,10 @@ type GeneratedAthRulingsExecuteResponse =
 
 export const athRulingActionSchema = z.enum(['open', 'clear', 'reject'])
 
+// What execute performs for one ruling. `attest` is a clear on an unheld
+// scored or live agent: the terminal clear is recorded without holding the row.
+export const athRulingStepSchema = z.enum(['open', 'clear', 'attest', 'reject'])
+
 export const athRulingDispositionSchema = z.enum([
   'ready',
   'already_applied',
@@ -8090,7 +8130,7 @@ export const athRulingPreviewItemSchema = z.object({
   stale_guard: z.boolean(),
   would_change_crown: z.boolean(),
   conflict_reason: z.string().nullable().default(null),
-  steps: z.array(athRulingActionSchema).default([]),
+  steps: z.array(athRulingStepSchema).default([]),
   reason: z.string(),
   evidence_references: z.array(z.string()).default([]),
   message: z.string(),
@@ -8127,7 +8167,7 @@ export const athRulingExecuteItemSchema = z.object({
   status: z.enum(['applied', 'already_applied', 'failed']),
   agent_status: z.string().nullable().default(null),
   would_change_crown: z.boolean(),
-  steps_applied: z.array(athRulingActionSchema).default([]),
+  steps_applied: z.array(athRulingStepSchema).default([]),
   // False on an applied row: the ruling landed, only the audit annotation
   // failed. Never re-run it.
   annotated: z.boolean().default(false),

@@ -31,10 +31,11 @@ were.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MIN_BURN_SHARE = 0.0
 MAX_BURN_SHARE = 1.0
@@ -45,6 +46,19 @@ This mirrors the validator's frozen ``MINER_EMISSION_SHARE = 1.0``, so a
 platform with no revision stored serves exactly what an unconfigured fleet
 already does and adding this surface changes no weights on deploy.
 """
+
+RANK_SHARES_SLOTS = 5
+"""Champion plus the four-runner tail the KOTH fold pays."""
+
+RANK_SHARES_PROTOCOL = 31
+"""Validator heartbeat protocol that folds a served ``rank_shares`` curve."""
+
+
+def curve_increases(shares: tuple[float, ...] | None) -> bool:
+    """True when a lower slot would be paid more than the one above it."""
+    return shares is not None and any(
+        later > earlier for earlier, later in zip(shares, shares[1:], strict=False)
+    )
 
 
 class BurnSettings(BaseModel):
@@ -68,6 +82,41 @@ class BurnSettings(BaseModel):
     miner half is unchanged by this dial: it scales the whole miner vector
     rather than re-ranking it.
     """
+
+    rank_shares: Annotated[
+        # The outer tuple accepts a JSON array; each share must be a number,
+        # never a numeric string.
+        tuple[Annotated[float, Field(strict=True)], ...] | None,
+        Field(default=None, strict=False, exclude_if=lambda value: value is None),
+    ] = None
+    """Operator payout curve for the champion then each tail slot.
+
+    ``None`` (the default) leaves every validator on its frozen 65/14/10/7/4
+    curve. A curve is served on the scoring ledger only once every
+    recently-live weight setter reports protocol 31, so a mixed fleet never
+    folds two curves. It must have exactly five positive shares summing to one
+    within the validator fold's own 1e-12 tolerance, or validators would refuse
+    it. A write must also be non-increasing from the champion down; reads stay
+    permissive so a stored revision can never fail into the default policy.
+    Omitting it on a write keeps the current curve; an explicit ``null``
+    clears it.
+    """
+
+    @field_validator("rank_shares")
+    @classmethod
+    def _valid_curve(cls, value: tuple[float, ...] | None) -> tuple[float, ...] | None:
+        if value is None:
+            return None
+        shares = tuple(float(share) for share in value)
+        if len(shares) != RANK_SHARES_SLOTS:
+            raise ValueError(
+                f"rank_shares must have exactly {RANK_SHARES_SLOTS} entries"
+            )
+        if any(not math.isfinite(share) or share <= 0.0 for share in shares):
+            raise ValueError("rank_shares must contain only finite positive values")
+        if not math.isclose(sum(shares), 1.0, rel_tol=0.0, abs_tol=1e-12):
+            raise ValueError("rank_shares must sum to 1")
+        return shares
 
 
 class BurnSettingsRevision(BaseModel):
@@ -105,6 +154,11 @@ class EffectiveBurnSettings(BaseModel):
     """Bounds served to the console so it cannot offer a share the platform
     would refuse."""
 
+    rank_shares_served: bool | None = None
+    """Whether the configured curve is on the scoring ledger now: True only
+    when a curve is set and every recently-live weight setter reports protocol
+    31. ``None`` when fleet readiness could not be read."""
+
     live_validator_count: int | None = None
     """Validators that have heartbeated recently enough to be folding weights.
 
@@ -123,6 +177,14 @@ class AdminBurnSettingsRequest(BaseModel):
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
+
+    @model_validator(mode="after")
+    def _curve_does_not_increase(self) -> AdminBurnSettingsRequest:
+        # Write-only: a stored revision that predates this rule must still
+        # read, or settings_from_row would fall back to the full default.
+        if curve_increases(self.settings.rank_shares):
+            raise ValueError("rank_shares must not increase from the champion down")
+        return self
 
 
 class AdminBurnSettingsResponse(BaseModel):

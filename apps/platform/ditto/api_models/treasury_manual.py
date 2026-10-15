@@ -5,7 +5,7 @@ from pydantic import Field
 from ditto_screening_protocol.treasury import Digest
 from ditto_screening_protocol.treasury_manual import (
     Bucket,
-    ManualEnvelope,
+    ManualEnvelopeWire,
     Positive,
     Wire,
 )
@@ -20,6 +20,6 @@ class ManualPreviewInput(Wire):
 
 
 class ManualSubmitInput(Wire):
-    envelope: ManualEnvelope
+    envelope: ManualEnvelopeWire
     confirmation_digest: Digest
     confirmation: Literal["TRANSFER SN118 ALPHA ONCE"]

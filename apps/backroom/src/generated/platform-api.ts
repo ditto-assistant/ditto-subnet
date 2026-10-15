@@ -1144,6 +1144,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/copy-reviews/{agent_id}/attest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attest Copy Review
+         * @description Record a board-review CLEAR on an unheld scored or live agent.
+         *
+         *     A board review that finds no violation used to have no write path short
+         *     of holding the agent first (``open``) and clearing it afterwards, which
+         *     takes a paid row -- and for the champion, the crown -- off the board
+         *     between the two calls. This records the same terminal ``clear`` directly.
+         */
+        post: operations["attest_copy_review_api_v1_admin_copy_reviews__agent_id__attest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/copy-reviews/{agent_id}/audit": {
         parameters: {
             query?: never;
@@ -3456,6 +3481,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/treasury-ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Admin Treasury Ledger */
+        get: operations["get_admin_treasury_ledger_api_v1_admin_treasury_ledger_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/treasury-manual": {
         parameters: {
             query?: never;
@@ -3890,7 +3932,7 @@ export interface paths {
         };
         /**
          * Get Report Only Current Packet
-         * @description Read the unanimous current member packet, without changing authority.
+         * @description Read the live-majority member packet, without changing authority.
          */
         get: operations["get_report_only_current_packet_api_v1_admin_v13_scorer_cohort_report_only_current_packet_get"];
         put?: never;
@@ -3910,7 +3952,22 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rotate Pin */
+        /**
+         * Rotate Pin
+         * @description Append a rotation that changes the packet, the membership, or both.
+         *
+         *     * Optimistic concurrency: the current rotation ID, packet and membership
+         *       (``expected_current_hotkeys``, defaulting to ``hotkeys``) must match.
+         *     * Every *new* member must sign the target packet, be unpaused and accept.
+         *     * The target packet must be the authority packet of the proposed cohort: a
+         *       strict majority of its live members, and at least three, sign it.
+         *     * At least three proposed members must be routable on it (unpaused,
+         *       accepting, with a scorer probe), checked before and after the write.
+         *     * Every fresh V13-capable nonmember must be paused.
+         *     * A packet change drains every live V13 ticket first, as before. A
+         *       membership-only change drains just the removed members' live tickets;
+         *       retained members keep their leases, which were issued on this packet.
+         */
         post: operations["rotate_pin_api_v1_admin_v13_scorer_cohort_rotate_post"];
         delete?: never;
         options?: never;
@@ -5683,6 +5740,23 @@ export interface paths {
         };
         /** Get Public Treasury Allocation */
         get: operations["get_public_treasury_allocation_api_v1_public_treasury_allocation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/treasury-ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Public Treasury Ledger */
+        get: operations["get_public_treasury_ledger_api_v1_public_treasury_ledger_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8023,11 +8097,7 @@ export interface components {
             /** Expected Slot Settings Revision */
             expected_slot_settings_revision: number;
             /** Hotkeys */
-            hotkeys: [
-                string,
-                string,
-                string
-            ];
+            hotkeys: string[];
             packet: components["schemas"]["V13ScorerPacket"];
             /** Reason */
             reason: string;
@@ -8431,7 +8501,7 @@ export interface components {
              */
             status: "applied" | "already_applied" | "failed";
             /** Steps Applied */
-            steps_applied?: ("open" | "clear" | "reject")[];
+            steps_applied?: ("open" | "clear" | "attest" | "reject")[];
             /** Would Change Crown */
             would_change_crown: boolean;
         };
@@ -8479,7 +8549,7 @@ export interface components {
             /** Stale Guard */
             stale_guard: boolean;
             /** Steps */
-            steps?: ("open" | "clear" | "reject")[];
+            steps?: ("open" | "clear" | "attest" | "reject")[];
             /** Would Change Crown */
             would_change_crown: boolean;
         };
@@ -14917,6 +14987,8 @@ export interface components {
              * @default 0
              */
             burn_share: number;
+            /** Rank Shares */
+            rank_shares?: number[] | null;
         };
         /** BurnSettingsRevision */
         BurnSettingsRevision: {
@@ -19887,6 +19959,8 @@ export interface components {
             min_burn_share: number;
             /** Miner Emission Share */
             miner_emission_share: number;
+            /** Rank Shares Served */
+            rank_shares_served?: boolean | null;
             /** Revision */
             revision: number;
             /** Scope */
@@ -22792,6 +22866,11 @@ export interface components {
             /** @description Protocol 28. The crown incumbent when the operator's terminal-review emission gate withholds its exact artifact: it is deliberately NOT in entries, because it may not be paid, and is served only on an epoch pin whose crown_mode is incumbent, with crown_incumbent_agent_id equal to its agent_id. The fold adds it to the pool as the incumbent, derives champion, tail, tie pooling and the score-ceiling cohort exactly as for any entry, then burns every share it allocated to this entry instead of renormalizing it onto other miners: a held champion keeps the crown and its slot goes unpaid rather than reassigned. Absent on every other ledger, which then folds exactly as protocol 27. */
             provisional_incumbent?: components["schemas"]["LedgerEntry"] | null;
             /**
+             * Rank Shares
+             * @description Protocol-31 operator payout curve: the champion's share, then each tail slot's, summing to 1. Served only once every recently-live weight setter reports v31. Absent keeps the frozen 65/14/10/7/4 curve.
+             */
+            rank_shares?: number[] | null;
+            /**
              * Reward Eligibility Mode
              * @description Present only while the operator's terminal-review emission gate is enforcing (ditto-subnet #2041). When present, every entry below has a terminal review decision for its exact artifact digest at this benchmark version under the posture revision the platform resolved: artifacts with an unresolved, inconclusive, infrastructure-failed or escalated review have already been withheld from this pool, and a clear recorded inside the current emission window takes effect at the next one. Absent -- the default, and what an older platform's omission means -- says the gate is off or in shadow, in which case this ledger is exactly what it was before the gate existed. The pool is filtered platform-side either way, so a validator that ignores this field folds correctly; it is served so the fold's telemetry can state which posture produced the pool.
              */
@@ -23002,6 +23081,41 @@ export interface components {
             /** Per Capability */
             per_capability: components["schemas"]["LongMemCapabilityScore"][];
         };
+        /** ManualBatchEnvelope */
+        ManualBatchEnvelope: {
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /** Destination */
+            destination: string;
+            manual_approval: components["schemas"]["ManualLimitApproval"];
+            request: components["schemas"]["ManualBatchRequest"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            version: "2";
+        };
+        /** ManualBatchRequest */
+        ManualBatchRequest: {
+            /** After Operation */
+            after_operation: number;
+            /** Amount Rao */
+            amount_rao: number;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Expires Block */
+            expires_block: number;
+            /** Reason */
+            reason: string;
+            /** Request Id */
+            request_id: string;
+            /** Retained Alpha Rao */
+            retained_alpha_rao: number;
+            /** Source Block */
+            source_block: number;
+            /** Sources */
+            sources: components["schemas"]["ManualSourceClaim"][];
+        };
         /** ManualEnvelope */
         ManualEnvelope: {
             /** Collector Policy Digest */
@@ -23009,6 +23123,46 @@ export interface components {
             /** Destination */
             destination: string;
             request: components["schemas"]["ManualRequest"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            version: "1";
+        };
+        /** ManualLimitApproval */
+        ManualLimitApproval: {
+            policy: components["schemas"]["ManualLimitPolicy"];
+            /** Signature */
+            signature: string;
+        };
+        /** ManualLimitPolicy */
+        ManualLimitPolicy: {
+            /** Collector Coldkey */
+            collector_coldkey: string;
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /** Max Amount Rao */
+            max_amount_rao: number;
+            /**
+             * Max Sources
+             * @default 512
+             * @constant
+             */
+            max_sources: 512;
+            /**
+             * Min Amount Rao
+             * @default 1
+             * @constant
+             */
+            min_amount_rao: 1;
+            /** Revision */
+            revision: number;
+            /**
+             * Scope
+             * @default manual_once
+             * @constant
+             */
+            scope: "manual_once";
             /**
              * Version
              * @default 1
@@ -23048,6 +23202,13 @@ export interface components {
             /** Source Block */
             source_block: number;
         };
+        /** ManualSourceClaim */
+        ManualSourceClaim: {
+            /** Amount Rao */
+            amount_rao: number;
+            /** Source Block */
+            source_block: number;
+        };
         /** ManualSubmitInput */
         ManualSubmitInput: {
             /**
@@ -23057,7 +23218,8 @@ export interface components {
             confirmation: "TRANSFER SN118 ALPHA ONCE";
             /** Confirmation Digest */
             confirmation_digest: string;
-            envelope: components["schemas"]["ManualEnvelope"];
+            /** Envelope */
+            envelope: components["schemas"]["ManualEnvelope"] | components["schemas"]["ManualBatchEnvelope"];
         };
         /**
          * MinerArtifactDownload
@@ -28687,9 +28849,8 @@ export interface components {
             /**
              * Effective Service Share
              * @default 0
-             * @constant
              */
-            effective_service_share: 0;
+            effective_service_share: number;
             /** Forecast Burn Share */
             forecast_burn_share: number;
             /** Forecast Miner Share */
@@ -28699,9 +28860,9 @@ export interface components {
             /**
              * Mode
              * @default shadow
-             * @constant
+             * @enum {string}
              */
-            mode: "shadow";
+            mode: "shadow" | "observe" | "enforce" | "pause";
             /**
              * Payment Observer Status
              * @default not_activated
@@ -28710,12 +28871,14 @@ export interface components {
             payment_observer_status: "not_activated";
             /** Policy Revision */
             policy_revision: number;
+            /** Routing Epoch */
+            routing_epoch?: number | null;
             /**
              * Routing Status
              * @default not_activated
-             * @constant
+             * @enum {string}
              */
-            routing_status: "not_activated";
+            routing_status: "not_activated" | "scheduled" | "active" | "stale" | "paused";
             runtime?: components["schemas"]["PublicTreasuryRuntime"];
             /** Service Bps */
             service_bps: number;
@@ -28810,6 +28973,11 @@ export interface components {
             /** Source Alpha Rao */
             source_alpha_rao: string;
             /**
+             * Source Claims
+             * @default []
+             */
+            source_claims: components["schemas"]["TreasurySourceClaim"][];
+            /**
              * State
              * @enum {string}
              */
@@ -28823,6 +28991,14 @@ export interface components {
             items: components["schemas"]["PublicTreasuryEvent"][];
             /** Next Before */
             next_before: number | null;
+        };
+        /** PublicTreasuryLedger */
+        PublicTreasuryLedger: {
+            current: components["schemas"]["TreasuryLedgerCurrent"] | null;
+            /** Intervals */
+            intervals?: components["schemas"]["TreasuryLedgerInterval"][];
+            sampler: components["schemas"]["TreasuryLedgerSamplerStatus"];
+            totals: components["schemas"]["TreasuryLedgerTotals"];
         };
         /**
          * PublicTreasuryRuntime
@@ -29950,6 +30126,11 @@ export interface components {
             actor: string;
             /** Confirmation */
             confirmation: string;
+            /**
+             * Expected Current Hotkeys
+             * @description The current pinned membership, required to change it. When omitted, hotkeys must equal the current membership.
+             */
+            expected_current_hotkeys?: string[] | null;
             expected_current_packet: components["schemas"]["V13ScorerPacket"];
             /** Expected Current Rotation Id */
             expected_current_rotation_id?: number | null;
@@ -29958,11 +30139,7 @@ export interface components {
             /** Expected Slot Settings Revision */
             expected_slot_settings_revision: number;
             /** Hotkeys */
-            hotkeys: [
-                string,
-                string,
-                string
-            ];
+            hotkeys: string[];
             packet: components["schemas"]["V13ScorerPacket"];
             /** Reason */
             reason: string;
@@ -32616,6 +32793,23 @@ export interface components {
             jaccard_threshold: number;
         };
         /**
+         * SourceArchiveProviderStatus
+         * @description Served configuration only; never a URL, credential, or health claim.
+         */
+        SourceArchiveProviderStatus: {
+            /**
+             * Auth Mode
+             * @enum {string}
+             */
+            auth_mode: "none" | "query" | "path";
+            /** Configured */
+            configured: boolean;
+            /** Credential Configured */
+            credential_configured: boolean;
+            /** Host */
+            host: string | null;
+        };
+        /**
          * SourceDisclosure
          * @description Whether the public source-release path is reachable at all.
          * @enum {string}
@@ -32653,6 +32847,7 @@ export interface components {
         };
         /** SourceReleaseGateStatus */
         SourceReleaseGateStatus: {
+            archive_provider?: components["schemas"]["SourceArchiveProviderStatus"] | null;
             /**
              * Automatic Confirmation Enabled
              * @default false
@@ -34106,6 +34301,93 @@ export interface components {
             /** Validator Hotkey */
             validator_hotkey: string;
         };
+        /** TreasuryLedgerCurrent */
+        TreasuryLedgerCurrent: {
+            /** Available Rao */
+            available_rao: string;
+            /**
+             * Block At
+             * Format: date-time
+             */
+            block_at: string;
+            /** Block Hash */
+            block_hash: string;
+            /** Block Number */
+            block_number: number;
+            /** Collector Coldkey */
+            collector_coldkey: string;
+            /** Collector Hotkey */
+            collector_hotkey: string;
+            /** Collector Incentive */
+            collector_incentive: number | null;
+            /** Collector Uid */
+            collector_uid: number | null;
+            /** Earned Per Epoch Rao */
+            earned_per_epoch_rao: string | null;
+            /** Epoch Index */
+            epoch_index: number;
+            /** Holdings */
+            holdings: components["schemas"]["TreasuryLedgerHoldingView"][];
+            /**
+             * Lock Status
+             * @enum {string}
+             */
+            lock_status: "none" | "perpetual" | "decaying";
+            /** Locked Rao */
+            locked_rao: string;
+            /** Owner Conviction Rao */
+            owner_conviction_rao: string | null;
+            /** Owner Holds Most Conviction */
+            owner_holds_most_conviction: boolean | null;
+            /** Owner Hotkey */
+            owner_hotkey: string | null;
+            /** Total Rao */
+            total_rao: string;
+        };
+        /** TreasuryLedgerHoldingView */
+        TreasuryLedgerHoldingView: {
+            /** Alpha Total Rao */
+            alpha_total_rao: string;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Coldkey */
+            coldkey: string;
+            /** Tao Free Rao */
+            tao_free_rao: string;
+        };
+        /**
+         * TreasuryLedgerInterval
+         * @description The change between two consecutive samples.
+         */
+        TreasuryLedgerInterval: {
+            /** Attributed Rao */
+            attributed_rao: string;
+            /** Balance Change Rao */
+            balance_change_rao: string;
+            /**
+             * Block At
+             * Format: date-time
+             */
+            block_at: string;
+            /** Block Number */
+            block_number: number;
+            /** Earned Rao */
+            earned_rao: string | null;
+            /** Epoch Index */
+            epoch_index: number;
+            /** Estimated */
+            estimated: boolean;
+            /** Outflow Rao */
+            outflow_rao: string;
+            /** Previous Epoch Index */
+            previous_epoch_index: number;
+            /** Receipt Count */
+            receipt_count: number;
+            /** Receipt Ids */
+            receipt_ids: number[];
+            /** Unattributed Rao */
+            unattributed_rao: string;
+        };
         /**
          * TreasuryLedgerPin
          * @description V1 can record shadow evidence only. No weight or spending activation.
@@ -34215,6 +34497,35 @@ export interface components {
              * @constant
              */
             weight_effect: "none";
+        };
+        /** TreasuryLedgerSamplerStatus */
+        TreasuryLedgerSamplerStatus: {
+            /** Enabled */
+            enabled: boolean;
+            /** Last Checked At */
+            last_checked_at?: string | null;
+            /** Last Error */
+            last_error?: string | null;
+            /** Last Sampled At */
+            last_sampled_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "running" | "not_configured" | "blocked" | "stopped";
+        };
+        /** TreasuryLedgerTotals */
+        TreasuryLedgerTotals: {
+            /** Attributed Rao */
+            attributed_rao: string;
+            /** Earned Rao */
+            earned_rao: string;
+            /** Outflow Rao */
+            outflow_rao: string;
+            /** Unattributed Rao */
+            unattributed_rao: string;
+            /** Window Epochs */
+            window_epochs: number;
         };
         /**
          * TreasuryObserverSettings
@@ -34345,6 +34656,11 @@ export interface components {
             /** Source Block */
             source_block: number | null;
             /**
+             * Source Claims
+             * @default []
+             */
+            source_claims: components["schemas"]["TreasurySourceClaim"][];
+            /**
              * Stage
              * @enum {string}
              */
@@ -34380,6 +34696,11 @@ export interface components {
             reason: string;
             /** Source Block */
             source_block?: number | null;
+            /**
+             * Source Claims
+             * @default []
+             */
+            source_claims: components["schemas"]["TreasurySourceClaim"][];
             /**
              * Stage
              * @enum {string}
@@ -34573,6 +34894,15 @@ export interface components {
             /** Revision */
             revision: number;
             settings: components["schemas"]["TreasurySettings"];
+        };
+        /** TreasurySourceClaim */
+        TreasurySourceClaim: {
+            /** Amount Rao */
+            amount_rao: number;
+            /** Epoch Index */
+            epoch_index: number;
+            /** Source Block */
+            source_block: number;
         };
         /**
          * TreasuryWeightCapability
@@ -35596,6 +35926,11 @@ export interface components {
             /** Oldest Scorer Observed At */
             oldest_scorer_observed_at: number;
             packet: components["schemas"]["V13ScorerPacket"];
+            /**
+             * Routable Hotkeys
+             * @description Unpaused, accepting pinned members signing the authority packet; always at least three.
+             */
+            routable_hotkeys?: string[];
         };
         /** V13ReviewClockRevision */
         V13ReviewClockRevision: {
@@ -35689,10 +36024,22 @@ export interface components {
         /** V13ScorerPreflight */
         V13ScorerPreflight: {
             /**
+             * Authority Hotkeys
+             * @description Pinned members signing the authority packet.
+             */
+            authority_hotkeys?: string[];
+            /** @description Packet a strict majority (and at least three) of the live pinned members sign. Only its signers are issued V13 work; null means no V13 issuance. */
+            authority_packet?: components["schemas"]["V13ScorerPacket"] | null;
+            /**
              * Observed At
              * Format: date-time
              */
             observed_at: string;
+            /**
+             * Pinned Hotkeys
+             * @description Current pinned membership; null before a pin.
+             */
+            pinned_hotkeys?: string[] | null;
             /** Slot Settings Checksum */
             slot_settings_checksum: string | null;
             /** Slot Settings Revision */
@@ -35710,6 +36057,12 @@ export interface components {
             hotkey: string;
             /** Live V13 Tickets */
             live_v13_tickets: number;
+            /**
+             * Member
+             * @description Whether the current pin names this validator.
+             * @default false
+             */
+            member: boolean;
             packet: components["schemas"]["V13ScorerPacket"] | null;
             /** Paused */
             paused: boolean;
@@ -39608,6 +39961,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCopyReviewItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attest_copy_review_api_v1_admin_copy_reviews__agent_id__attest_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCopyReviewOpenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCopyReviewResolveResponse"];
                 };
             };
             /** @description Validation Error */
@@ -43980,6 +44371,39 @@ export interface operations {
             };
         };
     };
+    get_admin_treasury_ledger_api_v1_admin_treasury_ledger_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicTreasuryLedger"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_manual_api_v1_admin_treasury_manual_get: {
         parameters: {
             query?: never;
@@ -47756,6 +48180,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicTreasuryAllocation"];
+                };
+            };
+        };
+    };
+    get_public_treasury_ledger_api_v1_public_treasury_ledger_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicTreasuryLedger"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

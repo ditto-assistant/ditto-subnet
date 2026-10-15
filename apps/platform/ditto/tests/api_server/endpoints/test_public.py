@@ -54,6 +54,7 @@ from ditto.api_models.screener import (
     SourceReviewFinding,
 )
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_models.stack_health import (
     ComponentHealthState,
     ValidatorComponentHealth,
@@ -71,7 +72,10 @@ from ditto.api_server.dependencies import (
     get_storage_client,
 )
 from ditto.api_server.endpoints import public as public_endpoint
-from ditto.api_server.endpoints.public import _fleet_classification
+from ditto.api_server.endpoints.public import (
+    _fleet_classification,
+    _public_artifact_release,
+)
 from ditto.api_server.koth import TOP5_MAX_CONFIRMATION_SEEDS
 from ditto.api_server.storage import ObjectDownloadFailedError
 from ditto.api_server.validator_names import ValidatorNamesSnapshot
@@ -111,6 +115,7 @@ from ditto.db.models import (
     ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
+from ditto.db.queries.artifact_release_settings import ArtifactReleasePolicy
 from ditto.db.queries.audit import (
     EVENT_SCORE,
     GENESIS_HASH,
@@ -12400,6 +12405,89 @@ class TestPublicArtifactRelease:
         king = await client.get(f"/api/v1/public/agent/{former_king_id}/artifact")
         assert king.status_code == 200
         storage.presigned_get_url.assert_awaited_once()
+
+    async def test_banned_king_source_is_released_but_never_a_rejected_one(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        now = datetime.now(UTC)
+        banned_king = await _seed_k3(
+            session_maker,
+            miner=_MINER_A,
+            composites=[0.7, 0.8, 0.9],
+            status=AgentStatus.BANNED,
+        )
+        rejected_king = await _seed_k3(
+            session_maker,
+            miner=_MINER_B,
+            composites=[0.7, 0.8, 0.9],
+            status=AgentStatus.REJECTED,
+        )
+        banned_commoner = await _seed_k3(
+            session_maker,
+            miner=_MINER_A,
+            composites=[0.4, 0.5, 0.6],
+            status=AgentStatus.BANNED,
+        )
+        for agent_id in (banned_king, rejected_king):
+            await _crown(
+                session_maker,
+                agent_id=agent_id,
+                first_crowned_at=now - timedelta(hours=49),
+            )
+        _install_db(app, session_maker)
+        storage = AsyncMock()
+        storage.presigned_get_url.return_value = "https://objects.example/source"
+
+        async def _storage():
+            return storage
+
+        app.dependency_overrides[get_storage_client] = _storage
+
+        # A ban does not withhold a king that earned verified winner emissions.
+        # A banned king that never reached a quorum is terminal, not "retry later".
+        unscored_banned_king = await _seed_k3(
+            session_maker,
+            miner=_MINER_B,
+            composites=[0.7],
+            status=AgentStatus.BANNED,
+        )
+        await _crown(
+            session_maker,
+            agent_id=unscored_banned_king,
+            first_crowned_at=now - timedelta(hours=49),
+        )
+        terminal = await client.get(
+            f"/api/v1/public/agent/{unscored_banned_king}/artifact"
+        )
+        assert terminal.status_code == 404
+        released = await client.get(f"/api/v1/public/agent/{banned_king}/artifact")
+        assert released.status_code == 200
+        for withheld in (rejected_king, banned_commoner):
+            response = await client.get(f"/api/v1/public/agent/{withheld}/artifact")
+            assert response.status_code == 404
+        storage.presigned_get_url.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        ("status", "expected"),
+        [
+            (AgentStatus.BANNED, "unavailable"),
+            (AgentStatus.SCORED, "awaiting_quorum"),
+        ],
+    )
+    def test_banned_submission_without_quorum_is_not_awaiting_one(
+        self, status: AgentStatus, expected: str
+    ) -> None:
+        release = _public_artifact_release(
+            status=status,
+            score_quorum=None,
+            policy=ArtifactReleasePolicy(SourceDisclosure.PUBLIC, 48),
+            king_reveal=None,
+            now=datetime.now(UTC),
+        )
+        assert release.status == expected
 
     async def test_king_source_is_embargoed_until_the_window_elapses(
         self,

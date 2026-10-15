@@ -5,6 +5,7 @@ import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   SCREENING_SUBMISSION_AGENT_STATUSES,
+  reinstatementRetryBudgetSchema,
   scoringLeaseConfirmation,
   scoringLeaseSettingsControlSchema,
   setScoringLeaseSettingsInputSchema,
@@ -26,6 +27,8 @@ import {
   ATH_RULINGS_CONFIRMATION,
   athRulingSchema,
   athRulingPreviewItemSchema,
+  athRulingStepSchema,
+  athRulingExecuteItemSchema,
   athRulingsPreviewResponseSchema,
   athRulingsExecuteResponseSchema,
   athRulingsUploadResponseSchema,
@@ -4235,6 +4238,18 @@ describe('validator queue reinstatement schemas', () => {
     created_at: '2026-07-27T19:00:00Z',
   }
 
+  it('accepts the fail-once zero infra-grant cap Platform records today', () => {
+    // MAX_AGENT_INFRA_RETRY_GRANTS is pinned at 0, so a real reinstatement row
+    // carries 0. Rejecting it broke get_validation_retry for every reinstated
+    // agent (2026-10-15, overhorizon v2).
+    const parsed = reinstatementRetryBudgetSchema.parse({
+      ...reinstatement.retry_budget_snapshot,
+      agent_infra_retry_grants: 0,
+      max_agent_infra_retry_grants: 0,
+    })
+    expect(parsed.max_agent_infra_retry_grants).toBe(0)
+  })
+
   it('reports whether an eviction can be reversed right now', () => {
     const parsed = validationRetryDetailSchema.parse({
       ...detail,
@@ -4865,6 +4880,35 @@ describe('batched ATH rulings schemas', () => {
     ).toThrow()
   })
 
+  it('parses a hold-free clear as an attest step', () => {
+    const preview = athRulingPreviewItemSchema.parse({
+      index: 0,
+      action: 'clear',
+      agent_id: ruling.agent_id,
+      ok: true,
+      disposition: 'ready',
+      stale_guard: false,
+      would_change_crown: false,
+      steps: ['attest'],
+      reason: 'Reviewed: clean',
+      message: 'will clear without holding (the agent stays on the board)',
+    })
+    expect(preview.steps).toEqual(['attest'])
+    const executed = athRulingExecuteItemSchema.parse({
+      index: 0,
+      action: 'clear',
+      agent_id: ruling.agent_id,
+      status: 'applied',
+      agent_status: 'scored',
+      would_change_crown: false,
+      steps_applied: ['attest'],
+      annotated: true,
+      message: 'ruling applied and audit rows annotated',
+    })
+    expect(executed.steps_applied).toEqual(['attest'])
+    expect(() => athRulingStepSchema.parse('withdraw')).toThrow()
+  })
+
   // The drift guard: every Platform response field has an explicit validator
   // and the key sets match the generated contract in both directions.
   it('mirrors the generated Platform contract field-for-field', () => {
@@ -4885,6 +4929,14 @@ describe('batched ATH rulings schemas', () => {
     >()
     expectTypeOf<ZodInput<typeof athRulingSchema>>().toMatchTypeOf<
       PlatformComponents['schemas']['AdminAthRuling']
+    >()
+    // A step Platform sends must parse here: Zod fails the whole response on
+    // one unknown enum value, which would blank every item of a preview.
+    expectTypeOf<ZodOutput<typeof athRulingStepSchema>>().toEqualTypeOf<
+      NonNullable<PlatformComponents['schemas']['AdminAthRulingPreviewItem']['steps']>[number]
+    >()
+    expectTypeOf<ZodOutput<typeof athRulingStepSchema>>().toEqualTypeOf<
+      NonNullable<PlatformComponents['schemas']['AdminAthRulingExecuteItem']['steps_applied']>[number]
     >()
     expect(
       Object.keys(
@@ -5148,5 +5200,17 @@ describe('scoring lease settings (#1156)', () => {
         confirmation: scoringLeaseConfirmation(180),
       }),
     ).toThrow(/APPLY SCORING TICKET TTL 150 MINUTES/)
+  })
+})
+
+describe('burn settings payout curve ordering', () => {
+  it('refuses an increasing curve on writes but still reads a stored one', async () => {
+    const { burnSettingsSchema, burnSettingsWriteSchema } = await import('./admin.schemas')
+    const increasing = { burn_share: 0, rank_shares: [0.07, 0.1, 0.13, 0.2, 0.5] }
+    expect(burnSettingsWriteSchema.safeParse(increasing).success).toBe(false)
+    expect(burnSettingsSchema.safeParse(increasing).success).toBe(true)
+    expect(
+      burnSettingsWriteSchema.safeParse({ burn_share: 0, rank_shares: [0.5, 0.2, 0.13, 0.1, 0.07] }).success,
+    ).toBe(true)
   })
 })

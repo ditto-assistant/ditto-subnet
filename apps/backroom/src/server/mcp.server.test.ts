@@ -464,6 +464,7 @@ describe('Backroom MCP tools', () => {
         'get_submission_cooldown',
         'get_treasury_settings',
         'get_treasury_receipts',
+        'get_treasury_ledger',
         'get_treasury_receipt_preflight',
         'get_treasury_manual_transfers',
         'get_treasury_activation_preflight',
@@ -1456,6 +1457,7 @@ describe('Backroom MCP tools', () => {
       current: revision(3),
       release_gate: {
         version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false,
+        archive_provider: { configured: true, host: 'api.taostats.io', auth_mode: 'query', credential_configured: true },
         receipt_diagnostics: [{ report: {
           schema_version: 3, validator_hotkey: 'validator', netuid: 118, timestamp: 100,
           observation: { submission_status: 'accepted', submission_observed_at: 90,
@@ -1500,6 +1502,7 @@ describe('Backroom MCP tools', () => {
     expect(readJsonResult(currentOnly)).toMatchObject({
       current: { revision: 3 },
       release_gate: { version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false, pending_kings: 7, confirmed_kings: 0,
+        archive_provider: { configured: true, host: 'api.taostats.io', auth_mode: 'query', credential_configured: true },
         receipt_diagnostics: [{ report: { schema_version: 3, observation: {
           last_validation: { error_count: 1, fields: ['provenance.champion_artifact_sha256:string_pattern_mismatch'] },
           failure_context: { claimed_schema_version: 1, task_id: 12, claimed_epoch_index: 25017, claimed_commit_block: 9029300, attempt_id: '11111111-1111-4111-8111-111111111111' },
@@ -1627,9 +1630,15 @@ describe('Backroom MCP tools', () => {
           properties: Record<string, unknown>
         }
         expect(schema.properties.hotkeys).toEqual({
-          type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 3,
+          type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 16,
         })
       }
+      const rotateSchema = tools.find((tool) => tool.name === 'rotate_v13_scorer_cohort')
+        ?.inputSchema as { properties: Record<string, unknown>; required?: Array<string> }
+      expect(rotateSchema.properties.expectedCurrentHotkeys).toEqual({
+        type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 16,
+      })
+      expect(rotateSchema.required).not.toContain('expectedCurrentHotkeys')
     } finally {
       await fresh.client.close()
       await fresh.server.close()
@@ -1638,7 +1647,7 @@ describe('Backroom MCP tools', () => {
     }
   })
 
-  it('keeps the V13 scorer cohort writers write-scoped and forwards exactly three hotkeys', async () => {
+  it('keeps the V13 scorer cohort writers write-scoped and forwards three to sixteen hotkeys', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const packet = {
       source_revision: 'b'.repeat(40),
@@ -1682,14 +1691,29 @@ describe('Backroom MCP tools', () => {
 
     const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
     try {
-      for (const count of [2, 4]) {
+      const seventeen = Array.from({ length: 17 }, (_, index) => `5Member${index}`)
+      for (const members of [hotkeys.slice(0, 2), seventeen]) {
         const response = await writer.client.callTool({
           name: 'rotate_v13_scorer_cohort',
-          arguments: { ...rotate, hotkeys: [...hotkeys, '5Delta'].slice(0, count) },
+          arguments: { ...rotate, hotkeys: members },
         })
         expect(response.isError).toBe(true)
       }
       expect(fetchMock).not.toHaveBeenCalled()
+
+      // Adding a fourth member binds the change to the current membership.
+      const widened = await writer.client.callTool({
+        name: 'rotate_v13_scorer_cohort',
+        arguments: {
+          ...rotate, hotkeys: [...hotkeys, '5Delta'], packet: rotate.expectedCurrentPacket,
+          expectedCurrentHotkeys: hotkeys,
+        },
+      })
+      expect(widened.isError).not.toBe(true)
+      expect(fetchMock).toHaveBeenCalledOnce()
+      expect(JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)))
+        .toMatchObject({ hotkeys: [...hotkeys, '5Delta'], expected_current_hotkeys: hotkeys })
+      fetchMock.mockClear()
 
       const response = await writer.client.callTool({ name: 'rotate_v13_scorer_cohort', arguments: rotate })
       expect(response.isError).not.toBe(true)
@@ -1698,7 +1722,8 @@ describe('Backroom MCP tools', () => {
       expect(url).toContain('/api/v1/admin/v13-scorer-cohort/rotate')
       expect(init.method).toBe('POST')
       expect(JSON.parse(String(init.body))).toMatchObject({
-        hotkeys, packet, expected_current_rotation_id: 3, actor: session.email,
+        hotkeys, packet, expected_current_rotation_id: 3, expected_current_hotkeys: null,
+        actor: session.email,
       })
       expect(readTextResult(response)).not.toContain('platform-admin-token')
     } finally {
@@ -6566,10 +6591,10 @@ describe('Backroom MCP tools', () => {
           action: 'clear',
           agent_id: 'db9b919d-241b-4131-a2cc-f426b4356950',
           status: 'failed',
-          agent_status: 'scored',
+          agent_status: 'banned',
           would_change_crown: false,
           steps_applied: [],
-          message: 'agent is scored, not held',
+          message: 'agent is banned, not held',
         },
       ],
       applied_count: 1,

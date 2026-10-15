@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from ditto.api_server.dependencies import get_session
+from ditto.chain.models import ArchiveRpcAuthMode
 from ditto.db.models import Agent, AgentKingship, AgentStatus
 
 pytestmark = pytest.mark.asyncio
@@ -40,6 +41,59 @@ def _payload(hours: int, expected: int = 0) -> dict[str, object]:
         "actor": "operator@example.com",
         "confirmation": f"SET SOURCE EMBARGO {hours} HOURS",
     }
+
+
+@pytest.mark.parametrize(
+    ("url", "key", "mode", "expected_host"),
+    [
+        (None, None, "query", None),
+        (
+            "wss://api.taostats.io/api/v1/rpc/ws/finney_archive",
+            "private-api-key",
+            "query",
+            "api.taostats.io",
+        ),
+        ("wss://archive.example/rpc", None, "query", "archive.example"),
+        (
+            "wss://private-user:private-password@archive.example/private-path?private-query=value",
+            "private-api-key",
+            "query",
+            "archive.example",
+        ),
+        ("wss://archive.example/rpc", "private-api-key", "none", "archive.example"),
+        ("wss://[invalid", "private-api-key", "path", None),
+    ],
+)
+async def test_release_gate_reports_archive_configuration_without_credentials(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    url: str | None,
+    key: str | None,
+    mode: ArchiveRpcAuthMode,
+    expected_host: str | None,
+) -> None:
+    _install(app, session_maker)
+    app.state.config = replace(
+        app.state.config,
+        chain=replace(
+            app.state.config.chain,
+            archive_rpc_url=url,
+            archive_rpc_api_key=key,
+            archive_rpc_auth_mode=mode,
+        ),
+    )
+    response = await client.get(
+        "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["release_gate"]["archive_provider"] == {
+        "configured": bool(url),
+        "host": expected_host,
+        "auth_mode": mode,
+        "credential_configured": bool(key),
+    }
+    assert "private-" not in response.text
 
 
 async def test_defaults_to_48_then_shortens_with_audited_revisions(

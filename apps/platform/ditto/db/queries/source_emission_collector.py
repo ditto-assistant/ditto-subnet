@@ -73,6 +73,43 @@ async def advance_source_emission_cursor(
     return result.scalar_one_or_none() is not None
 
 
+async def skip_quiet_source_emission_blocks(
+    session: AsyncSession,
+    *,
+    netuid: int,
+    block: int,
+    block_hash: str,
+    expected_block: int,
+    expected_block_hash: str,
+    runtime_code_hash: str | None,
+    now: datetime,
+) -> bool:
+    """CAS the cursor across blocks a range plan proved quiet.
+
+    Quiet blocks would commit no binding, payout or reset, so advancing past
+    them in one step is the same durable state as advancing one at a time.
+    """
+    if block <= expected_block or not expected_block_hash:
+        raise ValueError("quiet skip must move the cursor forward")
+    result = await session.execute(
+        update(SourceEmissionCollectorCursor)
+        .where(
+            SourceEmissionCollectorCursor.netuid == netuid,
+            SourceEmissionCollectorCursor.block == expected_block,
+            SourceEmissionCollectorCursor.block_hash == expected_block_hash,
+        )
+        .values(
+            block=block,
+            block_hash=block_hash,
+            updated_at=now,
+            runtime_code_hash=runtime_code_hash,
+            last_blocked_reason=None,
+        )
+        .returning(SourceEmissionCollectorCursor.netuid)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def list_source_emission_vector_bindings(
     session: AsyncSession,
     *,

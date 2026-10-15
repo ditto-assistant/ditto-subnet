@@ -5,6 +5,7 @@ import math
 import pytest
 from bittensor_wallet import Keypair
 
+from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 from ditto.validator.treasury_weights import fold_treasury_weights
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy
 from ditto_screening_protocol.treasury_approval import (
@@ -41,7 +42,7 @@ def fixture(*, service_bps=1000, signed_range=None, pinned_bps=None):
     )
     member = TreasuryFleetMember(
         validator_hotkey=Keypair.create_from_uri("//Eve").ss58_address,
-        protocol_version=30,
+        protocol_version=HEARTBEAT_PROTOCOL_VERSION,
         treasury_pin_version=2,
         treasury_dispatch_version=2,
         approved_policy_digest=policy.digest,
@@ -99,7 +100,7 @@ def test_independent_follower_uses_same_signed_service_allocation():
     args["local_capability"] = treasury_follower_capability(
         pin,
         validator_hotkey=Keypair.create_from_uri("//Dave").ss58_address,
-        protocol_version=30,
+        protocol_version=HEARTBEAT_PROTOCOL_VERSION,
     )
     assert args["local_capability"] not in pin.fleet
     assert fold_treasury_weights({"miner": 1}, **args) == expected

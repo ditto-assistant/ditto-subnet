@@ -218,6 +218,30 @@ def _ledger_statistical_band_cap(ledger: LedgerResponse) -> bool:
     return getattr(ledger, "statistical_band_mode", None) == "capped"
 
 
+def _ledger_rank_shares(
+    ledger: LedgerResponse, legacy: tuple[float, ...]
+) -> tuple[float, ...]:
+    """The protocol-31 operator payout curve when the served ledger carries one.
+
+    Platform withholds ``rank_shares`` until every recently-live weight setter
+    reports v31, so the whole fleet switches curves in the same epoch. A curve
+    the fold could not use (wrong length, non-positive, or not summing to one)
+    is ignored rather than raised: every validator ignores it identically and
+    keeps folding ``legacy``.
+    """
+    served = getattr(ledger, "rank_shares", None)
+    if not served:
+        return legacy
+    shares = tuple(float(share) for share in served)
+    if (
+        len(shares) != len(legacy)
+        or any(not math.isfinite(share) or share <= 0.0 for share in shares)
+        or not math.isclose(sum(shares), 1.0, rel_tol=0.0, abs_tol=1e-12)
+    ):
+        return legacy
+    return shares
+
+
 def _ledger_crown_incumbent(ledger: LedgerResponse) -> UUID | None:
     """The served incumbent the fold defends, or ``None`` for the classic walk.
 
@@ -2272,7 +2296,7 @@ class ValidatorWorker:
             memory_params=MemoryFoldParams(
                 margin=self._config.koth_margin,
                 tail_size=self._config.koth_tail_size,
-                rank_shares=self._config.koth_rank_shares,
+                rank_shares=_ledger_rank_shares(ledger, self._config.koth_rank_shares),
                 dethrone_z=self._config.koth_dethrone_z,
                 tie_pooling=ledger.tie_weighting_mode == "pool",
                 ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),

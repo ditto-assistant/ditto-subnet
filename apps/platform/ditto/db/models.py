@@ -7198,7 +7198,12 @@ class ScreenerL2ReportCanary(Base):
 
 
 class V13ScorerCohortPin(Base):
-    """Immutable, operator-audited V13 scorer and runtime packet admission."""
+    """Immutable, operator-audited V13 scorer and runtime packet admission.
+
+    ``hotkeys`` names three to sixteen members; the per-agent quorum stays three
+    distinct validators. The constraint keeps its historical ``three_hotkeys``
+    name so the deployed constraint is replaced in place.
+    """
 
     __tablename__ = "v13_scorer_cohort_pins"
 
@@ -7216,7 +7221,8 @@ class V13ScorerCohortPin(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_pin_version_check"),
         CheckConstraint(
-            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            "jsonb_typeof(hotkeys) = 'array' "
+            "AND jsonb_array_length(hotkeys) BETWEEN 3 AND 16",
             name="v13_scorer_pin_three_hotkeys_check",
         ),
         CheckConstraint(
@@ -7247,7 +7253,8 @@ class V13ScorerCohortRotation(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_rotation_version_check"),
         CheckConstraint(
-            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            "jsonb_typeof(hotkeys) = 'array' "
+            "AND jsonb_array_length(hotkeys) BETWEEN 3 AND 16",
             name="v13_scorer_rotation_three_hotkeys_check",
         ),
         CheckConstraint(
@@ -11531,6 +11538,52 @@ class TreasuryVerifiedReceipt(Base):
             "source_block",
             "bucket_id",
             postgresql_where=text("stage = 'service_distribution'"),
+        ),
+    )
+
+
+class TreasuryLedgerSample(Base):
+    """One per-epoch reading of the Gamma collector from finalized chain state.
+
+    Append-only and public: every column is a public chain value read at
+    ``block_hash``, so any sample can be re-derived from an archive node. The
+    gap between what the collector earned and how its balance moved is what a
+    verified treasury receipt must explain.
+    """
+
+    __tablename__ = "treasury_ledger_samples"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    block_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    sampled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    collector_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    collector_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    collector_uid: Mapped[int | None] = mapped_column(Integer)
+    collector_incentive: Mapped[float | None] = mapped_column(Float)
+    collector_emission_rao: Mapped[int | None] = mapped_column(BigInteger)
+    collector_total_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_locked_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_available_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_lock_perpetual: Mapped[bool | None] = mapped_column(Boolean)
+    owner_hotkey: Mapped[str | None] = mapped_column(Text)
+    owner_conviction_rao: Mapped[int | None] = mapped_column(BigInteger)
+    most_convicted_hotkey: Mapped[str | None] = mapped_column(Text)
+    holdings: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "netuid", "epoch_index", name="treasury_ledger_samples_netuid_epoch"
+        ),
+        CheckConstraint(
+            "collector_total_rao >= 0 AND collector_locked_rao >= 0 "
+            "AND collector_available_rao >= 0",
+            name="treasury_ledger_samples_nonnegative",
         ),
     )
 

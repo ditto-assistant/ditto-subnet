@@ -172,6 +172,9 @@ def chain(request: pytest.FixtureRequest) -> tuple[AsyncMock, dict]:
             "Active": [True, True, True],
             "ValidatorPermit": [True, False, False],
             "SubnetOwnerHotkey": "owner",
+            "SubnetEpochConsensus": state.get("consensus", {}).get(
+                kw["block_hash"], state.get("consensus_default", "Yuma")
+            ),
         }[kw["storage_function"]]
 
     substrate.query.side_effect = query
@@ -613,3 +616,56 @@ async def test_payout_accepts_only_proven_initialization_order(
         state["pending"][0][1].append(("v1", 81, "0x040506", 101))
     block = await read_source_emission_block(substrate, netuid=118, block=100)
     assert block.payout_initialization_reveals is (failure is None)
+
+
+_V475 = "0x557634c8c31bc639ea6552e297dcfb781cd7d9bdd491a5352c151305db33d3a0"
+
+
+async def test_v475_runtime_is_audited_only_under_yuma(chain: tuple) -> None:
+    substrate, state = chain
+    state["runtime"] = _V475
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.runtime_code_hash == _V475
+    assert block.updates
+    epoch_modes = [
+        c.kwargs["block_hash"]
+        for c in substrate.query.call_args_list
+        if c.kwargs["storage_function"] == "SubnetEpochConsensus"
+    ]
+    assert sorted(epoch_modes) == ["h100", "h99"]
+
+
+@pytest.mark.parametrize("at", ["h99", "h100"])
+async def test_null_epoch_consensus_fails_closed(chain: tuple, at: str) -> None:
+    substrate, state = chain
+    state["runtime"] = _V475
+    state["consensus"] = {at: "Null"}
+    with pytest.raises(ValueError, match="unsupported epoch consensus"):
+        await read_source_emission_block(substrate, netuid=118, block=100)
+
+
+async def test_pre_v475_runtime_never_reads_epoch_consensus(chain: tuple) -> None:
+    substrate, _ = chain
+    await read_source_emission_block(substrate, netuid=118, block=100)
+    assert not any(
+        c.kwargs["storage_function"] == "SubnetEpochConsensus"
+        for c in substrate.query.call_args_list
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "accepted"), [("Yuma", True), ("Null", False)], ids=["yuma", "null"]
+)
+async def test_v475_commit_inclusion_requires_yuma(
+    commit_chain: tuple, mode: str, accepted: bool
+) -> None:
+    from ditto.chain.source_emission_verifier import verify_finalized_weight_commit
+
+    substrate, state, claim = commit_chain
+    state["runtime"] = _V475
+    state["consensus_default"] = mode
+    if accepted:
+        await verify_finalized_weight_commit(substrate, claim)
+    else:
+        with pytest.raises(ValueError, match="commit epoch consensus"):
+            await verify_finalized_weight_commit(substrate, claim)

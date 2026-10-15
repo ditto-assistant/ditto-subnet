@@ -26,6 +26,15 @@ export async function fetchTreasuryReceiptPreflight(rawInput: unknown) {
 export async function fetchTreasuryReceipts() {
   return treasuryReceiptPageSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts?limit=100'))
 }
+
+import { treasuryGammaLedgerSchema } from '../lib/treasury-gamma-ledger.schemas'
+
+/** Per-epoch Gamma collector readings, validated at the Platform boundary. */
+export async function fetchTreasuryLedger(limit: number) {
+  return treasuryGammaLedgerSchema.parse(await platformAdminRequest(`/api/v1/admin/treasury-ledger?limit=${limit}`, {
+    retries: 1,
+  }))
+}
 import { publicTreasuryApprovalSchema, treasuryActivationPreflightInputSchema, treasuryActivationPreflightSchema, treasuryLedgerReadinessSchema } from '../lib/treasury-ledger.schemas'
 import { recordTreasuryRuntimeInputSchema, treasuryRuntimeControlSchema, treasuryRuntimeRevisionSchema } from '../lib/treasury-ledger.schemas'
 import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
@@ -2016,6 +2025,7 @@ export async function rotateV13ScorerCohort(input: {
     injected_keys: string[]
   }
   expectedCurrentRotationId?: number
+  expectedCurrentHotkeys?: string[]
   expectedSlotSettingsRevision: number
   expectedSlotSettingsChecksum: string
   reason: string
@@ -2028,6 +2038,7 @@ export async function rotateV13ScorerCohort(input: {
       packet: input.packet,
       expected_current_packet: input.expectedCurrentPacket,
       expected_current_rotation_id: input.expectedCurrentRotationId ?? null,
+      expected_current_hotkeys: input.expectedCurrentHotkeys ?? null,
       expected_slot_settings_revision: input.expectedSlotSettingsRevision,
       expected_slot_settings_checksum: input.expectedSlotSettingsChecksum,
       reason: input.reason,

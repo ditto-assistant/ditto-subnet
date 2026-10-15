@@ -668,6 +668,7 @@
 # A caddy-owned log dir so Caddy can both write AND roll (create new files). The
 # shared /opt/ditto/logs is deploy:ditto and not caddy-writable.
 - name: Ensure caddy log directory exists
+  tags: [platform-caddy]
   ansible.builtin.file:
     path: /opt/ditto/logs/caddy
     state: directory
@@ -676,15 +677,18 @@
     mode: "0755"
 
 - name: Write Caddyfile
+  tags: [platform-caddy]
   ansible.builtin.template:
     src: Caddyfile.j2
     dest: /etc/caddy/Caddyfile
     owner: root
     group: caddy
     mode: "0644"
+    validate: "caddy validate --adapter caddyfile --config %s"
   notify: reload caddy
 
 - name: Ensure Caddy is enabled and running
+  tags: [platform-caddy]
   ansible.builtin.systemd:
     name: caddy
     enabled: true

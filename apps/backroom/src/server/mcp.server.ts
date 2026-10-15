@@ -16,7 +16,7 @@ import { observerGrant } from './treasury-observer-access.server'
 import { createTreasuryObserverServer } from './treasury-observer-mcp.server'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
-import { fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers } from './admin.service'
+import { fetchTreasuryLedger, fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers } from './admin.service'
 import { fetchTreasuryActivationPreflight, fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 import { fetchTreasuryRuntime, recordTreasuryRuntime } from './admin.service'
 import { recordTreasuryRuntimeInputSchema } from '../lib/treasury-ledger.schemas'
@@ -776,17 +776,17 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_l2_report_canary_preflight:
     'Evaluate each exact-source canary guard; scheduling rechecks them.',
   get_v13_scorer_cohort:
-    'Read the immutable three-validator V13 scorer pin, including exact signed runtime packet.',
+    'Read the immutable 3-16 validator V13 scorer pin, including exact signed runtime packet.',
   get_v13_scorer_cohort_preflight:
-    'Read signed V13 fleet, admission and drain before pinning.',
+    'Read signed V13 fleet, membership, authority packet, admission and drain.',
   get_v13_scorer_cohort_history:
     'Read immutable V13 cohort and packet rotations.',
   get_v13_report_only_current_packet:
-    'Read unanimous live V13 packet; no authority change.',
+    'Read live-majority V13 packet and routable members; no authority change.',
   activate_v13_scorer_cohort:
-    'One-way pin of three exact managed V13 validators after nonmembers pause and live tickets drain.',
+    'One-way pin of 3-16 exact managed V13 validators after nonmembers pause and live tickets drain.',
   rotate_v13_scorer_cohort:
-    'Rotate pinned V13 cohort to unanimous signed packet after all V13 tickets drain; keeps pin history.',
+    'Append a V13 cohort rotation changing packet and/or 3-16 members; majority-signed, guarded, keeps history.',
   schedule_l2_report_canary:
     'Queue one isolated exact-artifact non-authoritative report. reviewSettingsRevision pins only canary scopes, never node scopes. See tool help.',
 
@@ -932,6 +932,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_treasury_ledger_readiness: 'Read epoch/policy readiness; no activation.',
   record_treasury_settings: 'Record buckets with CAS; in-range Gamma % under signed range moves next epoch.',
   get_treasury_receipts: 'Read treasury receipt history/publication.',
+  get_treasury_ledger: 'Read per-epoch Gamma earnings, balance, lock and unreceipted outflow.',
   get_treasury_manual_transfers: 'Read manual custody readiness, requests and public receipts; no funds.',
   get_treasury_receipt_preflight: 'Read exact receipt readiness/archive checkpoint; no writes.',
   record_treasury_receipt: 'Ingest finalized receipt; no signing/provider credit.',
@@ -991,10 +992,11 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read source range (max 400 lines); locate via search_screening_source or finding citations. Artifact scope.',
 }
 
-// Exactly three scorer hotkeys as a plain bounded array. z.tuple serializes to
-// draft-07 array-form `items`, which some MCP clients (Codex) cannot import, so
-// they silently drop the whole tool from a refreshed catalog (#2490, #2559).
-const v13ScorerCohortHotkeysSchema = z.array(z.string()).length(3)
+// Three to sixteen scorer hotkeys as a plain bounded array. The per-agent
+// quorum stays three. z.tuple serializes to draft-07 array-form `items`, which
+// some MCP clients (Codex) cannot import, so they silently drop the whole tool
+// from a refreshed catalog (#2490, #2559).
+const v13ScorerCohortHotkeysSchema = z.array(z.string()).min(3).max(16)
 
 export function createBackroomMcpServer(props: McpGrantProps) {
   if (observerGrant(props.scopes)) return createTreasuryObserverServer(props)
@@ -1311,7 +1313,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Preview ATH rulings batch',
       description:
-        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear an agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
+        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]; a clear on a held agent is ["clear"], and a clear on an unheld scored or live agent with no ATH review is ["attest"]: it records the terminal clear without holding the row, so the agent never leaves the board and would_change_crown is always false; a reject is also accepted on an agent still evaluating below quorum, as ["open","reject"], and ends its live validator tickets so the remaining runs are not paid for, while a bare open still needs scored or live), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear a held agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
       inputSchema: previewAthRulingsBatchInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1328,7 +1330,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Execute ATH rulings batch',
       description:
-        'Apply exactly the rulings a current preview token describes; confirmation must be "APPLY ATH RULINGS BATCH". The Platform verifies the token (operator, digest, TTL), re-downloads the uploaded document (or requires the identical inline `rulings`), RE-READS THE BOARD, and re-previews every item before touching it. Each ruling is then applied independently through the same open_ath_review / resolve_ath_review code path -- a reject on a scored agent opens the hold and resolves it in one item -- with the board re-read from Postgres after every ruling that lands, so item i is judged against the real board after items < i (not the preview\'s simulation); each is separately audited: the AthReview provenance and the clear/reject action rows carry batch_id, index, evidence_references, the rulings digest, the upload key, and the board fingerprint. Rows come back as applied / already_applied / failed with the refusal reason, so a partial batch is safe to preview and re-run. An applied row with `annotated: false` LANDED -- only the batch_id / evidence_references annotation on its audit rows failed; never re-run it. An item is refused when its guards moved, or when its crown outcome differs from the preview (would_change_crown flipped, or the champion / raw leader changed and the item touches the crown) -- preview again and read the new `board`. board_before and board_after report the crown around the batch. Requires backroom:write.',
+        'Apply exactly the rulings a current preview token describes; confirmation must be "APPLY ATH RULINGS BATCH". The Platform verifies the token (operator, digest, TTL), re-downloads the uploaded document (or requires the identical inline `rulings`), RE-READS THE BOARD, and re-previews every item before touching it. Each ruling is then applied independently through the same open_ath_review / resolve_ath_review code path -- a reject on a scored agent opens the hold and resolves it in one item, and an ["attest"] clear writes a resolved-clear review for an unheld scored or live agent without changing its status -- with the board re-read from Postgres after every ruling that lands, so item i is judged against the real board after items < i (not the preview\'s simulation); each is separately audited: the AthReview provenance and the clear/reject action rows carry batch_id, index, evidence_references, the rulings digest, the upload key, and the board fingerprint. Rows come back as applied / already_applied / failed with the refusal reason, so a partial batch is safe to preview and re-run. An applied row with `annotated: false` LANDED -- only the batch_id / evidence_references annotation on its audit rows failed; never re-run it. An item is refused when its guards moved, or when its crown outcome differs from the preview (would_change_crown flipped, or the champion / raw leader changed and the item touches the crown) -- preview again and read the new `board`. board_before and board_after report the crown around the batch. Requires backroom:write.',
       inputSchema: executeAthRulingsBatchInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2279,7 +2281,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get public source-release policy',
       description:
-        "Read the subnet-wide policy governing whether miners' submitted source is ever published, and how soon: disclosure ('public' — source enters the normal release path — or 'never' — no source is published at all), embargo_hours (the window measured from completed winner-emission confirmation, 6 to 8760, retained but inert while disclosure is 'never'), the current append-only revision, and the history with the actor and reason behind every change. Uniform for every submission: there is no per-miner or per-submission setting, so this one value describes the whole subnet. Release is king-only regardless — only the exact submission that held the crown and earned winner emissions in a completed tempo is ever eligible — so a 'public' policy does not mean every submission is published. The release_gate field, when present, reports the served gate version, automatic_confirmation_enabled, the durable collector cursor and runtime hash, last payout attribution or blocking reason, pending receipt and unresolved payout counts, pending and confirmed king counts, and up to 25 exact-agent payout receipt summaries (confirmed first, then newest crowns); rows_has_more signals truncation. The receipt_diagnostics list contains up to 64 latest signed validator relay observations with received_at and stale; receipt_diagnostics_has_more signals truncation. Schema-v2 last_validation contains only bounded field/type/rule codes and the error count of the last invalid claim in the latest recovery page; a new page clears it, and absence on v1 means unknown. These are self-reported diagnostic stages, never payout evidence; missing observations mean unknown, not healthy. Missing release_gate means this response cannot prove the new gate is deployed. Positive revealed weights alone are not earnings proof. Requires backroom:read and changes nothing.",
+        "Read the subnet-wide policy governing whether miners' submitted source is ever published, and how soon: disclosure ('public' — source enters the normal release path — or 'never' — no source is published at all), embargo_hours (the window measured from completed winner-emission confirmation, 6 to 8760, retained but inert while disclosure is 'never'), the current append-only revision, and the history with the actor and reason behind every change. Uniform for every submission: there is no per-miner or per-submission setting, so this one value describes the whole subnet. Release is king-only regardless — only the exact submission that held the crown and earned winner emissions in a completed tempo is ever eligible — so a 'public' policy does not mean every submission is published. The release_gate field, when present, reports the served gate version, automatic_confirmation_enabled, archive_provider (configured host, auth mode, and credential presence only; never a URL or key, and not a provider health or authentication result), the durable collector cursor and runtime hash, last payout attribution or blocking reason, pending receipt and unresolved payout counts, pending and confirmed king counts, and up to 25 exact-agent payout receipt summaries (confirmed first, then newest crowns); rows_has_more signals truncation. The receipt_diagnostics list contains up to 64 latest signed validator relay observations with received_at and stale; receipt_diagnostics_has_more signals truncation. Schema-v2 last_validation contains only bounded field/type/rule codes and the error count of the last invalid claim in the latest recovery page; a new page clears it, and absence on v1 means unknown. These are self-reported diagnostic stages, never payout evidence; missing observations mean unknown, not healthy. Missing archive_provider means the configured provider is unknown. Missing release_gate means this response cannot prove the new gate is deployed. Positive revealed weights alone are not earnings proof. Requires backroom:read and changes nothing.",
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },
@@ -3076,7 +3078,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_v13_scorer_cohort',
     {
       title: 'Get V13 scorer cohort pin',
-      description: 'Read the exact immutable three-validator scorer pin and signed runtime packet. Null means no pin and no signed L2 lease. Requires backroom:read.',
+      description: 'Read the exact immutable scorer pin (3-16 validators; each agent is still scored by three distinct members) and its last operator-approved signed runtime packet. Null means no pin and no signed L2 lease. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },
@@ -3087,7 +3089,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_v13_scorer_cohort_preflight',
     {
       title: 'Get V13 scorer cohort preflight',
-      description: 'Read current signed packets, accepting capacity, issuance pauses, and live V13 ticket counts for exact activation. Requires backroom:read.',
+      description: 'Read current signed packets, accepting capacity, issuance pauses, live V13 ticket counts and pin membership per validator, plus the pinned hotkeys and the authority packet (signed by a strict majority, and at least three, of the live members) with its signers. Only signers of the authority packet are issued V13 work. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },
@@ -3098,7 +3100,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_v13_scorer_cohort_history',
     {
       title: 'Get V13 scorer cohort history',
-      description: 'Read the original immutable pin and all append-only packet rotations. Requires backroom:read.',
+      description: 'Read the original immutable pin and all append-only packet and membership rotations. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },
@@ -3109,7 +3111,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_v13_report_only_current_packet',
     {
       title: 'Get V13 report-only current packet',
-      description: 'Read unanimous current signed scorer packet for the pinned three validators, including whether it matches the effective primary pin. Never changes authority. Requires backroom:read.',
+      description: 'Read the current authority packet of the pinned members (signed by a live majority of at least three) while at least three of its signers are routable, the routable hotkeys, and whether it matches the effective primary pin. Never changes authority. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },
@@ -3120,7 +3122,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'activate_v13_scorer_cohort',
     {
       title: 'Activate V13 scorer cohort pin',
-      description: 'One-way pin of three sorted exact managed validator hotkeys and their signed scorer packet. The Platform refuses unless all other fresh V13 validators are issuance-paused and all nonmember V13 tickets have drained. Requires current validator slot settings revision/checksum and confirmation PIN V13 SCORER COHORT. Requires backroom:write.',
+      description: 'One-way pin of 3-16 sorted, distinct, exact managed validator hotkeys and their signed scorer packet; every member must sign it. The Platform refuses unless all other fresh V13 validators are issuance-paused and all nonmember V13 tickets have drained. Requires current validator slot settings revision/checksum and confirmation PIN V13 SCORER COHORT. Requires backroom:write.',
       inputSchema: z.object({
         hotkeys: v13ScorerCohortHotkeysSchema,
         packet: z.object({
@@ -3143,8 +3145,8 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'rotate_v13_scorer_cohort',
     {
-      title: 'Rotate V13 scorer cohort packet',
-      description: 'Append one guarded scorer packet rotation for the same three sorted validators. Requires exact current packet and rotation ID, fresh unanimous signed target packet, current slot settings, accepting members, paused nonmembers, zero live V13 tickets, and confirmation ROTATE V13 SCORER PACKET. Requires backroom:write.',
+      title: 'Rotate V13 scorer cohort packet or membership',
+      description: 'Append one guarded rotation that changes the scorer packet, the 3-16 sorted member hotkeys, or both. Requires the exact current packet, rotation ID and (to change membership) expectedCurrentHotkeys; every new member signing the target packet, unpaused and accepting; the target signed by a live majority of at least three proposed members, three of them routable; current slot settings; paused nonmembers; and confirmation ROTATE V13 SCORER PACKET. A packet change needs zero live V13 tickets; a membership-only change needs only removed members drained. Requires backroom:write.',
       inputSchema: z.object({
         hotkeys: v13ScorerCohortHotkeysSchema,
         packet: z.object({
@@ -3162,6 +3164,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           injected_keys: z.array(z.string()).min(1),
         }),
         expectedCurrentRotationId: z.number().int().min(1).optional(),
+        expectedCurrentHotkeys: v13ScorerCohortHotkeysSchema.optional(),
         expectedSlotSettingsRevision: z.number().int().min(1),
         expectedSlotSettingsChecksum: z.string().regex(/^[0-9a-f]{64}$/),
         reason: z.string().min(8),
@@ -3527,6 +3530,16 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     async () => result(await fetchTreasuryReceipts()),
   )
   registerTool(
+    'get_treasury_ledger',
+    {
+      title: 'Read the Gamma collector ledger',
+      description: 'Read per-epoch finalized public readings of the Gamma collector: earnings per epoch, balance, conviction-lock mass and mode, owner-hotkey conviction, holding-wallet balances, and each interval where alpha left the collector, split into receipted and unreceipted amounts. An unreceipted outflow stays listed until record_treasury_receipt ingests its verified receipt. Amounts are rao (1e-9 alpha). Includes sampler status. No writes. Requires backroom:read.',
+      inputSchema: { limit: z.number().int().min(1).max(480).optional().describe('Epochs to read, newest first; default 72.') },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchTreasuryLedger(input.limit ?? 72)),
+  )
+  registerTool(
     'get_treasury_manual_transfers',
     { title: 'Read manual collector transfer controls', description: 'Read the manual bridge enablement, fresh signer observation, approved destinations, blocking reason and latest 20 requests with finality and independent public receipt state. Recurring transfers remain off. A signer report is not chain proof. No signing, transfer, settings mutation or provider credit authority. Requires backroom:read.', annotations: toolAnnotations('read') },
     async () => result(await fetchTreasuryManualTransfers()),
@@ -3613,7 +3626,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set emission burn',
       description:
-        'Apply one append-only revision of the SN118 emission burn live, with no validator release. Supply burn_share (0 releases the full miner emission through KOTH, 1 burns all of it — the same all-to-burn vector the fold already submits when no agent holds a positive score), expectedRevision exactly as get_burn_settings reports it (0 when no revision has ever been written) as an optimistic-concurrency guard, an operator reason, and the confirmation string "APPLY BURN SETTINGS". This is the one control here that moves TAO directly, which is why the revision log records who set it and why. It scales the competitive vector without re-ordering it: the remainder is normalized across the eligible miner weights, so no miner share of what miners receive changes. It is not instantaneous — a validator that already submitted weights this epoch keeps that vector until its next one, so budget roughly an epoch for the subnet-wide effect. Requires backroom:write.',
+        'Apply one append-only revision of the SN118 emission burn live, with no validator release. Supply burn_share (0 releases the full miner emission through KOTH, 1 burns all of it — the same all-to-burn vector the fold already submits when no agent holds a positive score), expectedRevision exactly as get_burn_settings reports it (0 when no revision has ever been written) as an optimistic-concurrency guard, an operator reason, and the confirmation string "APPLY BURN SETTINGS". This is the one control here that moves TAO directly, which is why the revision log records who set it and why. Optionally supply rank_shares, the KOTH payout curve for the champion then the four tail slots (five positive, non-increasing shares summing to 1, e.g. [0.5, 0.2, 0.13, 0.1, 0.07]). Omitting rank_shares keeps the current curve; null clears it to the frozen 65/14/10/7/4. Platform serves a curve to validators only once every recently-live weight setter reports protocol 31, so a mixed fleet never folds two curves; get_burn_settings reports effective.rank_shares_served, and until it is true the leaderboard keeps the frozen curve. Resend the current burn_share when changing only the curve. It scales the competitive vector without re-ordering it: the remainder is normalized across the eligible miner weights, so no miner share of what miners receive changes. It is not instantaneous — a validator that already submitted weights this epoch keeps that vector until its next one, so budget roughly an epoch for the subnet-wide effect. Requires backroom:write.',
       inputSchema: setBurnSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },
