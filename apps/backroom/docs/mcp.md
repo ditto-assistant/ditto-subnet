@@ -540,9 +540,10 @@ signed-in operator's audit identity. Publication preserves exact UTF-8 text and
 SHA-256 and never activates enforcement. Maintain approved versioned text in
 `docs/legal`; never publish a test fixture or draft legal wording.
 `set_cla_policy` returns the committed revision as `applied` with the refreshed
-`policy`. If only the follow-up read fails, `policy` is null and
-`refresh_error` says the revision was still committed. Read `get_cla_policy`;
-do not retry with the old `expectedRevision`.
+`policy`. If the write response is unreadable, `applied` is null; if the
+follow-up read fails, `policy` is null. In either case `refresh_error` says the
+write probably or certainly committed. Read `get_cla_policy`; do not retry with
+the old `expectedRevision`.
 
 When enforcement is on, new versions require at least 24 hours notice.
 `get_cla_policy` returns `minimum_enforced_notice_seconds` and

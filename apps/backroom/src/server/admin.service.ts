@@ -4173,18 +4173,20 @@ export async function updateClaPolicy(actor: string, rawInput: unknown) {
   const input = claPolicyWriteInputSchema.parse(rawInput)
   type Body = PlatformOperations['set_policy_api_v1_admin_cla_settings_post']['requestBody']['content']['application/json']
   const body = { expected_revision: input.expectedRevision, mode: input.mode, reason: input.reason, confirmation: input.confirmation } satisfies Body
-  const applied = claSettingsRevisionSchema.parse(
-    await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body }),
-  )
-  // The revision is committed once the POST returns. A failed refresh must not
-  // report the write as failed: a retry with the old revision would be stale.
+  const response = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body })
+  // The revision is committed once the POST returns. Neither an unreadable
+  // response nor a failed refresh may report the write as failed: a retry
+  // with the old revision would be stale.
+  const parsed = claSettingsRevisionSchema.safeParse(response)
+  const applied = parsed.success ? parsed.data : null
+  const committed = applied
+    ? `CLA policy revision ${applied.revision} was committed`
+    : 'The CLA policy write succeeded but returned an unreadable revision, so it is probably committed'
   try {
-    return { applied, policy: await fetchClaPolicy(), refresh_error: null }
+    const policy = await fetchClaPolicy()
+    return { applied, policy, refresh_error: applied ? null : `${committed}; compare policy.current with the intended mode before retrying.` }
   } catch {
-    return {
-      applied, policy: null,
-      refresh_error: `CLA policy revision ${applied.revision} was committed, but reading the refreshed policy failed; call get_cla_policy.`,
-    }
+    return { applied, policy: null, refresh_error: `${committed}, but reading the refreshed policy failed; call get_cla_policy.` }
   }
 }
 

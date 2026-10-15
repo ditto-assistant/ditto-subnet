@@ -6020,6 +6020,23 @@ describe('verified contributors and CLA rollout', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  it('reports a probably committed policy change when the write response is unreadable', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ unexpected: true }))
+      .mockResolvedValueOnce(Response.json(claControlFixture))
+      .mockResolvedValueOnce(Response.json({ unexpected: true }))
+      .mockResolvedValueOnce(Response.json({ detail: 'upstream exploded' }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const input = { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }
+    const refreshed = await updateClaPolicy('operator@omniaura.ai', input)
+    expect(refreshed).toMatchObject({ applied: null, policy: claControlFixture })
+    expect(refreshed.refresh_error).toContain('probably committed; compare policy.current')
+    const unrefreshed = await updateClaPolicy('operator@omniaura.ai', input)
+    expect(unrefreshed).toMatchObject({ applied: null, policy: null })
+    expect(unrefreshed.refresh_error).toContain('call get_cla_policy')
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
   it('does not report success when the policy write itself fails', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ detail: 'CLA policy revision changed; refresh before applying' }, { status: 409 }))
