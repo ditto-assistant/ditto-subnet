@@ -4,7 +4,7 @@ import asyncio
 
 import httpx
 import pytest
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 
 from ditto.api_server.middleware.public_cache import PublicCacheMiddleware
 from ditto.api_server.middleware.sized_gzip import SizedGZipMiddleware
@@ -63,7 +63,12 @@ def _build(
         "weak": 0,
         "pinned_big": 0,
         "split": 0,
+        "validating": 0,
+        "uncacheable": 0,
+        "no_cache": 0,
+        "split_fields": 0,
     }
+    seen_validators: list[str | None] = []
 
     @app.get("/api/v1/public/pinned")
     async def pinned() -> Response:
@@ -98,6 +103,47 @@ def _build(
             [
                 (b"cache-control", b"public, max-age=10"),
                 (b"cache-control", b"no-store"),
+            ]
+        )
+        return response
+
+    @app.get("/api/v1/public/validating")
+    async def validating(request: Request) -> Response:
+        # Answers its own conditional requests, like the CLA text endpoint.
+        calls["validating"] += 1
+        validator = request.headers.get("if-none-match")
+        seen_validators.append(validator)
+        headers = {"ETag": _WEAK_ETAG, "Cache-Control": "public, max-age=10"}
+        if validator is not None:
+            return Response(status_code=304, headers={"ETag": '"stale-strong"'})
+        return Response(b"TEST FIXTURE ONLY", media_type="text/plain", headers=headers)
+
+    @app.get("/api/v1/public/uncacheable")
+    async def uncacheable() -> Response:
+        calls["uncacheable"] += 1
+        return Response(
+            b"TEST FIXTURE ONLY",
+            media_type="text/plain",
+            headers={"ETag": _PINNED_ETAG, "Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/v1/public/no-cache")
+    async def no_cache() -> Response:
+        calls["no_cache"] += 1
+        return Response(
+            b"TEST FIXTURE ONLY",
+            media_type="text/plain",
+            headers={"Cache-Control": "no-cache, max-age=10"},
+        )
+
+    @app.get("/api/v1/public/split-fields")
+    async def split_fields() -> Response:
+        calls["split_fields"] += 1
+        response = Response(b"TEST FIXTURE ONLY", media_type="text/plain")
+        response.raw_headers.extend(
+            [
+                (b"cache-control", b"public, max-age=10"),
+                (b"cache-control", b"immutable"),
             ]
         )
         return response
@@ -178,6 +224,7 @@ def _build(
         # each already-compressed/identity representation independently.
         app.add_middleware(SizedGZipMiddleware, minimum_size=1000, compresslevel=6)
     app.add_middleware(PublicCacheMiddleware, now=clock, disabled=disabled)
+    app.state.seen_validators = seen_validators
     return app, calls
 
 
@@ -530,3 +577,63 @@ async def test_no_store_in_any_cache_control_field_prevents_caching(
             assert response.status_code == 200
             assert response.headers.get("x-public-cache") != "HIT"
     assert calls["split"] == 2
+
+
+async def test_cold_conditional_request_is_answered_and_stored_by_the_cache(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        cold = await client.get(
+            "/api/v1/public/validating", headers={"If-None-Match": _WEAK_ETAG[2:]}
+        )
+        warm = await client.get(
+            "/api/v1/public/validating", headers={"If-None-Match": _WEAK_ETAG}
+        )
+        full = await client.get("/api/v1/public/validating")
+    # The endpoint never sees the validator, so it cannot answer its own 304
+    # with a different validator, and the cold request fills the cache.
+    assert app.state.seen_validators == [None]
+    assert calls["validating"] == 1
+    for response in (cold, warm):
+        assert response.status_code == 304
+        assert response.headers["etag"] == _WEAK_ETAG
+        assert response.headers["vary"] == "Accept-Encoding"
+    assert full.status_code == 200 and full.headers["x-public-cache"] == "HIT"
+
+
+async def test_uncacheable_response_still_answers_a_matching_validator(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        matched = await client.get(
+            "/api/v1/public/uncacheable", headers={"If-None-Match": _PINNED_ETAG}
+        )
+        missed = await client.get(
+            "/api/v1/public/uncacheable", headers={"If-None-Match": '"other"'}
+        )
+    assert matched.status_code == 304 and matched.content == b""
+    assert matched.headers["etag"] == _PINNED_ETAG
+    assert matched.headers["cache-control"] == "no-store"
+    assert missed.status_code == 200 and missed.content == b"TEST FIXTURE ONLY"
+    assert calls["uncacheable"] == 2
+
+
+async def test_no_cache_responses_are_never_stored(clock: _Clock) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        for _ in range(2):
+            response = await client.get("/api/v1/public/no-cache")
+            assert response.headers.get("x-public-cache") != "HIT"
+    assert calls["no_cache"] == 2
+
+
+async def test_split_header_fields_are_stored_whole(clock: _Clock) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        await client.get("/api/v1/public/split-fields")
+        hit = await client.get("/api/v1/public/split-fields")
+    assert hit.headers["x-public-cache"] == "HIT"
+    assert hit.headers["cache-control"] == "public, max-age=10, immutable"
+    assert calls["split_fields"] == 1

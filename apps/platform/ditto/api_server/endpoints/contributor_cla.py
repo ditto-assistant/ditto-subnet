@@ -42,6 +42,9 @@ from ditto.api_server.contributor_identity import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.middleware.public_cache import (
+    if_none_match as if_none_match_header,
+)
 from ditto.api_server.no_store import no_store
 from ditto.chain import ChainError
 from ditto.db.models import (
@@ -225,18 +228,18 @@ async def public_text(
     row = await session.get(ClaVersion, version)
     if row is None:
         raise HTTPException(404, "CLA version is not published")
-    etag = f'"{row.sha256}"'
+    # Weak: the same digest names the identity and the gzip representation,
+    # whose bytes differ. Revalidation compares weakly, so a client pinning the
+    # published digest in either form still gets a 304.
+    etag = f'W/"{row.sha256}"'
     headers = {
         "Cache-Control": "public, max-age=31536000, immutable",
         "ETag": etag,
         "X-Content-Type-Options": "nosniff",
     }
-    validators = (if_none_match or "").split(",")
-    if any(
-        value.strip() == "*" or value.strip().removeprefix("W/") == etag
-        for value in validators
-    ):
-        return Response(status_code=304, headers=headers)
+    if if_none_match_header(if_none_match, etag):
+        # RFC 9110 15.4.5: repeat the Vary the 200 carries once gzip applies.
+        return Response(status_code=304, headers={**headers, "Vary": "Accept-Encoding"})
     return Response(
         content=row.text.encode("utf-8"), media_type="text/plain", headers=headers
     )
@@ -357,7 +360,9 @@ async def existing_receipt(
 @router.post(
     "/admin/cla/versions",
     response_model=ClaVersionView,
-    responses={status: {"model": HttpErrorEnvelope} for status in (400, 409, 503)},
+    responses={
+        status: {"model": HttpErrorEnvelope} for status in (400, 401, 409, 503)
+    },
 )
 async def publish(
     body: ClaPublishRequest, _admin: AdminDep, actor: ActorDep, session: SessionDep
@@ -406,7 +411,11 @@ async def publish(
         return version_view(row)
 
 
-@router.get("/admin/cla/settings", response_model=ClaControl)
+@router.get(
+    "/admin/cla/settings",
+    response_model=ClaControl,
+    responses={status: {"model": HttpErrorEnvelope} for status in (401, 503)},
+)
 async def control(
     request: Request,
     _admin: AdminDep,
@@ -495,7 +504,7 @@ async def control(
 @router.post(
     "/admin/cla/settings",
     response_model=SettingsView,
-    responses={status: {"model": HttpErrorEnvelope} for status in (409, 503)},
+    responses={status: {"model": HttpErrorEnvelope} for status in (401, 409, 503)},
 )
 async def set_policy(
     body: ClaSettingsRequest, _admin: AdminDep, actor: ActorDep, session: SessionDep

@@ -81,14 +81,17 @@ def test_expected_not_found_responses_use_the_actual_error_envelope(app):
         ("/api/v1/me/github-link/confirm", (400, 401, 403, 404, 409, 503)),
         ("/api/v1/me/github-link/unlink", (400, 401, 403, 409, 503)),
         ("/api/v1/cla/sign", (400, 409, 503)),
-        ("/api/v1/admin/cla/versions", (400, 409, 503)),
-        ("/api/v1/admin/cla/settings", (409, 503)),
+        ("/api/v1/admin/cla/versions", (400, 401, 409, 503)),
+        ("/api/v1/admin/cla/settings", (401, 409, 503)),
     ):
         for status in statuses:
             error_schema = paths[path]["post"]["responses"][str(status)]["content"][
                 "application/json"
             ]["schema"]
             assert error_schema["$ref"] == "#/components/schemas/HttpErrorEnvelope"
+    # require_admin answers 401 for a bad token and 503 when admin is unset.
+    control = paths["/api/v1/admin/cla/settings"]["get"]["responses"]
+    assert {"401", "503"} <= set(control)
     assert (
         HttpErrorEnvelope.model_validate(
             {

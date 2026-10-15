@@ -136,11 +136,23 @@ def _cache_control(headers: Headers) -> str:
     return ", ".join(headers.getlist("cache-control"))
 
 
+def _stored_headers(headers: Headers) -> dict[str, str]:
+    """The cacheable headers, keeping every field of a split header."""
+    stored = {
+        name: ", ".join(headers.getlist(name))
+        for name in _CACHEABLE_HEADERS
+        if name in headers
+    }
+    stored.setdefault("vary", "Accept-Encoding")
+    return stored
+
+
 def _policy_from_cache_control(value: str | None) -> tuple[float, float]:
     if not value:
         return 0.0, 0.0
     lowered = value.lower()
-    if "no-store" in lowered or "private" in lowered:
+    # no-cache forbids serving without revalidation, which this cache never does.
+    if "no-store" in lowered or "private" in lowered or "no-cache" in lowered:
         return 0.0, 0.0
     max_age = _MAX_AGE.search(lowered)
     stale = _STALE_WHILE_REVALIDATE.search(lowered)
@@ -226,18 +238,38 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
     async def _fetch(
         self, request: Request, call_next
     ) -> tuple[Response, _Entry | None]:
-        """Run the downstream app and capture the body when cacheable."""
+        """Run the downstream app and capture the body when cacheable.
+
+        The validator is dropped downstream, as on a background refresh, so the
+        endpoint always returns the 200 this cache stores and every 304 for a
+        cacheable entry is built here with the entry's own ETag and Vary.
+        """
+        inm = request.headers.get("if-none-match")
+        request.scope["headers"] = [
+            (name, value)
+            for name, value in request.scope["headers"]
+            if name.lower() != b"if-none-match"
+        ]
         response = await call_next(request)
         ttl, stale_ttl = _policy_from_cache_control(_cache_control(response.headers))
         if response.status_code != 200 or ttl <= 0:
+            etag = response.headers.get("etag")
+            if response.status_code == 200 and etag and if_none_match(inm, etag):
+                # Not cacheable, but the client's validator still matches.
+                async for _chunk in response.body_iterator:
+                    pass
+                return Response(
+                    status_code=304,
+                    headers={
+                        name: value
+                        for name, value in _stored_headers(response.headers).items()
+                        if name in ("cache-control", "vary")
+                    }
+                    | {"ETag": etag},
+                ), None
             return response, None
         body = b"".join([chunk async for chunk in response.body_iterator])
-        headers = {
-            name: value
-            for name, value in response.headers.items()
-            if name.lower() in _CACHEABLE_HEADERS
-        }
-        headers.setdefault("vary", "Accept-Encoding")
+        headers = _stored_headers(response.headers)
         etag = _entry_etag(response.headers, body)
         expires_at = self._now() + ttl
         entry = _Entry(
@@ -315,12 +347,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
                 )
                 return
             body = b"".join(body_parts)
-            headers = {
-                name: value
-                for name, value in headers_obj.items()
-                if name.lower() in _CACHEABLE_HEADERS
-            }
-            headers.setdefault("vary", "Accept-Encoding")
+            headers = _stored_headers(headers_obj)
             expires_at = self._now() + ttl
             self._store(
                 key,

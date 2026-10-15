@@ -276,8 +276,11 @@ async def test_registry_off_default_pinned_bytes_signature_status_and_immutable_
     document = await client.get("/api/v1/public/cla/versions/1/text")
     assert document.content == FIXTURE.format(version=1).encode()
     assert hashlib.sha256(document.content).hexdigest() == version["sha256"]
+    # Weak: the same digest names the identity and the gzip representation.
     etag = document.headers["etag"]
-    for validator in (etag, "W/" + etag, "*", '"unrelated", ' + etag):
+    assert etag == f'W/"{version["sha256"]}"'
+    strong = etag.removeprefix("W/")
+    for validator in (etag, strong, "*", '"unrelated", ' + strong):
         cached = await client.get(
             "/api/v1/public/cla/versions/1/text", headers={"if-none-match": validator}
         )
@@ -285,6 +288,7 @@ async def test_registry_off_default_pinned_bytes_signature_status_and_immutable_
         assert cached.headers["etag"] == etag
         assert cached.headers["cache-control"] == document.headers["cache-control"]
         assert cached.headers["x-content-type-options"] == "nosniff"
+        assert cached.headers["vary"] == "Accept-Encoding"
     fresh = await client.get(
         "/api/v1/public/cla/versions/1/text", headers={"if-none-match": '"unrelated"'}
     )
