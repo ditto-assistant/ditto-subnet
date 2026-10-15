@@ -3,9 +3,10 @@ import { PlatformAdminError, platformAdminRequest } from './ditto.server'
 /**
  * What reading a write's target back shows.
  * - `applied`: this exact write is visible.
- * - `superseded`: the target holds a different write that rules this one out
- *   (an immutable row, a revision guard or a terminal state), so it can never
- *   apply.
+ * - `superseded`: the exact record this write would create holds a different
+ *   write (the revision after its guard, an immutable row, a terminal audit),
+ *   so it can never apply. Read that record itself, never the latest state: a
+ *   write that committed and was then followed by others reads back `applied`.
  * - `absent`: the write is not visible. After a timeout Platform may still be
  *   processing it, so this alone never proves it failed.
  */
