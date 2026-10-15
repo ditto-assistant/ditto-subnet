@@ -34,7 +34,7 @@ import os
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from starlette.datastructures import Headers
@@ -62,14 +62,22 @@ _CACHEABLE_HEADERS = (
 logger = logging.getLogger(__name__)
 
 
-def _entry_etag(declared: str | None, body: bytes) -> str:
+def _entry_etag(headers: Mapping[str, str], body: bytes) -> str:
     """Keep an endpoint's own validator; otherwise derive one from the body.
 
     Content-addressed endpoints (pinned CLA text, avatars) publish a digest
     ETag that clients pin in If-None-Match; replacing it would turn every
-    revalidation of a cached entry into a full 200.
+    revalidation of a cached entry into a full 200. A declared strong ETag
+    names the identity bytes, so an encoded entry keeps it in weak form:
+    distinct bytes never share a strong validator, and weak revalidation
+    still answers a pinned digest with a 304.
     """
-    return declared or compute_etag(body)
+    declared = headers.get("etag")
+    if not declared:
+        return compute_etag(body)
+    if headers.get("content-encoding") and not declared.startswith("W/"):
+        return "W/" + declared
+    return declared
 
 
 def compute_etag(body: bytes) -> str:
@@ -227,7 +235,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
             if name.lower() in _CACHEABLE_HEADERS
         }
         headers.setdefault("vary", "Accept-Encoding")
-        etag = _entry_etag(response.headers.get("etag"), body)
+        etag = _entry_etag(response.headers, body)
         expires_at = self._now() + ttl
         entry = _Entry(
             response.status_code,
@@ -319,7 +327,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
                     status,
                     headers,
                     body,
-                    _entry_etag(headers_obj.get("etag"), body),
+                    _entry_etag(headers_obj, body),
                     expires_at,
                     expires_at + stale_ttl,
                 ),

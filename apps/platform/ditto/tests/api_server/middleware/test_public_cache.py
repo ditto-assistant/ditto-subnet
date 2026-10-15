@@ -61,6 +61,7 @@ def _build(
         "big": 0,
         "pinned": 0,
         "weak": 0,
+        "pinned_big": 0,
     }
 
     @app.get("/api/v1/public/pinned")
@@ -76,6 +77,16 @@ def _build(
                 "Cache-Control": "public, max-age=10",
                 "X-Content-Type-Options": "nosniff",
             },
+        )
+
+    @app.get("/api/v1/public/pinned-big")
+    async def pinned_big() -> Response:
+        # Large enough to gzip, like real agreement text behind a digest ETag.
+        calls["pinned_big"] += 1
+        return Response(
+            content=b"TEST FIXTURE ONLY. " * 300,
+            media_type="text/plain",
+            headers={"ETag": _PINNED_ETAG, "Cache-Control": "public, max-age=10"},
         )
 
     @app.get("/api/v1/public/weak")
@@ -465,3 +476,32 @@ async def test_declared_weak_etag_revalidates_with_either_form(clock: _Clock) ->
         assert response.status_code == 304
         assert response.headers["etag"] == _WEAK_ETAG
     assert calls["weak"] == 1
+
+
+async def test_cached_gzip_entry_weakens_a_declared_etag_and_still_revalidates(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock, gzip=True)
+    gzip = {"Accept-Encoding": "gzip"}
+    identity = {"Accept-Encoding": "identity"}
+    async with _client(app) as client:
+        compressed = await client.get("/api/v1/public/pinned-big", headers=gzip)
+        plain = await client.get("/api/v1/public/pinned-big", headers=identity)
+        revalidated = {
+            name: await client.get(
+                "/api/v1/public/pinned-big",
+                headers={**headers, "If-None-Match": _PINNED_ETAG},
+            )
+            for name, headers in (("gzip", gzip), ("identity", identity))
+        }
+    # Distinct bytes never share a strong validator.
+    assert compressed.headers["content-encoding"] == "gzip"
+    assert compressed.headers["etag"] == "W/" + _PINNED_ETAG
+    assert "content-encoding" not in plain.headers
+    assert plain.headers["etag"] == _PINNED_ETAG
+    # A client pinning the published digest revalidates either variant.
+    assert revalidated["gzip"].status_code == 304
+    assert revalidated["gzip"].headers["etag"] == "W/" + _PINNED_ETAG
+    assert revalidated["identity"].status_code == 304
+    assert revalidated["identity"].headers["etag"] == _PINNED_ETAG
+    assert calls["pinned_big"] == 2
