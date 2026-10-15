@@ -508,6 +508,25 @@ def test_quarantine_and_ath_queries_route_to_backroom_review() -> None:
         assert topic_ids[0] == "backroom-review", query
 
 
+def test_rolling_board_sweep_routes_to_sweep_then_review() -> None:
+    skill = ROOT / ".agents" / "skills" / "backroom-board-sweep"
+    body = (skill / "SKILL.md").read_text()
+    claude_link = ROOT / ".claude" / "skills" / "backroom-board-sweep"
+
+    assert "$backroom-review" in body
+    assert "execute_ath_rulings_batch" in body or "APPLY ATH RULINGS BATCH" in body
+    assert "get_leaderboard" in body
+    assert claude_link.is_symlink()
+    assert (claude_link.parent / claude_link.readlink()).resolve() == skill.resolve()
+    for query in (
+        "rolling top 5 ATH board review",
+        "sweep the board and review every emission recipient",
+    ):
+        topics = lookup(query, maximum=2)
+        assert str(topics[0]["id"]) == "backroom-board-sweep", query
+        assert "backroom-review" in topic_list(topics[0], "skills")
+
+
 def test_mine_skill_applies_operator_review_bar_locally() -> None:
     skill = ROOT / ".agents" / "skills" / "mine"
     body = (skill / "SKILL.md").read_text()

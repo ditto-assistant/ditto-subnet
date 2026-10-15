@@ -2,6 +2,43 @@
 
 <!-- version list -->
 
+## v0.369.2 (2026-10-15)
+
+### Bug Fixes
+
+- **validator**: Cancel continual retests when their lease is revoked
+  ([#2905](https://github.com/ditto-assistant/ditto-subnet/pull/2905),
+  [`7c4fa4a`](https://github.com/ditto-assistant/ditto-subnet/commit/7c4fa4a5d41fe1a57335eea3926812d9c4e0ccec))
+
+### Chores
+
+- **skills**: Add rolling top-5 board sweep workflow
+  ([#2924](https://github.com/ditto-assistant/ditto-subnet/pull/2924),
+  [`37e6f78`](https://github.com/ditto-assistant/ditto-subnet/commit/37e6f780e2388bd993d1d1907eb9548e71764558))
+
+
+## v0.369.1 (2026-10-15)
+
+### Bug Fixes
+
+- **platform**: Admit audited Subtensor v475-v478 source receipts under Yuma
+  ([#2941](https://github.com/ditto-assistant/ditto-subnet/pull/2941),
+  [`85ac8fa`](https://github.com/ditto-assistant/ditto-subnet/commit/85ac8fac165191f089ec0ccaff0235adabe4d9fe))
+
+
+## v0.369.0 (2026-10-15)
+
+### Features
+
+- **platform**: Release banned kings' source under the same gate
+  ([#2938](https://github.com/ditto-assistant/ditto-subnet/pull/2938),
+  [`f2fb697`](https://github.com/ditto-assistant/ditto-subnet/commit/f2fb697eec716a29c0b74dc75306b3489fe16ccf))
+
+- **platform**: Replay the source-emission backlog sparsely
+  ([#2940](https://github.com/ditto-assistant/ditto-subnet/pull/2940),
+  [`9783aba`](https://github.com/ditto-assistant/ditto-subnet/commit/9783aba1a0b941a67a33a5f228198404aeb169ab))
+
+
 ## v0.368.1 (2026-10-15)
 
 ### Bug Fixes

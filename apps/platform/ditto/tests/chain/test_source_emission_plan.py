@@ -53,6 +53,7 @@ class FakeChain:
     keys: dict[int, list[tuple[int, str]]] = field(default_factory=dict)
     controls: dict[int, tuple[Any, Any]] = field(default_factory=dict)
     missing_step: set[int] = field(default_factory=set)
+    consensus: dict[int, str] = field(default_factory=dict)
     storage_reads: list[int] = field(default_factory=list)
 
     @staticmethod
@@ -98,6 +99,8 @@ class FakeChain:
         self, module: str, storage_function: str, params: list[Any], block_hash: str
     ) -> Any:
         del module, params
+        if storage_function == "SubnetEpochConsensus":
+            return self.consensus.get(self.block_of(block_hash), "Yuma")
         mechanisms, commit_reveal = self.controls.get(
             self.block_of(block_hash), (1, True)
         )
@@ -248,3 +251,27 @@ async def test_a_failed_block_read_cancels_its_siblings() -> None:
     # The failure stops queued reads instead of letting all 40 run.
     assert len(started) < 40
     assert finished == []
+
+
+_V475 = "0x557634c8c31bc639ea6552e297dcfb781cd7d9bdd491a5352c151305db33d3a0"
+
+
+@pytest.mark.parametrize(
+    ("consensus", "full_scan"),
+    [({}, False), ({100: "Null"}, True), ({120: "Null"}, True)],
+    ids=["yuma", "null-at-start", "null-at-end"],
+)
+async def test_v475_endpoints_require_yuma(consensus, full_scan) -> None:
+    chain = FakeChain(first=101, last=120)
+    chain.code = {100: _V475, 120: _V475}
+    chain.consensus = consensus
+    chain.events = {
+        110: [_event("SubtensorModule", "EpochConsensusSet", (NETUID, "Null"))]
+    }
+
+    plan = await _plan(chain)
+
+    assert plan.full_scan is full_scan
+    if not full_scan:
+        # A consensus switch inside the range gets the full (fail-closed) read.
+        assert plan.interesting == (110,)
