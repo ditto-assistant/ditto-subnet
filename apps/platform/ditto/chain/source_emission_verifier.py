@@ -25,26 +25,39 @@ from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import ChainMinerEmissionReceipt
 
 # https://github.com/RaoFoundation/subtensor/releases/download/v464/subtensor-digest.json
+# v475 introduces a separate Null algorithm. These verified artifacts are
+# admitted only with SubnetEpochConsensus=Yuma at both block boundaries.
+# See docs/source-runtime-v475.md for artifact identity and semantic review.
+_EPOCH_CONSENSUS_RUNTIME_CODE_HASHES = frozenset(
+    {
+        "0x557634c8c31bc639ea6552e297dcfb781cd7d9bdd491a5352c151305db33d3a0",
+        "0x12a5ec0b0d4d1f72281a4e41a926ccce6c4cfda6134adf40eeb13847b6a8cd12",
+        "0x18b52484d9c5d7523f704c86b17b2ab959fffbc6edb6766a77e9877f0ad19387",
+        "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1",
+    }
+)
+
 # Compressed/compact WASM for v464 and v459, plus verified compressed
 # v466/v467 and v468-v473 (v472 was an untagged deploy of the v471 runtime).
-# Reveal, weights, epoch math and block_step are unchanged through v471; v473
-# only drops a redundant root-coldkey map population from block_step.
 # Artifact verification and scoped runtime audits:
-# docs/source-runtime-v{466,467,468}.md.
-AUDITED_RUNTIME_CODE_HASHES = frozenset(
-    {
-        "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2",
-        "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e",
-        "0x899a87a4e4610587d81d9237adeb3e420ea524cd39b397c7a9b4c811b0e7af1d",
-        "0x8858cf3545c90255e5f865dec13713fa1d76cac2be6b8f1070256ee572280abe",
-        "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47",
-        "0x5b0168d2878c1fdcdc424dddca29111b8fe8960bd169742d1c14ce16b22ae381",
-        "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08",
-        "0x637844a3ad94d3bdbea45664b67bbfa07a31f21c087834a56a772ba27f612b9f",
-        "0xd32f5c4347c58f0c5e68dc3e5dd53a26d4e5a24b770fb01279d1b05ec0612218",
-        "0x558275958401c026fa4a4159466d49eabd08c761f0c801390593fcba91dee69b",
-        "0x148088864116a7bc8bd18af140f522152890e0b7ee33fc979717deb1b48b5e07",
-    }
+# docs/source-runtime-v{466,467,468,475}.md.
+AUDITED_RUNTIME_CODE_HASHES = (
+    frozenset(
+        {
+            "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2",
+            "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e",
+            "0x899a87a4e4610587d81d9237adeb3e420ea524cd39b397c7a9b4c811b0e7af1d",
+            "0x8858cf3545c90255e5f865dec13713fa1d76cac2be6b8f1070256ee572280abe",
+            "0x5675b684d69a07f6f224c2ba9cabef719804911fba40fbe1a2295198c9cb7c47",
+            "0x5b0168d2878c1fdcdc424dddca29111b8fe8960bd169742d1c14ce16b22ae381",
+            "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08",
+            "0x637844a3ad94d3bdbea45664b67bbfa07a31f21c087834a56a772ba27f612b9f",
+            "0xd32f5c4347c58f0c5e68dc3e5dd53a26d4e5a24b770fb01279d1b05ec0612218",
+            "0x558275958401c026fa4a4159466d49eabd08c761f0c801390593fcba91dee69b",
+            "0x148088864116a7bc8bd18af140f522152890e0b7ee33fc979717deb1b48b5e07",
+        }
+    )
+    | _EPOCH_CONSENSUS_RUNTIME_CODE_HASHES
 )
 
 
@@ -346,6 +359,22 @@ async def read_source_emission_block(
         )
         return [(_unwrap(k), _unwrap(v)) async for k, v in rows]
 
+    if runtime_hashes[1] in _EPOCH_CONSENSUS_RUNTIME_CODE_HASHES:
+        modes = await asyncio.gather(
+            *(
+                cache.get(
+                    (netuid, "SubnetEpochConsensus", at),
+                    functools.partial(read, "SubnetEpochConsensus", at, [netuid]),
+                )
+                for at in (parent_hash, block_hash)
+            )
+        )
+        # The >2/3 attributed-stake proof is audited for Yuma. Null selects a
+        # sole validator and uses a different commit queue/reward algorithm.
+        # Missing or unfamiliar decoded values must never imply Yuma.
+        if any(mode != "Yuma" for mode in modes):
+            raise ValueError("unsupported non-Yuma epoch consensus")
+
     controls = await asyncio.gather(
         *(
             cache.get((netuid, name, at), functools.partial(read, name, at, [netuid]))
@@ -357,6 +386,34 @@ async def read_source_emission_block(
         raise ValueError("unsupported mechanism count")
     if controls[1] is not True or controls[3] is not True:
         raise ValueError("unsupported direct/manual weights mode")
+
+    def consensus_boundary(events: list[Any]) -> SourceEmissionBlock | None:
+        if runtime_hashes[1] not in _EPOCH_CONSENSUS_RUNTIME_CODE_HASHES:
+            return None
+        for event in events:
+            if not isinstance(event, dict):
+                raise ValueError("invalid consensus transition event")
+            if (
+                event.get("module_id") == "SubtensorModule"
+                and event.get("event_id") == "EpochConsensusSet"
+            ):
+                subnet, _ = _attrs(event, ("netuid", "mode"))
+                if _uint(subnet) == netuid:
+                    # A Null -> Yuma round trip can leave both endpoint modes
+                    # Yuma while changing permits after initialization.
+                    return SourceEmissionBlock(
+                        block,
+                        block_hash,
+                        parent_hash,
+                        False,
+                        (),
+                        (),
+                        (),
+                        runtime_hashes[1],
+                        "epoch_consensus_changed",
+                    )
+        return None
+
     key_maps = await asyncio.gather(
         *(
             cache.get((netuid, "Keys", at), functools.partial(mapping, "Keys", at))
@@ -404,6 +461,8 @@ async def read_source_emission_block(
                         invalidated.add(identities[uid])
         if not isinstance(boundary_events, list):
             raise ValueError("missing UID transition events")
+        if boundary := consensus_boundary(boundary_events):
+            return boundary
         for event in boundary_events:
             if not isinstance(event, dict):
                 raise ValueError("invalid UID transition event")
@@ -431,6 +490,8 @@ async def read_source_emission_block(
     events = await read("Events", block_hash, [], "System")
     if not isinstance(events, list):
         raise ValueError("invalid block events")
+    if boundary := consensus_boundary(events):
+        return boundary
     writes: dict[int, list[str]] = {}
     reveals: dict[str, list[str]] = {}
     write_positions: dict[int, list[int]] = {}

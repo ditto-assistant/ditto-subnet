@@ -328,6 +328,14 @@ async def test_missing_post_weight_matrix_remains_retryable(
 
 
 @pytest.mark.parametrize(
+    "runtime",
+    [
+        "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08",
+        "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1",
+    ],
+    ids=["v473", "v478"],
+)
+@pytest.mark.parametrize(
     "failure",
     [
         None,
@@ -338,10 +346,8 @@ async def test_missing_post_weight_matrix_remains_retryable(
     ],
 )
 async def test_initialization_reveal_receipt_uses_proven_consumed_vector(
-    receipt_chain, install_substrate_module, failure
+    receipt_chain, install_substrate_module, failure, runtime
 ):
-    from ditto.chain.source_emission_verifier import AUDITED_RUNTIME_CODE_HASHES
-
     state, substrate = receipt_chain, install_substrate_module
     query, mapping = substrate.query.side_effect, substrate.query_map.side_effect
     state["post_weights"] = [(2, [(1, 65535)])]
@@ -362,6 +368,7 @@ async def test_initialization_reveal_receipt_uses_proven_consumed_vector(
     async def enriched_query(**kw):
         extras = {
             "CommitRevealWeightsEnabled": True,
+            "SubnetEpochConsensus": "Yuma",
             "StakeWeight": [0, 0, 65535, 0],
             "Active": [False, False, True, False],
             "ValidatorPermit": [False, False, True, False],
@@ -381,9 +388,7 @@ async def test_initialization_reveal_receipt_uses_proven_consumed_vector(
 
     substrate.query.side_effect = enriched_query
     substrate.query_map.side_effect = enriched_mapping
-    substrate.rpc_request.return_value = {
-        "result": sorted(AUDITED_RUNTIME_CODE_HASHES)[0]
-    }
+    substrate.rpc_request.return_value = {"result": runtime}
     if failure == "late_write":
         state["events"].append(state["events"].pop(0))
     elif failure == "unexplained_weights":

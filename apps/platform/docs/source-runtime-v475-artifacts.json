@@ -1,0 +1,51 @@
+{
+  "verified_at": "2026-10-14",
+  "verification": "Official compressed WASM independently hashed; srtool digest and pinned source commit match. Scoped source audit, not an independent reproducible build.",
+  "supported_epoch_consensus": "Yuma",
+  "artifacts": [
+    {
+      "version": 475,
+      "source_commit": "d1718c99c34cf96abbf2bf09c0e9e48b945c76f5",
+      "size": 2632482,
+      "sha256": "00ef6bf41d93e8f2763511fe9f7b77cf30df141e4c0dbf2f4a160bd902f0ef1b",
+      "blake2b": "0x557634c8c31bc639ea6552e297dcfb781cd7d9bdd491a5352c151305db33d3a0"
+    },
+    {
+      "version": 476,
+      "source_commit": "d6dd557a7e425701c8237d7e0e0cae84c25b682b",
+      "size": 2632544,
+      "sha256": "bcc846bf6f75d72ba768f85e2790eed7b56ef9a9932178c94257e04615e7d189",
+      "blake2b": "0x12a5ec0b0d4d1f72281a4e41a926ccce6c4cfda6134adf40eeb13847b6a8cd12"
+    },
+    {
+      "version": 477,
+      "source_commit": "5c6e83e2f4936f257234f246957f75684c35227c",
+      "size": 2630752,
+      "sha256": "e226dd0326b4480a6da7f0534e9854bc399889c934b074c92448cbb7cd0fab63",
+      "blake2b": "0x18b52484d9c5d7523f704c86b17b2ab959fffbc6edb6766a77e9877f0ad19387"
+    },
+    {
+      "version": 478,
+      "source_commit": "850f2755bb05a3851f948489f0ab27b0645cebce",
+      "size": 2634898,
+      "sha256": "1d64a44f3607eb431ef8bbd909dd35dfcbcf9cc9168d9bf74923c198d3619ac6",
+      "blake2b": "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1"
+    }
+  ],
+  "critical_source_sha256_v475_through_v478": {
+    "coinbase/block_step.rs": "2286c0bc609a82233a658925198d61ec8385b49c24bd8e3695e4107c637c6f46",
+    "coinbase/reveal_commits.rs": "33098bed261a1ad7c970c7e38c02c7446316c00483e945ef0a86dddb9485f683",
+    "coinbase/run_coinbase.rs": "18c68fb6429c42bf53adb7cc4293f1ca4b6945c2d2e2da085b442735a3431afa",
+    "epoch/run_epoch.rs": "59e3a71468f2ca6ccca737fcb2af66991596ffa3509e5da72ae2855fc1c76f06",
+    "subnets/weights.rs": "6dd0d7831cbf504e6f18d776159b17176ef346390bc2a42481849137ba6685b7",
+    "subnets/mechanism.rs": "9e662d855c9918198656b1b4ec14508cb5cd1116625528fefd917a8708f13c30",
+    "macros/events.rs": "95c2b3554f29f931655d9e8f16522b1a067c2288733e3d0d0a6654e3ac23cd33"
+  },
+  "observed_live_runtime": {
+    "block": 9277846,
+    "block_hash": "0xab3b3175db31481154ace5e223242cdb9e618c2b30e9e815e141f72d422ec252",
+    "spec_version": 478,
+    "code_hash": "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1",
+    "epoch_consensus": "Yuma"
+  }
+}

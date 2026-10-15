@@ -94,6 +94,10 @@ async def test_release_gate_reports_archive_configuration_without_credentials(
         "credential_configured": bool(key),
     }
     assert "private-" not in response.text
+    assert (
+        "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1"
+        in response.json()["release_gate"]["audited_runtime_code_hashes"]
+    )
 
 
 async def test_defaults_to_48_then_shortens_with_audited_revisions(
