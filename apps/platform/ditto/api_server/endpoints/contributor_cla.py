@@ -360,9 +360,7 @@ async def existing_receipt(
 @router.post(
     "/admin/cla/versions",
     response_model=ClaVersionView,
-    responses={
-        status: {"model": HttpErrorEnvelope} for status in (400, 401, 409, 503)
-    },
+    responses={status: {"model": HttpErrorEnvelope} for status in (400, 401, 409, 503)},
 )
 async def publish(
     body: ClaPublishRequest, _admin: AdminDep, actor: ActorDep, session: SessionDep
