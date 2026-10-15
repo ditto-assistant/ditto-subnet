@@ -214,18 +214,25 @@ async def _cla_check_message(
     cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=body.hotkey)
     if cla.allowed:
         return None
-    existing = None
-    if body.payment_block_hash is not None and body.payment_extrinsic_index is not None:
-        existing = await get_agent_for_payment_proof(
-            session,
-            block_hash=body.payment_block_hash,
-            extrinsic_index=body.payment_extrinsic_index,
-        )
-    # The multipart commit settles an already assigned proof before its CLA
-    # gate: an exact retry returns the original artifact, and any other upload
-    # on it is a 3207 replay that signing cannot fix. The proof check below
-    # reports that replay, so consent is never the answer for such a proof.
-    if existing is not None:
+    if body.payment_block_hash is None or body.payment_extrinsic_index is None:
+        return cla.message
+    # Mirror the multipart commit, which settles the proof itself before its
+    # CLA gate: an exact retry returns the original artifact, while another
+    # upload's proof or another hotkey's credit is a 3207 replay that signing
+    # cannot fix. The proof check below reports those, so consent is never
+    # the answer for such a proof.
+    if await get_agent_for_payment_proof(
+        session,
+        block_hash=body.payment_block_hash,
+        extrinsic_index=body.payment_extrinsic_index,
+    ):
+        return None
+    credit = await get_evaluation_payment_for_proof(
+        session,
+        block_hash=body.payment_block_hash,
+        extrinsic_index=body.payment_extrinsic_index,
+    )
+    if credit and (credit.agent_id is not None or credit.miner_hotkey != body.hotkey):
         return None
     return cla.message
 
@@ -654,12 +661,9 @@ async def upload_agent(
         name=name,
         sha256=sha256,
     )
-    cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
-    if not cla.allowed:
-        return await _refuse_unless_exact_retry(
-            session, ClaConsentRequired(cla.message), retry_identity
-        )
-
+    # Refusals about the proof itself come before consent: signing the CLA
+    # cannot make another upload's proof or another hotkey's credit usable, so
+    # the caller must learn that first (the 3207 replay contract).
     payment_record = await get_evaluation_payment_for_proof(
         session,
         block_hash=payment_block_hash,
@@ -673,6 +677,11 @@ async def upload_agent(
         )
     if payment_record and payment_record.miner_hotkey != hotkey:
         raise PaymentReplayedError("payment credit belongs to a different hotkey")
+    cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
+    if not cla.allowed:
+        return await _refuse_unless_exact_retry(
+            session, ClaConsentRequired(cla.message), retry_identity
+        )
     if payment_record:
         _ensure_payment_recovery_fresh(payment_record.timestamp)
     using_credit = bool(payment_record)

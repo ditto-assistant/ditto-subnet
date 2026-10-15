@@ -187,6 +187,39 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
         assert not credit_check.json()["ok"]
         assert 1106 in credit_check.json()["error_codes"]
         assert not credit_check.json()["payment_required"]
+        # Another hotkey's credit is a replay that signing cannot fix, so both
+        # the dry run and the commit report 3207 before consent.
+        foreign_block = "0x" + "33" * 32
+        async with session_maker() as session, session.begin():
+            session.add(
+                EvaluationPayment(
+                    block_hash=foreign_block,
+                    extrinsic_index=0,
+                    agent_id=None,
+                    credit_for_agent_id=agent_id,
+                    miner_hotkey=bittensor.Keypair.create_from_uri(
+                        "//Charlie"
+                    ).ss58_address,
+                    miner_coldkey=owner,
+                    amount_rao=40_000_000,
+                    dest_address=app.state.config.upload_payment_address,
+                    timestamp=datetime.now(UTC),
+                )
+            )
+        foreign_check = await client.post(
+            "/api/v1/upload/check",
+            json={**recovery, "payment_block_hash": foreign_block},
+        )
+        assert foreign_check.status_code == 402, foreign_check.text
+        assert foreign_check.json()["error_code"] == 3207
+        foreign_data, foreign_files = _build_form(
+            keypair=alice, block_hash=foreign_block, name="credit-agent"
+        )
+        foreign = await client.post(
+            "/api/v1/upload/agent", data=foreign_data, files=foreign_files
+        )
+        assert foreign.status_code == 402, foreign.text
+        assert foreign.json()["error_code"] == 3207
         renamed_data, renamed_files = _build_form(keypair=alice, block_hash=block_hash)
         renamed_data["name"] = "different-name"
         renamed = await client.post(
