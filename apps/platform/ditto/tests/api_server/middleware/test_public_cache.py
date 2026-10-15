@@ -62,6 +62,7 @@ def _build(
         "pinned": 0,
         "weak": 0,
         "pinned_big": 0,
+        "split": 0,
     }
 
     @app.get("/api/v1/public/pinned")
@@ -88,6 +89,18 @@ def _build(
             media_type="text/plain",
             headers={"ETag": _PINNED_ETAG, "Cache-Control": "public, max-age=10"},
         )
+
+    @app.get("/api/v1/public/split-cache-control")
+    async def split_cache_control() -> Response:
+        calls["split"] += 1
+        response = Response(content=b"TEST FIXTURE ONLY", media_type="text/plain")
+        response.raw_headers.extend(
+            [
+                (b"cache-control", b"public, max-age=10"),
+                (b"cache-control", b"no-store"),
+            ]
+        )
+        return response
 
     @app.get("/api/v1/public/weak")
     async def weak() -> Response:
@@ -505,3 +518,15 @@ async def test_cached_gzip_entry_weakens_a_declared_etag_and_still_revalidates(
     assert revalidated["identity"].status_code == 304
     assert revalidated["identity"].headers["etag"] == _PINNED_ETAG
     assert calls["pinned_big"] == 2
+
+
+async def test_no_store_in_any_cache_control_field_prevents_caching(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        for _ in range(2):
+            response = await client.get("/api/v1/public/split-cache-control")
+            assert response.status_code == 200
+            assert response.headers.get("x-public-cache") != "HIT"
+    assert calls["split"] == 2

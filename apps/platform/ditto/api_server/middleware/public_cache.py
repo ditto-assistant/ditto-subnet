@@ -131,6 +131,11 @@ class _Entry:
         self.stale_until = stale_until
 
 
+def _cache_control(headers: Headers) -> str:
+    """Every Cache-Control field, so a later ``no-store`` is never missed."""
+    return ", ".join(headers.getlist("cache-control"))
+
+
 def _policy_from_cache_control(value: str | None) -> tuple[float, float]:
     if not value:
         return 0.0, 0.0
@@ -223,9 +228,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
     ) -> tuple[Response, _Entry | None]:
         """Run the downstream app and capture the body when cacheable."""
         response = await call_next(request)
-        ttl, stale_ttl = _policy_from_cache_control(
-            response.headers.get("cache-control")
-        )
+        ttl, stale_ttl = _policy_from_cache_control(_cache_control(response.headers))
         if response.status_code != 200 or ttl <= 0:
             return response, None
         body = b"".join([chunk async for chunk in response.body_iterator])
@@ -302,9 +305,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
         try:
             await self.app(inner_scope, receive, send)
             headers_obj = Headers(raw=raw_headers)
-            ttl, stale_ttl = _policy_from_cache_control(
-                headers_obj.get("cache-control")
-            )
+            ttl, stale_ttl = _policy_from_cache_control(_cache_control(headers_obj))
             if status != 200 or ttl <= 0:
                 self._backoff_stale(key)
                 logger.warning(
