@@ -16,8 +16,8 @@ from fastapi import (
     Request,
     Response,
 )
-from sqlalchemy import false, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import false, func, select, text
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.contributor_identity import (
@@ -36,6 +36,7 @@ from ditto.api_models.contributor_identity import (
 from ditto.api_models.http_errors import HttpErrorEnvelope
 from ditto.api_server.contributor_identity import (
     ContributorProofRejected,
+    admin_actor,
     check_contributor_proof,
     finalized_owner,
 )
@@ -62,8 +63,10 @@ from ditto_screening_protocol.contributor_identity import ADDRESS_PATTERN
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
+ActorDep = Annotated[str, Depends(admin_actor)]
 router = APIRouter(tags=["contributor-cla"], dependencies=[Depends(no_store)])
 ENFORCED_CLA_NOTICE = timedelta(hours=24)
+CLA_POLICY_WRITE_LOCK_TIMEOUT = "5s"
 # Public path values are validated before they reach integer/text columns, so
 # malformed input is a 422 rather than a database error.
 HotkeyPath = Annotated[str, Path(pattern=ADDRESS_PATTERN)]
@@ -94,6 +97,27 @@ async def earliest_cla_enforcement(
         if row.effective_at < noticed_at:
             earliest = max(earliest, noticed_at)
     return earliest
+
+
+async def lock_cla_policy_for_write(session: AsyncSession) -> None:
+    """Take the exclusive policy lock, or give up before stalling uploads.
+
+    Uploads hold the lock shared while they admit an artifact. A waiting
+    exclusive request queues every new upload behind it, so an operator write
+    waits only briefly and reports a retryable 503 instead.
+    """
+    await session.execute(
+        text("SELECT set_config('lock_timeout', :timeout, true)"),
+        {"timeout": CLA_POLICY_WRITE_LOCK_TIMEOUT},
+    )
+    try:
+        await lock_identity_writes(session, namespace="cla-policy")
+    except DBAPIError as exc:
+        if getattr(getattr(exc.orig, "__cause__", None), "sqlstate", None) == ("55P03"):
+            raise HTTPException(
+                503, "CLA policy is busy with in-flight uploads; retry shortly"
+            ) from None
+        raise
 
 
 def version_view(row: ClaVersion) -> ClaVersionView:
@@ -343,7 +367,7 @@ async def publish(
             409, "explicit CLA version and digest confirmation is required"
         )
     async with session.begin():
-        await lock_identity_writes(session, namespace="cla-policy")
+        await lock_cla_policy_for_write(session)
         settings = await current_cla_settings(session)
         now = datetime.now(UTC)
         notice_deadline = enforced_cla_notice_deadline(settings.mode, now=now)
@@ -369,7 +393,7 @@ async def publish(
             text=body.text,
             published_at=now,
             effective_at=body.effective_at,
-            actor=body.actor,
+            actor=actor,
             reason=body.reason,
         )
         session.add(row)
@@ -465,12 +489,12 @@ async def control(
 
 @router.post("/admin/cla/settings", response_model=SettingsView)
 async def set_policy(
-    body: ClaSettingsRequest, _admin: AdminDep, session: SessionDep
+    body: ClaSettingsRequest, _admin: AdminDep, actor: ActorDep, session: SessionDep
 ) -> SettingsView:
     if body.confirmation != f"SET CLA GATE {body.mode.upper()}":
         raise HTTPException(409, "explicit CLA gate confirmation is required")
     async with session.begin():
-        await lock_identity_writes(session, namespace="cla-policy")
+        await lock_cla_policy_for_write(session)
         previous = await current_cla_settings(session)
         if previous.revision != body.expected_revision:
             raise HTTPException(
@@ -493,7 +517,7 @@ async def set_policy(
             revision=previous.revision + 1,
             parent_revision=previous.revision,
             mode=body.mode,
-            actor=body.actor,
+            actor=actor,
             reason=body.reason,
             created_at=datetime.now(UTC),
         )

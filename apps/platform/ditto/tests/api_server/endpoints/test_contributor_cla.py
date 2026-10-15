@@ -27,7 +27,9 @@ from ditto.chain.models import BlockInfo
 from ditto.db.models import Agent, AgentStatus, ClaShadowUpload, ClaSignature
 from ditto.db.queries.contributor_identity import current_cla_version
 from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
-    _HEADERS,
+    _HEADERS as _ADMIN_TOKEN,
+)
+from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
     _install,
 )
 from ditto.tests.api_server.endpoints.test_upload import (
@@ -37,6 +39,8 @@ from ditto.tests.api_server.endpoints.test_upload import (
 
 pytestmark = pytest.mark.asyncio
 FIXTURE = "TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.\nplaceholder version {version}\n"
+# Backroom names its live operator in a header; audit rows record that actor.
+_HEADERS = {**_ADMIN_TOKEN, "X-Admin-Actor": "operator-fixture"}
 
 
 async def test_missing_policy_seed_cannot_silently_disable_consent(session_maker):
@@ -144,7 +148,6 @@ async def publish(client, version=1, *, effective=None):
             "text": content,
             "sha256": digest,
             "effective_at": (effective or datetime.now(UTC)).isoformat(),
-            "actor": "maintainer-fixture",
             "reason": "publish test-only placeholder fixture",
             "confirmation": f"PUBLISH CLA {version} {digest}",
         },
@@ -163,7 +166,6 @@ async def policy(client, mode):
         json={
             "expected_revision": current["revision"],
             "mode": mode,
-            "actor": "operator-fixture",
             "reason": "test the staged consent rollout",
             "confirmation": f"SET CLA GATE {mode.upper()}",
         },
@@ -821,7 +823,6 @@ async def enforce_attempt(client):
         json={
             "expected_revision": current["current"]["revision"],
             "mode": "enforce",
-            "actor": "operator-fixture",
             "reason": "test the enforcement notice window",
             "confirmation": "SET CLA GATE ENFORCE",
         },
@@ -910,3 +911,62 @@ async def test_public_identity_paths_accept_valid_values(app, client, session_ma
     assert (
         await client.get("/api/v1/public/cla/versions/2147483647")
     ).status_code == 404
+
+
+async def test_policy_write_gives_up_instead_of_queueing_uploads(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.api_server.endpoints import contributor_cla
+
+    setup(app, session_maker)
+    monkeypatch.setattr(contributor_cla, "CLA_POLICY_WRITE_LOCK_TIMEOUT", "100ms")
+    async with session_maker() as upload, upload.begin():
+        # An in-flight upload holds the policy lock shared.
+        await upload.execute(
+            text(
+                "SELECT pg_advisory_xact_lock_shared(hashtextextended('cla-policy', 0))"
+            )
+        )
+        busy = await client.post(
+            "/api/v1/admin/cla/settings",
+            headers=_HEADERS,
+            json={
+                "expected_revision": 0,
+                "mode": "shadow",
+                "reason": "test a busy policy lock",
+                "confirmation": "SET CLA GATE SHADOW",
+            },
+        )
+        assert busy.status_code == 503, busy.text
+        assert "retry" in busy.json()["message"]
+    assert (await policy(client, "shadow"))["mode"] == "shadow"
+
+
+async def test_cla_audit_rows_name_the_header_actor_not_the_body(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    content = FIXTURE.format(version=1)
+    digest = hashlib.sha256(content.encode()).hexdigest()
+    body = {
+        "version": 1,
+        "text": content,
+        "sha256": digest,
+        "effective_at": datetime.now(UTC).isoformat(),
+        "actor": "claimed-in-body",
+        "reason": "publish test-only placeholder fixture",
+        "confirmation": f"PUBLISH CLA 1 {digest}",
+    }
+    anonymous = await client.post(
+        "/api/v1/admin/cla/versions", headers=_ADMIN_TOKEN, json=body
+    )
+    assert anonymous.status_code == 422 and "X-Admin-Actor" in anonymous.text
+    published = await client.post(
+        "/api/v1/admin/cla/versions", headers=_HEADERS, json=body
+    )
+    assert published.status_code == 200, published.text
+    revision = await policy(client, "shadow")
+    assert revision["actor"] == "operator-fixture"
+    async with session_maker() as session:
+        actors = set(await session.scalars(text("SELECT actor FROM cla_versions")))
+    assert actors == {"operator-fixture"}

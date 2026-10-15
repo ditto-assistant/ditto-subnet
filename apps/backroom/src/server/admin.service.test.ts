@@ -5974,8 +5974,9 @@ describe('verified contributors and CLA rollout', () => {
     expect(result).toEqual(revokedGithubFixture)
     expect(fetchMock.mock.calls[1][0]).toContain(`/admin/github-links/${linkId}/revoke`)
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
-      actor: 'operator@omniaura.ai', reason: 'recover a verified hostile link', confirmation: githubRevocationFixture.confirmation,
+      reason: 'recover a verified hostile link', confirmation: githubRevocationFixture.confirmation,
     })
+    expect(fetchMock.mock.calls[1][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
   })
 
   it('preserves signed public identity and resolves a numeric account to its hotkey consent', async () => {
@@ -6004,7 +6005,8 @@ describe('verified contributors and CLA rollout', () => {
     vi.stubGlobal('fetch', fetchMock)
     expect(await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
       .toEqual({ applied: claShadowRevisionFixture, policy: claControlFixture, refresh_error: null })
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ expected_revision: 0, mode: 'shadow', reason: 'measure consent adoption', actor: 'operator@omniaura.ai', confirmation: 'SET CLA GATE SHADOW' })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ expected_revision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' })
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
   })
 
   it('reports a committed policy change even when the follow-up read fails', async () => {
@@ -6032,6 +6034,9 @@ describe('verified contributors and CLA rollout', () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json(claVersionFixture))
     vi.stubGlobal('fetch', fetchMock)
     await publishClaVersion('operator@omniaura.ai', { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test-only publication transport', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) })
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ actor: 'operator@omniaura.ai', version: 1, sha256: 'ab'.repeat(32), effective_at: '2026-10-14T00:00:00Z' })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body).toMatchObject({ version: 1, sha256: 'ab'.repeat(32), effective_at: '2026-10-14T00:00:00Z' })
+    expect(body).not.toHaveProperty('actor')
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
   })
 })

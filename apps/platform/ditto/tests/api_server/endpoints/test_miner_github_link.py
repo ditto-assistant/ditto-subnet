@@ -267,31 +267,35 @@ async def test_operator_recovery_frees_hostile_link_without_rewriting_signed_pro
     assert blocked.status_code == 409, blocked.text
     path = f"/api/v1/admin/github-links/{link_id}"
     payload = {
-        "actor": "operator@omniaura.ai",
+        # A body actor is ignored: the audit row names Backroom's header actor.
+        "actor": "claimed-in-body",
         "reason": "victim verified a phishing-induced hostile link",
         "confirmation": f"REVOKE GITHUB LINK {link_id}",
     }
+    operator = {**_HEADERS, "X-Admin-Actor": "operator@omniaura.ai"}
     assert (await client.post(path + "/revoke", json=payload)).status_code == 401
+    anonymous = await client.post(path + "/revoke", headers=_HEADERS, json=payload)
+    assert anonymous.status_code == 422 and "X-Admin-Actor" in anonymous.text
     inspected = await client.get(path, headers=_HEADERS)
     assert inspected.status_code == 200 and inspected.json()["can_revoke"]
     assert inspected.json()["operator_revocation"] is None
     wrong = await client.post(
         path + "/revoke",
-        headers=_HEADERS,
+        headers=operator,
         json={**payload, "confirmation": "wrong target"},
     )
     assert wrong.status_code == 409
-    revoked = await client.post(path + "/revoke", headers=_HEADERS, json=payload)
+    revoked = await client.post(path + "/revoke", headers=operator, json=payload)
     assert revoked.status_code == 200, revoked.text
     record = revoked.json()
     assert record["link"]["signature"] == original["signature"]
     assert record["link"]["nonce"] == original["nonce"]
     assert not record["can_revoke"] and record["link"]["revoked_at"]
-    assert record["operator_revocation"]["actor"] == payload["actor"]
+    assert record["operator_revocation"]["actor"] == "operator@omniaura.ai"
     assert record["operator_revocation"]["reason"] == payload["reason"]
     assert (await client.get(path, headers=_HEADERS)).json() == record
     assert (
-        await client.post(path + "/revoke", headers=_HEADERS, json=payload)
+        await client.post(path + "/revoke", headers=operator, json=payload)
     ).status_code == 409
     recovered = await client.post(
         "/api/v1/me/github-link/confirm", headers=auth, json=victim_body
@@ -350,7 +354,7 @@ async def test_operator_recovery_rejects_stale_preflight_after_miner_relinks(
     assert relinked.status_code == 200
     stale = await client.post(
         path + "/revoke",
-        headers=_HEADERS,
+        headers={**_HEADERS, "X-Admin-Actor": "operator-fixture"},
         json={
             "reason": "stale exact target must not revoke the replacement",
             "confirmation": before["confirmation"],

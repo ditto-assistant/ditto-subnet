@@ -79,7 +79,6 @@ class GithubLinkStatus(WireModel):
 
 class GithubOperatorRevokeRequest(WireModel):
     reason: Annotated[str, Field(min_length=8)]
-    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
 
 
@@ -188,7 +187,6 @@ class ClaSettingsRequest(WireModel):
     expected_revision: Annotated[int, Field(strict=True, ge=0)]
     mode: ClaMode
     reason: Annotated[str, Field(min_length=8)]
-    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
 
 
@@ -198,7 +196,6 @@ class ClaPublishRequest(WireModel):
     text: Annotated[str, Field(min_length=1, max_length=262144)]
     effective_at: AwareDatetime
     reason: Annotated[str, Field(min_length=8)]
-    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
 
     @field_validator("text")

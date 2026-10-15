@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
+
+from fastapi import Header, HTTPException
 
 from ditto.api_models.contributor_identity import KeyKind
 from ditto.api_server.attestation import (
@@ -20,6 +22,20 @@ if TYPE_CHECKING:
 
 class ContributorProofRejected(Exception):
     pass
+
+
+def admin_actor(
+    x_admin_actor: Annotated[str | None, Header(alias="X-Admin-Actor")] = None,
+) -> str:
+    """The operator recorded on immutable identity and CLA audit rows.
+
+    Backroom asserts its live staff session in this header, which admin
+    activity also records, so both audit trails name the same operator.
+    """
+    actor = (x_admin_actor or "").strip()
+    if not 1 <= len(actor) <= 120 or not actor.isprintable():
+        raise HTTPException(422, "X-Admin-Actor is required")
+    return actor
 
 
 @dataclass(frozen=True)

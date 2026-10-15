@@ -11451,7 +11451,8 @@ describe('contributor identity and CLA MCP tools', () => {
       actor: 'untrusted-input@invalid.example',
     } })
     expect(result.isError).not.toBe(true)
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ actor: session.email })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty('actor')
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe(session.email)
     await client.close(); await server.close()
   })
 
@@ -11492,9 +11493,11 @@ describe('contributor identity and CLA MCP tools', () => {
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
     await client.callTool({ name: 'set_cla_policy', arguments: { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' } })
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ actor: session.email, mode: 'shadow' })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ mode: 'shadow' })
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe(session.email)
     await client.callTool({ name: 'publish_cla_version', arguments: { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test publication attribution', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) } })
-    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({ actor: session.email, version: 1 })
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({ version: 1 })
+    expect(fetchMock.mock.calls[2][1].headers['X-Admin-Actor']).toBe(session.email)
     await client.close(); await server.close()
   })
 })

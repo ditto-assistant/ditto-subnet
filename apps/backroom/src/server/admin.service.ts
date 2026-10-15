@@ -4143,7 +4143,7 @@ export async function fetchGithubRevocationPreflight(rawInput: unknown) {
 export async function revokeMinerGithubLink(actor: string, rawInput: unknown) {
   const input = githubRevocationWriteInputSchema.parse(rawInput)
   type Body = PlatformOperations['revoke_github_link_api_v1_admin_github_links__link_id__revoke_post']['requestBody']['content']['application/json']
-  const body = { actor, reason: input.reason, confirmation: input.confirmation } satisfies Body
+  const body = { reason: input.reason, confirmation: input.confirmation } satisfies Body
   return githubRevocationControlSchema.parse(await platformAdminRequest(`/api/v1/admin/github-links/${input.linkId}/revoke`, { method: 'POST', actor, body }))
 }
 
@@ -4172,7 +4172,7 @@ export async function fetchClaPolicy(rawInput: unknown = {}) {
 export async function updateClaPolicy(actor: string, rawInput: unknown) {
   const input = claPolicyWriteInputSchema.parse(rawInput)
   type Body = PlatformOperations['set_policy_api_v1_admin_cla_settings_post']['requestBody']['content']['application/json']
-  const body = { expected_revision: input.expectedRevision, mode: input.mode, reason: input.reason, actor, confirmation: input.confirmation } satisfies Body
+  const body = { expected_revision: input.expectedRevision, mode: input.mode, reason: input.reason, confirmation: input.confirmation } satisfies Body
   const applied = claSettingsRevisionSchema.parse(
     await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body }),
   )
@@ -4191,7 +4191,7 @@ export async function updateClaPolicy(actor: string, rawInput: unknown) {
 export async function publishClaVersion(actor: string, rawInput: unknown) {
   const input = claPublishInputSchema.parse(rawInput)
   type Body = PlatformOperations['publish_api_v1_admin_cla_versions_post']['requestBody']['content']['application/json']
-  const body = { version: input.version, sha256: input.sha256, text: input.text, effective_at: input.effectiveAt, actor,
+  const body = { version: input.version, sha256: input.sha256, text: input.text, effective_at: input.effectiveAt,
     reason: input.reason, confirmation: input.confirmation } satisfies Body
   return claVersionSchema.parse(await platformAdminRequest('/api/v1/admin/cla/versions', { method: 'POST', actor, body }))
 }

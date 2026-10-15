@@ -40,6 +40,7 @@ from ditto.api_models.contributor_identity import (
 from ditto.api_models.http_errors import HttpErrorEnvelope
 from ditto.api_server.contributor_identity import (
     ContributorProofRejected,
+    admin_actor,
     check_contributor_proof,
     finalized_owner,
 )
@@ -857,6 +858,7 @@ async def revoke_github_link(
     link_id: UUID,
     body: GithubOperatorRevokeRequest,
     _admin: Annotated[None, Depends(require_admin)],
+    actor: Annotated[str, Depends(admin_actor)],
     session: SessionDep,
 ) -> GithubRevocationControl:
     if body.confirmation != f"REVOKE GITHUB LINK {link_id}":
@@ -869,9 +871,9 @@ async def revoke_github_link(
         control = _revocation_control(link, audit)
         if not control.can_revoke:
             raise HTTPException(409, control.blocking_reason)
-        now = datetime.now(UTC)
+        now = revocation_time(link, datetime.now(UTC))
         audit = MinerGithubOperatorRevocation(
-            link_id=link_id, actor=body.actor, reason=body.reason, revoked_at=now
+            link_id=link_id, actor=actor, reason=body.reason, revoked_at=now
         )
         session.add(audit)
         link.revoked_at = now

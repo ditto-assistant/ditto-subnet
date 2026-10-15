@@ -15861,11 +15861,6 @@ export interface components {
         };
         /** ClaPublishRequest */
         ClaPublishRequest: {
-            /**
-             * Actor
-             * @default admin_api
-             */
-            actor: string;
             /** Confirmation */
             confirmation: string;
             /**
@@ -15884,11 +15879,6 @@ export interface components {
         };
         /** ClaSettingsRequest */
         ClaSettingsRequest: {
-            /**
-             * Actor
-             * @default admin_api
-             */
-            actor: string;
             /** Confirmation */
             confirmation: string;
             /** Expected Revision */
@@ -21501,11 +21491,6 @@ export interface components {
         };
         /** GithubOperatorRevokeRequest */
         GithubOperatorRevokeRequest: {
-            /**
-             * Actor
-             * @default admin_api
-             */
-            actor: string;
             /** Confirmation */
             confirmation: string;
             /** Reason */
@@ -39410,6 +39395,7 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -39445,6 +39431,7 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -41093,6 +41080,7 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
             };
             path: {
                 link_id: string;
