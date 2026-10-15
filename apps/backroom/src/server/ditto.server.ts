@@ -222,9 +222,12 @@ export async function platformAdminRequest(
       text = await response.text()
     } catch (error) {
       if (!isTimeout(error)) throw transportError(path, error)
+      if (attempt++ < retries) continue
       throw new PlatformAdminError(
         'timeout',
-        `The platform API did not finish answering ${path} within ${Math.round(timeoutMs / 1000)}s.`,
+        `The platform API did not finish answering ${path} within ${Math.round(
+          timeoutMs / 1000,
+        )}s${retries > 0 ? ` (${attempt} attempts)` : ''}.`,
       )
     }
     const payload = decodeResponseBody(text)

@@ -133,6 +133,22 @@ describe('platformAdminRequest', () => {
     expect((error as PlatformAdminError).failure).toBe(failure)
   })
 
+  it('retries a GET whose response body times out', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    const stalled = new ReadableStream({
+      start(controller) {
+        controller.error(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+      },
+    })
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(stalled))
+      .mockResolvedValueOnce(Response.json({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(platformAdminRequest('/api/v1/admin/benchmark-rollout', { retries: 1 }))
+      .resolves.toEqual({ ok: true })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   it('supports the legacy Worker binding during the token-name rollout', async () => {
     delete process.env.DITTO_ADMIN_API_TOKEN
     process.env.DITTO_PLATFORM_ADMIN_TOKEN = 'legacy-admin-token'
