@@ -33,6 +33,7 @@ from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.v13_scorer_cohort import (
     MAX_COHORT_MEMBERS,
     MIN_COHORT_MEMBERS,
+    CohortPacket,
     V13ScorerPacket,
     authority_from_packets,
     cohort_authority,
@@ -341,6 +342,26 @@ async def _require_admitted_signers(
 _NOT_ROUTABLE = "fewer than three proposed members are routable on the target packet"
 
 
+def _require_routed_packet(
+    routed: CohortPacket | None, *, packet: V13ScorerPacket
+) -> None:
+    """Refuse unless the cohort routes exactly ``packet``, naming which failed.
+
+    No routable packet and a routable but different packet need different
+    fixes: the first is member admission (pause, capacity, probe), the second
+    is a stale target, so re-read the preflight ``authority_packet``.
+    """
+    if routed is None:
+        raise HTTPException(409, _NOT_ROUTABLE)
+    if routed.packet != packet:
+        raise HTTPException(
+            409,
+            "the cohort routes signed packet source_revision "
+            f"{routed.packet.source_revision}, not the target "
+            f"{packet.source_revision}; re-read the preflight authority_packet",
+        )
+
+
 async def _require_routable(
     session: AsyncSession,
     *,
@@ -353,9 +374,10 @@ async def _require_routable(
     Checked before the write so a refusal never consumes a rotation ID, and
     again after it against the stored row.
     """
-    routed = await routable_cohort_packet(session, hotkeys=hotkeys, now=now)
-    if routed is None or routed.packet != packet:
-        raise HTTPException(409, _NOT_ROUTABLE)
+    _require_routed_packet(
+        await routable_cohort_packet(session, hotkeys=hotkeys, now=now),
+        packet=packet,
+    )
 
 
 def _settings_paused(
@@ -427,9 +449,9 @@ async def activate_pin(
         )
         session.add(row)
         await session.flush()
-        routed = await pinned_cohort_packet(session, now=now)
-        if routed is None or routed.packet != payload.packet:
-            raise HTTPException(409, _NOT_ROUTABLE)
+        _require_routed_packet(
+            await pinned_cohort_packet(session, now=now), packet=payload.packet
+        )
     await session.refresh(row)
     return row
 
@@ -541,8 +563,8 @@ async def rotate_pin(
         )
         session.add(row)
         await session.flush()
-        routed = await pinned_cohort_packet(session, now=now)
-        if routed is None or routed.packet != payload.packet:
-            raise HTTPException(409, _NOT_ROUTABLE)
+        _require_routed_packet(
+            await pinned_cohort_packet(session, now=now), packet=payload.packet
+        )
     await session.refresh(row)
     return row

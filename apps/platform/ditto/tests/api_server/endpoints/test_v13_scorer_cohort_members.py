@@ -17,11 +17,13 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
+from ditto.api_server.endpoints import admin_v13_scorer_cohort
 from ditto.api_server.endpoints.admin_v13_scorer_cohort import (
     ActivateV13ScorerCohortRequest,
     RotateV13ScorerCohortRequest,
@@ -33,6 +35,7 @@ from ditto.api_server.endpoints.admin_v13_scorer_cohort import (
 from ditto.api_server.endpoints.admin_validator_slot_settings import _checksum
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.api_server.v13_scorer_cohort import (
+    CohortPacket,
     V13ScorerPacket,
     authority_from_packets,
     pinned_validator_allowed,
@@ -40,6 +43,7 @@ from ditto.api_server.v13_scorer_cohort import (
 )
 from ditto.db.models import (
     V13ScorerCohortPin,
+    V13ScorerCohortRotation,
     ValidatorHeartbeat,
     ValidatorSlotSettingsRevision,
     ValidatorTicket,
@@ -673,3 +677,92 @@ class TestActivateAndRotateMembership:
             _C: True,
             _D: False,
         }
+
+
+class TestPostWriteRoutingCheck:
+    """The post-write check names which of its two failures happened.
+
+    No routable packet is an admission problem (pause, capacity, probe); a
+    routable but different packet is a stale target. Both refuse the write.
+    """
+
+    @staticmethod
+    def _route(monkeypatch: pytest.MonkeyPatch, routed: CohortPacket | None) -> None:
+        async def fake(*_args: object, **_kwargs: object) -> CohortPacket | None:
+            return routed
+
+        monkeypatch.setattr(admin_v13_scorer_cohort, "pinned_cohort_packet", fake)
+
+    _OTHER = CohortPacket(
+        packet=V13ScorerPacket.model_validate(_OLD),
+        oldest_scorer_observed_at=0,
+        routable=(_A, _B, _C),
+    )
+
+    @pytest.mark.parametrize(
+        ("routed", "message"),
+        [
+            pytest.param(None, "fewer than three proposed members", id="none"),
+            pytest.param(
+                _OTHER,
+                f"routes signed packet source_revision {_OLD['source_revision']}, "
+                f"not the target {_NEW['source_revision']}",
+                id="different",
+            ),
+        ],
+    )
+    async def test_activate(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        routed: CohortPacket | None,
+        message: str,
+    ) -> None:
+        settings = await _seed(
+            session_maker, heartbeats=[_managed(h) for h in _FOUR], pin=None
+        )
+        self._route(monkeypatch, routed)
+        async with session_maker() as session:
+            with pytest.raises(HTTPException, match=message):
+                await activate_pin(
+                    ActivateV13ScorerCohortRequest.model_validate(
+                        _activate_body(
+                            list(_FOUR),
+                            expected_slot_settings_checksum=_checksum(settings),
+                        )
+                    ),
+                    None,
+                    session,
+                )
+        async with session_maker() as session:
+            assert await session.get(V13ScorerCohortPin, 13) is None
+
+    @pytest.mark.parametrize(
+        ("routed", "message"),
+        [
+            pytest.param(None, "fewer than three proposed members", id="none"),
+            pytest.param(
+                _OTHER,
+                f"routes signed packet source_revision {_OLD['source_revision']}, "
+                f"not the target {_NEW['source_revision']}",
+                id="different",
+            ),
+        ],
+    )
+    async def test_rotate(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        routed: CohortPacket | None,
+        message: str,
+    ) -> None:
+        settings = await _seed(
+            session_maker, heartbeats=[_managed(h) for h in _FOUR], pin=(_A, _B, _C)
+        )
+        self._route(monkeypatch, routed)
+        request = TestActivateAndRotateMembership()._add_member(settings)
+        async with session_maker() as session:
+            with pytest.raises(HTTPException, match=message):
+                await rotate_pin(request, None, session)
+        async with session_maker() as session:
+            assert await session.scalar(select(V13ScorerCohortRotation)) is None
