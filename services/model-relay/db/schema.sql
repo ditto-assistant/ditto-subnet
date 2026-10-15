@@ -58,6 +58,36 @@ CREATE TYPE public.ticketstatus AS ENUM (
 
 
 --
+-- Name: bounty_history_immutable(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.bounty_history_immutable() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN RAISE EXCEPTION 'bounty history is append-only'; END $$;
+
+
+--
+-- Name: bounty_slot_status_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.bounty_slot_status_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'bounty slots cannot be deleted';
+          END IF;
+          IF to_jsonb(NEW) - 'status' - 'status_changed_at'
+             IS DISTINCT FROM to_jsonb(OLD) - 'status' - 'status_changed_at'
+          THEN
+            RAISE EXCEPTION 'only a bounty slot status can change';
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
 -- Name: coding_hosted_assignment_guard(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1544,6 +1574,113 @@ CREATE TABLE public.benchmark_rollouts (
     CONSTRAINT ck_benchmark_rollouts_benchmark_rollout_forward CHECK ((desired_version > from_version)),
     CONSTRAINT ck_benchmark_rollouts_benchmark_rollout_from_positive CHECK ((from_version > 0)),
     CONSTRAINT ck_benchmark_rollouts_benchmark_rollout_status CHECK ((status = ANY (ARRAY['collecting'::text, 'blocked_ineligible'::text, 'activated'::text, 'superseded'::text])))
+);
+
+
+--
+-- Name: bounties; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounties (
+    bounty_id uuid NOT NULL,
+    repo text NOT NULL,
+    issue_number integer NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounties_issue CHECK ((issue_number > 0)),
+    CONSTRAINT ck_bounties_repo CHECK ((repo = lower(repo)))
+);
+
+
+--
+-- Name: bounty_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_events (
+    event_id bigint NOT NULL,
+    bounty_id uuid NOT NULL,
+    kind text NOT NULL,
+    revision integer,
+    round integer,
+    slot_id uuid,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_events_kind CHECK ((kind = ANY (ARRAY['revision_published'::text, 'round_opened'::text])))
+);
+
+
+--
+-- Name: bounty_events_event_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_events ALTER COLUMN event_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_events_event_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bounty_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_revisions (
+    bounty_id uuid NOT NULL,
+    revision integer NOT NULL,
+    title text NOT NULL,
+    scope text NOT NULL,
+    public_interfaces text NOT NULL,
+    acceptance_evidence text NOT NULL,
+    dependencies jsonb NOT NULL,
+    reviewer_login text NOT NULL,
+    entry_fee_alpha_rao bigint NOT NULL,
+    reward_pool_alpha_rao bigint NOT NULL,
+    attempts_per_round integer NOT NULL,
+    delivery_days integer NOT NULL,
+    review_days integer NOT NULL,
+    hold_minutes integer NOT NULL,
+    funding_mode text NOT NULL,
+    fee_escrow_coldkey text NOT NULL,
+    fee_escrow_hotkey text NOT NULL,
+    spec_digest text NOT NULL,
+    reviewer_actor text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    published_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_revisions_terms CHECK (((revision > 0) AND (length(spec_digest) = 64) AND (entry_fee_alpha_rao >= 0) AND (reward_pool_alpha_rao >= 0) AND ((attempts_per_round >= 1) AND (attempts_per_round <= 10)) AND ((delivery_days >= 1) AND (delivery_days <= 60)) AND ((review_days >= 1) AND (review_days <= 60)) AND ((hold_minutes >= 1) AND (hold_minutes <= 1440)) AND (funding_mode = ANY (ARRAY['rehearsal'::text, 'live'::text]))))
+);
+
+
+--
+-- Name: bounty_rounds; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_rounds (
+    bounty_id uuid NOT NULL,
+    round integer NOT NULL,
+    opened_revision integer NOT NULL,
+    opened_at timestamp with time zone NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    CONSTRAINT ck_bounty_rounds_round CHECK ((round > 0))
+);
+
+
+--
+-- Name: bounty_slots; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_slots (
+    slot_id uuid NOT NULL,
+    bounty_id uuid NOT NULL,
+    round integer NOT NULL,
+    "position" integer NOT NULL,
+    status text NOT NULL,
+    status_changed_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_slots_position CHECK (("position" > 0)),
+    CONSTRAINT ck_bounty_slots_status CHECK ((status = ANY (ARRAY['open'::text, 'held'::text, 'claimed'::text, 'submitted'::text, 'rework'::text, 'accepted'::text, 'rejected'::text, 'expired'::text, 'withdrawn'::text, 'cancelled'::text])))
 );
 
 
@@ -7635,6 +7772,46 @@ ALTER TABLE ONLY public.benchmark_rollouts
 
 
 --
+-- Name: bounties pk_bounties; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounties
+    ADD CONSTRAINT pk_bounties PRIMARY KEY (bounty_id);
+
+
+--
+-- Name: bounty_events pk_bounty_events; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT pk_bounty_events PRIMARY KEY (event_id);
+
+
+--
+-- Name: bounty_revisions pk_bounty_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_revisions
+    ADD CONSTRAINT pk_bounty_revisions PRIMARY KEY (bounty_id, revision);
+
+
+--
+-- Name: bounty_rounds pk_bounty_rounds; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_rounds
+    ADD CONSTRAINT pk_bounty_rounds PRIMARY KEY (bounty_id, round);
+
+
+--
+-- Name: bounty_slots pk_bounty_slots; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT pk_bounty_slots PRIMARY KEY (slot_id);
+
+
+--
 -- Name: burn_settings_revisions pk_burn_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8923,6 +9100,22 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 
 --
+-- Name: bounties uq_bounties_repo; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounties
+    ADD CONSTRAINT uq_bounties_repo UNIQUE (repo, issue_number);
+
+
+--
+-- Name: bounty_slots uq_bounty_slots_bounty_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT uq_bounty_slots_bounty_id UNIQUE (bounty_id, round, "position");
+
+
+--
 -- Name: cla_signatures uq_cla_signatures_hotkey_version; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9317,6 +9510,13 @@ CREATE UNIQUE INDEX benchmark_rollouts_one_open_idx ON public.benchmark_rollouts
 --
 
 CREATE UNIQUE INDEX benchmark_rollouts_transition_idx ON public.benchmark_rollouts USING btree (from_version, desired_version);
+
+
+--
+-- Name: bounty_events_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_events_bounty_idx ON public.bounty_events USING btree (bounty_id, event_id);
 
 
 --
@@ -10454,6 +10654,76 @@ CREATE TRIGGER agent_cla_bindings_no_truncate BEFORE TRUNCATE ON public.agent_cl
 
 
 --
+-- Name: bounties bounties_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounties_immutable BEFORE DELETE OR UPDATE ON public.bounties FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounties bounties_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounties_no_truncate BEFORE TRUNCATE ON public.bounties FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_events bounty_events_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_events_immutable BEFORE DELETE OR UPDATE ON public.bounty_events FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_events bounty_events_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_events_no_truncate BEFORE TRUNCATE ON public.bounty_events FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_revisions bounty_revisions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_revisions_immutable BEFORE DELETE OR UPDATE ON public.bounty_revisions FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_revisions bounty_revisions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_revisions_no_truncate BEFORE TRUNCATE ON public.bounty_revisions FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_rounds bounty_rounds_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_rounds_immutable BEFORE DELETE OR UPDATE ON public.bounty_rounds FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_rounds bounty_rounds_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_rounds_no_truncate BEFORE TRUNCATE ON public.bounty_rounds FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_slots bounty_slots_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_slots_no_truncate BEFORE TRUNCATE ON public.bounty_slots FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_slots bounty_slots_status_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_slots_status_only BEFORE DELETE OR UPDATE ON public.bounty_slots FOR EACH ROW EXECUTE FUNCTION public.bounty_slot_status_only();
+
+
+--
 -- Name: cla_settings_revisions cla_settings_revisions_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -11563,6 +11833,46 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.benchmark_rollout_members
     ADD CONSTRAINT fk_benchmark_rollout_members_rollout_id_benchmark_rollouts FOREIGN KEY (rollout_id) REFERENCES public.benchmark_rollouts(rollout_id) ON DELETE CASCADE;
+
+
+--
+-- Name: bounty_events fk_bounty_events_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_slot_id_bounty_slots; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_slot_id_bounty_slots FOREIGN KEY (slot_id) REFERENCES public.bounty_slots(slot_id);
+
+
+--
+-- Name: bounty_revisions fk_bounty_revisions_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_revisions
+    ADD CONSTRAINT fk_bounty_revisions_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_rounds fk_bounty_rounds_bounty_id_bounty_revisions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_rounds
+    ADD CONSTRAINT fk_bounty_rounds_bounty_id_bounty_revisions FOREIGN KEY (bounty_id, opened_revision) REFERENCES public.bounty_revisions(bounty_id, revision);
+
+
+--
+-- Name: bounty_slots fk_bounty_slots_bounty_id_bounty_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT fk_bounty_slots_bounty_id_bounty_rounds FOREIGN KEY (bounty_id, round) REFERENCES public.bounty_rounds(bounty_id, round);
 
 
 --

@@ -49,3 +49,14 @@ condition = "AND"
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]{40}$''']
 paths = ['''^dashboard/src/components/EntityPanel\.stack\.test\.tsx$''']
+
+# The public SS58 address of the well-known Substrate development key //Bob,
+# used as a bounty's fee escrow coldkey in the publication tests. An address is
+# not a credential.
+[[allowlists]]
+description = "Public development-key escrow address in the bounty tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty$''']
+paths = ['''^ditto/tests/api_server/endpoints/test_bounties\.py$''']

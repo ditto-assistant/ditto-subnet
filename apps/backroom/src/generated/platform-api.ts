@@ -612,6 +612,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/bounties/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview
+         * @description The digest, confirmation phrase and refusals for a revision; writes nothing.
+         */
+        post: operations["preview_api_v1_admin_bounties_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/bounties/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish */
+        post: operations["publish_api_v1_admin_bounties_revisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/burn-settings": {
         parameters: {
             query?: never;
@@ -5607,6 +5644,40 @@ export interface paths {
          *     Paginate with ``limit`` / ``offset`` up to ``total``.
          */
         get: operations["bench_corpus_api_v1_public_bench__version__corpus_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/bounties": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Board */
+        get: operations["board_api_v1_public_bounties_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/bounties/{bounty_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bounty Detail */
+        get: operations["bounty_detail_api_v1_public_bounties__bounty_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -15249,6 +15320,249 @@ export interface components {
             signature_nonce: string;
             /** Signature Timestamp */
             signature_timestamp: number;
+        };
+        /** BountyBoardPage */
+        BountyBoardPage: {
+            /** Items */
+            items: components["schemas"]["BountySummary"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /** BountyDetail */
+        BountyDetail: {
+            /** Events */
+            events: components["schemas"]["BountyEventView"][];
+            /** Revisions */
+            revisions: components["schemas"]["BountyRevisionView"][];
+            /** Rounds */
+            rounds: components["schemas"]["BountyRoundView"][];
+            /** Slots */
+            slots: components["schemas"]["BountySlotView"][];
+            summary: components["schemas"]["BountySummary"];
+        };
+        /** BountyEventView */
+        BountyEventView: {
+            /** Event Id */
+            event_id: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "revision_published" | "round_opened";
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Revision */
+            revision: number | null;
+            /** Round */
+            round: number | null;
+            /** Slot Id */
+            slot_id: string | null;
+        };
+        /** BountyPublishPreview */
+        BountyPublishPreview: {
+            /** Confirmation */
+            confirmation: string;
+            /** Refusals */
+            refusals: string[];
+            /** Revision */
+            revision: number;
+            /** Spec Digest */
+            spec_digest: string;
+        };
+        /** BountyPublishPreviewRequest */
+        BountyPublishPreviewRequest: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Issue */
+            issue: number;
+            /** Repo */
+            repo: string;
+            terms: components["schemas"]["BountyTerms"];
+        };
+        /** BountyPublishRequest */
+        BountyPublishRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Issue */
+            issue: number;
+            /** Reason */
+            reason: string;
+            /** Repo */
+            repo: string;
+            /** Reviewer Actor */
+            reviewer_actor: string;
+            terms: components["schemas"]["BountyTerms"];
+        };
+        /** BountyRevisionView */
+        BountyRevisionView: {
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /** Revision */
+            revision: number;
+            /** Spec Digest */
+            spec_digest: string;
+            terms: components["schemas"]["BountyTerms"];
+        };
+        /** BountyRoundView */
+        BountyRoundView: {
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Opened Revision */
+            opened_revision: number;
+            /** Round */
+            round: number;
+        };
+        /** BountySlotCounts */
+        BountySlotCounts: {
+            /** Claimed */
+            claimed: number;
+            /** Closed */
+            closed: number;
+            /** Held */
+            held: number;
+            /** Open */
+            open: number;
+            /** Rework */
+            rework: number;
+            /** Submitted */
+            submitted: number;
+        };
+        /** BountySlotView */
+        BountySlotView: {
+            /** Position */
+            position: number;
+            /** Round */
+            round: number;
+            /**
+             * Slot Id
+             * Format: uuid
+             */
+            slot_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "held" | "claimed" | "submitted" | "rework" | "accepted" | "rejected" | "expired" | "withdrawn" | "cancelled";
+            /**
+             * Status Changed At
+             * Format: date-time
+             */
+            status_changed_at: string;
+        };
+        /** BountySummary */
+        BountySummary: {
+            /**
+             * Bounty Id
+             * Format: uuid
+             */
+            bounty_id: string;
+            /** Current Revision */
+            current_revision: number;
+            /** Current Round */
+            current_round: number;
+            /** Delivery Days */
+            delivery_days: number;
+            /** Entry Fee Alpha Rao */
+            entry_fee_alpha_rao: number;
+            /**
+             * Funding Mode
+             * @enum {string}
+             */
+            funding_mode: "rehearsal" | "live";
+            /** Issue */
+            issue: number;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /** Repo */
+            repo: string;
+            /** Review Days */
+            review_days: number;
+            /** Reviewer Login */
+            reviewer_login: string;
+            /** Reward Pool Alpha Rao */
+            reward_pool_alpha_rao: number;
+            slots: components["schemas"]["BountySlotCounts"];
+            /** Spec Digest */
+            spec_digest: string;
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * BountyTerms
+         * @description The public, signed terms of one bounty revision.
+         */
+        BountyTerms: {
+            /** Acceptance Evidence */
+            acceptance_evidence: string;
+            /**
+             * Attempts Per Round
+             * @default 3
+             */
+            attempts_per_round: number;
+            /**
+             * Delivery Days
+             * @default 5
+             */
+            delivery_days: number;
+            /**
+             * Dependencies
+             * @default []
+             */
+            dependencies: string[];
+            /** Entry Fee Alpha Rao */
+            entry_fee_alpha_rao: number;
+            /** Fee Escrow Coldkey */
+            fee_escrow_coldkey: string;
+            /** Fee Escrow Hotkey */
+            fee_escrow_hotkey: string;
+            /**
+             * Funding Mode
+             * @enum {string}
+             */
+            funding_mode: "rehearsal" | "live";
+            /**
+             * Hold Minutes
+             * @default 30
+             */
+            hold_minutes: number;
+            /** Public Interfaces */
+            public_interfaces: string;
+            /**
+             * Review Days
+             * @default 7
+             */
+            review_days: number;
+            /** Reviewer Login */
+            reviewer_login: string;
+            /** Reward Pool Alpha Rao */
+            reward_pool_alpha_rao: number;
+            /** Scope */
+            scope: string;
+            /** Title */
+            title: string;
         };
         /**
          * BurnSettings
@@ -39458,6 +39772,131 @@ export interface operations {
             };
         };
     };
+    preview_api_v1_admin_bounties_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BountyPublishPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyPublishPreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    publish_api_v1_admin_bounties_revisions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BountyPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyRevisionView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
     get_settings_api_v1_admin_burn_settings_get: {
         parameters: {
             query?: never;
@@ -49176,6 +49615,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicBenchCorpusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_api_v1_public_bounties_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyBoardPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bounty_detail_api_v1_public_bounties__bounty_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bounty_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyDetail"];
+                };
+            };
+            /** @description Unknown bounty. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
                 };
             };
             /** @description Validation Error */

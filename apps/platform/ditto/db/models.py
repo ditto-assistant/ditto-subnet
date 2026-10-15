@@ -11952,3 +11952,160 @@ class AgentClaBinding(Base):
             ["signature_id"], ["cla_signatures.signature_id"], ondelete="RESTRICT"
         ),
     )
+
+
+BOUNTY_SLOT_STATUSES = (
+    "open",
+    "held",
+    "claimed",
+    "submitted",
+    "rework",
+    "accepted",
+    "rejected",
+    "expired",
+    "withdrawn",
+    "cancelled",
+)
+BOUNTY_EVENT_KINDS = ("revision_published", "round_opened")
+
+
+class Bounty(Base):
+    """One build bounty, identified by its public GitHub issue. Append-only."""
+
+    __tablename__ = "bounties"
+    bounty_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    repo: Mapped[str] = mapped_column(Text, nullable=False)
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("repo", "issue_number"),
+        CheckConstraint("issue_number > 0", name="issue"),
+        # One canonical spelling per repository; GitHub ignores case.
+        CheckConstraint("repo = lower(repo)", name="repo"),
+    )
+
+
+class BountyRevision(Base):
+    """The signed public terms of one bounty revision. Append-only."""
+
+    __tablename__ = "bounty_revisions"
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    public_interfaces: Mapped[str] = mapped_column(Text, nullable=False)
+    acceptance_evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    dependencies: Mapped[list[str]] = mapped_column(_JSON_VARIANT, nullable=False)
+    reviewer_login: Mapped[str] = mapped_column(Text, nullable=False)
+    entry_fee_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reward_pool_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    attempts_per_round: Mapped[int] = mapped_column(Integer, nullable=False)
+    delivery_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    review_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    hold_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    funding_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    fee_escrow_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    fee_escrow_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    spec_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    # Private operator identities; never part of the signed public terms.
+    reviewer_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        PrimaryKeyConstraint("bounty_id", "revision"),
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        CheckConstraint(
+            "revision > 0 AND length(spec_digest) = 64"
+            " AND entry_fee_alpha_rao >= 0 AND reward_pool_alpha_rao >= 0"
+            " AND attempts_per_round BETWEEN 1 AND 10"
+            " AND delivery_days BETWEEN 1 AND 60 AND review_days BETWEEN 1 AND 60"
+            " AND hold_minutes BETWEEN 1 AND 1440"
+            " AND funding_mode IN ('rehearsal','live')",
+            name="terms",
+        ),
+    )
+
+
+class BountyRound(Base):
+    """A round of paid slots, opened under one revision. Append-only."""
+
+    __tablename__ = "bounty_rounds"
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    round: Mapped[int] = mapped_column(Integer, nullable=False)
+    opened_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        PrimaryKeyConstraint("bounty_id", "round"),
+        ForeignKeyConstraint(
+            ["bounty_id", "opened_revision"],
+            ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
+        ),
+        CheckConstraint("round > 0", name="round"),
+    )
+
+
+class BountySlot(Base):
+    """One paid slot. Only its status changes; its identity never does."""
+
+    __tablename__ = "bounty_slots"
+    slot_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    round: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    status_changed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("bounty_id", "round", "position"),
+        ForeignKeyConstraint(
+            ["bounty_id", "round"], ["bounty_rounds.bounty_id", "bounty_rounds.round"]
+        ),
+        CheckConstraint("position > 0", name="position"),
+        CheckConstraint(
+            "status IN (" + ",".join(f"'{s}'" for s in BOUNTY_SLOT_STATUSES) + ")",
+            name="status",
+        ),
+    )
+
+
+class BountyEvent(Base):
+    """The public, append-only status trail of a bounty."""
+
+    __tablename__ = "bounty_events"
+    event_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    slot_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
+        CheckConstraint(
+            "kind IN (" + ",".join(f"'{k}'" for k in BOUNTY_EVENT_KINDS) + ")",
+            name="kind",
+        ),
+        Index("bounty_events_bounty_idx", "bounty_id", "event_id"),
+    )
