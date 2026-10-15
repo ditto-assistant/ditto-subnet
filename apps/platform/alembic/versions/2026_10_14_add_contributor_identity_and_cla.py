@@ -169,8 +169,12 @@ def upgrade() -> None:
         "agent_cla_bindings",
         sa.Column("agent_id", sa.UUID(), primary_key=True),
         sa.Column("signature_id", sa.UUID(), nullable=False),
-        sa.ForeignKeyConstraint(["agent_id"], ["agents.agent_id"]),
-        sa.ForeignKeyConstraint(["signature_id"], ["cla_signatures.signature_id"]),
+        # The binding is the artifact's consent provenance, so like the other
+        # artifact audit records it keeps its agent: agents are never deleted.
+        sa.ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["signature_id"], ["cla_signatures.signature_id"], ondelete="RESTRICT"
+        ),
     )
     op.execute("""CREATE FUNCTION contributor_identity_immutable()
         RETURNS trigger LANGUAGE plpgsql AS $$

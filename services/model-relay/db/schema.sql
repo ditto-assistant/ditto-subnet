@@ -11441,7 +11441,7 @@ ALTER TABLE ONLY public.admin_activity_outcomes
 --
 
 ALTER TABLE ONLY public.agent_cla_bindings
-    ADD CONSTRAINT fk_agent_cla_bindings_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id);
+    ADD CONSTRAINT fk_agent_cla_bindings_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
 
 
 --
@@ -11449,7 +11449,7 @@ ALTER TABLE ONLY public.agent_cla_bindings
 --
 
 ALTER TABLE ONLY public.agent_cla_bindings
-    ADD CONSTRAINT fk_agent_cla_bindings_signature_id_cla_signatures FOREIGN KEY (signature_id) REFERENCES public.cla_signatures(signature_id);
+    ADD CONSTRAINT fk_agent_cla_bindings_signature_id_cla_signatures FOREIGN KEY (signature_id) REFERENCES public.cla_signatures(signature_id) ON DELETE RESTRICT;
 
 
 --

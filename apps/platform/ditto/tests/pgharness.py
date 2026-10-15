@@ -51,7 +51,7 @@ import os
 import subprocess
 import tempfile
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -59,6 +59,12 @@ from urllib.parse import quote
 
 import asyncpg
 from sqlalchemy import text
+
+from ditto.db.history_guards import (
+    TRUNCATE_GUARDS_SQL,
+    truncate_past_guards,
+    truncate_past_guards_body,
+)
 
 if TYPE_CHECKING:
     from alembic.config import Config
@@ -541,45 +547,6 @@ SCHEMA_TABLE = "alembic_version"
 """Never truncated: it records which schema the database is on."""
 
 
-_TRUNCATE_GUARDS_SQL = (
-    "SELECT c.relname AS table_name, t.tgname AS trigger_name, "
-    "t.tgenabled::text AS enable_mode "
-    "FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
-    "JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname = 'public' AND NOT t.tgisinternal "
-    "AND t.tgenabled IN ('O', 'A') AND (t.tgtype & 32) != 0 "
-    "ORDER BY c.relname, t.tgname"
-)
-
-
-def _truncate_fixture_body(
-    tables: Sequence[str],
-    guards: Sequence[tuple[str, str, str]],
-    *,
-    restart_identity: bool = False,
-) -> list[str]:
-    def quoted(value: str) -> str:
-        return '"' + value.replace('"', '""') + '"'
-
-    body = [
-        f"  ALTER TABLE public.{quoted(table)} DISABLE TRIGGER {quoted(trigger)};"
-        for table, trigger, _mode in guards
-    ]
-    restart = " RESTART IDENTITY" if restart_identity else ""
-    body.append(
-        "  TRUNCATE "
-        + ", ".join(f"public.{quoted(name)}" for name in tables)
-        + restart
-        + " CASCADE;"
-    )
-    body += [
-        f"  ALTER TABLE public.{quoted(table)} ENABLE "
-        f"{'ALWAYS ' if mode == 'A' else ''}TRIGGER {quoted(trigger)};"
-        for table, trigger, mode in guards
-    ]
-    return body
-
-
 async def truncate_test_tables(
     conn: AsyncConnection | AsyncSession, *tables: str
 ) -> None:
@@ -601,12 +568,7 @@ async def truncate_test_tables(
     ):
         raise ValueError("invalid fixture table names")
     await conn.execute(text("SET LOCAL lock_timeout = '10s'"))
-    rows = (await conn.execute(text(_TRUNCATE_GUARDS_SQL))).all()
-    guards = [(row[0], row[1], row[2]) for row in rows]
-    body = _truncate_fixture_body(tables, guards)
-    await conn.execute(
-        text("DO $ditto_reset$\nBEGIN\n" + "\n".join(body) + "\nEND\n$ditto_reset$")
-    )
+    await truncate_past_guards(conn, tables)
 
 
 async def _build_reset_sql(conn: asyncpg.Connection) -> str:
@@ -647,8 +609,8 @@ async def _build_reset_sql(conn: asyncpg.Connection) -> str:
     # Owner-only fixture resets bypass enabled statement TRUNCATE guards on
     # this isolated clone, then restore them in the same atomic DO block.
     # Normal tests retain every production history guard.
-    guards = await conn.fetch(_TRUNCATE_GUARDS_SQL)
-    body = _truncate_fixture_body(
+    guards = await conn.fetch(TRUNCATE_GUARDS_SQL)
+    body = truncate_past_guards_body(
         tables,
         [(g["table_name"], g["trigger_name"], g["enable_mode"]) for g in guards],
         restart_identity=True,

@@ -11927,6 +11927,8 @@ class AgentClaBinding(Base):
     agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
     signature_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
     __table_args__ = (
-        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"]),
-        ForeignKeyConstraint(["signature_id"], ["cla_signatures.signature_id"]),
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["signature_id"], ["cla_signatures.signature_id"], ondelete="RESTRICT"
+        ),
     )
