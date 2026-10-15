@@ -755,6 +755,16 @@ async def upload_agent(
                         credit_for_agent_id=duplicate_agent_id,
                     )
             except PaymentReplayedError:
+                recovered = await _exact_retry_of_accepted_upload(
+                    session,
+                    payment_block_hash=payment_block_hash,
+                    payment_extrinsic_index=payment_extrinsic_index,
+                    hotkey=hotkey,
+                    name=name,
+                    sha256=sha256,
+                )
+                if recovered is not None:
+                    return recovered
                 raced = await get_evaluation_payment_for_proof(
                     session,
                     block_hash=payment_block_hash,
@@ -855,11 +865,6 @@ async def upload_agent(
             )
             if reserved is not None:
                 raise HTTPException(status_code=409, detail=reserved)
-            # Recheck inside the artifact commit after admission/name checks,
-            # closing the slow-upload TOCTOU window.
-            final_cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
-            if not final_cla.allowed:
-                raise ClaConsentRequired(final_cla.message)
             version = await insert_agent(
                 session,
                 agent_id=agent_id,
@@ -872,20 +877,6 @@ async def upload_agent(
                 prompt_fingerprint=prompt_fingerprint,
                 code_embedding=code_embedding,
                 code_embed_model=code_embed_model,
-            )
-            # Only shadow and enforce return a signature, so an upload while
-            # the gate is off binds nothing and stays deletable.
-            if final_cla.signature_id is not None:
-                session.add(
-                    AgentClaBinding(
-                        agent_id=agent_id, signature_id=final_cla.signature_id
-                    )
-                )
-                await session.flush()
-            # Shadow observations count accepted unsigned artifacts only, so they
-            # commit or roll back with this upload.
-            await record_shadow_upload(
-                session, netuid=netuid, hotkey=hotkey, decision=final_cla
             )
             if using_credit:
                 locked_credit = await get_evaluation_payment_for_proof(
@@ -907,26 +898,44 @@ async def upload_agent(
                 await insert_evaluation_payment(
                     session, verified=verified, agent_id=agent_id
                 )
-    except PaymentReplayedError:
-        # A concurrent identical retry may have passed the first lookup before
-        # the winning request committed. The transaction context has rolled this
-        # request back, so perform one final exact-identity lookup.
-        existing = await get_agent_for_payment_proof(
-            session,
-            block_hash=payment_block_hash,
-            extrinsic_index=payment_extrinsic_index,
-        )
-        if existing and (
-            existing.miner_hotkey == hotkey
-            and existing.name == name
-            and existing.sha256 == sha256
-        ):
-            assert existing.version is not None
-            return UploadAgentResponse(
-                agent_id=existing.agent_id,
-                version=existing.version,
-                status=existing.status,
+            # Decide consent last, after every write that can wait on a lock
+            # (the series lock, the credit row, the payment key), so a version
+            # that becomes effective during those waits is not missed. The
+            # shared policy lock held since the start blocks policy writes, and
+            # a refusal rolls every write above back.
+            final_cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
+            if not final_cla.allowed:
+                raise ClaConsentRequired(final_cla.message)
+            # Only shadow and enforce return a signature, so an upload while
+            # the gate is off binds nothing and stays deletable.
+            if final_cla.signature_id is not None:
+                session.add(
+                    AgentClaBinding(
+                        agent_id=agent_id, signature_id=final_cla.signature_id
+                    )
+                )
+                await session.flush()
+            # Shadow observations count accepted unsigned artifacts only, so they
+            # commit or roll back with this upload.
+            await record_shadow_upload(
+                session, netuid=netuid, hotkey=hotkey, decision=final_cla
             )
+    except (PaymentReplayedError, SubmissionCooldownError, ClaConsentRequired):
+        # A concurrent identical retry may have passed the first lookup before
+        # the winning request committed; the winner then also consumed the
+        # admission (cooldown) or a policy change landed in between. The
+        # transaction rolled this request back, so report the original upload
+        # if this request is its exact retry.
+        recovered = await _exact_retry_of_accepted_upload(
+            session,
+            payment_block_hash=payment_block_hash,
+            payment_extrinsic_index=payment_extrinsic_index,
+            hotkey=hotkey,
+            name=name,
+            sha256=sha256,
+        )
+        if recovered is not None:
+            return recovered
         raise
 
     logger.info(
@@ -939,6 +948,41 @@ async def upload_agent(
         version=version,
         status=AgentStatus.UPLOADED,
         payment_disposition="credit_consumed" if using_credit else "consumed",
+    )
+
+
+async def _exact_retry_of_accepted_upload(
+    session: AsyncSession,
+    *,
+    payment_block_hash: str,
+    payment_extrinsic_index: int,
+    hotkey: str,
+    name: str,
+    sha256: str,
+) -> UploadAgentResponse | None:
+    """The original agent when this request exactly repeats an accepted upload.
+
+    The proof stays non-transferable: a different hotkey, name or SHA is not a
+    retry. Used after any refusal that a concurrent identical request can cause
+    by committing first (the proof, its admission or a policy change), so the
+    loser of that race reports the original upload instead of the refusal.
+    """
+    existing = await get_agent_for_payment_proof(
+        session,
+        block_hash=payment_block_hash,
+        extrinsic_index=payment_extrinsic_index,
+    )
+    if not existing or (existing.miner_hotkey, existing.name, existing.sha256) != (
+        hotkey,
+        name,
+        sha256,
+    ):
+        return None
+    assert existing.version is not None
+    return UploadAgentResponse(
+        agent_id=existing.agent_id,
+        version=existing.version,
+        status=existing.status,
     )
 
 

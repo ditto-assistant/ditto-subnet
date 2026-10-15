@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -224,6 +225,160 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
             assert (await session.get(AgentClaBinding, agent_id)).signature_id == UUID(
                 receipt.json()["signature_id"]
             )
+
+
+def _paying(app, alice, owner, block_hash):
+    verifier = SimpleNamespace(
+        verify_payment=AsyncMock(
+            return_value=VerifiedPayment(
+                block_hash=block_hash,
+                extrinsic_index=0,
+                miner_hotkey=alice.ss58_address,
+                miner_coldkey=owner,
+                amount_rao=40_000_000,
+                tao_usd_rate=Decimal("400"),
+                dest_address=app.state.config.upload_payment_address,
+                block_timestamp=datetime.now(UTC),
+            )
+        )
+    )
+    app.dependency_overrides[get_payment_verifier] = lambda: verifier
+    return verifier
+
+
+async def _row_counts(session_maker) -> tuple[int, int, int, int]:
+    async with session_maker() as session:
+        return tuple(  # type: ignore[return-value]
+            [
+                int(await session.scalar(select(func.count()).select_from(model)))
+                for model in (
+                    Agent,
+                    EvaluationPayment,
+                    AgentClaBinding,
+                    ClaShadowUpload,
+                )
+            ]
+        )
+
+
+async def test_final_consent_gate_runs_last_and_rolls_back_every_write(
+    app, client, session_maker, object_storage, monkeypatch
+):
+    """The in-transaction gate decides after the lock-waiting writes."""
+    del object_storage
+    from ditto.api_server.endpoints import upload as upload_endpoint
+
+    setup(app, session_maker)
+    app.state.session_maker = session_maker
+    app.state.embedder = SimpleNamespace(embed=AsyncMock(return_value=None))
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    owner = bittensor.Keypair.create_from_uri("//Bob").ss58_address
+    version = await publish(client)
+    receipt = await client.post("/api/v1/cla/sign", json=signed(alice, version))
+    assert receipt.status_code == 200, receipt.text
+    await elapse_cla_notice(session_maker)
+    await policy(client, "enforce")
+    block_hash = "0x" + "51" * 32
+    _paying(app, alice, owner, block_hash)
+    real_gate = upload_endpoint.evaluate_cla_gate
+    seen_in_transaction: list[int] = []
+
+    async def gate(session, **kwargs):
+        decision = await real_gate(session, **kwargs)
+        if session.in_transaction() and await session.scalar(
+            select(func.count()).select_from(Agent)
+        ):
+            # The final gate: the agent and its payment are already written.
+            seen_in_transaction.append(
+                int(
+                    await session.scalar(
+                        select(func.count()).select_from(EvaluationPayment)
+                    )
+                )
+            )
+            # Simulate a version that became effective during the lock waits.
+            return replace(decision, allowed=False, signature_id=None)
+        return decision
+
+    monkeypatch.setattr(upload_endpoint, "evaluate_cla_gate", gate)
+    async with create_storage_client(parse_storage_config_from_env()) as storage:
+
+        async def get_storage():
+            return storage
+
+        app.dependency_overrides[get_storage_client] = get_storage
+        data, files = _build_form(keypair=alice, block_hash=block_hash)
+        refused = await client.post("/api/v1/upload/agent", data=data, files=files)
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["error_code"] == 1106
+    assert seen_in_transaction == [1]
+    assert await _row_counts(session_maker) == (0, 0, 0, 0)
+
+
+@pytest.mark.parametrize("refused_at", ["duplicate_credit", "admission"])
+async def test_lost_race_to_an_identical_retry_returns_the_original(
+    app, client, session_maker, object_storage, monkeypatch, refused_at
+):
+    """A loser refused by the winner's commit still gets the original agent."""
+    del object_storage
+    from ditto.api_server.endpoints import upload as upload_endpoint
+    from ditto.db.queries.agents import SubmissionCooldownError
+
+    setup(app, session_maker)
+    app.state.session_maker = session_maker
+    app.state.embedder = SimpleNamespace(embed=AsyncMock(return_value=None))
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    owner = bittensor.Keypair.create_from_uri("//Bob").ss58_address
+    block_hash = "0x" + "52" * 32
+    _paying(app, alice, owner, block_hash)
+    async with create_storage_client(parse_storage_config_from_env()) as storage:
+
+        async def get_storage():
+            return storage
+
+        app.dependency_overrides[get_storage_client] = get_storage
+        data, files = _build_form(keypair=alice, block_hash=block_hash)
+        winner = await client.post("/api/v1/upload/agent", data=data, files=files)
+        assert winner.status_code == 200, winner.text
+        # Replay the race: the loser's first proof lookup ran before the
+        # winner committed. Later steps then meet the winner's commit.
+        real_lookup = upload_endpoint.get_agent_for_payment_proof
+        lookups = 0
+
+        async def lookup(*args, **kwargs):
+            nonlocal lookups
+            lookups += 1
+            return None if lookups == 1 else await real_lookup(*args, **kwargs)
+
+        monkeypatch.setattr(upload_endpoint, "get_agent_for_payment_proof", lookup)
+        monkeypatch.setattr(
+            upload_endpoint,
+            "get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        if refused_at == "admission":
+            # The duplicate lookup also ran early; the winner's admission
+            # then refuses the loser inside its transaction.
+            monkeypatch.setattr(
+                upload_endpoint,
+                "get_same_owner_agent_by_sha",
+                AsyncMock(return_value=None),
+            )
+
+            async def cooldown(*_args, **_kwargs):
+                raise SubmissionCooldownError(datetime.now(UTC))
+
+            monkeypatch.setattr(
+                upload_endpoint, "consume_or_enforce_upload_admission", cooldown
+            )
+        retry_data, retry_files = _build_form(keypair=alice, block_hash=block_hash)
+        loser = await client.post(
+            "/api/v1/upload/agent", data=retry_data, files=retry_files
+        )
+    assert loser.status_code == 200, loser.text
+    assert loser.json()["agent_id"] == winner.json()["agent_id"]
+    async with session_maker() as session:
+        assert await session.scalar(select(func.count()).select_from(Agent)) == 1
 
 
 async def test_upload_while_the_gate_is_off_binds_nothing(
