@@ -6088,7 +6088,10 @@ export const reinstatementRetryBudgetSchema = z.object({
   // the per-agent bound they count against. Reinstatement adds to neither; these
   // are recorded so that claim is checkable rather than merely asserted.
   agent_infra_retry_grants: z.number().int().nonnegative(),
-  max_agent_infra_retry_grants: z.number().int().positive(),
+  // Zero, not a bug: Platform's fail-once retry policy pins the per-agent
+  // infra-grant cap at 0 (ditto/db/queries/retry_budget.py), so every live
+  // reinstatement records 0 here.
+  max_agent_infra_retry_grants: z.number().int().nonnegative(),
   manual_retry_grants: z.number().int().nonnegative(),
   operator_recoveries: z.number().int().nonnegative(),
   // Nullable: operator-recovery bounding moved off a fixed per-agent count. The

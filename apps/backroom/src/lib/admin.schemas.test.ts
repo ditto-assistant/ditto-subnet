@@ -5,6 +5,7 @@ import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   SCREENING_SUBMISSION_AGENT_STATUSES,
+  reinstatementRetryBudgetSchema,
   scoringLeaseConfirmation,
   scoringLeaseSettingsControlSchema,
   setScoringLeaseSettingsInputSchema,
@@ -4236,6 +4237,18 @@ describe('validator queue reinstatement schemas', () => {
     },
     created_at: '2026-07-27T19:00:00Z',
   }
+
+  it('accepts the fail-once zero infra-grant cap Platform records today', () => {
+    // MAX_AGENT_INFRA_RETRY_GRANTS is pinned at 0, so a real reinstatement row
+    // carries 0. Rejecting it broke get_validation_retry for every reinstated
+    // agent (2026-10-15, overhorizon v2).
+    const parsed = reinstatementRetryBudgetSchema.parse({
+      ...reinstatement.retry_budget_snapshot,
+      agent_infra_retry_grants: 0,
+      max_agent_infra_retry_grants: 0,
+    })
+    expect(parsed.max_agent_infra_retry_grants).toBe(0)
+  })
 
   it('reports whether an eviction can be reversed right now', () => {
     const parsed = validationRetryDetailSchema.parse({
