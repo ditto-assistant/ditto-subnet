@@ -301,11 +301,8 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 	if err != nil {
 		return nil, settings{}, err
 	}
-	if d.Cfg.Chain.Netuid < 0 || int(int32(d.Cfg.Chain.Netuid)) != d.Cfg.Chain.Netuid {
-		return nil, current, errors.New("configured netuid is outside nonnegative int32 range")
-	}
 	consent, err := q.GetClaUploadGate(ctx, postgres.GetClaUploadGateParams{
-		Netuid: int32(d.Cfg.Chain.Netuid), Hotkey: hotkey,
+		Netuid: d.Cfg.Chain.NetuidInt32(), Hotkey: hotkey,
 		ObservedAt: pgtype.Timestamptz{Time: d.now(), Valid: true},
 	})
 	if err != nil {
@@ -434,12 +431,8 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if signatureValid && !banned {
-		if d.Cfg.Chain.Netuid < 0 || int(int32(d.Cfg.Chain.Netuid)) != d.Cfg.Chain.Netuid {
-			d.dbError(w, r, "CLA gate lookup", errors.New("configured netuid is outside nonnegative int32 range"))
-			return
-		}
 		consent, qerr := d.Queries.GetClaUploadGate(r.Context(), postgres.GetClaUploadGateParams{
-			Netuid: int32(d.Cfg.Chain.Netuid), Hotkey: *payload.Hotkey,
+			Netuid: d.Cfg.Chain.NetuidInt32(), Hotkey: *payload.Hotkey,
 			ObservedAt: pgtype.Timestamptz{Time: d.now(), Valid: true},
 		})
 		if qerr != nil {

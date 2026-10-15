@@ -717,22 +717,6 @@ func TestCLAUnknownModeFailsClosedBeforeAdmission(t *testing.T) {
 	}
 }
 
-func TestCLARejectsNetuidNarrowingBeforeAdmission(t *testing.T) {
-	pool := testutil.NewTestPGPool(t)
-	secret, hotkey := newSignedHotkey(t)
-	d := uploadDeps(pool, "5Owner", time.Time{})
-	// Would narrow back to 118 and accept this network's default-off policy.
-	d.Cfg.Chain.Netuid = 1<<32 + 118
-	body := signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), map[string]any{"reserve_submission_slot": true})
-	r := httptest.NewRequest("POST", "/api/v1/upload/check", bytes.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	relayhttp.RequestIDMiddleware(testLogger(), http.HandlerFunc(d.handleCheck)).ServeHTTP(w, r)
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("netuid overflow did not fail closed: %d %s", w.Code, w.Body.String())
-	}
-}
-
 func TestRecoveryPreservesPythonCLARefusal(t *testing.T) {
 	// Recovery is delegated to the Python handler that owns payment lookup
 	// and CLA enforcement. The relay must not turn its refusal into success.

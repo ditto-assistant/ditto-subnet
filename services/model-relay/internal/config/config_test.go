@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -165,8 +166,13 @@ func TestNetuidValidation(t *testing.T) {
 		t.Run("valid_"+value, func(t *testing.T) {
 			env := minimalEnv()
 			env["NETUID"] = value
-			if _, err := Load(MapLookup(env)); err != nil {
+			cfg, err := Load(MapLookup(env))
+			if err != nil {
 				t.Fatalf("NETUID=%s must be accepted: %v", value, err)
+			}
+			// The CLA gate's int4 parameter is converted once, never narrowed.
+			if got := cfg.Chain.NetuidInt32(); strconv.Itoa(int(got)) != value {
+				t.Fatalf("NetuidInt32() = %d for NETUID=%s", got, value)
 			}
 		})
 	}

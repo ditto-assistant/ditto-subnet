@@ -226,6 +226,10 @@ type ChainConfig struct {
 	DevAllowUnpermittedValidator bool
 }
 
+// NetuidInt32 is NETUID as a Postgres int4. Load rejects any value outside
+// [0, 2147483647], so the conversion never truncates.
+func (c ChainConfig) NetuidInt32() int32 { return int32(c.Netuid) }
+
 // InferenceProxyConfig mirrors the Python InferenceProxyConfig (section 10 of
 // the DB contract / section 9 of the API contract). All limits validated with
 // the same bounds; non-numeric numerics fail boot.
