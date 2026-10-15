@@ -4175,15 +4175,24 @@ export async function updateClaPolicy(actor: string, rawInput: unknown) {
   const input = claPolicyWriteInputSchema.parse(rawInput)
   type Body = PlatformOperations['set_policy_api_v1_admin_cla_settings_post']['requestBody']['content']['application/json']
   const body = { expected_revision: input.expectedRevision, mode: input.mode, reason: input.reason, confirmation: input.confirmation } satisfies Body
-  const response = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body })
-  // The revision is committed once the POST returns. Neither an unreadable
-  // response nor a failed refresh may report the write as failed: a retry
-  // with the old revision would be stale.
-  const parsed = claSettingsRevisionSchema.safeParse(response)
-  const applied = parsed.success ? parsed.data : null
+  // A write that may have committed must not be reported as failed: a retry
+  // with the old revision would be stale. A timeout or 5xx can follow the
+  // commit; a 4xx (such as a revision conflict) is a definite rejection.
+  let response: unknown
+  let unknownOutcome: string | null = null
+  try {
+    response = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body })
+  } catch (error) {
+    if (!(error instanceof PlatformAdminError) || (error.failure !== 'timeout' && error.failure !== 'server')) throw error
+    unknownOutcome = error.message
+  }
+  const parsed = unknownOutcome === null ? claSettingsRevisionSchema.safeParse(response) : null
+  const applied = parsed?.success ? parsed.data : null
   const committed = applied
     ? `CLA policy revision ${applied.revision} was committed`
-    : 'The CLA policy write succeeded but returned an unreadable revision, so it is probably committed'
+    : unknownOutcome !== null
+      ? `The CLA policy write may have committed (${unknownOutcome})`
+      : 'The CLA policy write succeeded but returned an unreadable revision, so it is probably committed'
   try {
     const policy = await fetchClaPolicy()
     return { applied, policy, refresh_error: applied ? null : `${committed}; compare policy.current with the intended mode before retrying.` }

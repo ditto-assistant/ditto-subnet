@@ -6037,6 +6037,25 @@ describe('verified contributors and CLA rollout', () => {
     expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
+  it('reports an unknown outcome when the policy write times out or fails upstream', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ detail: 'upstream exploded' }, { status: 503 }))
+      .mockResolvedValueOnce(Response.json(claControlFixture))
+      .mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+      .mockResolvedValueOnce(Response.json({ detail: 'upstream exploded' }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const input = { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }
+    const upstream = await updateClaPolicy('operator@omniaura.ai', input)
+    expect(upstream).toMatchObject({ applied: null, policy: claControlFixture })
+    expect(upstream.refresh_error).toContain('may have committed (upstream exploded)')
+    expect(upstream.refresh_error).toContain('compare policy.current')
+    const timedOut = await updateClaPolicy('operator@omniaura.ai', input)
+    expect(timedOut).toMatchObject({ applied: null, policy: null })
+    expect(timedOut.refresh_error).toContain('may have committed (The platform API did not answer')
+    expect(timedOut.refresh_error).toContain('call get_cla_policy')
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
   it('does not report success when the policy write itself fails', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ detail: 'CLA policy revision changed; refresh before applying' }, { status: 409 }))
