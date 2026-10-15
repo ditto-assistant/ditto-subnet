@@ -122,6 +122,8 @@ from ditto.api_server.endpoints import (
     admin_validator_slot_settings_router,
     admin_validator_weights_router,
     attestation_router,
+    bounties_admin_router,
+    bounties_public_router,
     contributor_cla_router,
     ditto_callback_challenge_router,
     feedback_track_router,
@@ -737,6 +739,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(miner_ditto_link_router, prefix="/api/v1")
     app.include_router(miner_github_link_router, prefix="/api/v1")
     app.include_router(contributor_cla_router, prefix="/api/v1")
+    app.include_router(bounties_public_router, prefix="/api/v1")
+    app.include_router(bounties_admin_router, prefix="/api/v1")
     app.include_router(feedback_track_router, prefix="/api/v1")
     app.include_router(miner_mcp_router)
     # Root path (no /api/v1): Ditto fetches the challenge at the origin root.
