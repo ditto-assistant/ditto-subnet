@@ -22,6 +22,10 @@ ATTEMPT_TTL_SECONDS = 600
 EXCHANGE_WINDOW_SECONDS = 180
 EXCHANGE_DEADLINE_SECONDS = 150
 TOKEN_REVOCATION_DEADLINE_SECONDS = 15
+# GitHub answers a failed code exchange with 200 and an error code. Only these
+# are about the miner's own sign-in (an expired or reused code, an unverified
+# account); every other refusal is the app's configuration or GitHub's fault.
+_SIGN_IN_TOKEN_ERRORS = frozenset({"bad_verification_code", "unverified_user_email"})
 # One public identity lookup, connection to body, before a bounty claim.
 PUBLIC_IDENTITY_DEADLINE_SECONDS = 30
 
@@ -145,13 +149,23 @@ class GithubLinkClient:
                 token_response = response.json()
                 token = token_response.get("access_token")
                 if not isinstance(token, str) or not token:
-                    raise GithubLinkRejected("GitHub did not issue an identity token")
+                    if token_response.get("error") in _SIGN_IN_TOKEN_ERRORS:
+                        raise GithubLinkRejected(
+                            "GitHub did not accept this sign-in; start a new "
+                            "link attempt"
+                        )
+                    raise GithubProviderUnavailable(
+                        "GitHub did not issue an identity token"
+                    )
                 verified = False
                 try:
                     if token_response.get("token_type", "").lower() != "bearer":
-                        raise GithubLinkRejected(
+                        # A malformed token response, not the miner's answer.
+                        raise GithubProviderUnavailable(
                             "GitHub did not issue an identity token"
                         )
+                    # Extra scopes stay a rejection: the authorize URL passes
+                    # through the miner's browser, which can widen the scope.
                     if token_response.get("scope", "").strip():
                         raise GithubLinkRejected(
                             "GitHub linking requires a public-profile-only OAuth app"

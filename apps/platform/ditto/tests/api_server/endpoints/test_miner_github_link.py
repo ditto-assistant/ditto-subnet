@@ -58,6 +58,8 @@ class Provider:
     revoke_transport_error = False
     user_status = 200
     user_delay = 0.0
+    # Replaces the code exchange's JSON body when set.
+    token_reply: dict | None = None
     # Public lookups (/users/{login}): a replacement reply, a delay, headers.
     users_reply = None
     users_delay = 0.0
@@ -70,6 +72,8 @@ class Provider:
         async def handler(request):
             self.requests.append(request)
             if request.url.path == "/login/oauth/access_token":
+                if self.token_reply is not None:
+                    return httpx.Response(200, json=self.token_reply)
                 return httpx.Response(
                     200,
                     json={
@@ -418,6 +422,34 @@ async def test_exchange_revokes_only_the_issued_token_on_every_outcome(
     assert len(deletes) == 1
     assert deletes[0].url.path == "/applications/fixture-client/token"
     assert json.loads(deletes[0].content) == {"access_token": TOKEN}
+
+
+@pytest.mark.parametrize(
+    "reply,verdict",
+    [
+        # GitHub's own answers about this sign-in: an expired or reused code,
+        # an unverified account. The miner starts again.
+        ({"error": "bad_verification_code"}, True),
+        ({"error": "unverified_user_email"}, True),
+        # The app's configuration or a malformed body: a provider fault.
+        ({"error": "incorrect_client_credentials"}, False),
+        ({"error": "redirect_uri_mismatch"}, False),
+        ({}, False),
+        ({"access_token": TOKEN, "token_type": "mac", "scope": ""}, False),
+    ],
+)
+async def test_token_responses_are_classified_by_cause(
+    app, session_maker, reply, verdict
+):
+    provider = setup(app, session_maker)
+    provider.token_reply = reply
+    with pytest.raises(GithubLinkRejected) as failure:
+        await app.state.github_link.exchange(code="fixture", verifier="fixture")
+    assert isinstance(failure.value, GithubProviderUnavailable) is not verdict
+    assert TOKEN not in str(failure.value) and SECRET not in str(failure.value)
+    # A token that was issued is still revoked, whatever else was wrong.
+    deletes = [r for r in provider.requests if r.method == "DELETE"]
+    assert len(deletes) == (1 if "access_token" in reply else 0)
 
 
 @pytest.mark.parametrize("verification", ["scope", "identity", "success"])
