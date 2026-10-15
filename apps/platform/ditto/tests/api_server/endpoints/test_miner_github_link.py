@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -150,6 +151,10 @@ async def browser_flow(client, token, *, accept=True):
     assert callback.status_code == 200, callback.text
     assert callback.headers["cache-control"] == "no-store"
     assert "frame-ancestors 'none'" in callback.headers["content-security-policy"]
+    # Approval lets this hotkey claim bounty credit as the login, so the page
+    # warns against approving a link someone else started.
+    assert "Only approve a link you started from your own miner CLI" in callback.text
+    assert "claim GitHub bounty credit as" in callback.text
     consent = re.search(r'name="accept_token" value="([^"]+)"', callback.text).group(1)
     if accept:
         approved = await client.post(
@@ -396,7 +401,7 @@ async def test_exchange_revokes_only_the_issued_token_on_every_outcome(
 @pytest.mark.parametrize("verification", ["scope", "identity", "success"])
 @pytest.mark.parametrize("cleanup", ["status", "transport"])
 async def test_cleanup_preserves_original_rejection_and_blocks_success(
-    app, session_maker, verification, cleanup
+    app, session_maker, verification, cleanup, caplog
 ):
     provider = setup(app, session_maker)
     if verification == "scope":
@@ -411,10 +416,18 @@ async def test_cleanup_preserves_original_rejection_and_blocks_success(
         provider.revoke_status = 503
     else:
         provider.revoke_transport_error = True
-    with pytest.raises(GithubLinkRejected, match=expected) as rejected:
+    with (
+        caplog.at_level(logging.WARNING, logger="ditto.api_server.github_link"),
+        pytest.raises(GithubLinkRejected, match=expected) as rejected,
+    ):
         await app.state.github_link.exchange(code="fixture", verifier="fixture")
     assert TOKEN not in str(rejected.value) and SECRET not in str(rejected.value)
     assert len([r for r in provider.requests if r.method == "DELETE"]) == 1
+    # A rejection hides the cleanup failure from the miner, so it is logged
+    # without the token, the app secret or the provider body.
+    assert "GitHub transient token revocation failed" in caplog.text
+    assert ("status=503" if cleanup == "status" else "error_type=") in caplog.text
+    assert TOKEN not in caplog.text and SECRET not in caplog.text
 
 
 async def test_linked_attempt_is_terminal_but_session_cleanup_remains_allowed(
@@ -1077,12 +1090,29 @@ async def test_unique_account_relink_rename_nonce_replay_and_signed_unlink(
             "signature": alice.sign(payload).hex(),
         },
     }
+    # Another replica's clock ran ahead when it recorded the link; revoking at
+    # this replica's earlier time must not trip the history trigger.
+    ahead = datetime.now(UTC) + timedelta(minutes=5)
+    async with session_maker() as session, session.begin():
+        await session.execute(
+            text("ALTER TABLE miner_github_links DISABLE TRIGGER USER")
+        )
+        await session.execute(
+            text("UPDATE miner_github_links SET linked_at = :at WHERE link_id = :id"),
+            {"at": ahead, "id": link_id},
+        )
+        await session.execute(
+            text("ALTER TABLE miner_github_links ENABLE TRIGGER USER")
+        )
     assert (
         await client.post("/api/v1/me/github-link/unlink", headers=auth, json=body)
     ).status_code == 204
     assert (
         await client.post("/api/v1/me/github-link/unlink", headers=auth, json=body)
     ).status_code == 409
+    async with session_maker() as session:
+        unlinked = await session.get(MinerGithubLink, link_id)
+        assert unlinked is not None and unlinked.revoked_at == ahead
     assert (
         await client.get(f"/api/v1/public/github-link/{alice.ss58_address}")
     ).json()["link"] is None
@@ -1578,3 +1608,61 @@ async def test_bounty_identity_rechecks_link_after_network_io(
         release.set()
         with pytest.raises(BountyIdentityRejected, match="changed during verification"):
             await asyncio.wait_for(task, 10)
+
+
+async def test_start_prunes_abandoned_attempts_without_touching_links(
+    app, client, session_maker
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    now = datetime.now(UTC)
+
+    def attempt(status, *, created, expires, verifier=None):
+        return MinerGithubLinkAttempt(
+            netuid=118,
+            hotkey="5" + uuid4().hex[:47],
+            launch_hash=uuid4().hex,
+            status=status,
+            code_verifier=verifier,
+            accept_token_hash="fixture-accept" if verifier else None,
+            created_at=created,
+            expires_at=expires,
+        )
+
+    # Another hotkey's abandoned callback, still holding its PKCE verifier.
+    abandoned = attempt(
+        "identity_verified",
+        created=now - timedelta(minutes=20),
+        expires=now - timedelta(minutes=10),
+        verifier="fixture-verifier",
+    )
+    live = attempt(
+        "pending",
+        created=now,
+        expires=now + timedelta(minutes=10),
+        verifier="live-verifier",
+    )
+    old_failed = attempt(
+        "failed", created=now - timedelta(days=31), expires=now - timedelta(days=31)
+    )
+    recent_failed = attempt(
+        "failed", created=now - timedelta(days=1), expires=now - timedelta(days=1)
+    )
+    async with session_maker() as session, session.begin():
+        session.add_all([abandoned, live, old_failed, recent_failed])
+    started = await client.post(
+        "/api/v1/me/github-link/start", headers={"authorization": f"Bearer {token}"}
+    )
+    assert started.status_code == 200, started.text
+    async with session_maker() as session:
+        rows = {
+            row.attempt_id: row
+            for row in await session.scalars(select(MinerGithubLinkAttempt))
+        }
+    assert old_failed.attempt_id not in rows
+    assert rows[recent_failed.attempt_id].status == "failed"
+    scrubbed = rows[abandoned.attempt_id]
+    assert scrubbed.status == "expired"
+    assert scrubbed.code_verifier is None and scrubbed.accept_token_hash is None
+    assert rows[live.attempt_id].code_verifier == "live-verifier"

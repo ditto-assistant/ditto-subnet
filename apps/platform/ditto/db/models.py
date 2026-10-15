@@ -11750,6 +11750,18 @@ class MinerGithubLinkAttempt(Base):
             name="status",
         ),
         Index("miner_github_link_attempts_hotkey_idx", "hotkey", "expires_at"),
+        Index(
+            "miner_github_link_attempts_open_expiry_idx",
+            "expires_at",
+            postgresql_where=text(
+                "status IN ('pending','identity_verified','accepted')"
+            ),
+        ),
+        Index(
+            "miner_github_link_attempts_closed_created_idx",
+            "created_at",
+            postgresql_where=text("status IN ('failed','expired')"),
+        ),
     )
 
 

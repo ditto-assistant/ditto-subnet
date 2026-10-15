@@ -9806,10 +9806,24 @@ CREATE INDEX miner_ditto_links_user_idx ON public.miner_ditto_links USING btree 
 
 
 --
+-- Name: miner_github_link_attempts_closed_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_github_link_attempts_closed_created_idx ON public.miner_github_link_attempts USING btree (created_at) WHERE (status = ANY (ARRAY['failed'::text, 'expired'::text]));
+
+
+--
 -- Name: miner_github_link_attempts_hotkey_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX miner_github_link_attempts_hotkey_idx ON public.miner_github_link_attempts USING btree (hotkey, expires_at);
+
+
+--
+-- Name: miner_github_link_attempts_open_expiry_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_github_link_attempts_open_expiry_idx ON public.miner_github_link_attempts USING btree (expires_at) WHERE (status = ANY (ARRAY['pending'::text, 'identity_verified'::text, 'accepted'::text]));
 
 
 --

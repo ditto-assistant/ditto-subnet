@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from urllib.parse import urlencode, urlsplit
 
@@ -11,6 +12,7 @@ from pydantic import TypeAdapter
 from ditto.api_server.ditto_link import code_challenge_s256
 from ditto_screening_protocol.contributor_identity import GithubLogin
 
+logger = logging.getLogger(__name__)
 ATTEMPT_TTL_SECONDS = 600
 
 
@@ -145,8 +147,17 @@ class GithubLinkClient:
                             json={"access_token": token},
                         )
                         cleanup_ok = revoked.status_code == 204
-                    except Exception:
+                        failure = f"status={revoked.status_code}"
+                    except Exception as exc:
                         cleanup_ok = False
+                        failure = f"error_type={type(exc).__name__}"
+                    if not cleanup_ok:
+                        # A rejection hides this from the miner, and the token
+                        # stays valid, so operators need the signal. Never log
+                        # the token or the provider's response body.
+                        logger.warning(
+                            "GitHub transient token revocation failed: %s", failure
+                        )
                     # Preserve the original rejection. Cleanup cannot turn a
                     # failed verification into success or expose provider errors.
                     if verified and not cleanup_ok:

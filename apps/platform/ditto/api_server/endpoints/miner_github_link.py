@@ -63,6 +63,7 @@ from ditto.db.models import (
 from ditto.db.queries.contributor_identity import (
     active_github_link,
     lock_identity_writes,
+    prune_github_link_attempts,
 )
 from ditto_screening_protocol.contributor_identity import ADDRESS_PATTERN
 
@@ -221,6 +222,7 @@ async def start_link(
             session, namespace=f"github-link-start:{miner.miner_hotkey}"
         )
         now = datetime.now(UTC)
+        await prune_github_link_attempts(session, now=now)
         pending = await session.scalar(
             select(func.count())
             .select_from(MinerGithubLinkAttempt)
@@ -432,8 +434,11 @@ async def callback(
             f"(account ID {identity.user_id}).</p>"
             f"<p>Link this account to hotkey "
             f"<code>{html.escape(attempt.hotkey)}</code>?</p>"
-            "<p>This records a public contributor identity link. It does not "
-            "change payments or grant access to repositories.</p>"
+            "<p><strong>Only approve a link you started from your own miner "
+            "CLI.</strong> This records a public contributor identity link: "
+            "this hotkey will be able to claim GitHub bounty credit as "
+            f"<strong>@{html.escape(identity.login)}</strong>. It does not "
+            "grant access to repositories.</p>"
             '<form method="post" action="/api/v1/miner-auth/github/accept">'
             f'<input type="hidden" name="attempt_id" value="{attempt.attempt_id}">'
             f'<input type="hidden" name="accept_token" value="{accept}">'
@@ -630,6 +635,16 @@ async def _approved_attempt(
     return attempt
 
 
+def revocation_time(link: MinerGithubLink, now: datetime) -> datetime:
+    """Never revoke before the link was recorded.
+
+    Replica clocks can trail the one that linked. History writes are
+    serialized by the identity lock, so clamping keeps them ordered instead of
+    tripping the immutability trigger as a 500.
+    """
+    return max(now, link.linked_at)
+
+
 @router.post(
     "/me/github-link/confirm",
     response_model=GithubLinkView,
@@ -670,6 +685,7 @@ async def confirm(
             now = datetime.now(UTC)
             previous = await active_github_link(session, hotkey=body.hotkey)
             if previous:
+                now = revocation_time(previous, now)
                 previous.revoked_at = now
                 await session.flush()
             link_id = uuid4()
@@ -767,7 +783,7 @@ async def unlink(
                     created_at=now,
                 )
             )
-            link.revoked_at = now
+            link.revoked_at = revocation_time(link, now)
             await session.flush()
     except ContributorProofRejected as exc:
         raise HTTPException(400, str(exc)) from exc

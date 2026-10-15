@@ -48,6 +48,22 @@ def upgrade() -> None:
         "miner_github_link_attempts",
         ["hotkey", "expires_at"],
     )
+    # Bounded pruning: expired open attempts lose their secrets, and old
+    # unlinked attempts are deleted. Linked attempts stay as link provenance.
+    op.create_index(
+        "miner_github_link_attempts_open_expiry_idx",
+        "miner_github_link_attempts",
+        ["expires_at"],
+        postgresql_where=sa.text(
+            "status IN ('pending','identity_verified','accepted')"
+        ),
+    )
+    op.create_index(
+        "miner_github_link_attempts_closed_created_idx",
+        "miner_github_link_attempts",
+        ["created_at"],
+        postgresql_where=sa.text("status IN ('failed','expired')"),
+    )
     op.create_table(
         "miner_github_action_nonces",
         sa.Column("nonce", sa.UUID(), primary_key=True),

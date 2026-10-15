@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select, text
@@ -29,6 +29,47 @@ async def lock_identity_writes(
     await session.execute(
         text(statement),
         {"namespace": namespace},
+    )
+
+
+GITHUB_LINK_ATTEMPT_RETENTION = timedelta(days=30)
+GITHUB_LINK_ATTEMPT_PRUNE_BATCH = 100
+
+
+async def prune_github_link_attempts(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    limit: int = GITHUB_LINK_ATTEMPT_PRUNE_BATCH,
+) -> None:
+    """Retire abandoned link attempts in bounded, lock-skipping batches.
+
+    An attempt whose callback never arrives would otherwise keep its PKCE
+    verifier until something reads it again. Expire those and clear their
+    secrets, then delete unlinked attempts past retention. Linked attempts are
+    the provenance of a link and are never deleted.
+    """
+    await session.execute(
+        text(
+            "WITH stale AS ("
+            " SELECT attempt_id FROM miner_github_link_attempts"
+            " WHERE status IN ('pending','identity_verified','accepted')"
+            " AND expires_at <= :now ORDER BY expires_at LIMIT :limit"
+            " FOR UPDATE SKIP LOCKED)"
+            " UPDATE miner_github_link_attempts AS attempt"
+            " SET status = 'expired', code_verifier = NULL, accept_token_hash = NULL"
+            " FROM stale WHERE attempt.attempt_id = stale.attempt_id"
+        ),
+        {"now": now, "limit": limit},
+    )
+    await session.execute(
+        text(
+            "DELETE FROM miner_github_link_attempts WHERE attempt_id IN ("
+            " SELECT attempt_id FROM miner_github_link_attempts"
+            " WHERE status IN ('failed','expired') AND created_at < :cutoff"
+            " ORDER BY created_at LIMIT :limit FOR UPDATE SKIP LOCKED)"
+        ),
+        {"cutoff": now - GITHUB_LINK_ATTEMPT_RETENTION, "limit": limit},
     )
 
 
