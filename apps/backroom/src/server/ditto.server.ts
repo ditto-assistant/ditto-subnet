@@ -94,10 +94,16 @@ export async function platformPublicRequest(path: string) {
 
 /**
  * Why a platform admin call failed, so callers can write honest copy.
- * 'transport' means the connection failed after the request may have been
- * sent. A plain Error is raised only before anything is sent.
+ *
+ * Whether Platform may have acted is decided here, once, for every caller:
+ * - nothing was sent: a plain Error (bad configuration, an invalid URL or
+ *   header) or 'unreachable' (no connection was ever established);
+ * - Platform answered: 'auth' (401/403), 'request' (any other 3xx/4xx; writes
+ *   never follow redirects) or 'server' (5xx), each with its status;
+ * - the request may have reached Platform without a definite answer:
+ *   'timeout' or 'transport'.
  */
-export type PlatformAdminFailure = 'timeout' | 'auth' | 'server' | 'request' | 'transport'
+export type PlatformAdminFailure = 'unreachable' | 'timeout' | 'auth' | 'server' | 'request' | 'transport'
 
 export class PlatformAdminError extends Error {
   readonly failure: PlatformAdminFailure
@@ -122,9 +128,17 @@ function isTimeout(error: unknown) {
   )
 }
 
-function transportError(path: string, error: unknown) {
+// Connection-establishment failures: no byte of the request reached Platform.
+const NOT_CONNECTED = new Set([
+  'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT',
+])
+
+function connectionError(path: string, error: unknown) {
   const detail = error instanceof Error ? error.message : String(error)
-  return new PlatformAdminError('transport', `The platform API connection failed during ${path}: ${detail}`)
+  const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code
+  return typeof code === 'string' && NOT_CONNECTED.has(code)
+    ? new PlatformAdminError('unreachable', `The platform API could not be reached for ${path} (${code}): ${detail}`)
+    : new PlatformAdminError('transport', `The platform API connection failed during ${path}: ${detail}`)
 }
 
 export async function platformAdminRequest(
@@ -181,26 +195,34 @@ export async function platformAdminRequest(
     throw new Error(`refusing to retry a ${method} to ${path}: it is not idempotent`)
   }
 
+  // Validate the URL and headers before sending, so an invalid base URL or
+  // header value is a plain Error that never reached Platform rather than a
+  // fetch rejection that reads as a possibly delivered request.
+  const url = new URL(`${baseUrl}${path}`).href
+  const headers = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${token}`,
+    ...(actor ? { 'X-Admin-Actor': actor } : {}),
+    ...(operatorProof ? { 'X-Backroom-Operator-Proof': operatorProof } : {}),
+    ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+  }
+  new Headers(headers)
+
   let attempt = 0
   for (;;) {
     let response: Response
     try {
-      response = await fetch(`${baseUrl}${path}`, {
+      response = await fetch(url, {
         method,
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token}`,
-          ...(actor ? { 'X-Admin-Actor': actor } : {}),
-          ...(operatorProof ? { 'X-Backroom-Operator-Proof': operatorProof } : {}),
-          ...(options.body === undefined
-            ? {}
-            : { 'Content-Type': 'application/json' }),
-        },
+        headers,
         body,
+        // A write must not follow a redirect: fetch would replay a POST as a
+        // bodyless GET and report that answer as the write's.
+        redirect: method === 'GET' ? 'follow' : 'manual',
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {
-      if (!isTimeout(error)) throw transportError(path, error)
+      if (!isTimeout(error)) throw connectionError(path, error)
       if (attempt++ < retries) continue
       throw new PlatformAdminError(
         'timeout',
@@ -226,7 +248,7 @@ export async function platformAdminRequest(
       if (!response.ok) {
         text = ''
       } else {
-        if (!isTimeout(error)) throw transportError(path, error)
+        if (!isTimeout(error)) throw connectionError(path, error)
         if (attempt++ < retries) continue
         throw new PlatformAdminError(
           'timeout',
@@ -235,6 +257,13 @@ export async function platformAdminRequest(
           )}s${retries > 0 ? ` (${attempt} attempts)` : ''}.`,
         )
       }
+    }
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+      throw new PlatformAdminError(
+        'request',
+        `The platform API redirected ${method} ${path}; it was not followed, so nothing was written.`,
+        response.status || null,
+      )
     }
     const payload = decodeResponseBody(text)
     if (response.ok) return payload

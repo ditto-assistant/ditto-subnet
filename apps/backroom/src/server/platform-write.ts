@@ -1,0 +1,120 @@
+import { PlatformAdminError, platformAdminRequest } from './ditto.server'
+
+/**
+ * What reading a write's target back shows.
+ * - `applied`: this exact write is visible.
+ * - `superseded`: the target holds a different write that rules this one out
+ *   (an immutable row, a revision guard or a terminal state), so it can never
+ *   apply.
+ * - `absent`: the write is not visible. After a timeout Platform may still be
+ *   processing it, so this alone never proves it failed.
+ */
+export type ReadBack<T> =
+  | { state: 'applied'; value: T }
+  | { state: 'superseded'; detail: string }
+  | { state: 'absent' }
+
+/** A write that committed, or one whose outcome Backroom cannot decide. */
+export type WriteOutcome<T> =
+  | { state: 'committed'; value: T }
+  | { state: 'unknown'; reason: string }
+
+/** The write definitely applied nothing; the message says what to do next. */
+export class NothingAppliedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NothingAppliedError'
+  }
+}
+
+/**
+ * Send one Platform admin write and decide its outcome honestly.
+ *
+ * Every write needs the same three answers, so they live here rather than in
+ * each caller: report a commit as a commit, never report a write that may have
+ * committed as failed (a retry with stale guards would then misfire), and
+ * never report a write that definitely did nothing as possibly applied.
+ *
+ * - Not sent (a plain Error or 'unreachable'), auth and other 4xx refusals
+ *   propagate unchanged: nothing was applied.
+ * - `refusedBeforeWrite` marks Platform refusals raised before any write,
+ *   such as a lock timeout answered with 503.
+ * - A 409 may be this same write already applied by an earlier attempt; the
+ *   read-back decides, otherwise the 409 stands.
+ * - A timeout, a 5xx or a transport failure, and a 2xx with an unreadable body,
+ *   are settled by the read-back; an absent write stays unknown.
+ *
+ * `readBack` must be read-only and must recognise this exact write, not just
+ * any write to the same target.
+ */
+export async function platformAdminWrite<T>(
+  path: string,
+  request: { actor: string; body: unknown; method?: 'POST' | 'PUT' | 'PATCH' | 'DELETE' },
+  options: {
+    parse: (payload: unknown) => T | null
+    readBack: () => Promise<ReadBack<T>>
+    refusedBeforeWrite?: (error: PlatformAdminError) => boolean
+    /** Appended to a definite refusal: how to retry safely. */
+    retryHint: string
+  },
+): Promise<WriteOutcome<T>> {
+  let payload: unknown
+  try {
+    payload = await platformAdminRequest(path, {
+      method: request.method ?? 'POST',
+      actor: request.actor,
+      body: request.body,
+    })
+  } catch (error) {
+    if (!(error instanceof PlatformAdminError)) throw error
+    if (error.failure === 'unreachable' || error.failure === 'auth') throw error
+    if (options.refusedBeforeWrite?.(error)) {
+      throw new NothingAppliedError(`${error.message}. Nothing was applied: ${options.retryHint}`)
+    }
+    if (error.failure === 'request') {
+      if (error.status !== 409) throw error
+      const seen = await tryReadBack(options.readBack)
+      if (seen?.state === 'applied') return { state: 'committed', value: seen.value }
+      if (seen === undefined) {
+        throw new Error(
+          `${error.message}. Reading the target back failed, so an earlier attempt may already have ` +
+            'applied this write; read it before retrying.',
+        )
+      }
+      throw error
+    }
+    return settle(error.message, options.readBack)
+  }
+  const value = options.parse(payload)
+  if (value !== null) return { state: 'committed', value }
+  // Platform answers 2xx only after committing; settle the unreadable body.
+  const seen = await tryReadBack(options.readBack)
+  if (seen?.state === 'applied') return { state: 'committed', value: seen.value }
+  return {
+    state: 'unknown',
+    reason: 'Platform reported success but returned an unreadable response, so the write probably committed',
+  }
+}
+
+async function settle<T>(failure: string, readBack: () => Promise<ReadBack<T>>): Promise<WriteOutcome<T>> {
+  const seen = await tryReadBack(readBack)
+  if (seen?.state === 'applied') return { state: 'committed', value: seen.value }
+  if (seen?.state === 'superseded') {
+    throw new NothingAppliedError(`${failure}. ${seen.detail}, so this write cannot have applied.`)
+  }
+  return {
+    state: 'unknown',
+    reason:
+      seen === undefined
+        ? `${failure}; reading the target back also failed`
+        : `${failure}; it is not visible yet and may still commit`,
+  }
+}
+
+async function tryReadBack<T>(readBack: () => Promise<ReadBack<T>>) {
+  try {
+    return await readBack()
+  } catch {
+    return undefined
+  }
+}

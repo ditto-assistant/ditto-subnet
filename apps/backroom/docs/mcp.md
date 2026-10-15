@@ -541,24 +541,31 @@ non-rejected, non-banned, non-retired submissions, not chain registrations. All 
 signed-in operator's audit identity. Publication preserves exact UTF-8 text and
 SHA-256 and never activates enforcement. Maintain approved versioned text in
 `docs/legal`; never publish a test fixture or draft legal wording.
-`set_cla_policy` returns the committed revision as `applied` with the refreshed
-`policy`. If the write times out, fails upstream (5xx), loses its connection
-or returns an unreadable revision, `applied` is null; if the follow-up read
-fails, `policy` is null. In
-each case `refresh_error` explains that the write may have committed. Read
-`get_cla_policy`; do not retry with the old `expectedRevision`. A 4xx, such as
-a revision conflict, still fails: nothing was applied. So does Platform's 503
-"CLA policy is busy with in-flight uploads", which is raised before the write;
-retry it with the same `expectedRevision`.
+### Write outcomes
 
-`publish_cla_version` cannot leave an operator guessing either. After a
-timeout, 5xx or lost connection, Backroom reads
-`/api/v1/public/cla/versions/{version}` and returns the version if the same
-digest and effective date are already published. If the version is not
-visible yet, the error says the publish may have committed: retry with the
-same input. A retry that Platform rejects with 409 because the identical
-version is already published returns that version instead of failing. A 409
-for different text, a 400 or the policy busy 503 applies nothing.
+`set_cla_policy`, `publish_cla_version` and `revoke_miner_github_link` share
+one outcome rule (`src/server/platform-write.ts`), so none of them reports a
+possible commit as a failure or a definite refusal as a possible commit:
+
+- **Applied:** Platform answered 2xx, or the write was found by reading its
+  target back. The tool returns the committed result.
+- **Nothing applied:** the request never reached Platform (configuration,
+  invalid URL or header, or no connection), Platform refused it (auth, 4xx,
+  or a redirect, which writes never follow), Platform refused it before
+  writing (the 503 "CLA policy is busy with in-flight uploads"), or the read-
+  back shows a different write already holds the target (another operator's
+  revision `expectedRevision + 1`, a different text for the version, or a link
+  revoked by someone else). The error says so.
+- **Unknown:** a timeout, 5xx or lost connection after sending, and the write
+  is not visible yet (Platform may still commit it) or could not be read
+  back. `set_cla_policy` returns `applied: null`, the observed `policy` and a
+  `refresh_error`; the other two fail with "may have committed".
+
+In every unknown case, retry with the same input. Each write is recognisable
+on read-back (the revision that follows `expectedRevision` with your actor,
+mode and reason; the version with your digest and effective date; your
+revocation audit), so a retry that meets its own earlier commit returns it
+instead of failing, including when Platform answers that retry with 409.
 
 When enforcement is on, new versions require at least 24 hours notice.
 `get_cla_policy` returns `minimum_enforced_notice_seconds` and

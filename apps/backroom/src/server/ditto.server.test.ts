@@ -152,6 +152,51 @@ describe('platformAdminRequest', () => {
     expect((error as PlatformAdminError).status).toBe(status)
   })
 
+  it.each([
+    ['an invalid base URL', () => { process.env.DITTO_PLATFORM_API_BASE_URL = 'platform.invalid without scheme' }, {}],
+    ['an invalid header value', () => {}, { actor: 'operator@example.com\r\nX-Injected: yes' }],
+  ])('fails before sending on %s', async (_name, configure, options) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    configure()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const error = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', body: { mode: 'shadow' }, ...options })
+      .catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(Error)
+    expect(error).not.toBeInstanceOf(PlatformAdminError)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['ECONNREFUSED', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT'])('classifies %s as unreachable, not delivered', async (code) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause: { code } })))
+
+    const error = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', body: { mode: 'shadow' } })
+      .catch((caught: unknown) => caught)
+
+    expect((error as PlatformAdminError).failure).toBe('unreachable')
+    expect((error as PlatformAdminError).status).toBeNull()
+  })
+
+  it('never follows a redirect on a write and reports it as a definite refusal', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(null, { status: 301, headers: { Location: 'https://elsewhere.invalid/' } }))
+      .mockResolvedValueOnce(Response.json({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const error = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', body: { mode: 'shadow' } })
+      .catch((caught: unknown) => caught)
+    await platformAdminRequest('/api/v1/admin/cla/settings')
+
+    expect(fetchMock.mock.calls[0][1].redirect).toBe('manual')
+    expect((error as PlatformAdminError).failure).toBe('request')
+    expect((error as PlatformAdminError).status).toBe(301)
+    expect((error as Error).message).toContain('nothing was written')
+    expect(fetchMock.mock.calls[1][1].redirect).toBe('follow')
+  })
+
   it('retries a GET whose response body times out', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
     const stalled = new ReadableStream({

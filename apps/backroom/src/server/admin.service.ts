@@ -537,6 +537,7 @@ import {
   platformAdminRequest,
   platformPublicRequest,
 } from './ditto.server'
+import { platformAdminWrite } from './platform-write'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
 import {
   submissionDepositAddressControlSchema,
@@ -4146,7 +4147,23 @@ export async function revokeMinerGithubLink(actor: string, rawInput: unknown) {
   const input = githubRevocationWriteInputSchema.parse(rawInput)
   type Body = PlatformOperations['revoke_github_link_api_v1_admin_github_links__link_id__revoke_post']['requestBody']['content']['application/json']
   const body = { reason: input.reason, confirmation: input.confirmation } satisfies Body
-  return githubRevocationControlSchema.parse(await platformAdminRequest(`/api/v1/admin/github-links/${input.linkId}/revoke`, { method: 'POST', actor, body }))
+  const outcome = await platformAdminWrite<z.infer<typeof githubRevocationControlSchema>>(`/api/v1/admin/github-links/${input.linkId}/revoke`, { actor, body }, {
+    parse: (payload) => githubRevocationControlSchema.safeParse(payload).data ?? null,
+    readBack: async () => {
+      const control = await fetchGithubRevocationPreflight({ linkId: input.linkId })
+      const audit = control.operator_revocation
+      if (!control.link.revoked_at) return { state: 'absent' }
+      // Platform records the stripped header actor; a revocation is terminal.
+      if (audit && audit.actor === actor.trim() && audit.reason === input.reason) return { state: 'applied', value: control }
+      return { state: 'superseded', detail: audit ? `The link was already revoked by ${audit.actor}` : 'The link was already unlinked by its miner' }
+    },
+    retryHint: 'retry with the same input.',
+  })
+  if (outcome.state === 'committed') return outcome.value
+  throw new Error(
+    `The GitHub link revocation may have committed (${outcome.reason}). Retry revoke_miner_github_link with the ` +
+      'same input: an already applied revocation is returned, not repeated.',
+  )
 }
 
 export async function fetchMinerGithubLink(rawInput: unknown) {
@@ -4181,39 +4198,51 @@ export async function fetchClaPolicy(rawInput: unknown = {}) {
 /** Platform's contributor_cla.CLA_POLICY_BUSY_MESSAGE, raised before any write. */
 const CLA_POLICY_BUSY_MESSAGE = 'CLA policy is busy with in-flight uploads'
 
+function claPolicyBusy(error: PlatformAdminError) {
+  return error.status === 503 && error.message.startsWith(CLA_POLICY_BUSY_MESSAGE)
+}
+
+type ClaControl = z.infer<typeof claControlSchema>
+type ClaSettingsRevision = z.infer<typeof claSettingsRevisionSchema>
+
 export async function updateClaPolicy(actor: string, rawInput: unknown) {
   const input = claPolicyWriteInputSchema.parse(rawInput)
   type Body = PlatformOperations['set_policy_api_v1_admin_cla_settings_post']['requestBody']['content']['application/json']
   const body = { expected_revision: input.expectedRevision, mode: input.mode, reason: input.reason, confirmation: input.confirmation } satisfies Body
-  // A write that may have committed must not be reported as failed: a retry
-  // with the old revision would be stale. A timeout, 5xx or transport failure
-  // can follow the commit. A plain Error (raised before sending), an auth
-  // failure or a 4xx (such as a revision conflict) proves nothing was applied.
-  let response: unknown
-  let unknownOutcome: string | null = null
-  try {
-    response = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body })
-  } catch (error) {
-    if (!(error instanceof PlatformAdminError) || error.failure === 'auth' || error.failure === 'request') throw error
-    // Platform's own lock-timeout 503 is raised before the write. Any other
-    // 503 may come from a proxy after the commit, so it stays unknown.
-    if (error.status === 503 && error.message.startsWith(CLA_POLICY_BUSY_MESSAGE)) {
-      throw new Error(`${error.message}. Nothing was applied: retry with the same expectedRevision.`)
-    }
-    unknownOutcome = error.message
-  }
-  const parsed = unknownOutcome === null ? claSettingsRevisionSchema.safeParse(response) : null
-  const applied = parsed?.success ? parsed.data : null
-  const committed = applied
+  // The revision guard makes this write recognisable: only one revision can
+  // follow expectedRevision, so its actor, mode and reason say whose it is.
+  let observed: ClaControl | null = null
+  const outcome = await platformAdminWrite<ClaSettingsRevision>('/api/v1/admin/cla/settings', { actor, body }, {
+    parse: (payload) => claSettingsRevisionSchema.safeParse(payload).data ?? null,
+    readBack: async () => {
+      observed = await fetchClaPolicy()
+      const target = input.expectedRevision + 1
+      const row = [observed.current, ...observed.history].find((item) => item.revision === target)
+      if (!row) return { state: 'absent' }
+      if (row.actor === actor.trim() && row.mode === input.mode && row.reason === input.reason) return { state: 'applied', value: row }
+      return { state: 'superseded', detail: `Revision ${target} was already written by ${row.actor}` }
+    },
+    refusedBeforeWrite: claPolicyBusy,
+    retryHint: 'retry with the same expectedRevision.',
+  })
+  const applied: ClaSettingsRevision | null = outcome.state === 'committed' ? outcome.value : null
+  const status = applied
     ? `CLA policy revision ${applied.revision} was committed`
-    : unknownOutcome !== null
-      ? `The CLA policy write may have committed (${unknownOutcome})`
-      : 'The CLA policy write succeeded but returned an unreadable revision, so it is probably committed'
-  try {
-    const policy = await fetchClaPolicy()
-    return { applied, policy, refresh_error: applied ? null : `${committed}; compare policy.current with the intended mode before retrying.` }
-  } catch {
-    return { applied, policy: null, refresh_error: `${committed}, but reading the refreshed policy failed; call get_cla_policy.` }
+    : `The CLA policy write may have committed (${outcome.state === 'unknown' ? outcome.reason : ''})`
+  let policy: ClaControl | null = observed
+  if (applied || !policy) {
+    try {
+      policy = await fetchClaPolicy()
+    } catch {
+      return { applied, policy: null, refresh_error: `${status}, but reading the refreshed policy failed; call get_cla_policy.` }
+    }
+  }
+  return {
+    applied,
+    policy,
+    refresh_error: applied
+      ? null
+      : `${status}. Retry with the same input: once revision ${input.expectedRevision + 1} is visible, a retry returns it instead of failing.`,
   }
 }
 
@@ -4222,33 +4251,25 @@ export async function publishClaVersion(actor: string, rawInput: unknown) {
   type Body = PlatformOperations['publish_api_v1_admin_cla_versions_post']['requestBody']['content']['application/json']
   const body = { version: input.version, sha256: input.sha256, text: input.text, effective_at: input.effectiveAt,
     reason: input.reason, confirmation: input.confirmation } satisfies Body
-  try {
-    return claVersionSchema.parse(await platformAdminRequest('/api/v1/admin/cla/versions', { method: 'POST', actor, body }))
-  } catch (error) {
-    if (!(error instanceof PlatformAdminError) || error.failure === 'auth') throw error
-    if (error.status === 503 && error.message.startsWith(CLA_POLICY_BUSY_MESSAGE)) {
-      throw new Error(`${error.message}. Nothing was applied: retry with the same input.`)
-    }
-    // A 409 can be this same publication committed by an earlier attempt; a
-    // timeout, 5xx or transport failure may follow the commit. Any other 4xx
-    // applied nothing. Versions are immutable, so a matching row is this write.
-    if (error.failure === 'request' && error.status !== 409) throw error
-    let existing: z.infer<typeof claVersionSchema> | null | undefined
-    try {
-      existing = await readPublishedClaVersion(input.version)
-    } catch {
-      existing = undefined
-    }
-    if (existing && existing.sha256 === input.sha256 && Date.parse(existing.effective_at) === Date.parse(input.effectiveAt)) {
-      return existing
-    }
-    if (error.failure === 'request') throw error
-    throw new Error(
-      `The CLA version ${input.version} publish may have committed (${error.message}), but ` +
-        `${existing === undefined ? 'reading it back failed' : 'it is not visible yet'}. ` +
-        'Retry publish_cla_version with the same input: an already committed publication is returned, not duplicated.',
-    )
-  }
+  const outcome = await platformAdminWrite<z.infer<typeof claVersionSchema>>('/api/v1/admin/cla/versions', { actor, body }, {
+    parse: (payload) => claVersionSchema.safeParse(payload).data ?? null,
+    readBack: async () => {
+      // Versions are immutable: a row with this digest and date is this write.
+      const existing = await readPublishedClaVersion(input.version)
+      if (!existing) return { state: 'absent' }
+      if (existing.sha256 === input.sha256 && Date.parse(existing.effective_at) === Date.parse(input.effectiveAt)) {
+        return { state: 'applied', value: existing }
+      }
+      return { state: 'superseded', detail: `CLA version ${input.version} is already published with a different digest or effective date` }
+    },
+    refusedBeforeWrite: claPolicyBusy,
+    retryHint: 'retry with the same input.',
+  })
+  if (outcome.state === 'committed') return outcome.value
+  throw new Error(
+    `The CLA version ${input.version} publish may have committed (${outcome.reason}). Retry publish_cla_version with ` +
+      'the same input: an already committed publication is returned, not duplicated.',
+  )
 }
 
 async function readPublishedClaVersion(version: number) {
