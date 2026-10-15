@@ -21,7 +21,13 @@ from ditto.api_server.storage import (
     create_storage_client,
     parse_storage_config_from_env,
 )
-from ditto.db.models import Agent, AgentClaBinding, ClaShadowUpload, EvaluationPayment
+from ditto.db.models import (
+    Agent,
+    AgentClaBinding,
+    AgentStatus,
+    ClaShadowUpload,
+    EvaluationPayment,
+)
 from ditto.tests.api_server.conftest import make_api_server_config
 from ditto.tests.api_server.endpoints.test_contributor_cla import (
     elapse_cla_notice,
@@ -175,6 +181,22 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
         )
         assert retried.status_code == 200, retried.text
         assert retried.json()["agent_id"] == str(agent_id)
+        # An exact retry returns the original row whatever its status, so the
+        # preflight must agree with the multipart endpoint after a rejection.
+        async with session_maker() as session, session.begin():
+            (await session.get(Agent, agent_id)).status = AgentStatus.REJECTED
+        rejected_check = await client.post("/api/v1/upload/check", json=recovery)
+        assert rejected_check.status_code == 200, rejected_check.text
+        assert rejected_check.json()["ok"], rejected_check.text
+        rejected_data, rejected_files = _build_form(
+            keypair=alice, block_hash=block_hash
+        )
+        rejected_retry = await client.post(
+            "/api/v1/upload/agent", data=rejected_data, files=rejected_files
+        )
+        assert rejected_retry.status_code == 200, rejected_retry.text
+        assert rejected_retry.json()["agent_id"] == str(agent_id)
+        assert rejected_retry.json()["status"] == AgentStatus.REJECTED.value
         # No new storage/payment or retroactive receipt is created.
         verifier.verify_payment.assert_awaited_once()
         async with session_maker() as session:
