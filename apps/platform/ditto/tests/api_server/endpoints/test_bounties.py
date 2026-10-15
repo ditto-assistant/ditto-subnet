@@ -273,6 +273,19 @@ async def test_public_reads_page_cache_and_hide_private_operator_fields(
     assert first.json()["total"] == rest.json()["total"] == 3
     issues = [item["issue"] for item in first.json()["items"] + rest.json()["items"]]
     assert sorted(issues) == [101, 102, 103] and len(first.json()["items"]) == 2
+    # One issue's bounty is found without paging.
+    one = await client.get(
+        "/api/v1/public/bounties", params={"repo": _REPO, "issue": 102}
+    )
+    assert [item["issue"] for item in one.json()["items"]] == [102]
+    assert one.json()["total"] == 1
+    other = await client.get(
+        "/api/v1/public/bounties", params={"repo": "ditto-assistant/other"}
+    )
+    assert other.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
+    for params in ({"repo": "Ditto-Assistant/ditto-subnet"}, {"issue": 0}):
+        bad = await client.get("/api/v1/public/bounties", params=params)
+        assert bad.status_code == 422, bad.text
     detail = await client.get(
         f"/api/v1/public/bounties/{first.json()['items'][0]['bounty_id']}"
     )
@@ -391,16 +404,16 @@ async def test_published_history_is_append_only(app, client, session_maker):
         "bounty_events": 2,
     }
     async with session_maker() as session, session.begin():
-        # Only a slot's status may move.
+        # A slot's status may move (P2 adds its claim and deadline).
         await session.execute(
             text(
-                "UPDATE bounty_slots SET status = 'held', status_changed_at = now() "
-                "WHERE position = 1"
+                "UPDATE bounty_slots SET status = 'cancelled', "
+                "status_changed_at = now() WHERE position = 1"
             )
         )
     async with session_maker() as session:
         statuses = sorted(await session.scalars(select(BountySlot.status)))
-    assert statuses == ["held", "open", "open"]
+    assert statuses == ["cancelled", "open", "open"]
 
 
 async def test_publication_routes_declare_their_errors(app):

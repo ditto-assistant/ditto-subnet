@@ -1,0 +1,351 @@
+"""`ditto bounty`: exact terms, typed consent, signed claims, safe retries."""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
+
+import bittensor
+import pytest
+
+from ditto.api_models.bounty import (
+    BountyBoardPage,
+    BountyClaimView,
+    BountyDetail,
+    BountyFeeReceipt,
+    BountyRefundView,
+    BountyRevisionView,
+    BountySlotCounts,
+    BountySummary,
+    BountyTerms,
+    bounty_claim_message,
+    bounty_team_digest,
+    simulated_fee_block_hash,
+)
+from ditto.api_models.contributor_identity import ClaStatus
+from ditto.miner_cli.__main__ import _build_parser, main
+from ditto.miner_cli.commands import bounty
+from ditto.miner_cli.errors import TransientApiError
+
+HOTKEY = bittensor.Keypair.create_from_uri("//Alice")
+COLDKEY = bittensor.Keypair.create_from_uri("//Alice//cold")
+REPO, ISSUE, DIGEST = "ditto-assistant/ditto-subnet", 2942, "ab" * 32
+PHRASE = f"CLAIM BOUNTY {REPO}#{ISSUE} REVISION 1 {DIGEST}"
+NOW = datetime.now(UTC)
+TERMS = BountyTerms(
+    title="TEST FIXTURE bounty",
+    scope="Fixture scope.",
+    public_interfaces="Fixture interface.",
+    acceptance_evidence="Fixture tests pass.",
+    reviewer_login="reviewer-fixture",
+    entry_fee_alpha_rao=2_500_000_000,
+    reward_pool_alpha_rao=100_000_000_000,
+    funding_mode="rehearsal",
+    fee_escrow_coldkey="5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    fee_escrow_hotkey="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+)
+
+
+def detail(**summary_over) -> BountyDetail:
+    terms = TERMS.model_copy(
+        update={"funding_mode": summary_over.get("funding_mode", "rehearsal")}
+    )
+    summary = BountySummary(
+        bounty_id=uuid4(),
+        repo=REPO,
+        issue=ISSUE,
+        title=terms.title,
+        current_revision=1,
+        spec_digest=DIGEST,
+        entry_fee_alpha_rao=terms.entry_fee_alpha_rao,
+        reward_pool_alpha_rao=terms.reward_pool_alpha_rao,
+        delivery_days=5,
+        review_days=7,
+        reviewer_login="reviewer-fixture",
+        funding_mode=terms.funding_mode,
+        current_round=1,
+        claims_paused=summary_over.get("claims_paused", False),
+        slots=BountySlotCounts(
+            open=3, held=0, claimed=0, submitted=0, rework=0, closed=0
+        ),
+        published_at=NOW,
+        updated_at=NOW,
+    )
+    return BountyDetail(
+        summary=summary,
+        revisions=[
+            BountyRevisionView(
+                revision=1, spec_digest=DIGEST, terms=terms, published_at=NOW
+            )
+        ],
+        rounds=[],
+        slots=[],
+        events=[],
+    )
+
+
+def claim_view(state: str = "held", **over) -> BountyClaimView:
+    claim_id = over.pop("claim_id", uuid4())
+    receipt = BountyFeeReceipt(
+        block_hash=simulated_fee_block_hash(claim_id), block_number=0, extrinsic_index=0
+    )
+    base = {
+        "claim_id": claim_id,
+        "bounty_id": uuid4(),
+        "repo": REPO,
+        "issue": ISSUE,
+        "revision": 1,
+        "spec_digest": DIGEST,
+        "slot_id": uuid4(),
+        "round": 1,
+        "position": 1,
+        "state": state,
+        "slot_status": "claimed" if state == "claimed" else "held",
+        "hotkey": HOTKEY.ss58_address,
+        "payee_coldkey": COLDKEY.ss58_address,
+        "github_login": "alice-dev",
+        "funding_mode": "rehearsal",
+        "fee_alpha_rao": TERMS.entry_fee_alpha_rao,
+        "fee_escrow_coldkey": TERMS.fee_escrow_coldkey,
+        "fee_escrow_hotkey": TERMS.fee_escrow_hotkey,
+        "held_at": NOW,
+        "hold_expires_at": NOW + timedelta(minutes=30),
+        "claimed_at": NOW if state == "claimed" else None,
+        "deadline_at": NOW + timedelta(days=5) if state == "claimed" else None,
+        "simulated_receipt": receipt,
+        "receipts": [receipt] if state != "held" else [],
+        "refunds": [],
+    }
+    base.update(over)
+    return BountyClaimView(**base)
+
+
+def api(found: BountyDetail | None = None):
+    client = MagicMock()
+    client.__enter__.return_value = client
+    found = found or detail()
+    client.list_bounties.return_value = BountyBoardPage(
+        items=[found.summary], total=1, limit=1, offset=0
+    )
+    client.get_bounty.return_value = found
+    client.get_cla_status.return_value = ClaStatus(netuid=118, mode="off")
+    held = claim_view("held")
+    client.hold_bounty_claim.return_value = held
+    client.confirm_bounty_claim.side_effect = lambda claim_id, _body: claim_view(
+        "claimed", claim_id=claim_id
+    )
+    return client
+
+
+def wallet():
+    live = MagicMock()
+    live.hotkey.ss58_address = HOTKEY.ss58_address
+    live.hotkey.sign.side_effect = HOTKEY.sign
+    live.coldkey.ss58_address = COLDKEY.ss58_address
+    live.coldkey.sign.side_effect = COLDKEY.sign
+    live.coldkeypub.ss58_address = COLDKEY.ss58_address
+    return SimpleNamespace(hotkey_ss58=HOTKEY.ss58_address), live
+
+
+def run(argv: list[str], client, live=None):
+    handle, wallet_live = wallet()
+    with (
+        patch.object(bounty, "ApiClient", return_value=client),
+        patch.object(bounty, "load_wallet", return_value=(handle, live or wallet_live)),
+        patch.object(bounty, "resolve_wallet_names", return_value=("w", "h")),
+        patch.object(bounty.time, "sleep"),
+    ):
+        return main(["bounty", *argv, "--subtensor.network", "local"])
+
+
+@pytest.fixture(autouse=True)
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    return tmp_path
+
+
+def claim_args(*extra: str) -> list[str]:
+    return ["claim", f"{REPO}#{ISSUE}", "--github-login", "alice-dev", *extra]
+
+
+def test_claim_signs_the_exact_revision_after_typed_consent(home, capsys):
+    client = api()
+    handle, live = wallet()
+
+    def consent():
+        output = capsys.readouterr()
+        # The terms and the exact phrase are shown before anything is signed.
+        assert "Type exactly" in output.err and PHRASE in output.err
+        assert "2.5 alpha (2500000000 rao)" in output.err
+        assert "REHEARSAL" in output.err and not output.out
+        live.hotkey.sign.assert_not_called()
+        return PHRASE
+
+    with patch("builtins.input", side_effect=consent):
+        assert run([*claim_args(), "--json"], client, live) == 0
+    body = client.hold_bounty_claim.call_args.args[0]
+    assert (body.repo, body.issue, body.revision, body.spec_digest) == (
+        REPO,
+        ISSUE,
+        1,
+        DIGEST,
+    )
+    assert body.payee_coldkey == COLDKEY.ss58_address and body.netuid == 118
+    assert body.team_digest == bounty_team_digest(
+        payee_coldkey=COLDKEY.ss58_address,
+        members=[(HOTKEY.ss58_address, "alice-dev")],
+    )
+    assert HOTKEY.verify(
+        bounty_claim_message(
+            netuid=118,
+            repo=REPO,
+            issue=ISSUE,
+            revision=1,
+            spec_digest=DIGEST,
+            hotkey=HOTKEY.ss58_address,
+            payee_coldkey=COLDKEY.ss58_address,
+            github_login="alice-dev",
+            team_digest=body.team_digest,
+            nonce=body.nonce,
+            issued_at=body.issued_at,
+            key_kind="hotkey",
+            signer=HOTKEY.ss58_address,
+        ),
+        bytes.fromhex(body.proof.signature),
+    )
+    # The rehearsal fee is the hold's own simulated receipt.
+    held = client.hold_bounty_claim.return_value
+    claim_id, confirm = client.confirm_bounty_claim.call_args.args
+    assert claim_id == held.claim_id
+    assert confirm.receipt == held.simulated_receipt
+    out = json.loads(capsys.readouterr().out)
+    assert out["state"] == "claimed"
+    saved = home / ".cache/ditto/bounty/local"
+    terms = json.loads(
+        (saved / "ditto-assistant-ditto-subnet-2942-r1.json").read_text()
+    )
+    assert terms["spec_digest"] == DIGEST and terms["terms"]["title"] == TERMS.title
+    assert (saved / "claims" / f"{held.claim_id}.json").exists()
+
+
+@pytest.mark.parametrize(
+    "typed", ["", "yes", PHRASE.replace("REVISION 1", "REVISION 2")]
+)
+def test_a_mismatched_confirmation_signs_nothing(capsys, typed):
+    client = api()
+    handle, live = wallet()
+    assert run([*claim_args(), "--confirmation", typed], client, live) == 1
+    live.hotkey.sign.assert_not_called()
+    client.hold_bounty_claim.assert_not_called()
+    assert "not signed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "found,message",
+    [
+        (detail(funding_mode="live"), "live bounty fees are not enabled"),
+        (detail(claims_paused=True), "paused"),
+    ],
+)
+def test_unclaimable_bounties_stop_before_the_wallet(capsys, found, message):
+    client = api(found)
+    with patch.object(bounty, "load_wallet") as load:
+        assert run([*claim_args(), "--confirmation", PHRASE], client) == 1
+    load.assert_not_called()
+    assert message in capsys.readouterr().err
+
+
+def test_a_coldkey_proof_is_signed_by_the_payee():
+    client = api()
+    handle, live = wallet()
+    assert (
+        run(
+            [*claim_args("--key-kind", "coldkey"), "--confirmation", PHRASE],
+            client,
+            live,
+        )
+        == 0
+    )
+    body = client.hold_bounty_claim.call_args.args[0]
+    assert (body.proof.key_kind, body.proof.signer) == ("coldkey", COLDKEY.ss58_address)
+    live.hotkey.sign.assert_not_called()
+
+
+def test_transient_failures_resend_the_same_signed_claim(capsys):
+    client = api()
+    held = client.hold_bounty_claim.return_value
+    client.hold_bounty_claim.side_effect = [
+        TransientApiError("bounty claim failed: HTTP 503"),
+        held,
+    ]
+    assert run([*claim_args(), "--confirmation", PHRASE], client) == 0
+    first, second = (call.args[0] for call in client.hold_bounty_claim.call_args_list)
+    # The retry is the same nonce and signature, so it can never claim twice.
+    assert first == second
+    assert "retrying" in capsys.readouterr().err
+
+
+def test_a_refunded_fee_is_reported_and_exits_nonzero(capsys):
+    client = api()
+    client.confirm_bounty_claim.side_effect = lambda claim_id, body: claim_view(
+        "refund_owed",
+        claim_id=claim_id,
+        refunds=[
+            BountyRefundView(
+                obligation_id=uuid4(),
+                reason="hold_expired",
+                payee_coldkey=COLDKEY.ss58_address,
+                amount_alpha_rao=TERMS.entry_fee_alpha_rao,
+                receipt=body.receipt,
+                simulated=True,
+                created_at=NOW,
+            )
+        ],
+    )
+    assert run([*claim_args(), "--confirmation", PHRASE], client) == 1
+    out = capsys.readouterr().out
+    assert "refund_owed" in out and "Refund owed (simulated): 2.5 alpha" in out
+
+
+def test_confirm_resends_only_a_live_hold():
+    client = api()
+    held = claim_view("held")
+    client.get_bounty_claim.return_value = held
+    assert run(["confirm", str(held.claim_id)], client) == 0
+    assert (
+        client.confirm_bounty_claim.call_args.args[1].receipt == held.simulated_receipt
+    )
+    client.confirm_bounty_claim.reset_mock()
+    client.get_bounty_claim.return_value = claim_view("claimed")
+    assert run(["confirm", str(held.claim_id)], client) == 0
+    client.confirm_bounty_claim.assert_not_called()
+
+
+def test_status_list_and_show(capsys):
+    client = api()
+    client.get_bounty_claim.return_value = claim_view("claimed")
+    assert run(["status", str(uuid4())], client) == 0
+    assert "Delivery deadline" in capsys.readouterr().out
+    assert run(["list"], client) == 0
+    assert f"{REPO}#{ISSUE}  r1  fee 2.5 alpha" in capsys.readouterr().out
+    assert run(["show", f"{REPO}#{ISSUE}"], client) == 0
+    assert "reviewer @reviewer-fixture" in capsys.readouterr().out
+    client.list_bounties.assert_called_with(repo=REPO, issue=ISSUE, limit=1)
+
+
+@pytest.mark.parametrize(
+    "target", ["ditto-assistant/ditto-subnet", "Ditto-Assistant/ditto-subnet#1", "#1"]
+)
+def test_targets_must_be_canonical_issue_references(capsys, target):
+    client = api()
+    assert run(["claim", target, "--github-login", "alice-dev"], client) == 1
+    assert "not an issue reference" in capsys.readouterr().err
+    client.hold_bounty_claim.assert_not_called()
+
+
+def test_claim_requires_a_github_login():
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["bounty", "claim", f"{REPO}#{ISSUE}"])

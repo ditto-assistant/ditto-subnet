@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -8,10 +10,16 @@ from pydantic import ValidationError
 from ditto_screening_protocol.bounty import (
     MAX_ALPHA_RAO,
     SPEC_V1_FIELDS,
+    BountyClaimRequest,
+    BountyFeeReceipt,
     BountyPublishRequest,
     BountyTerms,
+    bounty_claim_message,
+    bounty_pause_confirmation,
     bounty_publish_confirmation,
     bounty_spec_digest,
+    bounty_team_digest,
+    simulated_fee_block_hash,
 )
 
 COLDKEY = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
@@ -173,3 +181,135 @@ def test_publish_confirmation_names_the_exact_revision():
         )
         == "PUBLISH BOUNTY ditto-assistant/ditto-subnet#2942 REVISION 1 " + "ab" * 32
     )
+
+
+NONCE = UUID("1b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633b")
+ISSUED = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+
+
+def test_team_digest_is_canonical_json_of_the_sorted_team():
+    canonical = (
+        '{"members":[{"github_login":"alice-dev","hotkey":"'
+        + HOTKEY
+        + '"}],"payee_coldkey":"'
+        + COLDKEY
+        + '"}'
+    ).encode()
+    assert (
+        bounty_team_digest(payee_coldkey=COLDKEY, members=[(HOTKEY, "alice-dev")])
+        == hashlib.sha256(canonical).hexdigest()
+    )
+    # Member order never changes the team.
+    pair = [(HOTKEY, "alice-dev"), (COLDKEY, "bob-dev")]
+    assert bounty_team_digest(
+        payee_coldkey=COLDKEY, members=pair
+    ) == bounty_team_digest(payee_coldkey=COLDKEY, members=pair[::-1])
+
+
+def test_claim_message_signs_every_field_in_order():
+    team = "cd" * 32
+    message = bounty_claim_message(
+        netuid=118,
+        repo="ditto-assistant/ditto-subnet",
+        issue=2942,
+        revision=1,
+        spec_digest="ab" * 32,
+        hotkey=HOTKEY,
+        payee_coldkey=COLDKEY,
+        github_login="alice-dev",
+        team_digest=team,
+        nonce=NONCE,
+        issued_at=ISSUED,
+        key_kind="hotkey",
+        signer=HOTKEY,
+    )
+    assert (
+        message
+        == (
+            "ditto-bounty-claim:v1:118:ditto-assistant/ditto-subnet:2942:1:"
+            f"{'ab' * 32}:"
+            f"{HOTKEY}:{COLDKEY}:alice-dev:{team}:{NONCE}:"
+            f"2026-09-21T12:00:00.000000+00:00:hotkey:{HOTKEY}"
+        ).encode()
+    )
+
+
+def test_claim_message_requires_an_aware_time():
+    with pytest.raises(ValueError):
+        bounty_claim_message(
+            netuid=118,
+            repo="ditto-assistant/ditto-subnet",
+            issue=1,
+            revision=1,
+            spec_digest="ab" * 32,
+            hotkey=HOTKEY,
+            payee_coldkey=COLDKEY,
+            github_login="alice-dev",
+            team_digest="cd" * 32,
+            nonce=NONCE,
+            issued_at=datetime(2026, 9, 21, 12, 0),
+            key_kind="hotkey",
+            signer=HOTKEY,
+        )
+
+
+def test_simulated_receipt_is_bound_to_one_claim():
+    claim = UUID("00000000-0000-4000-8000-000000000001")
+    expected = hashlib.sha256(f"ditto-bounty-simulated-fee:v1:{claim}".encode())
+    assert simulated_fee_block_hash(claim) == "0x" + expected.hexdigest()
+    assert simulated_fee_block_hash(claim) != simulated_fee_block_hash(NONCE)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"revision": 0},
+        {"revision": "1"},
+        {"netuid": "118"},
+        {"spec_digest": "AB" * 32},
+        {"payee_coldkey": "not-an-address"},
+        {"issued_at": "2026-09-21T12:00:00"},
+        {"repo": "Ditto-Assistant/ditto-subnet"},
+    ],
+)
+def test_claim_request_rejects_invalid_fields(change):
+    valid = {
+        "netuid": 118,
+        "repo": "ditto-assistant/ditto-subnet",
+        "issue": 2942,
+        "revision": 1,
+        "spec_digest": "ab" * 32,
+        "hotkey": HOTKEY,
+        "payee_coldkey": COLDKEY,
+        "github_login": "alice-dev",
+        "team_digest": "cd" * 32,
+        "nonce": str(NONCE),
+        "issued_at": "2026-09-21T12:00:00+00:00",
+        "proof": {"key_kind": "hotkey", "signer": HOTKEY, "signature": "ab" * 64},
+    }
+    BountyClaimRequest.model_validate(valid)
+    with pytest.raises(ValidationError):
+        BountyClaimRequest.model_validate({**valid, **change})
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {"block_hash": "0x" + "AB" * 32, "block_number": 1, "extrinsic_index": 0},
+        {"block_hash": "ab" * 32, "block_number": 1, "extrinsic_index": 0},
+        {"block_hash": "0x" + "ab" * 32, "block_number": -1, "extrinsic_index": 0},
+        {"block_hash": "0x" + "ab" * 32, "block_number": 1, "extrinsic_index": "0"},
+    ],
+)
+def test_fee_receipts_are_exact(receipt):
+    with pytest.raises(ValidationError):
+        BountyFeeReceipt.model_validate(receipt)
+
+
+def test_pause_confirmation_names_the_bounty_and_direction():
+    kwargs = {"repo": "ditto-assistant/ditto-subnet", "issue": 2942}
+    assert (
+        bounty_pause_confirmation(**kwargs, paused=True)
+        == "PAUSE BOUNTY CLAIMS ditto-assistant/ditto-subnet#2942"
+    )
+    assert bounty_pause_confirmation(**kwargs, paused=False).startswith("RESUME ")

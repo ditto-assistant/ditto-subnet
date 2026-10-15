@@ -78,8 +78,7 @@ CREATE FUNCTION public.bounty_slot_status_only() RETURNS trigger
           IF TG_OP = 'DELETE' THEN
             RAISE EXCEPTION 'bounty slots cannot be deleted';
           END IF;
-          IF to_jsonb(NEW) - 'status' - 'status_changed_at'
-             IS DISTINCT FROM to_jsonb(OLD) - 'status' - 'status_changed_at'
+          IF to_jsonb(NEW) - 'status' - 'status_changed_at' - 'claim_id' - 'deadline_at' IS DISTINCT FROM to_jsonb(OLD) - 'status' - 'status_changed_at' - 'claim_id' - 'deadline_at'
           THEN
             RAISE EXCEPTION 'only a bounty slot status can change';
           END IF;
@@ -1592,6 +1591,81 @@ CREATE TABLE public.bounties (
 
 
 --
+-- Name: bounty_action_nonces; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_action_nonces (
+    nonce uuid NOT NULL,
+    action text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_action_nonces_action CHECK ((action = 'claim'::text))
+);
+
+
+--
+-- Name: bounty_claim_controls; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_claim_controls (
+    control_id bigint NOT NULL,
+    bounty_id uuid NOT NULL,
+    paused boolean NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: bounty_claim_controls_control_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_claim_controls ALTER COLUMN control_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_claim_controls_control_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bounty_claims; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_claims (
+    claim_id uuid NOT NULL,
+    bounty_id uuid NOT NULL,
+    revision integer NOT NULL,
+    spec_digest text NOT NULL,
+    slot_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    payee_coldkey text NOT NULL,
+    github_login text NOT NULL,
+    team_digest text NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    key_kind text NOT NULL,
+    signer text NOT NULL,
+    signature text NOT NULL,
+    owner_block bigint NOT NULL,
+    owner_block_hash text NOT NULL,
+    github_link_id uuid NOT NULL,
+    github_user_id bigint NOT NULL,
+    cla_signature_id uuid NOT NULL,
+    funding_mode text NOT NULL,
+    fee_alpha_rao bigint NOT NULL,
+    fee_escrow_coldkey text NOT NULL,
+    fee_escrow_hotkey text NOT NULL,
+    held_at timestamp with time zone NOT NULL,
+    hold_expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_claims_claim CHECK (((key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text])) AND (fee_alpha_rao > 0) AND (hold_expires_at > held_at) AND (github_user_id > 0) AND (funding_mode = ANY (ARRAY['rehearsal'::text, 'live'::text])) AND ((key_kind = 'coldkey'::text) OR (signer = hotkey)) AND ((key_kind = 'hotkey'::text) OR (signer = payee_coldkey))))
+);
+
+
+--
 -- Name: bounty_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1603,7 +1677,8 @@ CREATE TABLE public.bounty_events (
     round integer,
     slot_id uuid,
     recorded_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_bounty_events_kind CHECK ((kind = ANY (ARRAY['revision_published'::text, 'round_opened'::text])))
+    claim_id uuid,
+    CONSTRAINT ck_bounty_events_kind CHECK ((kind = ANY (ARRAY['revision_published'::text, 'round_opened'::text, 'slot_held'::text, 'hold_expired'::text, 'hold_released'::text, 'slot_claimed'::text, 'fee_refund_owed'::text, 'claims_paused'::text, 'claims_resumed'::text])))
 );
 
 
@@ -1618,6 +1693,44 @@ ALTER TABLE public.bounty_events ALTER COLUMN event_id ADD GENERATED ALWAYS AS I
     NO MINVALUE
     NO MAXVALUE
     CACHE 1
+);
+
+
+--
+-- Name: bounty_fee_payments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_fee_payments (
+    block_hash text NOT NULL,
+    extrinsic_index integer NOT NULL,
+    block_number bigint NOT NULL,
+    claim_id uuid NOT NULL,
+    payer_coldkey text NOT NULL,
+    amount_alpha_rao bigint NOT NULL,
+    simulated boolean NOT NULL,
+    outcome text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_fee_payments_payment CHECK (((amount_alpha_rao > 0) AND (extrinsic_index >= 0) AND (block_number >= 0) AND (outcome = ANY (ARRAY['allocated'::text, 'refund_owed'::text]))))
+);
+
+
+--
+-- Name: bounty_obligations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_obligations (
+    obligation_id uuid NOT NULL,
+    bounty_id uuid NOT NULL,
+    claim_id uuid NOT NULL,
+    kind text NOT NULL,
+    reason text NOT NULL,
+    payee_coldkey text NOT NULL,
+    amount_alpha_rao bigint NOT NULL,
+    block_hash text NOT NULL,
+    extrinsic_index integer NOT NULL,
+    simulated boolean NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_obligations_obligation CHECK (((kind = 'fee_refund'::text) AND (amount_alpha_rao > 0) AND (reason = ANY (ARRAY['hold_expired'::text, 'slot_lost'::text, 'identity_changed'::text, 'duplicate_payment'::text]))))
 );
 
 
@@ -1679,6 +1792,9 @@ CREATE TABLE public.bounty_slots (
     status text NOT NULL,
     status_changed_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone NOT NULL,
+    claim_id uuid,
+    deadline_at timestamp with time zone,
+    CONSTRAINT ck_bounty_slots_claim CHECK ((((status <> 'open'::text) OR (claim_id IS NULL)) AND ((status <> ALL (ARRAY['held'::text, 'claimed'::text, 'submitted'::text, 'rework'::text, 'accepted'::text, 'rejected'::text, 'expired'::text, 'withdrawn'::text])) OR (claim_id IS NOT NULL)) AND ((status <> 'claimed'::text) OR (deadline_at IS NOT NULL)))),
     CONSTRAINT ck_bounty_slots_position CHECK (("position" > 0)),
     CONSTRAINT ck_bounty_slots_status CHECK ((status = ANY (ARRAY['open'::text, 'held'::text, 'claimed'::text, 'submitted'::text, 'rework'::text, 'accepted'::text, 'rejected'::text, 'expired'::text, 'withdrawn'::text, 'cancelled'::text])))
 );
@@ -7780,11 +7896,51 @@ ALTER TABLE ONLY public.bounties
 
 
 --
+-- Name: bounty_action_nonces pk_bounty_action_nonces; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_action_nonces
+    ADD CONSTRAINT pk_bounty_action_nonces PRIMARY KEY (nonce);
+
+
+--
+-- Name: bounty_claim_controls pk_bounty_claim_controls; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claim_controls
+    ADD CONSTRAINT pk_bounty_claim_controls PRIMARY KEY (control_id);
+
+
+--
+-- Name: bounty_claims pk_bounty_claims; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT pk_bounty_claims PRIMARY KEY (claim_id);
+
+
+--
 -- Name: bounty_events pk_bounty_events; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.bounty_events
     ADD CONSTRAINT pk_bounty_events PRIMARY KEY (event_id);
+
+
+--
+-- Name: bounty_fee_payments pk_bounty_fee_payments; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_fee_payments
+    ADD CONSTRAINT pk_bounty_fee_payments PRIMARY KEY (block_hash, extrinsic_index);
+
+
+--
+-- Name: bounty_obligations pk_bounty_obligations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT pk_bounty_obligations PRIMARY KEY (obligation_id);
 
 
 --
@@ -9108,6 +9264,22 @@ ALTER TABLE ONLY public.bounties
 
 
 --
+-- Name: bounty_claims uq_bounty_claims_nonce; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT uq_bounty_claims_nonce UNIQUE (nonce);
+
+
+--
+-- Name: bounty_obligations uq_bounty_obligations_block_hash; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT uq_bounty_obligations_block_hash UNIQUE (block_hash, extrinsic_index, kind);
+
+
+--
 -- Name: bounty_slots uq_bounty_slots_bounty_id; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9513,10 +9685,45 @@ CREATE UNIQUE INDEX benchmark_rollouts_transition_idx ON public.benchmark_rollou
 
 
 --
+-- Name: bounty_claim_controls_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_claim_controls_bounty_idx ON public.bounty_claim_controls USING btree (bounty_id, control_id);
+
+
+--
+-- Name: bounty_claims_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_claims_bounty_idx ON public.bounty_claims USING btree (bounty_id);
+
+
+--
+-- Name: bounty_claims_slot_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_claims_slot_idx ON public.bounty_claims USING btree (slot_id);
+
+
+--
 -- Name: bounty_events_bounty_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX bounty_events_bounty_idx ON public.bounty_events USING btree (bounty_id, event_id);
+
+
+--
+-- Name: bounty_fee_payments_allocated_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX bounty_fee_payments_allocated_idx ON public.bounty_fee_payments USING btree (claim_id) WHERE (outcome = 'allocated'::text);
+
+
+--
+-- Name: bounty_obligations_claim_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_obligations_claim_idx ON public.bounty_obligations USING btree (claim_id);
 
 
 --
@@ -10668,6 +10875,48 @@ CREATE TRIGGER bounties_no_truncate BEFORE TRUNCATE ON public.bounties FOR EACH 
 
 
 --
+-- Name: bounty_action_nonces bounty_action_nonces_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_action_nonces_immutable BEFORE DELETE OR UPDATE ON public.bounty_action_nonces FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_action_nonces bounty_action_nonces_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_action_nonces_no_truncate BEFORE TRUNCATE ON public.bounty_action_nonces FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_claim_controls bounty_claim_controls_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_claim_controls_immutable BEFORE DELETE OR UPDATE ON public.bounty_claim_controls FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_claim_controls bounty_claim_controls_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_claim_controls_no_truncate BEFORE TRUNCATE ON public.bounty_claim_controls FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_claims bounty_claims_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_claims_immutable BEFORE DELETE OR UPDATE ON public.bounty_claims FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_claims bounty_claims_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_claims_no_truncate BEFORE TRUNCATE ON public.bounty_claims FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
 -- Name: bounty_events bounty_events_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -10679,6 +10928,34 @@ CREATE TRIGGER bounty_events_immutable BEFORE DELETE OR UPDATE ON public.bounty_
 --
 
 CREATE TRIGGER bounty_events_no_truncate BEFORE TRUNCATE ON public.bounty_events FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_fee_payments bounty_fee_payments_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_fee_payments_immutable BEFORE DELETE OR UPDATE ON public.bounty_fee_payments FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_fee_payments bounty_fee_payments_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_fee_payments_no_truncate BEFORE TRUNCATE ON public.bounty_fee_payments FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_obligations bounty_obligations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_obligations_immutable BEFORE DELETE OR UPDATE ON public.bounty_obligations FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_obligations bounty_obligations_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_obligations_no_truncate BEFORE TRUNCATE ON public.bounty_obligations FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
 
 
 --
@@ -11836,6 +12113,54 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 
 --
+-- Name: bounty_claim_controls fk_bounty_claim_controls_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claim_controls
+    ADD CONSTRAINT fk_bounty_claim_controls_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_claims fk_bounty_claims_bounty_id_bounty_revisions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT fk_bounty_claims_bounty_id_bounty_revisions FOREIGN KEY (bounty_id, revision) REFERENCES public.bounty_revisions(bounty_id, revision);
+
+
+--
+-- Name: bounty_claims fk_bounty_claims_cla_signature_id_cla_signatures; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT fk_bounty_claims_cla_signature_id_cla_signatures FOREIGN KEY (cla_signature_id) REFERENCES public.cla_signatures(signature_id);
+
+
+--
+-- Name: bounty_claims fk_bounty_claims_github_link_id_miner_github_links; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT fk_bounty_claims_github_link_id_miner_github_links FOREIGN KEY (github_link_id) REFERENCES public.miner_github_links(link_id);
+
+
+--
+-- Name: bounty_claims fk_bounty_claims_nonce_bounty_action_nonces; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT fk_bounty_claims_nonce_bounty_action_nonces FOREIGN KEY (nonce) REFERENCES public.bounty_action_nonces(nonce);
+
+
+--
+-- Name: bounty_claims fk_bounty_claims_slot_id_bounty_slots; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT fk_bounty_claims_slot_id_bounty_slots FOREIGN KEY (slot_id) REFERENCES public.bounty_slots(slot_id);
+
+
+--
 -- Name: bounty_events fk_bounty_events_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11844,11 +12169,51 @@ ALTER TABLE ONLY public.bounty_events
 
 
 --
+-- Name: bounty_events fk_bounty_events_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
 -- Name: bounty_events fk_bounty_events_slot_id_bounty_slots; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.bounty_events
     ADD CONSTRAINT fk_bounty_events_slot_id_bounty_slots FOREIGN KEY (slot_id) REFERENCES public.bounty_slots(slot_id);
+
+
+--
+-- Name: bounty_fee_payments fk_bounty_fee_payments_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_fee_payments
+    ADD CONSTRAINT fk_bounty_fee_payments_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_obligations fk_bounty_obligations_block_hash_bounty_fee_payments; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT fk_bounty_obligations_block_hash_bounty_fee_payments FOREIGN KEY (block_hash, extrinsic_index) REFERENCES public.bounty_fee_payments(block_hash, extrinsic_index);
+
+
+--
+-- Name: bounty_obligations fk_bounty_obligations_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT fk_bounty_obligations_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_obligations fk_bounty_obligations_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT fk_bounty_obligations_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
 
 
 --
@@ -11873,6 +12238,14 @@ ALTER TABLE ONLY public.bounty_rounds
 
 ALTER TABLE ONLY public.bounty_slots
     ADD CONSTRAINT fk_bounty_slots_bounty_id_bounty_rounds FOREIGN KEY (bounty_id, round) REFERENCES public.bounty_rounds(bounty_id, round);
+
+
+--
+-- Name: bounty_slots fk_bounty_slots_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT fk_bounty_slots_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
 
 
 --

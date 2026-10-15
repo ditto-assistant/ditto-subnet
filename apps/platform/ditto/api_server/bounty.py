@@ -26,6 +26,7 @@ from ditto.api_models.bounty import (
     BountyPublishRequest,
     BountyRevisionView,
     BountyRoundView,
+    BountySlotClaimant,
     BountySlotCounts,
     BountySlotView,
     BountySummary,
@@ -33,7 +34,17 @@ from ditto.api_models.bounty import (
     bounty_publish_confirmation,
     bounty_spec_digest,
 )
-from ditto.db.models import Bounty, BountyEvent, BountyRevision, BountyRound, BountySlot
+from ditto.api_server import bounty_claims
+from ditto.api_server.bounty_claims import effective_slot_status
+from ditto.db.models import (
+    Bounty,
+    BountyClaim,
+    BountyClaimControl,
+    BountyEvent,
+    BountyRevision,
+    BountyRound,
+    BountySlot,
+)
 from ditto.db.queries.contributor_identity import lock_identity_writes
 
 # Issue #2942: three attempts per round. The field stays in the signed terms
@@ -295,6 +306,7 @@ def _summary(
     first: BountyRevision,
     current: BountyRevision,
     current_round: int,
+    paused: bool,
     statuses: Counter[str],
 ) -> BountySummary:
     return BountySummary(
@@ -311,18 +323,39 @@ def _summary(
         reviewer_login=current.reviewer_login,
         funding_mode=current.funding_mode,  # type: ignore[arg-type]
         current_round=current_round,
+        claims_paused=paused,
         slots=_slot_counts(statuses),
         published_at=first.published_at,
         updated_at=current.published_at,
     )
 
 
-async def board(session: AsyncSession, *, limit: int, offset: int) -> BountyBoardPage:
-    """Newest bounties first, each with its current terms and slot counts."""
-    total = int(await session.scalar(select(func.count()).select_from(Bounty)) or 0)
+async def board(
+    session: AsyncSession,
+    *,
+    limit: int,
+    offset: int,
+    repo: str | None = None,
+    issue: int | None = None,
+) -> BountyBoardPage:
+    """Newest bounties first, each with its current terms and slot counts.
+
+    ``repo`` and ``issue`` narrow the board, so a client can find one issue's
+    bounty without paging.
+    """
+    filters = []
+    if repo is not None:
+        filters.append(Bounty.repo == repo)
+    if issue is not None:
+        filters.append(Bounty.issue_number == issue)
+    total = int(
+        await session.scalar(select(func.count()).select_from(Bounty).where(*filters))
+        or 0
+    )
     bounties = list(
         await session.scalars(
             select(Bounty)
+            .where(*filters)
             .order_by(Bounty.created_at.desc(), Bounty.bounty_id)
             .offset(offset)
             .limit(limit)
@@ -346,26 +379,86 @@ async def board(session: AsyncSession, *, limit: int, offset: int) -> BountyBoar
             )
         ).all()
     }
+    now = bounty_claims.utcnow()
     statuses: dict[UUID, Counter[str]] = {}
-    for bounty_id, status, count in (
+    for slot, holder in (
         await session.execute(
-            select(BountySlot.bounty_id, BountySlot.status, func.count())
+            select(BountySlot, BountyClaim)
+            .outerjoin(BountyClaim, BountyClaim.claim_id == BountySlot.claim_id)
             .where(BountySlot.bounty_id.in_(ids))
-            .group_by(BountySlot.bounty_id, BountySlot.status)
         )
     ).all():
-        statuses.setdefault(bounty_id, Counter())[status] = int(count)
+        status = effective_slot_status(slot, holder, now=now)
+        statuses.setdefault(slot.bounty_id, Counter())[status] += 1
+    paused = await _paused(session, ids)
     items = [
         _summary(
             bounty,
             first=revisions[bounty.bounty_id][0],
             current=revisions[bounty.bounty_id][-1],
             current_round=int(rounds.get(bounty.bounty_id, 0)),
+            paused=paused.get(bounty.bounty_id, False),
             statuses=statuses.get(bounty.bounty_id, Counter()),
         )
         for bounty in bounties
     ]
     return BountyBoardPage(items=items, total=total, limit=limit, offset=offset)
+
+
+async def _paused(session: AsyncSession, ids: list[UUID]) -> dict[UUID, bool]:
+    """Each bounty's latest pause control; no control means claims are open."""
+    latest = (
+        select(
+            BountyClaimControl.bounty_id,
+            BountyClaimControl.paused,
+            func.row_number()
+            .over(
+                partition_by=BountyClaimControl.bounty_id,
+                order_by=BountyClaimControl.control_id.desc(),
+            )
+            .label("rank"),
+        )
+        .where(BountyClaimControl.bounty_id.in_(ids))
+        .subquery()
+    )
+    rows = await session.execute(
+        select(latest.c.bounty_id, latest.c.paused).where(latest.c.rank == 1)
+    )
+    return {bounty_id: bool(value) for bounty_id, value in rows.all()}
+
+
+def _slot_view(
+    slot: BountySlot, holder: BountyClaim | None, *, now: datetime
+) -> BountySlotView:
+    status = effective_slot_status(slot, holder, now=now)
+    # A lapsed hold has no claimant; every other claimed slot shows its claim.
+    claimant = holder if status != "open" else None
+    return BountySlotView(
+        slot_id=slot.slot_id,
+        round=slot.round,
+        position=slot.position,
+        status=status,  # type: ignore[arg-type]
+        status_changed_at=(
+            holder.hold_expires_at
+            if holder is not None and slot.status == "held" and status == "open"
+            else slot.status_changed_at
+        ),
+        hold_expires_at=claimant.hold_expires_at
+        if status == "held" and claimant
+        else None,
+        deadline_at=slot.deadline_at if claimant else None,
+        claimant=(
+            BountySlotClaimant(
+                claim_id=claimant.claim_id,
+                hotkey=claimant.hotkey,
+                payee_coldkey=claimant.payee_coldkey,
+                github_login=claimant.github_login,
+                revision=claimant.revision,
+            )
+            if claimant
+            else None
+        ),
+    )
 
 
 async def detail(session: AsyncSession, bounty_id: UUID) -> BountyDetail:
@@ -386,13 +479,16 @@ async def detail(session: AsyncSession, bounty_id: UUID) -> BountyDetail:
             .order_by(BountyRound.round)
         )
     )
-    slots = list(
-        await session.scalars(
-            select(BountySlot)
+    now = bounty_claims.utcnow()
+    slots = (
+        await session.execute(
+            select(BountySlot, BountyClaim)
+            .outerjoin(BountyClaim, BountyClaim.claim_id == BountySlot.claim_id)
             .where(BountySlot.bounty_id == bounty_id)
             .order_by(BountySlot.round, BountySlot.position)
         )
-    )
+    ).all()
+    views = [_slot_view(slot, holder, now=now) for slot, holder in slots]
     events = list(
         await session.scalars(
             select(BountyEvent)
@@ -406,7 +502,8 @@ async def detail(session: AsyncSession, bounty_id: UUID) -> BountyDetail:
             first=revisions[0],
             current=revisions[-1],
             current_round=rounds[-1].round if rounds else 0,
-            statuses=Counter(slot.status for slot in slots),
+            paused=(await _paused(session, [bounty_id])).get(bounty_id, False),
+            statuses=Counter(view.status for view in views),
         ),
         revisions=[revision_view(row) for row in revisions],
         rounds=[
@@ -417,16 +514,7 @@ async def detail(session: AsyncSession, bounty_id: UUID) -> BountyDetail:
             )
             for row in rounds
         ],
-        slots=[
-            BountySlotView(
-                slot_id=slot.slot_id,
-                round=slot.round,
-                position=slot.position,
-                status=slot.status,  # type: ignore[arg-type]
-                status_changed_at=slot.status_changed_at,
-            )
-            for slot in slots
-        ],
+        slots=views,
         events=[
             BountyEventView(
                 event_id=event.event_id,
@@ -434,6 +522,7 @@ async def detail(session: AsyncSession, bounty_id: UUID) -> BountyDetail:
                 revision=event.revision,
                 round=event.round,
                 slot_id=event.slot_id,
+                claim_id=event.claim_id,
                 recorded_at=event.recorded_at,
             )
             for event in events

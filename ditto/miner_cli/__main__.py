@@ -18,6 +18,7 @@ import sys
 
 from ditto.miner_cli.commands import attest as attest_cmd
 from ditto.miner_cli.commands import avatar as avatar_cmd
+from ditto.miner_cli.commands import bounty as bounty_cmd
 from ditto.miner_cli.commands import cla as cla_cmd
 from ditto.miner_cli.commands import link_ditto as link_ditto_cmd
 from ditto.miner_cli.commands import link_github as link_github_cmd
@@ -147,6 +148,7 @@ def _build_parser() -> argparse.ArgumentParser:
     link_ditto_cmd.add_subparser(subparsers, parents=[sub_parent])
     link_github_cmd.add_subparser(subparsers, parents=[sub_parent])
     cla_cmd.add_subparser(subparsers, parents=[sub_parent])
+    bounty_cmd.add_subparser(subparsers, parents=[sub_parent])
 
     return parser
 
