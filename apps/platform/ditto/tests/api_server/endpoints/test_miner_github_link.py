@@ -1824,7 +1824,9 @@ async def test_attempt_status_rejects_a_malformed_attempt_id(
     assert HttpErrorEnvelope.model_validate(response.json()).error_code != 3000
 
 
-async def test_private_link_and_cla_errors_are_never_cached(app, client, session_maker):
+async def test_private_link_and_cla_responses_are_never_cached(
+    app, client, session_maker
+):
     setup(app, session_maker)
     token = await _sign_in(client, bittensor.Keypair.create_from_uri("//Alice"))
     auth = {"authorization": f"Bearer {token}"}
@@ -1833,6 +1835,9 @@ async def test_private_link_and_cla_errors_are_never_cached(app, client, session
         ("/api/v1/me/github-link/attempts/not-a-uuid", auth, 422),
         (f"/api/v1/me/github-link/attempts/{uuid4()}", {}, 401),
         ("/api/v1/public/cla/versions/9", {}, 404),
+        # A redirect returned directly, which FastAPI does not merge with the
+        # router dependency's headers.
+        ("/api/v1/miner-auth/ditto/callback", {}, 302),
     ):
         response = await client.get(path, headers=headers)
         assert response.status_code == status, (path, response.text)

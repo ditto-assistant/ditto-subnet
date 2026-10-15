@@ -196,6 +196,7 @@ from ditto.api_server.middleware import (
 )
 from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
 from ditto.api_server.miner_avatar import MAX_AVATAR_BYTES
+from ditto.api_server.no_store import NoStoreMiddleware
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
@@ -664,6 +665,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Gzip is inside the public cache: each identity/gzip representation is
     # built once and cached independently, so a 200KB operations cache HIT
     # does not burn CPU recompressing the same user-agnostic bytes.
+    # Innermost: a private route's no-store reaches gzip and the public cache.
+    app.add_middleware(NoStoreMiddleware)
     app.add_middleware(SizedGZipMiddleware, minimum_size=1000, compresslevel=6)
     # Opt-in per-client-IP limit on the unauthenticated expensive routes. Inside
     # the public cache so cache hits never spend a client's budget; absent
