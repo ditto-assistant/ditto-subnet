@@ -78,7 +78,7 @@ def _managed(hotkey: str) -> ValidatorHeartbeat:
     """A v13 heartbeat signing the cohort's shared packet.
 
     The issuing member must pass ``pinned_validator_allowed``, which demands
-    that all three members sign the same managed release.
+    that it sign the managed release a live majority of the members signs.
     """
     row = _heartbeat(hotkey, _NOW, versions=[7, _V13], protocol_version=18)
     row.benchmark_capacity = {
@@ -407,3 +407,100 @@ class TestDeadCohortGenerationReleasesItsOwner:
 
         assert entries[pinned].gate is None
         assert entries[newer].gate == "owner_serialized"
+
+
+class TestFourthCohortMemberFinishesAStrandedGeneration:
+    """A wider pin: the fourth member takes the seat the third can no longer fill.
+
+    The quorum stays three distinct validators. Pinning a fourth healthy member
+    on the same signed packet gives a 2/3 generation, whose third member spent
+    its retry budget, a validator that can still be issued the last seat.
+    """
+
+    _FOUR = (*_COHORT, _OUTSIDER)
+
+    async def _seed(self, session: AsyncSession) -> tuple[UUID, UUID]:
+        async with session.begin():
+            session.add_all([_managed(hotkey) for hotkey in self._FOUR])
+            session.add(
+                _heartbeat(_PAUSED, _NOW, versions=[7, _V13], protocol_version=18)
+            )
+        dead = await _seed_generation(
+            session, name="dead", created_at=_NOW - timedelta(days=3)
+        )
+        newer = await _seed_generation(
+            session, name="newer", created_at=_NOW - timedelta(hours=1)
+        )
+        await _seed_two_of_three(session, dead)
+        async with session.begin():
+            session.add(
+                V13ScorerCohortPin(
+                    bench_version=_V13,
+                    hotkeys=sorted(self._FOUR),
+                    packet=_PACKET,
+                    slot_settings_revision=1,
+                    slot_settings_checksum="f" * 64,
+                    reason="test four-member scorer cohort",
+                    actor="test",
+                )
+            )
+        await _pause(session, _PAUSED)
+        return dead, newer
+
+    async def test_every_member_counts_toward_quorum_capacity(
+        self, session: AsyncSession
+    ) -> None:
+        await self._seed(session)
+
+        assert await _capable(session) == set(self._FOUR)
+
+    async def test_the_fourth_member_leases_the_stranded_generation(
+        self, session: AsyncSession
+    ) -> None:
+        dead, newer = await self._seed(session)
+        async with session.begin():
+            continuation, provisional = await get_score_priority_floors(
+                session, bench_version=_V13
+            )
+            entries = await preview_queue_order(
+                session,
+                bench_version=_V13,
+                now=_NOW,
+                agent_ids=[dead, newer],
+                score_continuation_floor=continuation,
+                provisional_contender_floor=provisional,
+                rollout=None,
+            )
+        # Still reachable through the fourth member, so it keeps the owner slot.
+        assert entries[dead].gate is None
+        assert entries[newer].gate == "owner_serialized"
+
+        async with session.begin():
+            ticket = await issue_ticket(
+                session,
+                validator_hotkey=_OUTSIDER,
+                now=_NOW,
+                ttl=_TTL,
+                bench_version=_V13,
+                owner_concurrent_submission_limit=1,
+            )
+
+        assert ticket is not None
+        assert ticket.agent_id == dead
+        assert ticket.validator_hotkey == _OUTSIDER
+
+    async def test_the_exhausted_member_is_not_issued_the_seat_again(
+        self, session: AsyncSession
+    ) -> None:
+        dead, _ = await self._seed(session)
+        async with session.begin():
+            ticket = await issue_ticket(
+                session,
+                validator_hotkey=_COHORT[2],
+                now=_NOW,
+                ttl=_TTL,
+                bench_version=_V13,
+                owner_concurrent_submission_limit=1,
+            )
+
+        assert ticket is None or ticket.agent_id != dead

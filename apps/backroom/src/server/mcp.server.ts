@@ -776,17 +776,17 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_l2_report_canary_preflight:
     'Evaluate each exact-source canary guard; scheduling rechecks them.',
   get_v13_scorer_cohort:
-    'Read the immutable three-validator V13 scorer pin, including exact signed runtime packet.',
+    'Read the immutable 3-16 validator V13 scorer pin, including exact signed runtime packet.',
   get_v13_scorer_cohort_preflight:
-    'Read signed V13 fleet, admission and drain before pinning.',
+    'Read signed V13 fleet, membership, authority packet, admission and drain.',
   get_v13_scorer_cohort_history:
     'Read immutable V13 cohort and packet rotations.',
   get_v13_report_only_current_packet:
-    'Read unanimous live V13 packet; no authority change.',
+    'Read live-majority V13 packet and routable members; no authority change.',
   activate_v13_scorer_cohort:
-    'One-way pin of three exact managed V13 validators after nonmembers pause and live tickets drain.',
+    'One-way pin of 3-16 exact managed V13 validators after nonmembers pause and live tickets drain.',
   rotate_v13_scorer_cohort:
-    'Rotate pinned V13 cohort to unanimous signed packet after all V13 tickets drain; keeps pin history.',
+    'Append a V13 cohort rotation changing packet and/or 3-16 members; majority-signed, guarded, keeps history.',
   schedule_l2_report_canary:
     'Queue one isolated exact-artifact non-authoritative report. reviewSettingsRevision pins only canary scopes, never node scopes. See tool help.',
 
@@ -992,10 +992,11 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read source range (max 400 lines); locate via search_screening_source or finding citations. Artifact scope.',
 }
 
-// Exactly three scorer hotkeys as a plain bounded array. z.tuple serializes to
-// draft-07 array-form `items`, which some MCP clients (Codex) cannot import, so
-// they silently drop the whole tool from a refreshed catalog (#2490, #2559).
-const v13ScorerCohortHotkeysSchema = z.array(z.string()).length(3)
+// Three to sixteen scorer hotkeys as a plain bounded array. The per-agent
+// quorum stays three. z.tuple serializes to draft-07 array-form `items`, which
+// some MCP clients (Codex) cannot import, so they silently drop the whole tool
+// from a refreshed catalog (#2490, #2559).
+const v13ScorerCohortHotkeysSchema = z.array(z.string()).min(3).max(16)
 
 export function createBackroomMcpServer(props: McpGrantProps) {
   if (observerGrant(props.scopes)) return createTreasuryObserverServer(props)
@@ -3077,7 +3078,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_v13_scorer_cohort',
     {
       title: 'Get V13 scorer cohort pin',
-      description: 'Read the exact immutable three-validator scorer pin and signed runtime packet. Null means no pin and no signed L2 lease. Requires backroom:read.',
+      description: 'Read the exact immutable scorer pin (3-16 validators; each agent is still scored by three distinct members) and its last operator-approved signed runtime packet. Null means no pin and no signed L2 lease. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },
@@ -3088,7 +3089,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_v13_scorer_cohort_preflight',
     {
       title: 'Get V13 scorer cohort preflight',
-      description: 'Read current signed packets, accepting capacity, issuance pauses, and live V13 ticket counts for exact activation. Requires backroom:read.',
+      description: 'Read current signed packets, accepting capacity, issuance pauses, live V13 ticket counts and pin membership per validator, plus the pinned hotkeys and the authority packet (signed by a strict majority, and at least three, of the live members) with its signers. Only signers of the authority packet are issued V13 work. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },
@@ -3099,7 +3100,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_v13_scorer_cohort_history',
     {
       title: 'Get V13 scorer cohort history',
-      description: 'Read the original immutable pin and all append-only packet rotations. Requires backroom:read.',
+      description: 'Read the original immutable pin and all append-only packet and membership rotations. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },
@@ -3110,7 +3111,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_v13_report_only_current_packet',
     {
       title: 'Get V13 report-only current packet',
-      description: 'Read unanimous current signed scorer packet for the pinned three validators, including whether it matches the effective primary pin. Never changes authority. Requires backroom:read.',
+      description: 'Read the current authority packet of the pinned members (signed by a live majority of at least three) while at least three of its signers are routable, the routable hotkeys, and whether it matches the effective primary pin. Never changes authority. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },
@@ -3121,7 +3122,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'activate_v13_scorer_cohort',
     {
       title: 'Activate V13 scorer cohort pin',
-      description: 'One-way pin of three sorted exact managed validator hotkeys and their signed scorer packet. The Platform refuses unless all other fresh V13 validators are issuance-paused and all nonmember V13 tickets have drained. Requires current validator slot settings revision/checksum and confirmation PIN V13 SCORER COHORT. Requires backroom:write.',
+      description: 'One-way pin of 3-16 sorted, distinct, exact managed validator hotkeys and their signed scorer packet; every member must sign it. The Platform refuses unless all other fresh V13 validators are issuance-paused and all nonmember V13 tickets have drained. Requires current validator slot settings revision/checksum and confirmation PIN V13 SCORER COHORT. Requires backroom:write.',
       inputSchema: z.object({
         hotkeys: v13ScorerCohortHotkeysSchema,
         packet: z.object({
@@ -3144,8 +3145,8 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'rotate_v13_scorer_cohort',
     {
-      title: 'Rotate V13 scorer cohort packet',
-      description: 'Append one guarded scorer packet rotation for the same three sorted validators. Requires exact current packet and rotation ID, fresh unanimous signed target packet, current slot settings, accepting members, paused nonmembers, zero live V13 tickets, and confirmation ROTATE V13 SCORER PACKET. Requires backroom:write.',
+      title: 'Rotate V13 scorer cohort packet or membership',
+      description: 'Append one guarded rotation that changes the scorer packet, the 3-16 sorted member hotkeys, or both. Requires the exact current packet, rotation ID and (to change membership) expectedCurrentHotkeys; every new member signing the target packet, unpaused and accepting; the target signed by a live majority of at least three proposed members, three of them routable; current slot settings; paused nonmembers; and confirmation ROTATE V13 SCORER PACKET. A packet change needs zero live V13 tickets; a membership-only change needs only removed members drained. Requires backroom:write.',
       inputSchema: z.object({
         hotkeys: v13ScorerCohortHotkeysSchema,
         packet: z.object({
@@ -3163,6 +3164,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           injected_keys: z.array(z.string()).min(1),
         }),
         expectedCurrentRotationId: z.number().int().min(1).optional(),
+        expectedCurrentHotkeys: v13ScorerCohortHotkeysSchema.optional(),
         expectedSlotSettingsRevision: z.number().int().min(1),
         expectedSlotSettingsChecksum: z.string().regex(/^[0-9a-f]{64}$/),
         reason: z.string().min(8),
