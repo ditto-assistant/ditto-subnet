@@ -87,18 +87,18 @@ def if_none_match(header: str | None, etag: str) -> bool:
     """Return ``True`` when ``If-None-Match`` matches ``etag`` (so serve 304).
 
     Accepts the comma-separated list form, the ``*`` wildcard, and weak
-    validators (``W/"..."``); we compare ignoring the weak prefix since our
-    strong ETag is byte-stable.
+    validators (``W/"..."``). If-None-Match uses weak comparison (RFC 9110
+    13.1.2), so the prefix is ignored on both sides: an endpoint may declare a
+    weak ETag of its own.
     """
     if not header:
         return False
+    current = etag.removeprefix("W/")
     for raw in header.split(","):
         token = raw.strip()
         if token == "*":
             return True
-        if token.startswith("W/"):
-            token = token[2:]
-        if token == etag:
+        if token.removeprefix("W/") == current:
             return True
     return False
 

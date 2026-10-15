@@ -38,6 +38,7 @@ class _RefreshGate:
 
 
 _PINNED_ETAG = '"' + "ab" * 32 + '"'
+_WEAK_ETAG = 'W/"' + "cd" * 16 + '"'
 
 
 def _build(
@@ -59,6 +60,7 @@ def _build(
         "outside": 0,
         "big": 0,
         "pinned": 0,
+        "weak": 0,
     }
 
     @app.get("/api/v1/public/pinned")
@@ -74,6 +76,15 @@ def _build(
                 "Cache-Control": "public, max-age=10",
                 "X-Content-Type-Options": "nosniff",
             },
+        )
+
+    @app.get("/api/v1/public/weak")
+    async def weak() -> Response:
+        calls["weak"] += 1
+        return Response(
+            content=b"TEST FIXTURE ONLY",
+            media_type="text/plain",
+            headers={"ETag": _WEAK_ETAG, "Cache-Control": "public, max-age=10"},
         )
 
     @app.get("/api/v1/public/cached")
@@ -435,3 +446,22 @@ async def test_endpoint_validator_and_hardening_headers_survive_the_cache(
     assert revalidated.status_code == 304
     assert revalidated.headers["etag"] == _PINNED_ETAG
     assert calls["pinned"] == 1
+
+
+async def test_declared_weak_etag_revalidates_with_either_form(clock: _Clock) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        miss = await client.get(
+            "/api/v1/public/weak", headers={"If-None-Match": _WEAK_ETAG}
+        )
+        echoed = await client.get(
+            "/api/v1/public/weak", headers={"If-None-Match": _WEAK_ETAG}
+        )
+        strong = await client.get(
+            "/api/v1/public/weak", headers={"If-None-Match": _WEAK_ETAG[2:]}
+        )
+    # A client echoing the endpoint's own weak validator must get a 304.
+    for response in (miss, echoed, strong):
+        assert response.status_code == 304
+        assert response.headers["etag"] == _WEAK_ETAG
+    assert calls["weak"] == 1
