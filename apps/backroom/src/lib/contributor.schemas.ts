@@ -5,7 +5,8 @@ const signature = z.string().regex(/^[0-9a-fA-F]{128}$/)
 const keyKind = z.enum(['hotkey', 'coldkey'])
 export const claModeSchema = z.enum(['off', 'shadow', 'enforce'])
 export const contributorHotkeyInputSchema = z.object({ hotkey: z.string().min(1).max(128) })
-export const githubAccountInputSchema = z.object({ githubUserId: z.number().int().positive() })
+// Platform stores int64, but an id above 2^53 cannot round-trip a JS number.
+export const githubAccountInputSchema = z.object({ githubUserId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) })
 
 const githubLinkSchema = z.object({
   link_id: z.string().uuid(), netuid: z.number().int(), hotkey: z.string(), coldkey: z.string(),
