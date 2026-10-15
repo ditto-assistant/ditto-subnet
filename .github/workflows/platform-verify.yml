@@ -102,7 +102,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --locked --group dev --python 3.12
+        run: uv sync --locked --group dev --group browser --python 3.12
 
       - name: ruff format check
         run: uv run ruff format --check .
@@ -122,7 +122,7 @@ jobs:
       # validate the previous contract instead of this commit's.
       - name: Rebuild the screening protocol path dependency
         run: >-
-          uv sync --locked --group dev --python 3.12
+          uv sync --locked --group dev --group browser --python 3.12
           --reinstall-package ditto-screening-protocol
 
       # Run from apps/platform: the script bootstraps sys.path itself but
@@ -235,7 +235,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --locked --group dev --python 3.12
+        run: uv sync --locked --group dev --group browser --python 3.12
 
       - name: Set up Go for hosted start integration
         if: matrix.suite == 'api-server'

@@ -1,4 +1,8 @@
-"""Real Chromium enforces OAuth redirect CSP and constructs consent headers."""
+"""Real Chromium enforces OAuth redirect CSP and constructs consent headers.
+
+Needs the `browser` dependency group: `uv sync --group dev --group browser`,
+then `uv run playwright install chromium`.
+"""
 
 from __future__ import annotations
 
@@ -13,11 +17,24 @@ import bittensor
 import httpx
 import pytest
 import uvicorn
-from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import async_playwright
 
 from ditto.api_server.github_link import GithubLinkClient
 from ditto.tests.api_server.endpoints.test_miner_github_link import _sign_in, setup
+
+try:
+    from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api import async_playwright
+except ImportError:
+    # CI installs the group and sets DITTO_REQUIRE_BROWSER, so it never skips.
+    if os.environ.get("DITTO_REQUIRE_BROWSER", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        raise
+    pytest.skip(
+        "the browser dependency group is not installed", allow_module_level=True
+    )
 
 
 def _browser_required() -> bool:
