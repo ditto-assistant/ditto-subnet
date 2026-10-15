@@ -146,17 +146,23 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
         assert legacy_reserved_retry.status_code == 200, legacy_reserved_retry.text
         assert legacy_reserved_retry.json()["ok"]
         assert not legacy_reserved_retry.json()["payment_required"]
-        for name in (None, "different-name"):
-            non_exact = await client.post(
-                "/api/v1/upload/check", json={**recovery, "name": name}
+        legacy_unnamed = await client.post(
+            "/api/v1/upload/check", json={**recovery, "name": None}
+        )
+        assert legacy_unnamed.status_code == 200, legacy_unnamed.text
+        assert legacy_unnamed.json()["ok"]
+        assert not legacy_unnamed.json()["payment_required"]
+        # Any other upload on the assigned proof is the replay the multipart
+        # commit reports before its CLA gate; signing could never fix it.
+        for change in (
+            {"name": "different-name"},
+            _signed_request_body(keypair=alice, sha256="ab" * 32),
+        ):
+            replay = await client.post(
+                "/api/v1/upload/check", json={**recovery, **change}
             )
-            assert non_exact.status_code == 200, non_exact.text
-            if name is None:
-                assert non_exact.json()["ok"]
-                assert not non_exact.json()["payment_required"]
-            else:
-                assert not non_exact.json()["ok"]
-                assert 1106 in non_exact.json()["error_codes"]
+            assert replay.status_code == 402, replay.text
+            assert replay.json()["error_code"] == 3207
         credit_block = "0x" + "32" * 32
         async with session_maker() as session, session.begin():
             session.add(

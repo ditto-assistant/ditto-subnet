@@ -220,15 +220,11 @@ async def _cla_check_message(
             block_hash=body.payment_block_hash,
             extrinsic_index=body.payment_extrinsic_index,
         )
-    # Pre-CLA clients omit the optional name. They may still recover a paid
-    # exact retry; the multipart commit checks the stored name and rejects any
-    # other upload on this proof as a 3207 replay before the CLA gate.
-    if (
-        existing is not None
-        and existing.miner_hotkey == body.hotkey
-        and existing.sha256 == body.sha256
-        and (body.name is None or existing.name == body.name)
-    ):
+    # The multipart commit settles an already assigned proof before its CLA
+    # gate: an exact retry returns the original artifact, and any other upload
+    # on it is a 3207 replay that signing cannot fix. The proof check below
+    # reports that replay, so consent is never the answer for such a proof.
+    if existing is not None:
         return None
     return cla.message
 
@@ -369,10 +365,13 @@ async def check(
                     block_hash=body.payment_block_hash,
                     extrinsic_index=body.payment_extrinsic_index,
                 )
+                # Pre-CLA clients omit the optional name; the multipart commit
+                # still compares the stored one.
                 if not (
                     existing is not None
                     and existing.miner_hotkey == body.hotkey
                     and existing.sha256 == body.sha256
+                    and (body.name is None or existing.name == body.name)
                 ):
                     raise PaymentReplayedError("payment proof already used")
                 recovery_payment_verified = True
