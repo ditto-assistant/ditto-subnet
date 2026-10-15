@@ -5701,7 +5701,7 @@ CREATE TABLE public.v13_scorer_cohort_pins (
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_settings_check_4272 CHECK ((length(slot_settings_checksum) = 64)),
-    CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_three_hotkeys_check CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND (jsonb_array_length(hotkeys) = 3))),
+    CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_three_hotkeys_check CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND ((jsonb_array_length(hotkeys) >= 3) AND (jsonb_array_length(hotkeys) <= 16)))),
     CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_version_check CHECK ((bench_version = 13))
 );
 
@@ -5742,7 +5742,7 @@ CREATE TABLE public.v13_scorer_cohort_rotations (
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_sett_c460 CHECK ((length(slot_settings_checksum) = 64)),
-    CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_thre_54aa CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND (jsonb_array_length(hotkeys) = 3))),
+    CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_thre_54aa CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND ((jsonb_array_length(hotkeys) >= 3) AND (jsonb_array_length(hotkeys) <= 16)))),
     CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_vers_0d33 CHECK ((bench_version = 13))
 );
 
