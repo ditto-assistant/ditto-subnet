@@ -191,3 +191,31 @@ def test_all_confirmation_prompts_use_stderr(name, kwargs, monkeypatch, capsys):
     output = capsys.readouterr()
     assert "[y/N]" in output.err
     assert "[y/N]" not in output.out
+
+
+class _Recorder(io.StringIO):
+    """A piped (block-buffered) stream that records when it is flushed."""
+
+    def __init__(self, name: str, log: list[str]) -> None:
+        super().__init__()
+        self.name, self.log = name, log
+
+    def write(self, text: str) -> int:
+        self.log.append(f"{self.name} write {text!r}")
+        return super().write(text)
+
+    def flush(self) -> None:
+        self.log.append(f"{self.name} flush")
+
+
+def test_prompt_follows_the_flushed_preview(monkeypatch) -> None:
+    log: list[str] = []
+    monkeypatch.setattr("sys.stdout", _Recorder("stdout", log))
+    monkeypatch.setattr("sys.stderr", _Recorder("stderr", log))
+    monkeypatch.setattr(builtins, "input", lambda: "y")
+    print("preview the miner must see")
+
+    assert confirm.prompt_input("Confirm? ") == "y"
+
+    # The preview reaches the terminal before the prompt that asks about it.
+    assert log.index("stdout flush") < log.index("stderr write 'Confirm? '")

@@ -40,7 +40,12 @@ _RAO_PER_TAO = Decimal(1_000_000_000)
 
 
 def prompt_input(prompt: str) -> str:
-    """Read input without contaminating machine-readable stdout."""
+    """Read input without contaminating machine-readable stdout.
+
+    Flush stdout first: a piped stdout is block-buffered, and the preview a
+    miner is asked to approve must appear before the prompt that asks.
+    """
+    sys.stdout.flush()
     print(prompt, file=sys.stderr, end="", flush=True)
     return input()
 
