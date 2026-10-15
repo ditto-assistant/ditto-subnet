@@ -24,6 +24,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
 
@@ -643,9 +644,21 @@ async def upload_agent(
             )
         raise PaymentReplayedError("payment proof already used by a different upload")
 
+    # From here on, a concurrent identical request that commits first can
+    # cause a refusal (consent, the proof, the admission). Every such refusal
+    # goes through the exact-retry check so the loser reports the original.
+    retry_identity = _RetryIdentity(
+        payment_block_hash=payment_block_hash,
+        payment_extrinsic_index=payment_extrinsic_index,
+        hotkey=hotkey,
+        name=name,
+        sha256=sha256,
+    )
     cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
     if not cla.allowed:
-        raise ClaConsentRequired(cla.message)
+        return await _refuse_unless_exact_retry(
+            session, ClaConsentRequired(cla.message), retry_identity
+        )
 
     payment_record = await get_evaluation_payment_for_proof(
         session,
@@ -653,7 +666,11 @@ async def upload_agent(
         extrinsic_index=payment_extrinsic_index,
     )
     if payment_record and payment_record.agent_id is not None:
-        raise PaymentReplayedError("payment proof already used by a different upload")
+        return await _refuse_unless_exact_retry(
+            session,
+            PaymentReplayedError("payment proof already used by a different upload"),
+            retry_identity,
+        )
     if payment_record and payment_record.miner_hotkey != hotkey:
         raise PaymentReplayedError("payment credit belongs to a different hotkey")
     if payment_record:
@@ -756,12 +773,7 @@ async def upload_agent(
                     )
             except PaymentReplayedError:
                 recovered = await _exact_retry_of_accepted_upload(
-                    session,
-                    payment_block_hash=payment_block_hash,
-                    payment_extrinsic_index=payment_extrinsic_index,
-                    hotkey=hotkey,
-                    name=name,
-                    sha256=sha256,
+                    session, retry_identity
                 )
                 if recovered is not None:
                     return recovered
@@ -926,14 +938,7 @@ async def upload_agent(
         # admission (cooldown) or a policy change landed in between. The
         # transaction rolled this request back, so report the original upload
         # if this request is its exact retry.
-        recovered = await _exact_retry_of_accepted_upload(
-            session,
-            payment_block_hash=payment_block_hash,
-            payment_extrinsic_index=payment_extrinsic_index,
-            hotkey=hotkey,
-            name=name,
-            sha256=sha256,
-        )
+        recovered = await _exact_retry_of_accepted_upload(session, retry_identity)
         if recovered is not None:
             return recovered
         raise
@@ -951,14 +956,29 @@ async def upload_agent(
     )
 
 
+@dataclass(frozen=True)
+class _RetryIdentity:
+    """What makes a request an exact retry of an accepted upload."""
+
+    payment_block_hash: str
+    payment_extrinsic_index: int
+    hotkey: str
+    name: str
+    sha256: str
+
+
+async def _refuse_unless_exact_retry(
+    session: AsyncSession, refusal: Exception, identity: _RetryIdentity
+) -> UploadAgentResponse:
+    """Report the original upload if this request repeats it, else refuse."""
+    recovered = await _exact_retry_of_accepted_upload(session, identity)
+    if recovered is not None:
+        return recovered
+    raise refusal
+
+
 async def _exact_retry_of_accepted_upload(
-    session: AsyncSession,
-    *,
-    payment_block_hash: str,
-    payment_extrinsic_index: int,
-    hotkey: str,
-    name: str,
-    sha256: str,
+    session: AsyncSession, identity: _RetryIdentity
 ) -> UploadAgentResponse | None:
     """The original agent when this request exactly repeats an accepted upload.
 
@@ -969,13 +989,13 @@ async def _exact_retry_of_accepted_upload(
     """
     existing = await get_agent_for_payment_proof(
         session,
-        block_hash=payment_block_hash,
-        extrinsic_index=payment_extrinsic_index,
+        block_hash=identity.payment_block_hash,
+        extrinsic_index=identity.payment_extrinsic_index,
     )
     if not existing or (existing.miner_hotkey, existing.name, existing.sha256) != (
-        hotkey,
-        name,
-        sha256,
+        identity.hotkey,
+        identity.name,
+        identity.sha256,
     ):
         return None
     assert existing.version is not None

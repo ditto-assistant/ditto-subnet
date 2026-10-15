@@ -315,7 +315,9 @@ async def test_final_consent_gate_runs_last_and_rolls_back_every_write(
     assert await _row_counts(session_maker) == (0, 0, 0, 0)
 
 
-@pytest.mark.parametrize("refused_at", ["duplicate_credit", "admission"])
+@pytest.mark.parametrize(
+    "refused_at", ["consent_pregate", "payment_record", "duplicate_credit", "admission"]
+)
 async def test_lost_race_to_an_identical_retry_returns_the_original(
     app, client, session_maker, object_storage, monkeypatch, refused_at
 ):
@@ -351,11 +353,26 @@ async def test_lost_race_to_an_identical_retry_returns_the_original(
             return None if lookups == 1 else await real_lookup(*args, **kwargs)
 
         monkeypatch.setattr(upload_endpoint, "get_agent_for_payment_proof", lookup)
-        monkeypatch.setattr(
-            upload_endpoint,
-            "get_evaluation_payment_for_proof",
-            AsyncMock(return_value=None),
-        )
+        if refused_at == "consent_pregate":
+            # A policy change refuses the loser before its payment record.
+            real_gate = upload_endpoint.evaluate_cla_gate
+
+            async def refusing_gate(session, **kwargs):
+                return replace(
+                    await real_gate(session, **kwargs),
+                    allowed=False,
+                    message="fixture consent refusal",
+                )
+
+            monkeypatch.setattr(upload_endpoint, "evaluate_cla_gate", refusing_gate)
+        if refused_at != "payment_record":
+            # The payment record is real only where the winner's assignment
+            # itself is the refusal.
+            monkeypatch.setattr(
+                upload_endpoint,
+                "get_evaluation_payment_for_proof",
+                AsyncMock(return_value=None),
+            )
         if refused_at == "admission":
             # The duplicate lookup also ran early; the winner's admission
             # then refuses the loser inside its transaction.
