@@ -62,7 +62,17 @@ def add_subparser(
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Sign the printed pairing after the GitHub browser holder approves it.",
+        help=(
+            "Sign the pairing without a prompt once the browser approves it; "
+            "requires --expect-github-id."
+        ),
+    )
+    parser.add_argument(
+        "--expect-github-id",
+        type=_github_user_id,
+        default=None,
+        metavar="ID",
+        help="Numeric GitHub account ID that must approve the link.",
     )
     parser.add_argument("--json", action="store_true")
     subs = parser.add_subparsers(dest="github_command")
@@ -90,6 +100,16 @@ def add_subparser(
     unlink.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     unlink.set_defaults(func=run, github_command="unlink")
     return parser
+
+
+def _github_user_id(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if not 1 <= number <= 9223372036854775807:
+        raise argparse.ArgumentTypeError("expected a positive numeric GitHub user id")
+    return number
 
 
 def _print(link, as_json: bool) -> None:
@@ -210,6 +230,12 @@ def run(args: argparse.Namespace) -> int:
                     else "GitHub link revoked; its signed history is retained"
                 )
                 return 0
+            if args.yes and args.expect_github_id is None:
+                # Whoever opens the launch URL first approves the account; an
+                # unattended run must not sign an account nobody checked.
+                raise MinerCliError(
+                    "--yes requires --expect-github-id <numeric GitHub user id>"
+                )
             names = _wallet_names(args)
             started = client.start_github_link(token=token)
             print(
@@ -257,6 +283,24 @@ def run(args: argparse.Namespace) -> int:
                         f"{attempt.github_user_id}); miner hotkey {hotkey}",
                         file=sys.stderr,
                     )
+                    if (
+                        args.expect_github_id is not None
+                        and attempt.github_user_id != args.expect_github_id
+                    ):
+                        raise MinerCliError(
+                            "the approving GitHub account is not the expected id "
+                            f"{args.expect_github_id}; not linked"
+                        )
+                    current = client.get_github_link(token=token).link
+                    if (
+                        current is not None
+                        and current.github_user_id != attempt.github_user_id
+                    ):
+                        print(
+                            "Linking revokes the active link to "
+                            f"@{current.github_login} (id {current.github_user_id})",
+                            file=sys.stderr,
+                        )
                     if (
                         not args.yes
                         and prompt_input(

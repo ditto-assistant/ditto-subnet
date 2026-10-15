@@ -46,6 +46,7 @@ def args(**over):
         "no_browser": True,
         "wait": 10,
         "yes": True,
+        "expect_github_id": 100,
         "key_kind": "hotkey",
     }
     base.update(over)
@@ -540,6 +541,70 @@ def test_github_prints_verified_account_before_loading_private_wallet(
     )
     live.hotkey.sign.assert_called_once()
     assert api.get_github_link_attempt.call_count == (2 if transient else 1)
+
+
+@pytest.mark.parametrize("case", ["no_expected_id", "other_account", "replaces"])
+def test_unattended_github_link_signs_only_the_expected_account(capsys, case):
+    api = MagicMock()
+    api.__enter__.return_value = api
+    attempt = uuid4()
+    api.start_github_link.return_value = GithubLinkStart(
+        netuid=118,
+        attempt_id=attempt,
+        authorize_url="https://dittobench.ai/fixture",
+        expires_in=600,
+    )
+    api.get_github_link_attempt.return_value = GithubLinkAttemptStatus(
+        attempt_id=attempt,
+        status="accepted",
+        github_user_id=200 if case == "other_account" else 100,
+        github_login="someone-else" if case == "other_account" else "miner-fixture",
+    )
+    api.get_github_link.return_value = SimpleNamespace(
+        netuid=118,
+        link=SimpleNamespace(
+            link_id=uuid4(), github_login="previous-account", github_user_id=300
+        ),
+    )
+    api.confirm_github_link.return_value = None
+    handle, live = wallet()
+    with (
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture-session", "hotkey": KEY.ss58_address},
+        ),
+        patch.object(link_github, "load_wallet", return_value=(handle, live)),
+        patch.object(link_github, "ApiClient", return_value=api),
+    ):
+        code = link_github.run(
+            args(expect_github_id=None if case == "no_expected_id" else 100)
+        )
+    err = capsys.readouterr().err
+    if case == "replaces":
+        assert code == 0
+        assert "revokes the active link to @previous-account (id 300)" in err
+        api.confirm_github_link.assert_called_once()
+        return
+    assert code == 1
+    if case == "no_expected_id":
+        assert "--yes requires --expect-github-id" in err
+        api.start_github_link.assert_not_called()
+    else:
+        assert "not the expected id 100; not linked" in err
+    live.hotkey.sign.assert_not_called()
+    api.confirm_github_link.assert_not_called()
+
+
+def test_expected_github_id_must_be_a_positive_number():
+    parser = _build_parser()
+    assert (
+        parser.parse_args(["link-github", "--expect-github-id", "42"]).expect_github_id
+        == 42
+    )
+    for value in ("0", "-1", "octocat"):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["link-github", "--expect-github-id", value])
 
 
 @pytest.mark.parametrize("wait,expiry,timeout", [(1, 600, 1), (7200, 7200, 600)])
