@@ -62,6 +62,11 @@ describe('platformAdminWrite decides every outcome once', () => {
     await expect(write(readBacks[seen])).resolves.toEqual(outcome)
   })
 
+  it('fails as not applied when an unreadable 2xx meets a superseding write', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(answers.unreadable()))
+    await expect(write(readBacks.superseded)).rejects.toThrow(NothingAppliedError)
+  })
+
   it.each([
     ['not sent (no admin token)', () => { delete process.env.DITTO_ADMIN_API_TOKEN; return vi.fn() }, Error, 0],
     ['unreachable', () => vi.fn().mockRejectedValueOnce(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } })), PlatformAdminError, 1],

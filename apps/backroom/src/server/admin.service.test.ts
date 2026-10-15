@@ -6132,6 +6132,14 @@ describe('verified contributors and CLA rollout', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2)
     })
 
+    it('fails as not applied when an unreadable 2xx meets a revision by another operator', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({ unexpected: true }))
+        .mockResolvedValueOnce(control({ ...claShadowRevisionFixture, actor: 'someone-else@omniaura.ai' })))
+      await expect(updateClaPolicy('operator@omniaura.ai', input))
+        .rejects.toThrow('Revision 1 was already written by someone-else@omniaura.ai, so this write cannot have applied.')
+    })
+
     it('finds its revision beyond the first history page', async () => {
       process.env.DITTO_ADMIN_API_TOKEN = 'secret'
       const later = { ...claShadowRevisionFixture, revision: 31, parent_revision: 30, actor: 'someone-else@omniaura.ai' }

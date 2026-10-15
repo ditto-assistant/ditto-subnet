@@ -87,9 +87,15 @@ export async function platformAdminWrite<T>(
   }
   const value = options.parse(payload)
   if (value !== null) return { state: 'committed', value }
-  // Platform answers 2xx only after committing; settle the unreadable body.
+  // Platform answers 2xx only after committing; settle the unreadable body. A
+  // superseded target means the 2xx was not Platform committing this write.
   const seen = await tryReadBack(options.readBack)
   if (seen?.state === 'applied') return { state: 'committed', value: seen.value }
+  if (seen?.state === 'superseded') {
+    throw new NothingAppliedError(
+      `Platform reported success but returned an unreadable response. ${seen.detail}, so this write cannot have applied.`,
+    )
+  }
   return {
     state: 'unknown',
     reason: 'Platform reported success but returned an unreadable response, so the write probably committed',
