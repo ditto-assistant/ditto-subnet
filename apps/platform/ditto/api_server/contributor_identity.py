@@ -10,8 +10,8 @@ from fastapi import Header, HTTPException
 
 from ditto.api_models.contributor_identity import KeyKind
 from ditto.api_server.attestation import (
-    MAX_ATTESTATION_AGE,
-    MAX_ISSUED_AT_SKEW,
+    AttestationRejected,
+    check_freshness,
     verify_signature,
 )
 from ditto.chain import ExtrinsicNotFoundError
@@ -60,11 +60,17 @@ def check_contributor_proof(
     now: datetime,
 ) -> None:
     if issued_at.tzinfo is None:
+        # check_freshness would read a naive time as local time.
         raise ContributorProofRejected("issued_at must include a timezone")
-    if issued_at > now + MAX_ISSUED_AT_SKEW:
-        raise ContributorProofRejected("issued_at is too far in the future")
-    if issued_at < now - MAX_ATTESTATION_AGE:
-        raise ContributorProofRejected("signature has expired; sign again")
+    # Share the attestation window so the two proofs cannot drift apart.
+    try:
+        check_freshness(issued_at=issued_at, now=now)
+    except AttestationRejected:
+        raise ContributorProofRejected(
+            "issued_at is too far in the future"
+            if issued_at > now
+            else "signature has expired; sign again"
+        ) from None
     if key_kind == "hotkey" and signer != hotkey:
         raise ContributorProofRejected("hotkey proof signer must be the named hotkey")
     if not verify_signature(signer=signer, payload=payload, signature_hex=signature):
