@@ -55,7 +55,8 @@ front-load artifact downloads.
 8. **Write rulings** through the batched court (create upload, PUT, preview,
    execute with `APPLY ATH RULINGS BATCH`). Every item must be `ready`. A
    reject carries `evidence_references`; cite the generator lines too when the
-   finding is an inverse of it.
+   finding is an inverse of it. Clean rows get a `clear`, which records a
+   hold-free attestation (see Gotchas).
 9. **Roll.** Re-read `get_leaderboard`. If `ranked_count` did not drop after a
    reject, a sibling re-entered. Repeat from step 1 for every new top-5 or
    recipient row. Sibling chains on one hotkey can run several rounds; review
@@ -65,14 +66,24 @@ front-load artifact downloads.
 
 ## Gotchas
 
-- **Clears need a held row.** `clear` on a `scored` row previews as
-  `conflict: agent is scored, not held`. Recording a clear means an `open` batch
-  first, which takes the row (and, for the champion, the crown) off the board
-  until the clear lands. Ask the operator before opening paid rows. Otherwise
-  report the rows as reviewed-clean and keep the drafted reasons.
+- **Clean rows are attested, not held.** `clear` on an unheld `scored` or
+  `live` row with no review previews as `steps: ["attest"]` ("will clear without
+  holding"): the row stays on the board and the crown cannot move. Never `open`
+  a paid row just to record a clear. Keep clears in their own batch.
 - **Split mixed batches.** The preview token binds the whole document. Drop the
   blocked items, upload again and re-preview rather than executing a partly
   blocked token.
+- **Evaluating rows race the guard.** A row one score short of quorum can
+  finalize between preview and execute; execute then fails it with `score count
+  changed`. Re-read the score count, re-guard and re-preview; the finalized row
+  may now be a paid board row.
+- **Copy holds can be module splits.** A hold whose diff shows a few large
+  files removed and many small files added is usually the same engine split
+  into modules. Compare normalized line sets and long comment lines, check the
+  public starter kits, the source-release gate (only emission-confirmed kings
+  are public), direction and `get_owner_attestations`. Cross-owner reproduction
+  of an unreleased engine with no owner link is a provenance reject (helios v1
+  `8c232fcc`) with no I1–I8 finding.
 - **Rejects on evaluating rows are allowed** (`["open","reject"]`, PR #2906);
   a bare `open` still needs scored or live.
 - **Same name is not same miner.** Precedents mentioning a "delta v5" or
