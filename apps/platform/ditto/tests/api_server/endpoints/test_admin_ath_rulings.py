@@ -1534,6 +1534,7 @@ async def test_single_row_attest_route_is_guarded_and_idempotent(
     )
     assert no_actor.status_code == 422, no_actor.text
     assert (await _review(maker, champion_id))[0] is None
+    payer = "5ChampionOwner"
     async with maker() as session, session.begin():
         session.add(
             EvaluationPayment(
@@ -1541,7 +1542,7 @@ async def test_single_row_attest_route_is_guarded_and_idempotent(
                 extrinsic_index=0,
                 agent_id=champion_id,
                 miner_hotkey="5Champion",
-                miner_coldkey="5ChampionOwner",
+                miner_coldkey=payer,
                 amount_rao=1,
                 dest_address="5Treasury",
                 timestamp=_T0,
@@ -1553,7 +1554,7 @@ async def test_single_row_attest_route_is_guarded_and_idempotent(
     assert first.json()["idempotent"] is False
     assert first.json()["agent_status"] == "scored"
     assert first.json()["review"]["resolution"] == "clear"
-    assert first.json()["review"]["miner_coldkey"] == "5ChampionOwner"
+    assert first.json()["review"]["miner_coldkey"] == payer
     again = await client.post(url.format(champion_id), json=payload, headers=_HEADERS)
     assert again.status_code == 200, again.text
     assert again.json()["idempotent"] is True
