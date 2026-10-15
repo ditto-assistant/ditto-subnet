@@ -436,8 +436,18 @@ async def test_cleanup_preserves_original_rejection_and_blocks_success(
     assert TOKEN not in caplog.text and SECRET not in caplog.text
 
 
-async def test_linked_attempt_is_terminal_but_session_cleanup_remains_allowed(
-    app, client, session_maker
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"status": "failed"},
+        {"github_login": "someone-else"},
+        {"github_user_id": 101},
+        {"hotkey": "5" + "F" * 47},
+        {"session_id": uuid4()},
+    ],
+)
+async def test_linked_attempt_is_immutable_but_session_cleanup_remains_allowed(
+    app, client, session_maker, change
 ):
     setup(app, session_maker)
     alice = bittensor.Keypair.create_from_uri("//Alice")
@@ -452,8 +462,9 @@ async def test_linked_attempt_is_terminal_but_session_cleanup_remains_allowed(
     async with session_maker() as session:
         attempt = await session.get(MinerGithubLinkAttempt, UUID(started["attempt_id"]))
         assert attempt is not None and attempt.status == "linked"
-        attempt.status = "failed"
-        with pytest.raises(DBAPIError, match="linked GitHub attempts are terminal"):
+        for column, value in change.items():
+            setattr(attempt, column, value)
+        with pytest.raises(DBAPIError, match="linked GitHub attempts are immutable"):
             await session.flush()
         await session.rollback()
     async with session_maker() as session, session.begin():

@@ -237,18 +237,24 @@ def upgrade() -> None:
         "ON miner_github_links FOR EACH STATEMENT "
         "EXECUTE FUNCTION contributor_identity_immutable()"
     )
-    op.execute("""CREATE FUNCTION github_link_attempt_linked_terminal()
+    # A linked attempt is the provenance of an immutable link. Only the
+    # session FK may still be cleared (ON DELETE SET NULL).
+    op.execute("""CREATE FUNCTION github_link_attempt_linked_immutable()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
-          IF OLD.status = 'linked' AND NEW.status IS DISTINCT FROM OLD.status THEN
-            RAISE EXCEPTION 'linked GitHub attempts are terminal';
+          IF OLD.status = 'linked' AND (
+            to_jsonb(NEW) - 'session_id' IS DISTINCT FROM to_jsonb(OLD) - 'session_id'
+            OR (NEW.session_id IS NOT NULL
+                AND NEW.session_id IS DISTINCT FROM OLD.session_id)
+          ) THEN
+            RAISE EXCEPTION 'linked GitHub attempts are immutable';
           END IF;
           RETURN NEW;
         END $$""")
     op.execute(
-        "CREATE TRIGGER miner_github_link_attempts_linked_terminal "
-        "BEFORE UPDATE OF status ON miner_github_link_attempts FOR EACH ROW "
-        "EXECUTE FUNCTION github_link_attempt_linked_terminal()"
+        "CREATE TRIGGER miner_github_link_attempts_linked_immutable "
+        "BEFORE UPDATE ON miner_github_link_attempts FOR EACH ROW "
+        "EXECUTE FUNCTION github_link_attempt_linked_immutable()"
     )
 
 
@@ -267,4 +273,4 @@ def downgrade() -> None:
         op.drop_table(table)
     op.execute("DROP FUNCTION contributor_identity_immutable()")
     op.execute("DROP FUNCTION github_link_revocation_only()")
-    op.execute("DROP FUNCTION github_link_attempt_linked_terminal()")
+    op.execute("DROP FUNCTION github_link_attempt_linked_immutable()")
