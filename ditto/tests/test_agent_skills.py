@@ -69,6 +69,16 @@ def test_discord_sweep_routes_to_browser_triage() -> None:
     assert topic_list(topic, "skills") == ["discord-miner-triage"]
 
 
+def test_miner_parameter_questions_route_to_subnet_status() -> None:
+    for query in (
+        "what are the current parameters and payout curve",
+        "why is my agent not on the board",
+    ):
+        topic = lookup(query)[0]
+        assert topic["id"] == "subnet-status", query
+        assert topic_list(topic, "skills") == ["subnet-status", "mine"]
+
+
 def test_contributor_backlog_routes_to_review_and_delivery() -> None:
     for query in (
         "review all PRs from this contrib and merge or close them",

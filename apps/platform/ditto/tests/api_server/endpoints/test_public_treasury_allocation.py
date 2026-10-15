@@ -1,6 +1,6 @@
 """Forecasts cannot masquerade as active funding or leak billing identity."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -189,8 +189,15 @@ async def test_public_runtime_exposes_verified_control_without_funding_or_privat
         "activation_epoch",
         "allocation_matches",
     }
-    # Recording control cannot become chain routing, funds or sweep proof.
-    assert body["routing_status"] == body["sweep_status"] == "not_activated"
+    # Recorded control alone is never routing: without an enforcing pin the
+    # page reports the runtime's intent and an effective share of 0.
+    assert body["mode"] == ("shadow" if invalid else mode)
+    expected_routing = {"enforce": "scheduled", "pause": "paused"}.get(
+        mode, "not_activated"
+    )
+    assert body["routing_status"] == ("not_activated" if invalid else expected_routing)
+    assert body["routing_epoch"] is None
+    assert body["sweep_status"] == "not_activated"
     assert body["effective_service_share"] == 0
     assert "PRIVATE" not in response.text
     assert "signature" not in response.text
@@ -198,3 +205,135 @@ async def test_public_runtime_exposes_verified_control_without_funding_or_privat
         preserved = await session.get(TreasuryRuntimeRevision, revision)
         assert preserved.settings == stored_settings
         assert preserved.checksum == checksum
+
+
+@pytest.mark.asyncio
+async def test_enforcing_pin_reports_active_routing_and_its_folded_share(
+    app, client, session_maker
+):
+    from uuid import uuid4
+
+    from ditto.api_server.ledger_pin import ledger_digest
+    from ditto.db.models import LedgerEpochSnapshot
+    from ditto.tests.api_server.endpoints.test_treasury_receipt_ingress import (
+        fixture,
+        h,
+    )
+
+    app.state.session_maker = session_maker
+    pin, _ = fixture()
+    served = {"treasury_pin": pin.model_dump(mode="json")}
+    async with session_maker() as session:
+        session.add(
+            LedgerEpochSnapshot(
+                snapshot_id=uuid4(),
+                netuid=app.state.config.chain.netuid,
+                epoch_index=pin.epoch_index,
+                last_epoch_block=pin.first_block,
+                pinned_block=pin.pinned_block,
+                pinned_block_hash=h(pin.pinned_block),
+                pinned_at=datetime.now(UTC),
+                bench_version=13,
+                entries=[],
+                context={"served": served},
+                ledger_digest=ledger_digest([], served),
+            )
+        )
+        await session.commit()
+    body = (await client.get("/api/v1/public/treasury-allocation")).json()
+    assert body["routing_status"] == "active"
+    assert body["routing_epoch"] == pin.epoch_index
+    assert body["effective_service_share"] == pin.service_bps / 10_000
+    assert body["effective_service_share"] > 0
+
+
+@pytest.mark.asyncio
+async def test_unverifiable_pin_never_reports_active_routing(
+    app, client, session_maker
+):
+    from uuid import uuid4
+
+    from ditto.db.models import LedgerEpochSnapshot
+    from ditto.tests.api_server.endpoints.test_treasury_receipt_ingress import (
+        fixture,
+        h,
+    )
+
+    app.state.session_maker = session_maker
+    pin, _ = fixture()
+    async with session_maker() as session:
+        session.add(
+            LedgerEpochSnapshot(
+                snapshot_id=uuid4(),
+                netuid=app.state.config.chain.netuid,
+                epoch_index=pin.epoch_index,
+                last_epoch_block=pin.first_block,
+                pinned_block=pin.pinned_block,
+                pinned_block_hash=h(pin.pinned_block),
+                pinned_at=datetime(2020, 1, 1, tzinfo=UTC),
+                bench_version=13,
+                entries=[],
+                context={"served": {"treasury_pin": pin.model_dump(mode="json")}},
+                ledger_digest="0" * 64,
+            )
+        )
+        await session.commit()
+    body = (await client.get("/api/v1/public/treasury-allocation")).json()
+    assert body["routing_status"] == "not_activated"
+    assert body["effective_service_share"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    [
+        # An enforcing pin from an earlier epoch: validators refuse to fold it.
+        ("stale", "stale"),
+        # Just past its own epoch's end (360 blocks after the pinned block,
+        # plus a 2-minute grace): the next epoch started without a fresh pin.
+        ("previous_epoch", "stale"),
+        # A malformed stored context must not 500 the public page.
+        ("malformed", "not_activated"),
+    ],
+)
+async def test_stale_or_malformed_pin_never_reports_active_routing(
+    app, client, session_maker, context, expected
+):
+    from uuid import uuid4
+
+    from ditto.api_server.ledger_pin import ledger_digest
+    from ditto.db.models import LedgerEpochSnapshot
+    from ditto.tests.api_server.endpoints.test_treasury_receipt_ingress import (
+        fixture,
+        h,
+    )
+
+    app.state.session_maker = session_maker
+    pin, _ = fixture()
+    served = {"treasury_pin": pin.model_dump(mode="json")}
+    async with session_maker() as session:
+        session.add(
+            LedgerEpochSnapshot(
+                snapshot_id=uuid4(),
+                netuid=app.state.config.chain.netuid,
+                epoch_index=pin.epoch_index,
+                last_epoch_block=pin.first_block,
+                pinned_block=pin.pinned_block,
+                pinned_block_hash=h(pin.pinned_block),
+                pinned_at=(
+                    datetime.now(UTC) - timedelta(minutes=75)
+                    if context == "previous_epoch"
+                    else datetime(2020, 1, 1, tzinfo=UTC)
+                ),
+                bench_version=13,
+                entries=[],
+                context={"served": served} if context != "malformed" else [1, 2],
+                ledger_digest=ledger_digest([], served),
+            )
+        )
+        await session.commit()
+    response = await client.get("/api/v1/public/treasury-allocation")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["routing_status"] == expected
+    assert body["effective_service_share"] == 0

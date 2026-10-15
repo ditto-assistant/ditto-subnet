@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v0.366.1 (2026-10-15)
+
+### Bug Fixes
+
+- **platform**: Require payout ambiguity to reproduce and rescan discarded payouts
+  ([#2935](https://github.com/ditto-assistant/ditto-subnet/pull/2935),
+  [`d7bcc8e`](https://github.com/ditto-assistant/ditto-subnet/commit/d7bcc8e50963d44b965e9dc50f6247a27ae69200))
+
+
+## v0.366.0 (2026-10-14)
+
+### Bug Fixes
+
+- **platform**: Report live Gamma routing on the public treasury page
+  ([#2916](https://github.com/ditto-assistant/ditto-subnet/pull/2916),
+  [`79a5ccb`](https://github.com/ditto-assistant/ditto-subnet/commit/79a5ccb3d73bcf0062ed5afdbf77a7d04797aed6))
+
+### Features
+
+- **skills**: Add a miner-facing subnet-status skill
+  ([#2914](https://github.com/ditto-assistant/ditto-subnet/pull/2914),
+  [`ccc78d0`](https://github.com/ditto-assistant/ditto-subnet/commit/ccc78d0b16f415137ee3f756b628796f84ec61d0))
+
+
+## v0.365.0 (2026-10-14)
+
+### Features
+
+- **treasury**: Support cold-approved manual transfers up to 2500 alpha
+  ([#2923](https://github.com/ditto-assistant/ditto-subnet/pull/2923),
+  [`a408ab3`](https://github.com/ditto-assistant/ditto-subnet/commit/a408ab3acabe7f532b9bfe684567f6e04f8d35d4))
+
+
 ## v0.364.0 (2026-10-14)
 
 ### Features

@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { TreasuryManualTransferPanel } from './TreasuryManualTransferPanel'
-import { alphaRao, manualControlSchema } from '../lib/treasury-manual.schemas'
+import { alphaRao, manualControlSchema, manualMaximum } from '../lib/treasury-manual.schemas'
 
 const preview = vi.fn(), queue = vi.fn(), refresh = vi.fn(() => Promise.resolve(control))
 vi.mock('@tanstack/react-start', () => ({ useServerFn: (fn: unknown) => fn }))
@@ -16,6 +16,27 @@ const control = { enabled: true, blocked_reason: null, bridge_error: null, recur
 }
 const result = { envelope: { version: 1, collector_policy_digest: 'a'.repeat(64), destination: '5' + 'a'.repeat(47), request: { request_id: 'fa1e68a6-5213-4b25-b90a-bec349ab0a0b', after_operation: 2, source_block: 200, bucket_id: 'gm', amount_rao: 100000000, retained_alpha_rao: 55000000000, expires_block: 1000, reason: 'manual inference purchase' } }, confirmation_digest: 'b'.repeat(64), spending_authority: 'not_queued' }
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); refresh.mockImplementation(() => Promise.resolve(control)) })
+
+it('Max combines verified receipts only under the new approval and preserves reserve', () => {
+  const readiness = { policy: 'a'.repeat(64), after_operation: 2, previous_state: 'finalized',
+    bounded_claim_available: true, finalized_block: 1000, available_alpha_rao: 9000e9,
+    max_distribution_rao: 100e9, sources: [200, 300].map(source_block => ({ source_block,
+      remaining: [{ bucket_id: 'gm', holding_coldkey: control.destinations[0].holding_coldkey, alpha_rao: 1400e9 }],
+    })),
+  }
+  const base = manualControlSchema.parse({ ...control, readiness })
+  expect(manualMaximum(base, 'gm', 1e9)).toBe(100e9)
+  const ranged = manualControlSchema.parse({ ...control, readiness: { ...readiness, manual_approval: {
+    policy: { version: 1, scope: 'manual_once', collector_policy_digest: 'a'.repeat(64),
+      collector_coldkey: control.destinations[0].holding_coldkey, revision: 1,
+      min_amount_rao: 1, max_amount_rao: 2500e9, max_sources: 512 }, signature: `0x${'a'.repeat(128)}`,
+  } } })
+  expect(manualMaximum(ranged, 'gm', 1e9)).toBe(2500e9)
+  expect(manualMaximum(ranged, 'gm', 8000e9)).toBe(1000e9)
+  expect(manualMaximum(ranged, 'gm', 9001e9)).toBe(0)
+  expect(manualMaximum(ranged, 'bitsec', 1e9)).toBe(0)
+  expect(manualMaximum(ranged, 'gm', 0)).toBe(0)
+})
 
 it('previews exact integer amounts and queues only after amount and wallet confirmation', async () => {
   preview.mockResolvedValue(result); queue.mockResolvedValue({ status: 'queued' })

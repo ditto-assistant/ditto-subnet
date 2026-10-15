@@ -5,9 +5,17 @@ import json
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from .treasury import Address, Digest, Hash
+from .treasury_manual_limit import ManualLimitApproval
 
 Positive = Annotated[int, Field(gt=0, le=2**53 - 1, strict=True)]
 Nonnegative = Annotated[int, Field(ge=0, le=2**53 - 1, strict=True)]
@@ -58,6 +66,46 @@ class ManualEnvelope(Wire):
         ).hexdigest()
 
 
+class ManualSourceClaim(Wire):
+    source_block: Positive
+    amount_rao: Positive
+
+
+class ManualBatchRequest(ManualRequest):
+    sources: Annotated[list[ManualSourceClaim], Field(min_length=1, max_length=512)]
+
+    @model_validator(mode="after")
+    def exact_sources(self):
+        blocks = [s.source_block for s in self.sources]
+        if (
+            blocks != sorted(set(blocks))
+            or self.source_block != blocks[0]
+            or sum(s.amount_rao for s in self.sources) != self.amount_rao
+        ):
+            raise ValueError(
+                "manual sources must be ordered, unique and conserve amount"
+            )
+        return self
+
+
+class ManualBatchEnvelope(ManualEnvelope):
+    version: Literal[2] = 2
+    request: ManualBatchRequest
+    manual_approval: ManualLimitApproval
+
+
+ManualEnvelopeWire = Annotated[
+    ManualEnvelope | ManualBatchEnvelope, Field(discriminator="version")
+]
+
+
+_MANUAL_ENVELOPE_ADAPTER = TypeAdapter(ManualEnvelopeWire)
+
+
+def parse_manual_envelope(body):
+    return _MANUAL_ENVELOPE_ADAPTER.validate_python(body)
+
+
 class ManualPart(Wire):
     bucket_id: Bucket
     alpha_rao: Positive
@@ -77,7 +125,13 @@ class ManualReadiness(Wire):
     finalized_block: Positive
     available_alpha_rao: Annotated[int, Field(ge=0, le=2**53 - 1, strict=True)]
     max_distribution_rao: Positive
-    sources: Annotated[list[ManualSource], Field(max_length=100)]
+    sources: Annotated[list[ManualSource], Field(max_length=512)]
+    manual_approval: ManualLimitApproval | None = None
+
+
+class ManualSourceEpoch(Wire):
+    source_block: Positive
+    epoch_index: Nonnegative
 
 
 class ManualSettlement(Wire):
@@ -86,6 +140,7 @@ class ManualSettlement(Wire):
     block_hash: Hash
     extrinsic_index: Annotated[int, Field(ge=0, strict=True)]
     extrinsic_hash: Hash
+    source_epochs: Annotated[list[ManualSourceEpoch], Field(max_length=512)] = []
 
 
 class ManualBlocker(Wire):

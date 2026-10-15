@@ -23702,6 +23702,41 @@ export interface components {
             /** Per Capability */
             per_capability: components["schemas"]["LongMemCapabilityScore"][];
         };
+        /** ManualBatchEnvelope */
+        ManualBatchEnvelope: {
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /** Destination */
+            destination: string;
+            manual_approval: components["schemas"]["ManualLimitApproval"];
+            request: components["schemas"]["ManualBatchRequest"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            version: "2";
+        };
+        /** ManualBatchRequest */
+        ManualBatchRequest: {
+            /** After Operation */
+            after_operation: number;
+            /** Amount Rao */
+            amount_rao: number;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Expires Block */
+            expires_block: number;
+            /** Reason */
+            reason: string;
+            /** Request Id */
+            request_id: string;
+            /** Retained Alpha Rao */
+            retained_alpha_rao: number;
+            /** Source Block */
+            source_block: number;
+            /** Sources */
+            sources: components["schemas"]["ManualSourceClaim"][];
+        };
         /** ManualEnvelope */
         ManualEnvelope: {
             /** Collector Policy Digest */
@@ -23709,6 +23744,46 @@ export interface components {
             /** Destination */
             destination: string;
             request: components["schemas"]["ManualRequest"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            version: "1";
+        };
+        /** ManualLimitApproval */
+        ManualLimitApproval: {
+            policy: components["schemas"]["ManualLimitPolicy"];
+            /** Signature */
+            signature: string;
+        };
+        /** ManualLimitPolicy */
+        ManualLimitPolicy: {
+            /** Collector Coldkey */
+            collector_coldkey: string;
+            /** Collector Policy Digest */
+            collector_policy_digest: string;
+            /** Max Amount Rao */
+            max_amount_rao: number;
+            /**
+             * Max Sources
+             * @default 512
+             * @constant
+             */
+            max_sources: 512;
+            /**
+             * Min Amount Rao
+             * @default 1
+             * @constant
+             */
+            min_amount_rao: 1;
+            /** Revision */
+            revision: number;
+            /**
+             * Scope
+             * @default manual_once
+             * @constant
+             */
+            scope: "manual_once";
             /**
              * Version
              * @default 1
@@ -23748,6 +23823,13 @@ export interface components {
             /** Source Block */
             source_block: number;
         };
+        /** ManualSourceClaim */
+        ManualSourceClaim: {
+            /** Amount Rao */
+            amount_rao: number;
+            /** Source Block */
+            source_block: number;
+        };
         /** ManualSubmitInput */
         ManualSubmitInput: {
             /**
@@ -23757,7 +23839,8 @@ export interface components {
             confirmation: "TRANSFER SN118 ALPHA ONCE";
             /** Confirmation Digest */
             confirmation_digest: string;
-            envelope: components["schemas"]["ManualEnvelope"];
+            /** Envelope */
+            envelope: components["schemas"]["ManualEnvelope"] | components["schemas"]["ManualBatchEnvelope"];
         };
         /**
          * MinerArtifactDownload
@@ -29387,9 +29470,8 @@ export interface components {
             /**
              * Effective Service Share
              * @default 0
-             * @constant
              */
-            effective_service_share: 0;
+            effective_service_share: number;
             /** Forecast Burn Share */
             forecast_burn_share: number;
             /** Forecast Miner Share */
@@ -29399,9 +29481,9 @@ export interface components {
             /**
              * Mode
              * @default shadow
-             * @constant
+             * @enum {string}
              */
-            mode: "shadow";
+            mode: "shadow" | "observe" | "enforce" | "pause";
             /**
              * Payment Observer Status
              * @default not_activated
@@ -29410,12 +29492,14 @@ export interface components {
             payment_observer_status: "not_activated";
             /** Policy Revision */
             policy_revision: number;
+            /** Routing Epoch */
+            routing_epoch?: number | null;
             /**
              * Routing Status
              * @default not_activated
-             * @constant
+             * @enum {string}
              */
-            routing_status: "not_activated";
+            routing_status: "not_activated" | "scheduled" | "active" | "stale" | "paused";
             runtime?: components["schemas"]["PublicTreasuryRuntime"];
             /** Service Bps */
             service_bps: number;
@@ -29509,6 +29593,11 @@ export interface components {
             route: string;
             /** Source Alpha Rao */
             source_alpha_rao: string;
+            /**
+             * Source Claims
+             * @default []
+             */
+            source_claims: components["schemas"]["TreasurySourceClaim"][];
             /**
              * State
              * @enum {string}
@@ -35187,6 +35276,11 @@ export interface components {
             /** Source Block */
             source_block: number | null;
             /**
+             * Source Claims
+             * @default []
+             */
+            source_claims: components["schemas"]["TreasurySourceClaim"][];
+            /**
              * Stage
              * @enum {string}
              */
@@ -35222,6 +35316,11 @@ export interface components {
             reason: string;
             /** Source Block */
             source_block?: number | null;
+            /**
+             * Source Claims
+             * @default []
+             */
+            source_claims: components["schemas"]["TreasurySourceClaim"][];
             /**
              * Stage
              * @enum {string}
@@ -35415,6 +35514,15 @@ export interface components {
             /** Revision */
             revision: number;
             settings: components["schemas"]["TreasurySettings"];
+        };
+        /** TreasurySourceClaim */
+        TreasurySourceClaim: {
+            /** Amount Rao */
+            amount_rao: number;
+            /** Epoch Index */
+            epoch_index: number;
+            /** Source Block */
+            source_block: number;
         };
         /**
          * TreasuryWeightCapability
