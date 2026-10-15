@@ -136,6 +136,7 @@ def _expire(attempt: MinerGithubLinkAttempt) -> None:
         attempt.status = "expired"
         attempt.code_verifier = None
         attempt.accept_token_hash = None
+        attempt.browser_binding_hash = None
 
 
 def _has_binding(request: Request, attempt: MinerGithubLinkAttempt) -> bool:

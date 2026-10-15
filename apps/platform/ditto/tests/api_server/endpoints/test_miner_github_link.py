@@ -1741,6 +1741,7 @@ async def test_start_prunes_abandoned_attempts_without_touching_links(
             status=status,
             code_verifier=verifier,
             accept_token_hash="fixture-accept" if verifier else None,
+            browser_binding_hash="fixture-binding" if verifier else None,
             created_at=created,
             expires_at=expires,
         )
@@ -1803,12 +1804,15 @@ async def test_start_prunes_abandoned_attempts_without_touching_links(
     scrubbed = rows[abandoned.attempt_id]
     assert scrubbed.status == "expired"
     assert scrubbed.code_verifier is None and scrubbed.accept_token_hash is None
+    assert scrubbed.browser_binding_hash is None
     assert rows[live.attempt_id].code_verifier == "live-verifier"
     pruned_accepted = rows[expired_accepted.attempt_id]
     assert pruned_accepted.status == "expired"
     assert pruned_accepted.accept_token_hash is None
+    assert pruned_accepted.browser_binding_hash is None
     kept = rows[live_accepted.attempt_id]
     assert kept.status == "accepted" and kept.accept_token_hash == "fixture-accept"
+    assert kept.browser_binding_hash == "fixture-binding"
 
 
 async def test_attempt_status_rejects_a_malformed_attempt_id(

@@ -57,7 +57,8 @@ async def prune_github_link_attempts(
             " AND expires_at <= :now ORDER BY expires_at LIMIT :limit"
             " FOR UPDATE SKIP LOCKED)"
             " UPDATE miner_github_link_attempts AS attempt"
-            " SET status = 'expired', code_verifier = NULL, accept_token_hash = NULL"
+            " SET status = 'expired', code_verifier = NULL, accept_token_hash = NULL,"
+            " browser_binding_hash = NULL"
             " FROM stale WHERE attempt.attempt_id = stale.attempt_id"
         ),
         {"now": now, "limit": limit},
