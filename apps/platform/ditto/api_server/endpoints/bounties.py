@@ -5,12 +5,15 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.bounty import (
     REPO_PATTERN,
+    BountyAppealDecisionRequest,
+    BountyAppealRequest,
     BountyBoardPage,
+    BountyCancelRequest,
     BountyClaimRequest,
     BountyClaimsPauseRequest,
     BountyClaimView,
@@ -19,11 +22,16 @@ from ditto.api_models.bounty import (
     BountyPublishPreview,
     BountyPublishPreviewRequest,
     BountyPublishRequest,
+    BountyReassignRequest,
+    BountyReopenRequest,
+    BountyReviewRequest,
     BountyRevisionView,
+    BountySubmitRequest,
     BountySummary,
+    BountyWithdrawRequest,
 )
 from ditto.api_models.http_errors import HttpErrorEnvelope
-from ditto.api_server import bounty, bounty_claims
+from ditto.api_server import bounty, bounty_claims, bounty_reviews
 from ditto.api_server.contributor_identity import admin_actor
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -167,3 +175,152 @@ async def confirm(
 )
 async def claim(claim_id: UUID, session: SessionDep) -> BountyClaimView:
     return await bounty_claims.read_claim(session, claim_id)
+
+
+def _same_claim(path_claim: UUID, body_claim: UUID) -> None:
+    if path_claim != body_claim:
+        raise HTTPException(400, "claim_id does not match the route")
+
+
+@claims_router.post(
+    "/{claim_id}/submissions",
+    response_model=BountyClaimView,
+    responses=_errors(400, 403, 404, 409, 429),
+)
+async def submit(
+    claim_id: UUID, body: BountySubmitRequest, request: Request
+) -> BountyClaimView:
+    """Submit the signed exact commit of a pull request for review."""
+    _same_claim(claim_id, body.claim_id)
+    state = request.app.state
+    return await bounty_reviews.submit_work(
+        state.session_maker, body=body, netuid=state.config.chain.netuid
+    )
+
+
+@claims_router.post(
+    "/{claim_id}/withdraw",
+    response_model=BountyClaimView,
+    responses=_errors(400, 403, 404, 409, 429),
+)
+async def withdraw(
+    claim_id: UUID, body: BountyWithdrawRequest, request: Request
+) -> BountyClaimView:
+    """Give up a claimed or rework slot; the entry fee is retained."""
+    _same_claim(claim_id, body.claim_id)
+    state = request.app.state
+    return await bounty_reviews.withdraw_claim(
+        state.session_maker, body=body, netuid=state.config.chain.netuid
+    )
+
+
+@claims_router.post(
+    "/{claim_id}/appeals",
+    response_model=BountyClaimView,
+    responses=_errors(400, 403, 404, 409, 429),
+)
+async def appeal(
+    claim_id: UUID, body: BountyAppealRequest, request: Request
+) -> BountyClaimView:
+    """Appeal a rejection or a missed deadline of this claim, once each."""
+    _same_claim(claim_id, body.claim_id)
+    state = request.app.state
+    return await bounty_reviews.file_appeal(
+        state.session_maker, body=body, netuid=state.config.chain.netuid
+    )
+
+
+@admin_router.post(
+    "/claims/{claim_id}/review",
+    response_model=BountyClaimView,
+    responses=_errors(400, 401, 403, 404, 409, 503),
+)
+async def review(
+    claim_id: UUID,
+    body: BountyReviewRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+) -> BountyClaimView:
+    """The assigned reviewer's decision on one exact submission."""
+    return await bounty_reviews.review_submission(
+        request.app.state.session_maker, claim_id=claim_id, body=body, actor=actor
+    )
+
+
+@admin_router.post(
+    "/{bounty_id}/reviewer",
+    response_model=BountySummary,
+    responses=_errors(400, 401, 404, 409, 503),
+)
+async def reassign(
+    bounty_id: UUID,
+    body: BountyReassignRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+    session: SessionDep,
+) -> BountySummary:
+    """Name a new reviewer; overdue reviews get one more review window."""
+    await bounty_reviews.reassign_reviewer(
+        request.app.state.session_maker, bounty_id=bounty_id, body=body, actor=actor
+    )
+    return (await bounty.detail(session, bounty_id)).summary
+
+
+@admin_router.post(
+    "/slots/{slot_id}/cancel",
+    response_model=BountySummary,
+    responses=_errors(400, 401, 404, 409, 503),
+)
+async def cancel(
+    slot_id: UUID,
+    body: BountyCancelRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+    session: SessionDep,
+) -> BountySummary:
+    """Cancel a slot; a paid entry fee is refunded in full."""
+    bounty_id = await bounty_reviews.cancel_slot(
+        request.app.state.session_maker, slot_id=slot_id, body=body, actor=actor
+    )
+    return (await bounty.detail(session, bounty_id)).summary
+
+
+@admin_router.post(
+    "/slots/{slot_id}/reopen",
+    response_model=BountySummary,
+    responses=_errors(400, 401, 404, 409, 503),
+)
+async def reopen(
+    slot_id: UUID,
+    body: BountyReopenRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+    session: SessionDep,
+) -> BountySummary:
+    """Reopen a closed slot for a new claim."""
+    bounty_id = await bounty_reviews.reopen_slot(
+        request.app.state.session_maker, slot_id=slot_id, body=body, actor=actor
+    )
+    return (await bounty.detail(session, bounty_id)).summary
+
+
+@admin_router.post(
+    "/appeals/{appeal_id}/decision",
+    response_model=BountyClaimView,
+    responses=_errors(400, 401, 403, 404, 409, 503),
+)
+async def decide_appeal(
+    appeal_id: UUID,
+    body: BountyAppealDecisionRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+) -> BountyClaimView:
+    """Uphold or deny an appeal; its reviewer may not decide it."""
+    return await bounty_reviews.decide_appeal(
+        request.app.state.session_maker, appeal_id=appeal_id, body=body, actor=actor
+    )

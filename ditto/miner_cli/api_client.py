@@ -50,11 +50,14 @@ from ditto.api_models import (
     UploadCheckResponse,
 )
 from ditto.api_models.bounty import (
+    BountyAppealRequest,
     BountyBoardPage,
     BountyClaimRequest,
     BountyClaimView,
     BountyConfirmRequest,
     BountyDetail,
+    BountySubmitRequest,
+    BountyWithdrawRequest,
 )
 from ditto.api_models.contributor_identity import (
     ClaSignatureView,
@@ -718,6 +721,31 @@ class ApiClient:
             self._bounty_response(
                 "POST",
                 f"/api/v1/bounties/claims/{claim_id}/confirm",
+                body.model_dump(mode="json"),
+            ).json()
+        )
+
+    def submit_bounty_work(
+        self, claim_id: UUID, body: BountySubmitRequest
+    ) -> BountyClaimView:
+        return self._bounty_action(claim_id, "submissions", body)
+
+    def withdraw_bounty_claim(
+        self, claim_id: UUID, body: BountyWithdrawRequest
+    ) -> BountyClaimView:
+        return self._bounty_action(claim_id, "withdraw", body)
+
+    def appeal_bounty_decision(
+        self, claim_id: UUID, body: BountyAppealRequest
+    ) -> BountyClaimView:
+        return self._bounty_action(claim_id, "appeals", body)
+
+    def _bounty_action(self, claim_id: UUID, action: str, body: Any) -> BountyClaimView:
+        """A signed action on one claim; resending it returns the same outcome."""
+        return BountyClaimView.model_validate(
+            self._bounty_response(
+                "POST",
+                f"/api/v1/bounties/claims/{claim_id}/{action}",
                 body.model_dump(mode="json"),
             ).json()
         )

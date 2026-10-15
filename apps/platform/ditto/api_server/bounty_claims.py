@@ -29,16 +29,24 @@ from sqlalchemy import exists, func, select
 from sqlalchemy.exc import IntegrityError
 
 from ditto.api_models.bounty import (
+    BountyAppealView,
     BountyClaimRequest,
     BountyClaimsPauseRequest,
     BountyClaimView,
     BountyConfirmRequest,
     BountyFeeReceipt,
     BountyRefundView,
+    BountySubmissionView,
     bounty_claim_message,
     bounty_pause_confirmation,
     bounty_team_digest,
     simulated_fee_block_hash,
+)
+from ditto.api_server.bounty_deadlines import (
+    apply_deadlines,
+    effective_slot_status,
+    release_slot,
+    settle_deadlines,
 )
 from ditto.api_server.bounty_identity import (
     BountyIdentityRejected,
@@ -57,14 +65,19 @@ from ditto.db.integrity import unique_violation
 from ditto.db.models import (
     Bounty,
     BountyActionNonce,
+    BountyAppeal,
+    BountyAppealDecision,
     BountyClaim,
     BountyClaimControl,
     BountyEvent,
     BountyFeePayment,
     BountyObligation,
+    BountyReview,
     BountyRevision,
     BountyRound,
     BountySlot,
+    BountySlotAction,
+    BountySubmission,
 )
 from ditto.db.queries.contributor_identity import (
     active_github_link,
@@ -133,17 +146,7 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def effective_slot_status(
-    slot: BountySlot, holder: BountyClaim | None, *, now: datetime
-) -> str:
-    """A slot's status as of ``now``: a lapsed hold reads as open before any
-    request writes it back (reads never write)."""
-    if slot.status == "held" and (holder is None or now >= holder.hold_expires_at):
-        return "open"
-    return slot.status
-
-
-async def _locked_bounty(session: AsyncSession, bounty_id: UUID) -> Bounty:
+async def locked_bounty(session: AsyncSession, bounty_id: UUID) -> Bounty:
     # One row lock per bounty serializes holds, confirmations and pauses.
     bounty = await session.scalar(
         select(Bounty).where(Bounty.bounty_id == bounty_id).with_for_update()
@@ -172,49 +175,6 @@ async def claims_paused(session: AsyncSession, bounty_id: UUID) -> bool:
         .limit(1)
     )
     return bool(paused)
-
-
-async def reopen_lapsed_holds(
-    session: AsyncSession, bounty_id: UUID, *, now: datetime
-) -> None:
-    """Reopen slots whose unpaid hold has lapsed, stamped at the hold's end."""
-    rows = (
-        await session.execute(
-            select(BountySlot, BountyClaim)
-            .join(BountyClaim, BountyClaim.claim_id == BountySlot.claim_id)
-            .where(
-                BountySlot.bounty_id == bounty_id,
-                BountySlot.status == "held",
-                BountyClaim.hold_expires_at <= now,
-            )
-            .order_by(BountyClaim.hold_expires_at, BountySlot.position)
-            .with_for_update(of=BountySlot)
-        )
-    ).all()
-    for slot, claim in rows:
-        _release(session, slot, claim, kind="hold_expired", at=claim.hold_expires_at)
-
-
-def _release(
-    session: AsyncSession,
-    slot: BountySlot,
-    claim: BountyClaim,
-    *,
-    kind: str,
-    at: datetime,
-) -> None:
-    slot.status, slot.claim_id, slot.status_changed_at = "open", None, at
-    session.add(
-        BountyEvent(
-            bounty_id=slot.bounty_id,
-            kind=kind,
-            revision=claim.revision,
-            round=slot.round,
-            slot_id=slot.slot_id,
-            claim_id=claim.claim_id,
-            recorded_at=at,
-        )
-    )
 
 
 def _same_claim(claim: BountyClaim, body: BountyClaimRequest) -> bool:
@@ -347,9 +307,10 @@ async def hold_claim(
     except BountyIdentityRejected as exc:
         raise HTTPException(403, str(exc)) from exc
 
+    await settle_deadlines(maker, bounty_id, now=now)
     try:
         async with maker() as session, session.begin():
-            await _locked_bounty(session, bounty_id)
+            await locked_bounty(session, bounty_id)
             revision = await _current_revision(session, bounty_id)
             _check_terms(revision, body)
             if await claims_paused(session, bounty_id):
@@ -368,7 +329,7 @@ async def hold_claim(
                 BountyActionNonce(nonce=body.nonce, action="claim", recorded_at=now)
             )
             await session.flush()
-            await reopen_lapsed_holds(session, bounty_id, now=now)
+            await apply_deadlines(session, bounty_id, now=now)
             holder = await session.scalar(
                 select(BountyClaim.claim_id)
                 .join(BountySlot, BountySlot.claim_id == BountyClaim.claim_id)
@@ -524,8 +485,10 @@ async def confirm_claim(
     except ChainError:
         raise HTTPException(503, "finalized ownership unavailable; retry") from None
     now = (clock or utcnow)()
+    await settle_deadlines(maker, claim.bounty_id, now=now)
     async with maker() as session, session.begin():
-        await _locked_bounty(session, claim.bounty_id)
+        await locked_bounty(session, claim.bounty_id)
+        await apply_deadlines(session, claim.bounty_id, now=now)
         claim = await session.get(BountyClaim, claim_id)
         assert claim is not None
         recorded = await session.get(
@@ -555,14 +518,14 @@ async def confirm_claim(
         elif now >= claim.hold_expires_at:
             reason = "hold_expired"
             if holds_slot:
-                _release(
+                release_slot(
                     session, slot, claim, kind="hold_expired", at=claim.hold_expires_at
                 )
         elif not holds_slot:
             reason = "slot_lost"
         elif await _identity_changed(session, claim, owner_coldkey=owner_coldkey):
             reason = "identity_changed"
-            _release(session, slot, claim, kind="hold_released", at=now)
+            release_slot(session, slot, claim, kind="hold_released", at=now)
         session.add(
             BountyFeePayment(
                 block_hash=fee.block_hash,
@@ -649,6 +612,28 @@ async def claim_view(
             .order_by(BountyObligation.created_at, BountyObligation.obligation_id)
         )
     )
+    submissions = (
+        await session.execute(
+            select(BountySubmission, BountyReview)
+            .outerjoin(
+                BountyReview,
+                BountyReview.submission_id == BountySubmission.submission_id,
+            )
+            .where(BountySubmission.claim_id == claim.claim_id)
+            .order_by(BountySubmission.submitted_at, BountySubmission.submission_id)
+        )
+    ).all()
+    appeals = (
+        await session.execute(
+            select(BountyAppeal, BountyAppealDecision)
+            .outerjoin(
+                BountyAppealDecision,
+                BountyAppealDecision.appeal_id == BountyAppeal.appeal_id,
+            )
+            .where(BountyAppeal.claim_id == claim.claim_id)
+            .order_by(BountyAppeal.filed_at, BountyAppeal.appeal_id)
+        )
+    ).all()
     allocated = next((p for p in payments if p.outcome == "allocated"), None)
     holds_slot = slot.claim_id == claim.claim_id
     if allocated is not None:
@@ -659,9 +644,24 @@ async def claim_view(
         state = "refund_owed"
     else:
         state = "hold_expired"
-    # The claim's own slot status. A slot released from this claim reads
-    # open: whatever it holds now belongs to another claim.
-    slot_status = effective_slot_status(slot, claim, now=now) if holds_slot else "open"
+    # The claim's own slot status: whatever the slot holds now belongs to
+    # another claim. A reopened claim keeps the outcome it was reopened from;
+    # a released hold reads open.
+    if holds_slot:
+        slot_status = effective_slot_status(slot, claim, now=now)
+    else:
+        slot_status = (
+            await session.scalar(
+                select(BountySlotAction.prior_status)
+                .where(
+                    BountySlotAction.claim_id == claim.claim_id,
+                    BountySlotAction.action == "reopen",
+                )
+                .order_by(BountySlotAction.action_id.desc())
+                .limit(1)
+            )
+            or "open"
+        )
     return BountyClaimView(
         claim_id=claim.claim_id,
         bounty_id=claim.bounty_id,
@@ -723,6 +723,32 @@ async def claim_view(
             )
             for r in refunds
         ],
+        submissions=[
+            BountySubmissionView(
+                submission_id=sub.submission_id,
+                pr_number=sub.pr_number,
+                head_sha=sub.head_sha,
+                submitted_at=sub.submitted_at,
+                review_due_at=sub.review_due_at,
+                decision=review.decision if review else None,  # type: ignore[arg-type]
+                decision_reason=review.reason if review else None,
+                attribution=review.attribution if review else None,
+                rework_deadline_at=review.rework_deadline_at if review else None,
+                decided_at=review.decided_at if review else None,
+            )
+            for sub, review in submissions
+        ],
+        appeals=[
+            BountyAppealView(
+                appeal_id=appeal.appeal_id,
+                subject_event_id=appeal.subject_event_id,
+                reason_digest=appeal.reason_digest,
+                filed_at=appeal.filed_at,
+                upheld=decision.upheld if decision else None,
+                decided_at=decision.decided_at if decision else None,
+            )
+            for appeal, decision in appeals
+        ],
     )
 
 
@@ -739,7 +765,7 @@ async def set_claims_paused(
         raise HTTPException(400, "reason must not be blank")
     now = (clock or utcnow)()
     async with maker() as session, session.begin():
-        bounty = await _locked_bounty(session, bounty_id)
+        bounty = await locked_bounty(session, bounty_id)
         expected = bounty_pause_confirmation(
             repo=bounty.repo, issue=bounty.issue_number, paused=body.paused
         )

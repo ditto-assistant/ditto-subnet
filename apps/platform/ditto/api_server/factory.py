@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 import ditto
 from ditto.api_server.bounty_claims import SimulatedBountyFeeVerifier
+from ditto.api_server.bounty_deadlines import BountyDeadlineSweeper
 from ditto.api_server.burn_settings import BurnSettingsResolver
 from ditto.api_server.coding_artifact_capabilities import (
     CodingArtifactCapabilityMinter,
@@ -501,6 +502,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await nonce_janitor.start()
             app.state.validator_nonce_janitor = nonce_janitor
+
+            # Records bounty deadlines no request has touched. Requests apply
+            # the same rule lazily, so only the platform role sweeps.
+            bounty_deadlines = BountyDeadlineSweeper(
+                session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(bounty_deadlines.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await bounty_deadlines.start()
+            app.state.bounty_deadline_sweeper = bounty_deadlines
 
             capacity_event_janitor = ScreenerCapacityEventJanitor(
                 session_maker=app.state.session_maker,

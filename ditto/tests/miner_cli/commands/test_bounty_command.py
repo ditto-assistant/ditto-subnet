@@ -21,8 +21,12 @@ from ditto.api_models.bounty import (
     BountySlotCounts,
     BountySummary,
     BountyTerms,
+    bounty_appeal_message,
     bounty_claim_message,
+    bounty_reason_digest,
+    bounty_submit_message,
     bounty_team_digest,
+    bounty_withdraw_message,
     simulated_fee_block_hash,
 )
 from ditto.api_models.contributor_identity import ClaStatus
@@ -71,6 +75,7 @@ def detail(**summary_over) -> BountyDetail:
         slots=BountySlotCounts(
             open=3, held=0, claimed=0, submitted=0, rework=0, closed=0
         ),
+        reviews_overdue=0,
         published_at=NOW,
         updated_at=NOW,
     )
@@ -118,6 +123,8 @@ def claim_view(state: str = "held", **over) -> BountyClaimView:
         "simulated_receipt": receipt,
         "receipts": [receipt] if state != "held" else [],
         "refunds": [],
+        "submissions": [],
+        "appeals": [],
     }
     base.update(over)
     return BountyClaimView(**base)
@@ -349,3 +356,124 @@ def test_targets_must_be_canonical_issue_references(capsys, target):
 def test_claim_requires_a_github_login():
     with pytest.raises(SystemExit):
         _build_parser().parse_args(["bounty", "claim", f"{REPO}#{ISSUE}"])
+
+
+SHA = "3f" * 20
+
+
+def acting_api(state: str = "claimed"):
+    client = api()
+    view = claim_view(state)
+    client.get_bounty_claim.return_value = view
+    for method in (
+        "submit_bounty_work",
+        "withdraw_bounty_claim",
+        "appeal_bounty_decision",
+    ):
+        getattr(client, method).return_value = view
+    return client, view
+
+
+def test_submit_signs_the_exact_commit_after_typed_consent(capsys):
+    client, view = acting_api()
+    phrase = f"SUBMIT BOUNTY CLAIM {view.claim_id} PR 61 {SHA}"
+    argv = ["submit", str(view.claim_id), "--pr", "61", "--head-sha", SHA.upper()]
+    assert run([*argv, "--confirmation", phrase], client) == 0
+    claim_id, body = client.submit_bounty_work.call_args.args
+    assert claim_id == view.claim_id
+    assert (body.repo, body.pr_number, body.head_sha) == (REPO, 61, SHA)
+    assert HOTKEY.verify(
+        bounty_submit_message(
+            netuid=118,
+            claim_id=view.claim_id,
+            hotkey=HOTKEY.ss58_address,
+            repo=REPO,
+            pr_number=61,
+            head_sha=SHA,
+            nonce=body.nonce,
+            issued_at=body.issued_at,
+            key_kind="hotkey",
+            signer=HOTKEY.ss58_address,
+        ),
+        bytes.fromhex(body.proof.signature),
+    )
+    assert "exact commit" in capsys.readouterr().err
+
+
+def test_withdraw_states_the_retained_fee_and_needs_its_phrase(capsys):
+    client, view = acting_api()
+    assert run(["withdraw", str(view.claim_id), "--confirmation", "yes"], client) == 1
+    client.withdraw_bounty_claim.assert_not_called()
+    err = capsys.readouterr().err
+    assert "retained" in err and "nothing was signed" in err
+    phrase = f"WITHDRAW BOUNTY CLAIM {view.claim_id}"
+    assert run(["withdraw", str(view.claim_id), "--confirmation", phrase], client) == 0
+    body = client.withdraw_bounty_claim.call_args.args[1]
+    assert HOTKEY.verify(
+        bounty_withdraw_message(
+            netuid=118,
+            claim_id=view.claim_id,
+            hotkey=HOTKEY.ss58_address,
+            nonce=body.nonce,
+            issued_at=body.issued_at,
+            key_kind="hotkey",
+            signer=HOTKEY.ss58_address,
+        ),
+        bytes.fromhex(body.proof.signature),
+    )
+
+
+def test_appeal_binds_the_statement_digest(tmp_path):
+    client, view = acting_api("claimed")
+    statement = tmp_path / "appeal.md"
+    statement.write_text("The deadline fell during a fixture outage.\n")
+    argv = ["appeal", str(view.claim_id), "--event", "42", "--reason-file"]
+    phrase = "APPEAL BOUNTY EVENT 42"
+    assert run([*argv, str(statement), "--confirmation", phrase], client) == 0
+    body = client.appeal_bounty_decision.call_args.args[1]
+    assert body.reason == statement.read_text() and body.subject_event_id == 42
+    assert HOTKEY.verify(
+        bounty_appeal_message(
+            netuid=118,
+            claim_id=view.claim_id,
+            hotkey=HOTKEY.ss58_address,
+            subject_event_id=42,
+            reason_digest=bounty_reason_digest(statement.read_text()),
+            nonce=body.nonce,
+            issued_at=body.issued_at,
+            key_kind="hotkey",
+            signer=HOTKEY.ss58_address,
+        ),
+        bytes.fromhex(body.proof.signature),
+    )
+    statement.write_text("   \n")
+    assert run([*argv, str(statement), "--confirmation", phrase], client) == 1
+
+
+def test_actions_refuse_another_wallets_claim_and_a_foreign_coldkey(capsys):
+    client, view = acting_api()
+    other = bittensor.Keypair.create_from_uri("//Mallory")
+    stranger = claim_view("claimed", claim_id=view.claim_id, hotkey=other.ss58_address)
+    client.get_bounty_claim.return_value = stranger
+    phrase = f"WITHDRAW BOUNTY CLAIM {view.claim_id}"
+    assert run(["withdraw", str(view.claim_id), "--confirmation", phrase], client) == 1
+    assert "belongs to hotkey" in capsys.readouterr().err
+    client.get_bounty_claim.return_value = claim_view(
+        "claimed", claim_id=view.claim_id, payee_coldkey=other.ss58_address
+    )
+    assert (
+        run(
+            [
+                "withdraw",
+                str(view.claim_id),
+                "--key-kind",
+                "coldkey",
+                "--confirmation",
+                phrase,
+            ],
+            client,
+        )
+        == 1
+    )
+    assert "payee of record" in capsys.readouterr().err
+    client.withdraw_bounty_claim.assert_not_called()
