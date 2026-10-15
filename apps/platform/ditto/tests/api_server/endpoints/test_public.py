@@ -12401,6 +12401,54 @@ class TestPublicArtifactRelease:
         assert king.status_code == 200
         storage.presigned_get_url.assert_awaited_once()
 
+    async def test_banned_king_source_is_released_but_never_a_rejected_one(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        now = datetime.now(UTC)
+        banned_king = await _seed_k3(
+            session_maker,
+            miner=_MINER_A,
+            composites=[0.7, 0.8, 0.9],
+            status=AgentStatus.BANNED,
+        )
+        rejected_king = await _seed_k3(
+            session_maker,
+            miner=_MINER_B,
+            composites=[0.7, 0.8, 0.9],
+            status=AgentStatus.REJECTED,
+        )
+        banned_commoner = await _seed_k3(
+            session_maker,
+            miner=_MINER_A,
+            composites=[0.4, 0.5, 0.6],
+            status=AgentStatus.BANNED,
+        )
+        for agent_id in (banned_king, rejected_king):
+            await _crown(
+                session_maker,
+                agent_id=agent_id,
+                first_crowned_at=now - timedelta(hours=49),
+            )
+        _install_db(app, session_maker)
+        storage = AsyncMock()
+        storage.presigned_get_url.return_value = "https://objects.example/source"
+
+        async def _storage():
+            return storage
+
+        app.dependency_overrides[get_storage_client] = _storage
+
+        # A ban does not withhold a king that earned verified winner emissions.
+        released = await client.get(f"/api/v1/public/agent/{banned_king}/artifact")
+        assert released.status_code == 200
+        for withheld in (rejected_king, banned_commoner):
+            response = await client.get(f"/api/v1/public/agent/{withheld}/artifact")
+            assert response.status_code == 404
+        storage.presigned_get_url.assert_awaited_once()
+
     async def test_king_source_is_embargoed_until_the_window_elapses(
         self,
         app: FastAPI,
