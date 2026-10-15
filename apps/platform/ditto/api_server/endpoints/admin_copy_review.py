@@ -1293,11 +1293,17 @@ async def attest_review(
                 and existing.resolution == "clear"
                 and scored_or_live
             ):
+                # A replay answers exactly what the first write answered,
+                # including the payment-time coldkey.
+                candidate_coldkey, _reference_coldkey = await _review_coldkeys(
+                    session, agent, None
+                )
                 return AdminCopyReviewResolveResponse(
                     review=_item(
                         existing,
                         agent,
                         actions=await _review_actions(session, existing.review_id),
+                        miner_coldkey=candidate_coldkey,
                     ),
                     agent_status=agent.status.value,
                     idempotent=True,

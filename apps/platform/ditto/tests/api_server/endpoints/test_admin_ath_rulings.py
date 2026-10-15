@@ -36,6 +36,7 @@ from ditto.db.models import (
     AthReview,
     AthReviewAction,
     BenchmarkRollout,
+    EvaluationPayment,
     Score,
     TicketStatus,
     ValidatorHeartbeat,
@@ -1533,15 +1534,31 @@ async def test_single_row_attest_route_is_guarded_and_idempotent(
     )
     assert no_actor.status_code == 422, no_actor.text
     assert (await _review(maker, champion_id))[0] is None
+    async with maker() as session, session.begin():
+        session.add(
+            EvaluationPayment(
+                block_hash=f"0x{1:064x}",
+                extrinsic_index=0,
+                agent_id=champion_id,
+                miner_hotkey="5Champion",
+                miner_coldkey="5ChampionOwner",
+                amount_rao=1,
+                dest_address="5Treasury",
+                timestamp=_T0,
+            )
+        )
 
     first = await client.post(url.format(champion_id), json=payload, headers=_HEADERS)
     assert first.status_code == 200, first.text
     assert first.json()["idempotent"] is False
     assert first.json()["agent_status"] == "scored"
     assert first.json()["review"]["resolution"] == "clear"
+    assert first.json()["review"]["miner_coldkey"] == "5ChampionOwner"
     again = await client.post(url.format(champion_id), json=payload, headers=_HEADERS)
     assert again.status_code == 200, again.text
     assert again.json()["idempotent"] is True
+    # A replay answers what the first write answered, coldkey included.
+    assert again.json()["review"] == first.json()["review"]
     _review_row, actions = await _review(maker, champion_id)
     assert [action.action for action in actions] == ["clear"]
 
