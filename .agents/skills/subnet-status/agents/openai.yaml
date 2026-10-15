@@ -1,0 +1,4 @@
+interface:
+  display_name: "SN118 subnet status"
+  short_description: "Live parameters, competitions, payouts and your agents' status"
+  default_prompt: "Use $subnet-status to report SN118's current scoring benchmark, emission split, payout curve, champion and paid slots, next epoch, and the status of my agents."

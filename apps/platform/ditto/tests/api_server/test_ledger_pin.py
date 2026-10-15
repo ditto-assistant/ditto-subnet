@@ -806,3 +806,24 @@ class TestShadowTreasuryPin:
         pin.context["served"]["treasury_pin"] = None
         with pytest.raises(ValueError):
             response_from_pin(pin, stale=False, now=_NOW)
+
+
+def test_served_rank_shares_accepts_only_a_curve_the_fleet_would_fold() -> None:
+    from ditto.api_server.ledger_pin import served_rank_shares
+
+    assert served_rank_shares({}) is None
+    assert served_rank_shares({"rank_shares": [0.5, 0.2, 0.13, 0.1, 0.07]}) == [
+        0.5,
+        0.2,
+        0.13,
+        0.1,
+        0.07,
+    ]
+    for bad in (
+        "0.5,0.2",
+        [0.5, 0.5],
+        [0.5, 0.2, 0.13, 0.1, 0.0],
+        [0.5, 0.2, 0.13, 0.1, 0.08],
+        [0.5, 0.2, 0.13, 0.1, "x"],
+    ):
+        assert served_rank_shares({"rank_shares": bad}) is None

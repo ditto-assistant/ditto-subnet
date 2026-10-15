@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
@@ -14,6 +15,7 @@ from ditto.api_models.artifact_release_settings import (
     AdminArtifactReleaseSettingsRequest,
     AdminArtifactReleaseSettingsResponse,
     ReceiptDiagnosticRow,
+    SourceArchiveProviderStatus,
     SourceReleaseEligibilityRow,
     SourceReleaseGateStatus,
 )
@@ -103,7 +105,14 @@ async def get_settings(
             .limit(25)
         )
     ).all()
-    netuid = request.app.state.config.chain.netuid
+    chain = request.app.state.config.chain
+    netuid = chain.netuid
+    # Only expose the host. A configured URL can contain sensitive path/query
+    # data; a malformed URL must not hide the collector's other diagnostics.
+    try:
+        archive_host = urlsplit(chain.archive_rpc_url or "").hostname
+    except ValueError:
+        archive_host = None
     cursor = await session.get(SourceEmissionCollectorCursor, netuid)
     last_payout = await session.scalar(
         select(SourceEmissionPayout)
@@ -175,6 +184,12 @@ async def get_settings(
         release_gate=SourceReleaseGateStatus(
             version=SOURCE_RELEASE_GATE_VERSION,
             automatic_confirmation_enabled=request.app.state.config.source_emission_confirmation_enabled,
+            archive_provider=SourceArchiveProviderStatus(
+                configured=bool(chain.archive_rpc_url),
+                host=archive_host,
+                auth_mode=chain.archive_rpc_auth_mode,
+                credential_configured=bool(chain.archive_rpc_api_key),
+            ),
             collector_cursor_block=cursor.block if cursor else None,
             collector_cursor_hash=cursor.block_hash if cursor else None,
             collector_runtime_code_hash=cursor.runtime_code_hash if cursor else None,

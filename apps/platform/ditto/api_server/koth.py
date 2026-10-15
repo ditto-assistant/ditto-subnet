@@ -289,10 +289,16 @@ def emission_shares(
     *,
     tie_pooling: bool = False,
     statistical_band_cap: bool = False,
+    rank_shares: Sequence[float] | None = None,
 ) -> tuple[float, ...]:
-    """Return occupied rank shares, optionally pooled across evidence ties."""
+    """Return occupied rank shares, optionally pooled across evidence ties.
+
+    ``rank_shares`` is the served protocol-31 operator curve; ``None`` keeps the
+    frozen ``KOTH_RANK_SHARES``.
+    """
     members = emission_set(projection)
-    shares = list(KOTH_RANK_SHARES[: len(members)])
+    curve = KOTH_RANK_SHARES if rank_shares is None else tuple(rank_shares)
+    shares = list(curve[: len(members)])
     if not tie_pooling:
         return tuple(shares)
     start = 0
@@ -317,6 +323,7 @@ def emission_allocation(
     tie_pooling: bool = False,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    rank_shares: Sequence[float] | None = None,
 ) -> EmissionAllocation:
     """Return the exact validator payout mode, membership, and shares.
 
@@ -349,6 +356,7 @@ def emission_allocation(
             projection,
             tie_pooling=tie_pooling,
             statistical_band_cap=statistical_band_cap,
+            rank_shares=rank_shares,
         ),
     )
 

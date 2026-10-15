@@ -124,6 +124,7 @@ class TestCreateApiServer:
         # Receipt selectors and exact manual custody envelopes carry bounded
         # transport annotations, not extensive source/policy review evidence.
         assert bounded == [
+            "openapi.components.schemas.ManualBatchRequest.reason=240",
             "openapi.components.schemas.ManualPreviewInput.reason=240",
             "openapi.components.schemas.ManualRequest.reason=240",
             "openapi.components.schemas.TreasuryReceiptSelector.reason=240",

@@ -106,6 +106,19 @@
       "related": ["validator-miner", "dittobench-scoring", "backroom-review", "miner-comms"]
     },
     {
+      "id": "subnet-status",
+      "title": "Miner view of SN118's live parameters and competitions",
+      "keywords": ["subnet status", "current parameters", "current competition", "payout curve", "rank_shares", "emission split", "gamma share", "burn share", "miner share", "champion", "paid slots", "dethrone margin", "next epoch", "my agent status", "why is my agent not on the board", "what does rank pay"],
+      "summary": "Read-only, public-endpoint snapshot for miners: scoring bench_version and harness, the miner-pool split (Gamma, burn, miners), the KOTH payout curve and paid recipients, the next weight epoch, and the status, scores and review reasons of a hotkey's agents. Pair with mine for building and uploading.",
+      "skills": ["subnet-status", "mine"],
+      "owns": [".agents/skills/subnet-status"],
+      "read": [".agents/skills/subnet-status/SKILL.md", "docs/MINER.md", "apps/platform/docs/public-telemetry.md"],
+      "search": ["rg -n 'treasury-allocation|rank_shares|champion_share' apps/platform/ditto/api_server/endpoints/public.py", "rg -n '@router.get' apps/platform/ditto/api_server/endpoints/public.py"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/subnet-status", "python3 .agents/skills/subnet-status/scripts/subnet_status.py --json"],
+      "invariants": ["Public endpoints only: no wallet, Backroom token or operator credential.", "The public treasury page is a forecast; the on-chain Incentive vector is ground truth for what each UID earns.", "The payout curve and split are operator settings and change between epochs; never hard-code them in miner docs."],
+      "related": ["mine", "validator-miner", "miner-comms"]
+    },
+    {
       "id": "wandb-operations",
       "title": "W&B validator and worker operations",
       "keywords": ["wandb", "w&b", "weights and biases", "telemetry", "wandb run", "run history", "node failure", "fleet diagnosis"],

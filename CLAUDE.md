@@ -14,6 +14,9 @@ Load only the returned anchors and the relevant specialized skill:
 
 - `.agents/skills/mine` for miner setup, local rehearsal vs on-chain scoring,
   packaging, upload, and local pre-submit review against the operator bar;
+- `.agents/skills/subnet-status` for the miner view of live parameters: scoring
+  bench, emission split, payout curve, champion, next epoch, and a hotkey's
+  agents (public endpoints only);
 - `.agents/skills/ditto-subnet-platform` for Platform, migrations, dashboard,
   and Backroom;
 - `.agents/skills/ditto-subnet-benchmark` for validator, scoring, DittoBench,
@@ -41,6 +44,7 @@ Load only the returned anchors and the relevant specialized skill:
 | Surface | Path |
 |---|---|
 | Miner starter kit and local rehearsal | `miners/dittobench-starter-kit/`, `.agents/skills/mine/` |
+| Miner live-status lookup | `.agents/skills/subnet-status/` |
 | Miner CLI, validator, chain client | `ditto/` |
 | Validator Compose and updater | `docker-compose.yml`, `scripts/` |
 | Platform API, DB, dashboard | `apps/platform/` |

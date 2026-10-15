@@ -291,6 +291,62 @@ class Migration(unittest.TestCase):
         with self.assertRaises(ValueError):
             m.manifest(self.source, self.old, self.new, "registration", self.sha)
 
+    def test_signed_complete_backup_with_wal_header_preserves_exact_history(self):
+        # sqlite3.backup copies journal-mode header bytes even when the backup
+        # is complete and has no WAL. Do not rewrite the signed source file.
+        live = self.root / "live-wal.db"
+        source = sqlite3.connect(self.source)
+        writer = sqlite3.connect(live)
+        source.backup(writer)
+        source.close()
+        self.assertEqual(writer.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
+        backup = self.root / "wal-header-backup.db"
+        output = sqlite3.connect(backup)
+        writer.backup(output)
+        output.close()
+        writer.close()
+        backup.chmod(0o600)
+        raw = backup.read_bytes()
+        self.assertEqual(raw[18:20], b"\x02\x02")
+        self.assertFalse(Path(str(backup) + "-wal").exists())
+        digest = hashlib.sha256(raw).hexdigest()
+        approval = m.manifest(backup, self.old, self.new, "registration", digest)
+        self.assertEqual(approval["history_sha256"], self.approval["history_sha256"])
+        target = self.root / "wal-migrated.db"
+        result = m.migrate(
+            backup, target, self.old, self.new, approval, self.signed(approval)
+        )
+        self.assertEqual(backup.read_bytes(), raw)
+        self.assertEqual(result["registration_reserved_rao"], 3)
+        self.assertEqual(result["cursor"], 199)
+        migrated = m.snapshot(target, result["target_sha256"])
+        original = m.snapshot(self.source, self.sha)
+        before, after = m.history(original), m.history(migrated)
+        self.assertEqual(after["events"][:-1], before["events"])
+        for table in ("cursor", "earnings", "operations"):
+            self.assertEqual(after[table], before[table])
+        original.close()
+        migrated.close()
+        with self.assertRaises(ValueError):
+            m.manifest(backup, self.old, self.new, "registration", self.sha)
+        Path(str(backup) + "-wal").write_bytes(b"pending-pages")
+        with self.assertRaises(ValueError):
+            m.manifest(backup, self.old, self.new, "registration", digest)
+
+    def test_unknown_or_mixed_sqlite_header_modes_refuse(self):
+        for header in (b"\x01\x02", b"\x02\x01", b"\x03\x03"):
+            raw = self.source.read_bytes()
+            raw = raw[:18] + header + raw[20:]
+            self.source.write_bytes(raw)
+            with self.assertRaises(ValueError):
+                m.manifest(
+                    self.source,
+                    self.old,
+                    self.new,
+                    "registration",
+                    hashlib.sha256(raw).hexdigest(),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

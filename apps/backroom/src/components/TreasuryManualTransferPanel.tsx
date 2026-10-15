@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import type { z } from 'zod'
-import { alphaDisplay, alphaRao, fundable, manualRequestId, manualTransferConfirmation, manualControlSchema, manualPreviewSchema } from '../lib/treasury-manual.schemas'
+import { alphaDisplay, alphaRao, manualMaximum, fundable, manualRequestId, manualTransferConfirmation, manualControlSchema, manualPreviewSchema } from '../lib/treasury-manual.schemas'
 import { getManualTransfers, previewManualTransfer, queueManualTransfer } from '../server/treasury-manual.functions'
 
 type Control = z.infer<typeof manualControlSchema>
@@ -46,6 +46,7 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
     return () => { clearInterval(timer); ++refreshGeneration.current }
   }, [refresh]) // eslint-disable-line react-hooks/exhaustive-deps
   const invalidate = () => { setPreview(null); setConfirmation(''); setMessage(''); setActionError(''); setRequestId(manualRequestId()) }
+  const maximum = manualMaximum(state, bucket, alphaRao(reserve) ?? 0)
   const expected = preview ? manualTransferConfirmation(preview.envelope) : ''
   const blocked = readOnly || busy || !!state.blocked_reason || !!refreshError
   const previewDestinationEnabled = !!preview && state.destinations.some(d =>
@@ -57,11 +58,15 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
     <button className={inputClass} disabled={busy} onClick={() => { void load() }}>Refresh transfer status</button>
     {state.blocked_reason && <p role="status">{state.blocked_reason}</p>}
     {state.readiness && <p className="text-sm">Collector stake: {alphaDisplay(state.readiness.available_alpha_rao)} alpha · observed finalized block {state.readiness.finalized_block}</p>}
+    {state.readiness && <p className="text-sm">
+      Signed manual ceiling: {alphaDisplay(state.readiness.manual_approval?.policy.max_amount_rao ?? state.readiness.max_distribution_rao)} alpha.
+      {state.readiness.manual_approval ? ' Mature earnings can be combined in one transfer.' : ' One earnings receipt per transfer; renewed cold approval is needed for aggregation.'}
+    </p>}
     <fieldset disabled={blocked} className="grid gap-4 md:grid-cols-2">
       <label>Destination wallet<select aria-label="Destination wallet" className={inputClass} value={bucket} onChange={e => { setBucket(e.target.value); invalidate() }}>
         {state.destinations.map(d => <option key={d.bucket_id} value={d.bucket_id} disabled={!fundable(d)}>{d.bucket_id.toUpperCase()}{fundable(d) ? '' : ' — allocation off'}</option>)}
       </select></label>
-      <label>Amount (SN118 alpha)<input className={inputClass} inputMode="decimal" value={amount} onChange={e => { setAmount(e.target.value); invalidate() }} /></label>
+      <div><label>Amount (SN118 alpha)<input className={inputClass} inputMode="decimal" value={amount} onChange={e => { setAmount(e.target.value); invalidate() }} /></label><button type="button" className={inputClass} disabled={!maximum} onClick={() => { setAmount(alphaDisplay(maximum)); invalidate() }}>Max</button><span className="text-xs">{alphaRao(reserve) ? `Available after reserve and verified earnings: ${alphaDisplay(maximum)} alpha` : 'Enter the stake reserve to calculate Max.'}</span></div>
       <label>Minimum alpha to retain staked<input className={inputClass} inputMode="decimal" value={reserve} onChange={e => { setReserve(e.target.value); invalidate() }} /></label>
       <label>Audit reason<input className={inputClass} maxLength={240} value={reason} onChange={e => { setReason(e.target.value); invalidate() }} /></label>
       <button className={inputClass} disabled={!alphaRao(amount) || !alphaRao(reserve) || reason.trim().length < 8 || !state.destinations.some(d => d.bucket_id === bucket && fundable(d))} onClick={async () => {
@@ -74,6 +79,7 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
     {preview && <div className="space-y-3 rounded border border-[var(--line)] p-4">
       <p>Send {alphaDisplay(preview.envelope.request.amount_rao)} alpha to {preview.envelope.request.bucket_id.toUpperCase()}; retain at least {alphaDisplay(preview.envelope.request.retained_alpha_rao)} alpha.</p>
       <p className="break-all font-mono text-xs">{preview.envelope.destination}</p>
+      {preview.envelope.version === 2 && <p className="text-sm">One transfer backed by {preview.envelope.request.sources.length} verified earnings receipts.</p>}
       <p className="text-sm">Expires at finalized block {preview.envelope.request.expires_block}. Custody rechecks balances, reserve, signed destination and previous delivery before signing.</p>
       <label>Type “{expected}”<input className={inputClass} value={confirmation} disabled={readOnly || busy} onChange={e => setConfirmation(e.target.value)} /></label>
       {!previewDestinationEnabled && <p role="status">The destination wallet or allocation changed. Create a new preview before transferring.</p>}

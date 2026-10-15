@@ -534,6 +534,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await emission_collector.start()
             app.state.source_emission_collector = emission_collector
 
+            from ditto.api_server.treasury_ledger import TreasuryLedgerSampler
+
+            treasury_ledger_sampler = TreasuryLedgerSampler(
+                app_state=app.state,
+                session_maker=app.state.session_maker,
+                enabled=app.state.config.treasury_ledger_sampler_enabled,
+            )
+            stack.push_async_callback(treasury_ledger_sampler.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await treasury_ledger_sampler.start()
+            app.state.treasury_ledger_sampler = treasury_ledger_sampler
+
             from ditto.api_server.treasury_manual_loop import TreasuryManualLoop
 
             app.state.treasury_manual_loop = TreasuryManualLoop(app.state)
@@ -698,6 +710,15 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     )
 
     app.include_router(treasury_allocation_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.public_treasury_ledger import (
+        admin_router as admin_treasury_ledger_router,
+    )
+    from ditto.api_server.endpoints.public_treasury_ledger import (
+        router as treasury_ledger_router,
+    )
+
+    app.include_router(treasury_ledger_router, prefix="/api/v1")
+    app.include_router(admin_treasury_ledger_router, prefix="/api/v1")
     app.include_router(attestation_router, prefix="/api/v1")
     app.include_router(name_claims_router, prefix="/api/v1")
     app.include_router(miner_avatars_router, prefix="/api/v1")

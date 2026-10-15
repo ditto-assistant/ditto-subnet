@@ -48,8 +48,11 @@ SHA-256, and `agent_status`. Screenshots, rank, and truncated keys are leads.
 - Leaderboard / ATH / scored or live high-rank / precedent search → board.
 - Miner appeal: follow current status. A scored agent is a board case even
   if it was once quarantined.
-- Skip `banned` rows. Park `evaluating` / `waiting_validator` for the next
-  fire — `open_ath_review` 409s until the agent is `scored` or `live`.
+- Skip `banned` rows. An `evaluating` / `waiting_validator` row can still
+  be rejected through the batched rulings court (below): a proven violation
+  need not wait for quorum, and the reject ends its live validator tickets.
+  A hold (`open_ath_review`, or a batch `open`) still 409s until the agent
+  is `scored` or `live`.
 - An ATH reject is per UUID. Same SHA or same hotkey is a different agent row
   (see [references/precedents/identity-uuid-not-sha.md](references/precedents/identity-uuid-not-sha.md)).
   The rare `banned_hotkeys` upload gate is separate and blocks future uploads;
@@ -239,8 +242,9 @@ quarantine court's shape, with the crown re-read on both legs.
    ```
 
    `action` is `open` (hold for investigation), `clear`, or `reject`. A
-   `reject` on a scored/live agent opens and resolves in one item; on a held
-   agent it resolves only. Each agent appears once; every reject cites at
+   `reject` on a scored, live, or still-evaluating agent opens and resolves
+   in one item (set `expected_score_count` to the current partial count, which
+   may be 0); on a held agent it resolves only. Each agent appears once; every reject cites at
    least one `path:line`. The replay of the 2026-09-13 top-5 rejects lives at
    `apps/platform/ditto/tests/fixtures/ath_rulings_replay_2026-09-13.json`.
 2. `create_ath_rulings_upload` (backroom:write), then
