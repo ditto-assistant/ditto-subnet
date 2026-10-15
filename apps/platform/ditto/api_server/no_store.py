@@ -14,22 +14,13 @@ def no_store(request: Request, response: Response) -> None:
     """Router dependency for private routes.
 
     The header on ``response`` covers a value the endpoint returns. A returned
-    ``Response`` and every error response are built separately, so the
-    request is also marked for :class:`NoStoreMiddleware` and
-    :func:`mark_error_no_store`.
+    ``Response`` is built separately, so the request is also marked for
+    :class:`NoStoreMiddleware`. Error responses are no-store by default in
+    ``envelope_response``, so they need no mark (and a request that fails
+    before dependencies run, such as an unparseable body, is still covered).
     """
     response.headers["Cache-Control"] = NO_STORE
     request.state.no_store = True
-
-
-def mark_error_no_store(request: Request, response: Response | None) -> None:
-    """Apply a private route's cache policy to its error response.
-
-    Like :class:`NoStoreMiddleware`, an explicitly declared policy (for
-    example an ``HTTPException`` raised with its own headers) is kept.
-    """
-    if response is not None and getattr(request.state, "no_store", False):
-        response.headers.setdefault("Cache-Control", NO_STORE)
 
 
 class NoStoreMiddleware:
@@ -38,8 +29,7 @@ class NoStoreMiddleware:
     Covers redirects and other ``Response`` objects a private endpoint returns
     directly, which FastAPI does not merge with the dependency's headers. An
     explicit policy (the public, immutable CLA text) is left as declared.
-    Mount it innermost so the public cache sees the final header. The generic
-    500 is built outside the middleware stack and uses mark_error_no_store.
+    Mount it innermost so the public cache sees the final header.
     """
 
     def __init__(self, app: ASGIApp) -> None:

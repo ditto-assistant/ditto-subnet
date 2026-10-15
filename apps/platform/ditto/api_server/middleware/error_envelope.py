@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import functools
-import inspect
 import logging
-from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -35,7 +32,6 @@ from ditto.api_server.middleware.request_id import (
     REQUEST_ID_HEADER,
     request_id_var,
 )
-from ditto.api_server.no_store import mark_error_no_store
 from ditto.api_server.payment_verifier import (
     PaymentAmountMismatch,
     PaymentCallTypeMismatch,
@@ -233,23 +229,18 @@ def envelope_response(
     rid = request_id_var.get()
     response_headers = dict(headers or {})
     response_headers[REQUEST_ID_HEADER] = rid
+    # No error is cacheable: it can carry a request id, an auth answer or a
+    # transient refusal. Every error path (route exceptions, validation and
+    # routing failures, 413/429 middleware and the 500 handler) builds its
+    # response here, so this one default covers them all. A handler that
+    # declares its own Cache-Control keeps it.
+    if not any(name.lower() == "cache-control" for name in response_headers):
+        response_headers["Cache-Control"] = "no-store"
     return JSONResponse(
         status_code=status_code,
         content=_envelope(error_code, message),
         headers=response_headers,
     )
-
-
-def _keep_no_store(handler: Callable[..., Any]) -> Callable[..., Any]:
-    @functools.wraps(handler)
-    async def wrapped(request: Request, exc: Exception) -> Any:
-        response = handler(request, exc)
-        if inspect.isawaitable(response):
-            response = await response
-        mark_error_no_store(request, response)
-        return response
-
-    return wrapped
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -551,8 +542,3 @@ def register_exception_handlers(app: FastAPI) -> None:
             return envelope_response(500, ERROR_CODE_UNHANDLED, "internal server error")
         finally:
             request_id_var.reset(token)
-
-    # Error responses are built here, not from the response a private route's
-    # no_store dependency marked, so carry its cache policy over explicitly.
-    for key, handler in list(app.exception_handlers.items()):
-        app.exception_handlers[key] = _keep_no_store(handler)
