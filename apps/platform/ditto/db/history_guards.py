@@ -64,8 +64,13 @@ async def truncate_past_guards(
     tables: Sequence[str],
     *,
     restart_identity: bool = False,
+    lock_timeout_ms: int | None = None,
 ) -> None:
-    """Truncate ``tables`` with CASCADE inside the caller's transaction."""
+    """Truncate ``tables`` with CASCADE inside the caller's transaction.
+
+    ``lock_timeout_ms`` is set inside the same statement, so it also bounds the
+    truncate on an autocommit connection, where a prior SET LOCAL would not.
+    """
     if not tables or any(
         not table.isascii() or not table.isidentifier() for table in tables
     ):
@@ -76,6 +81,11 @@ async def truncate_past_guards(
         [(row[0], row[1], row[2]) for row in rows],
         restart_identity=restart_identity,
     )
+    if lock_timeout_ms is not None:
+        body.insert(
+            0,
+            f"  PERFORM set_config('lock_timeout', '{int(lock_timeout_ms)}ms', true);",
+        )
     await conn.execute(
         text("DO $ditto_reset$\nBEGIN\n" + "\n".join(body) + "\nEND\n$ditto_reset$")
     )

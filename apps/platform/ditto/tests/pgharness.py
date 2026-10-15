@@ -545,6 +545,8 @@ def drop_worker_database(admin: Dsn, database: str) -> None:
 
 SCHEMA_TABLE = "alembic_version"
 """Never truncated: it records which schema the database is on."""
+TRUNCATE_LOCK_TIMEOUT_MS = 10_000
+"""Bound a fixture truncate stuck behind a straggler's lock."""
 
 
 async def truncate_test_tables(
@@ -567,8 +569,7 @@ async def truncate_test_tables(
         for table in tables
     ):
         raise ValueError("invalid fixture table names")
-    await conn.execute(text("SET LOCAL lock_timeout = '10s'"))
-    await truncate_past_guards(conn, tables)
+    await truncate_past_guards(conn, tables, lock_timeout_ms=TRUNCATE_LOCK_TIMEOUT_MS)
 
 
 async def _build_reset_sql(conn: asyncpg.Connection) -> str:
