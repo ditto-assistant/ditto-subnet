@@ -62,22 +62,26 @@ _CACHEABLE_HEADERS = (
 logger = logging.getLogger(__name__)
 
 
-def _entry_etag(headers: Mapping[str, str], body: bytes) -> str:
-    """Keep an endpoint's own validator; otherwise derive one from the body.
+def _declared_etag(headers: Mapping[str, str]) -> str | None:
+    """The endpoint's own validator, as it applies to this representation.
 
     Content-addressed endpoints (pinned CLA text, avatars) publish a digest
     ETag that clients pin in If-None-Match; replacing it would turn every
-    revalidation of a cached entry into a full 200. A declared strong ETag
-    names the identity bytes, so an encoded entry keeps it in weak form:
-    distinct bytes never share a strong validator, and weak revalidation
-    still answers a pinned digest with a 304.
+    revalidation into a full 200. A declared strong ETag names the identity
+    bytes, so an encoded representation carries it in weak form: distinct
+    bytes never share a strong validator, and weak revalidation still answers
+    a pinned digest with a 304. Every path that serves a declared ETag
+    through this cache, stored or passed through, uses this one rule.
     """
     declared = headers.get("etag")
-    if not declared:
-        return compute_etag(body)
-    if headers.get("content-encoding") and not declared.startswith("W/"):
+    if declared and headers.get("content-encoding") and not declared.startswith("W/"):
         return "W/" + declared
     return declared
+
+
+def _entry_etag(headers: Mapping[str, str], body: bytes) -> str:
+    """Keep an endpoint's own validator; otherwise derive one from the body."""
+    return _declared_etag(headers) or compute_etag(body)
 
 
 def compute_etag(body: bytes) -> str:
@@ -253,7 +257,9 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         ttl, stale_ttl = _policy_from_cache_control(_cache_control(response.headers))
         if response.status_code != 200 or ttl <= 0:
-            etag = response.headers.get("etag")
+            etag = _declared_etag(response.headers)
+            if response.status_code == 200 and etag:
+                response.headers["etag"] = etag
             if response.status_code == 200 and etag and if_none_match(inm, etag):
                 # Not cacheable, but the client's validator still matches.
                 async for _chunk in response.body_iterator:

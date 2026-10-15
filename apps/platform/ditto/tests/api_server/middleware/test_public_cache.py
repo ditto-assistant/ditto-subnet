@@ -67,6 +67,7 @@ def _build(
         "uncacheable": 0,
         "no_cache": 0,
         "split_fields": 0,
+        "uncacheable_big": 0,
     }
     seen_validators: list[str | None] = []
 
@@ -123,6 +124,16 @@ def _build(
         calls["uncacheable"] += 1
         return Response(
             b"TEST FIXTURE ONLY",
+            media_type="text/plain",
+            headers={"ETag": _PINNED_ETAG, "Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/v1/public/uncacheable-big")
+    async def uncacheable_big() -> Response:
+        # Large enough to gzip, but not cacheable: served through the cache.
+        calls["uncacheable_big"] += 1
+        return Response(
+            content=b"TEST FIXTURE ONLY. " * 300,
             media_type="text/plain",
             headers={"ETag": _PINNED_ETAG, "Cache-Control": "no-store"},
         )
@@ -637,3 +648,22 @@ async def test_split_header_fields_are_stored_whole(clock: _Clock) -> None:
     assert hit.headers["x-public-cache"] == "HIT"
     assert hit.headers["cache-control"] == "public, max-age=10, immutable"
     assert calls["split_fields"] == 1
+
+
+async def test_uncacheable_gzip_response_gets_the_same_weak_validator(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock, gzip=True)
+    gzip = {"Accept-Encoding": "gzip"}
+    async with _client(app) as client:
+        full = await client.get("/api/v1/public/uncacheable-big", headers=gzip)
+        revalidated = await client.get(
+            "/api/v1/public/uncacheable-big",
+            headers={**gzip, "If-None-Match": _PINNED_ETAG},
+        )
+    assert full.headers["content-encoding"] == "gzip"
+    # The stored and the pass-through paths apply one rule to encoded bytes.
+    assert full.headers["etag"] == "W/" + _PINNED_ETAG
+    assert revalidated.status_code == 304
+    assert revalidated.headers["etag"] == "W/" + _PINNED_ETAG
+    assert calls["uncacheable_big"] == 2
