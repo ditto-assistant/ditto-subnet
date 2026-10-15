@@ -1057,3 +1057,26 @@ async def test_off_gate_reads_only_the_policy_and_offers_nothing_to_bind(
     async with session_maker() as session:
         shadow = await evaluate_cla_gate(session, netuid=118, hotkey=alice.ss58_address)
     assert shadow.signature_id == UUID(receipt.json()["signature_id"])
+
+
+async def test_policy_history_pages_from_the_current_revision(
+    app, client, session_maker
+):
+    """Backroom finds revision N at history offset current - N; pin that."""
+    setup(app, session_maker)
+    for mode in ("shadow", "off", "shadow"):
+        await policy(client, mode)
+    control = (await client.get("/api/v1/admin/cla/settings", headers=_HEADERS)).json()
+    current = control["current"]["revision"]
+    assert current == 3
+    # The newest revision is the current one, at offset 0.
+    assert control["history"][0] == control["current"]
+    for target in range(current + 1):
+        page = (
+            await client.get(
+                "/api/v1/admin/cla/settings",
+                headers=_HEADERS,
+                params={"history_limit": 1, "history_offset": current - target},
+            )
+        ).json()
+        assert [row["revision"] for row in page["history"]] == [target]
