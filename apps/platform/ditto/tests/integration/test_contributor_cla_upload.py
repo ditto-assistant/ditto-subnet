@@ -127,6 +127,18 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
         assert exact_check.status_code == 200 and exact_check.json()["ok"], (
             exact_check.text
         )
+        # Without the payment proof this is a request to buy another seed of the
+        # accepted artifact: a new contribution, so the current CLA applies too.
+        # The Go relay serves only these proof-less checks and must match.
+        unpaid = {
+            key: value
+            for key, value in recovery.items()
+            if not key.startswith("payment_")
+        }
+        unpaid_check = await client.post("/api/v1/upload/check", json=unpaid)
+        assert unpaid_check.status_code == 200, unpaid_check.text
+        assert not unpaid_check.json()["ok"]
+        assert {1104, 1106} <= set(unpaid_check.json()["error_codes"])
         legacy_reserved_retry = await client.post(
             "/api/v1/upload/check",
             json={**recovery, "name": None, "reserve_submission_slot": True},
