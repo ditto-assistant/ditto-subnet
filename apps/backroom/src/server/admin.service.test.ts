@@ -6063,8 +6063,18 @@ describe('verified contributors and CLA rollout', () => {
     vi.stubGlobal('fetch', fetchMock)
     const result = await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' })
     expect(result).toMatchObject({ applied: null, policy: claControlFixture })
-    expect(result.refresh_error).toContain('may have committed (fetch failed)')
+    expect(result.refresh_error).toContain('may have committed (The platform API connection failed during /api/v1/admin/cla/settings: fetch failed)')
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails without claiming a possible commit when the policy write is never sent', async () => {
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    delete process.env.DITTO_PLATFORM_ADMIN_TOKEN
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
+      .rejects.toThrow('not configured')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it.each([409, 401])('does not report success when the policy write is rejected with %i', async (status) => {

@@ -4177,16 +4177,15 @@ export async function updateClaPolicy(actor: string, rawInput: unknown) {
   const body = { expected_revision: input.expectedRevision, mode: input.mode, reason: input.reason, confirmation: input.confirmation } satisfies Body
   // A write that may have committed must not be reported as failed: a retry
   // with the old revision would be stale. A timeout, 5xx or transport failure
-  // can follow the commit; a 4xx (such as a revision conflict) is a definite
-  // rejection.
+  // can follow the commit. A plain Error (raised before sending), an auth
+  // failure or a 4xx (such as a revision conflict) proves nothing was applied.
   let response: unknown
   let unknownOutcome: string | null = null
   try {
     response = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body })
   } catch (error) {
-    // Only an auth failure or a 4xx proves nothing was applied.
-    if (error instanceof PlatformAdminError && (error.failure === 'auth' || error.failure === 'request')) throw error
-    unknownOutcome = error instanceof Error ? error.message : String(error)
+    if (!(error instanceof PlatformAdminError) || error.failure === 'auth' || error.failure === 'request') throw error
+    unknownOutcome = error.message
   }
   const parsed = unknownOutcome === null ? claSettingsRevisionSchema.safeParse(response) : null
   const applied = parsed?.success ? parsed.data : null

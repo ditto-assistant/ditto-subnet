@@ -101,6 +101,38 @@ describe('platformAdminRequest', () => {
     expect((error as Error).message).toContain('25s')
   })
 
+  it('classifies a connection failure after sending as transport', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')))
+
+    const error = await platformAdminRequest('/api/v1/admin/cla/settings', {
+      method: 'POST',
+      body: { mode: 'shadow' },
+    }).catch((cause: unknown) => cause)
+
+    expect(error).toBeInstanceOf(PlatformAdminError)
+    expect((error as PlatformAdminError).failure).toBe('transport')
+    expect((error as PlatformAdminError).status).toBeNull()
+    expect((error as Error).message).toContain('fetch failed')
+  })
+
+  it.each([
+    ['transport', new TypeError('terminated')],
+    ['timeout', new DOMException('The operation was aborted due to timeout', 'TimeoutError')],
+  ])('classifies a failed response body read as %s', async (failure, cause) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    const body = new ReadableStream({ start(controller) { controller.error(cause) } })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body)))
+
+    const error = await platformAdminRequest('/api/v1/admin/cla/settings', {
+      method: 'POST',
+      body: { mode: 'shadow' },
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(PlatformAdminError)
+    expect((error as PlatformAdminError).failure).toBe(failure)
+  })
+
   it('supports the legacy Worker binding during the token-name rollout', async () => {
     delete process.env.DITTO_ADMIN_API_TOKEN
     process.env.DITTO_PLATFORM_ADMIN_TOKEN = 'legacy-admin-token'

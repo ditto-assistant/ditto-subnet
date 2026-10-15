@@ -92,8 +92,12 @@ export async function platformPublicRequest(path: string) {
   return payload
 }
 
-/** Why a platform admin call failed, so callers can write honest copy. */
-export type PlatformAdminFailure = 'timeout' | 'auth' | 'server' | 'request'
+/**
+ * Why a platform admin call failed, so callers can write honest copy.
+ * 'transport' means the connection failed after the request may have been
+ * sent. A plain Error is raised only before anything is sent.
+ */
+export type PlatformAdminFailure = 'timeout' | 'auth' | 'server' | 'request' | 'transport'
 
 export class PlatformAdminError extends Error {
   readonly failure: PlatformAdminFailure
@@ -116,6 +120,11 @@ function isTimeout(error: unknown) {
     error instanceof DOMException &&
     (error.name === 'TimeoutError' || error.name === 'AbortError')
   )
+}
+
+function transportError(path: string, error: unknown) {
+  const detail = error instanceof Error ? error.message : String(error)
+  return new PlatformAdminError('transport', `The platform API connection failed during ${path}: ${detail}`)
 }
 
 export async function platformAdminRequest(
@@ -191,7 +200,7 @@ export async function platformAdminRequest(
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {
-      if (!isTimeout(error)) throw error
+      if (!isTimeout(error)) throw transportError(path, error)
       if (attempt++ < retries) continue
       throw new PlatformAdminError(
         'timeout',
@@ -208,7 +217,17 @@ export async function platformAdminRequest(
       // Shared server helpers can run outside a TanStack response context.
     }
 
-    const payload = decodeResponseBody(await response.text())
+    let text: string
+    try {
+      text = await response.text()
+    } catch (error) {
+      if (!isTimeout(error)) throw transportError(path, error)
+      throw new PlatformAdminError(
+        'timeout',
+        `The platform API did not finish answering ${path} within ${Math.round(timeoutMs / 1000)}s.`,
+      )
+    }
+    const payload = decodeResponseBody(text)
     if (response.ok) return payload
     if (response.status >= 500 && attempt++ < retries) continue
     const message = errorMessage(payload, response.status)
