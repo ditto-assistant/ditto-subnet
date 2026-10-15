@@ -4157,7 +4157,14 @@ export async function fetchMinerGithubLink(rawInput: unknown) {
 export async function fetchGithubContributor(rawInput: unknown) {
   const input = githubAccountInputSchema.parse(rawInput)
   const identity = githubLinkStatusSchema.parse(await platformAdminRequest(`/api/v1/public/github-account/${input.githubUserId}`))
-  return { ...identity, cla: identity.link ? await fetchMinerClaStatus({ hotkey: identity.link.hotkey }) : null }
+  if (!identity.link) return { ...identity, cla: null, cla_error: null }
+  // Keep the resolved identity visible when only the consent read fails.
+  try {
+    return { ...identity, cla: await fetchMinerClaStatus({ hotkey: identity.link.hotkey }), cla_error: null }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    return { ...identity, cla: null, cla_error: `Identity resolved, but reading CLA status failed: ${reason}` }
+  }
 }
 
 export async function fetchMinerClaStatus(rawInput: unknown) {

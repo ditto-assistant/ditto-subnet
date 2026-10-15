@@ -5987,8 +5987,18 @@ describe('verified contributors and CLA rollout', () => {
       .mockResolvedValueOnce(Response.json(claStatusFixture))
     vi.stubGlobal('fetch', fetchMock)
     expect(await fetchMinerGithubLink({ hotkey: 'fixture' })).toEqual(contributorFixture)
-    expect(await fetchGithubContributor({ githubUserId: 100 })).toEqual({ ...contributorFixture, cla: claStatusFixture })
+    expect(await fetchGithubContributor({ githubUserId: 100 })).toEqual({ ...contributorFixture, cla: claStatusFixture, cla_error: null })
     expect(fetchMock.mock.calls[1][0]).toContain('/public/github-account/100')
+  })
+
+  it('keeps the resolved GitHub identity when only the CLA read fails', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json({ detail: 'upstream exploded' }, { status: 503 })))
+    const result = await fetchGithubContributor({ githubUserId: 100 })
+    expect(result).toMatchObject({ ...contributorFixture, cla: null })
+    expect(result.cla_error).toBe('Identity resolved, but reading CLA status failed: upstream exploded')
   })
 
   it.each([2 ** 53, Number.MAX_VALUE])('rejects an unsafe GitHub id %s instead of looking up a rounded one', async (githubUserId) => {

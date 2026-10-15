@@ -1671,7 +1671,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_github_contributor_status', {
     title: 'Get GitHub contributor identity and CLA',
-    description: 'Resolve an authenticated GitHub PR author numeric id to its active linked hotkey and current CLA status. Always use the numeric author id, never a login string: logins can be renamed or reused. is_current reports effective-version consent, not a bounty award or payee authorization. An unlinked account returns link=null and cla=null. Requires backroom:read.',
+    description: 'Resolve an authenticated GitHub PR author numeric id to its active linked hotkey and current CLA status. Always use the numeric author id, never a login string: logins can be renamed or reused. is_current reports effective-version consent, not a bounty award or payee authorization. An unlinked account returns link=null and cla=null. If only the CLA read fails, the identity is still returned with cla=null and cla_error naming the failure; never read that as unsigned. Requires backroom:read.',
     inputSchema: githubAccountInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGithubContributor(input)))
 

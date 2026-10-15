@@ -528,6 +528,8 @@ parses its input with the strict uuid schema before calling Platform.
 `get_miner_github_link` reads an active OAuth-verified numeric GitHub id and its
 signed hotkey link. `get_github_contributor_status` resolves a numeric PR author
 id to its linked hotkey and current CLA status; logins alone are not identity.
+If only the CLA read fails, it still returns the identity with `cla: null` and
+a `cla_error` naming the failure, which never means unsigned.
 `get_miner_cla_status` reads the effective version and exact consent receipt.
 These are identity/consent evidence, never payment routing or bounty awards.
 
