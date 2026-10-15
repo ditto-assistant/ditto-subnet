@@ -9845,6 +9845,13 @@ CREATE UNIQUE INDEX miner_github_links_active_hotkey_key ON public.miner_github_
 
 
 --
+-- Name: miner_github_links_attempt_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_github_links_attempt_idx ON public.miner_github_links USING btree (link_attempt_id);
+
+
+--
 -- Name: miner_session_tokens_session_idx; Type: INDEX; Schema: public; Owner: -
 --
 

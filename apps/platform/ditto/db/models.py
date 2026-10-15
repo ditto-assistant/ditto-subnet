@@ -11827,6 +11827,7 @@ class MinerGithubLink(Base):
         ForeignKeyConstraint(["nonce"], ["miner_github_action_nonces.nonce"]),
         CheckConstraint("github_user_id > 0", name="github_id"),
         CheckConstraint("key_kind IN ('hotkey','coldkey')", name="key_kind"),
+        Index("miner_github_links_attempt_idx", "link_attempt_id"),
         Index(
             "miner_github_links_active_hotkey_key",
             "hotkey",

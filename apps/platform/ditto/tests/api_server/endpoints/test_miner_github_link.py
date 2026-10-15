@@ -54,12 +54,14 @@ class Provider:
     scope = ""
     revoke_status = 204
     revoke_transport_error = False
+    user_status = 200
+    user_delay = 0.0
 
     def __init__(self):
         self.requests = []
 
     def transport(self):
-        def handler(request):
+        async def handler(request):
             self.requests.append(request)
             if request.url.path == "/login/oauth/access_token":
                 return httpx.Response(
@@ -72,8 +74,10 @@ class Provider:
                 )
             if request.url.path == "/user":
                 assert request.headers["authorization"] == f"Bearer {TOKEN}"
+                if self.user_delay:
+                    await asyncio.sleep(self.user_delay)
                 return httpx.Response(
-                    200, json={"id": self.user_id, "login": self.login}
+                    self.user_status, json={"id": self.user_id, "login": self.login}
                 )
             if request.url.path == "/applications/fixture-client/token":
                 assert request.method == "DELETE"
@@ -767,7 +771,9 @@ async def test_exchange_failure_is_terminal_and_redacts_unexpected_details(
         "/api/v1/miner-auth/github/callback",
         params={"state": params["state"][0], "code": "fixture-code"},
     )
-    assert response.status_code == 400, response.text
+    # A rejected identity is the miner's outcome (400); an unexpected fault is
+    # ours (500). Both end the attempt.
+    assert response.status_code == (500 if unexpected else 400), response.text
     polled = await client.get(
         f"/api/v1/me/github-link/attempts/{body['attempt_id']}", headers=auth
     )
@@ -1351,6 +1357,8 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
         replace(evidence, _seal=object()),
         replace(evidence, verified_at=datetime.now(UTC) - timedelta(minutes=3)),
         replace(evidence, netuid=119),
+        # A client-supplied object, not prepared evidence.
+        {"netuid": 118, "hotkey": alice.ss58_address},
     ):
         async with session_maker() as session, session.begin():
             with pytest.raises(BountyIdentityRejected, match="fresh GitHub evidence"):
@@ -1846,3 +1854,108 @@ async def test_private_link_and_cla_responses_are_never_cached(
         response = await client.get(path, headers=headers)
         assert response.status_code == status, (path, response.text)
         assert response.headers.get("cache-control") == "no-store", path
+
+
+async def _callback(client, token, case):
+    auth = {"authorization": f"Bearer {token}"}
+    started = (await client.post("/api/v1/me/github-link/start", headers=auth)).json()
+    params = await launch_in_browser(client, started)
+    query = {"state": params["state"][0], "code": "fixture-code"}
+    if case == "declined":
+        query = {"state": params["state"][0], "error": "access_denied"}
+    return started, await client.get("/api/v1/miner-auth/github/callback", params=query)
+
+
+@pytest.mark.parametrize(
+    "case,status", [("declined", 400), ("provider", 502), ("bug", 500)]
+)
+async def test_callback_status_separates_declines_outages_and_bugs(
+    app, client, session_maker, monkeypatch, case, status
+):
+    provider = setup(app, session_maker)
+    if case == "provider":
+        provider.user_status = 503
+    if case == "bug":
+
+        async def broken(**_kwargs):
+            raise RuntimeError("fixture bug")
+
+        monkeypatch.setattr(app.state.github_link, "exchange", broken)
+    token = await _sign_in(client, bittensor.Keypair.create_from_uri("//Alice"))
+    started, callback = await _callback(client, token, case)
+    assert callback.status_code == status, callback.text
+    assert callback.headers["cache-control"] == "no-store"
+    async with session_maker() as session:
+        attempt = await session.get(MinerGithubLinkAttempt, UUID(started["attempt_id"]))
+        assert attempt.status == "failed" and attempt.code_verifier is None
+    if case == "provider":
+        # The transient token issued before the outage is still revoked.
+        assert [r.method for r in provider.requests].count("DELETE") == 1
+
+
+async def test_exchange_deadline_fails_as_an_outage_and_still_revokes(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.api_server import github_link
+
+    provider = setup(app, session_maker)
+    provider.user_delay = 5.0
+    monkeypatch.setattr(github_link, "EXCHANGE_DEADLINE_SECONDS", 0.2)
+    token = await _sign_in(client, bittensor.Keypair.create_from_uri("//Alice"))
+    _started, callback = await _callback(client, token, "provider")
+    assert callback.status_code == 502, callback.text
+    assert "did not answer in time" in callback.text
+    assert [r.method for r in provider.requests].count("DELETE") == 1
+
+
+async def test_confirm_stops_when_linking_is_disabled(app, client, session_maker):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    started, _, _ = await browser_flow(client, token)
+    app.state.github_link = GithubLinkClient(
+        replace(app.state.github_link.config, enabled=False)
+    )
+    confirmed = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers={"authorization": f"Bearer {token}"},
+        json=signed_link(alice, started["attempt_id"]),
+    )
+    assert confirmed.status_code == 503, confirmed.text
+    async with session_maker() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(MinerGithubLink)) == 0
+        )
+
+
+async def test_new_link_is_ordered_after_every_event_of_its_account(
+    app, client, session_maker
+):
+    """A replica with a fast clock revoked the account's previous link."""
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    charlie = bittensor.Keypair.create_from_uri("//Charlie")
+    alice_token = await _sign_in(client, alice)
+    started, _, _ = await browser_flow(client, alice_token)
+    first = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers={"authorization": f"Bearer {alice_token}"},
+        json=signed_link(alice, started["attempt_id"]),
+    )
+    assert first.status_code == 200, first.text
+    ahead = datetime.now(UTC) + timedelta(minutes=5)
+    async with session_maker() as session, session.begin():
+        previous = await session.get(MinerGithubLink, UUID(first.json()["link_id"]))
+        previous.revoked_at = ahead
+    charlie_token = await _sign_in(client, charlie)
+    started, _, _ = await browser_flow(client, charlie_token)
+    second = await client.post(
+        "/api/v1/me/github-link/confirm",
+        headers={"authorization": f"Bearer {charlie_token}"},
+        json=signed_link(charlie, started["attempt_id"]),
+    )
+    assert second.status_code == 200, second.text
+    async with session_maker() as session:
+        current = await session.get(MinerGithubLink, UUID(second.json()["link_id"]))
+        # The same GitHub account is never recorded as linked to two hotkeys.
+        assert current.linked_at >= ahead

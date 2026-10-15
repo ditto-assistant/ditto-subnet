@@ -103,6 +103,10 @@ def upgrade() -> None:
         sa.CheckConstraint("github_user_id > 0", name="github_id"),
         sa.CheckConstraint("key_kind IN ('hotkey','coldkey')", name="key_kind"),
     )
+    # Attempt pruning deletes attempts; this keeps its FK check off a scan.
+    op.create_index(
+        "miner_github_links_attempt_idx", "miner_github_links", ["link_attempt_id"]
+    )
     # Identity is globally one-to-one. A netuid binds the proof, not a second
     # active identity mapping for the same hotkey or GitHub account.
     for field in ("hotkey", "github_user_id"):

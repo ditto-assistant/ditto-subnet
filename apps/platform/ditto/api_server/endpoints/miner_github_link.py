@@ -53,6 +53,7 @@ from ditto.api_server.github_link import (
     EXCHANGE_WINDOW_SECONDS,
     GithubLinkClient,
     GithubLinkRejected,
+    GithubProviderUnavailable,
 )
 from ditto.api_server.no_store import no_store
 from ditto.chain import ChainError
@@ -392,13 +393,20 @@ async def callback(
     # cannot exchange the code, and CLI polling retains access to the row.
     failure = None
     identity = None
+    # A declined or rejected identity is the miner's answer (400); a provider
+    # outage is a bad gateway (502) and anything else is our fault (500), so
+    # monitoring can tell them apart. The attempt fails terminally either way.
+    failure_status = 400
     try:
         if error or not code:
             raise GithubLinkRejected("GitHub sign-in was declined")
         identity = await client.exchange(code=code, verifier=verifier)
+    except GithubProviderUnavailable as exc:
+        failure, failure_status = str(exc), 502
     except GithubLinkRejected as exc:
         failure = str(exc)
     except Exception as exc:
+        failure_status = 500
         # The verifier is consumed; persist a terminal failure without leaking
         # unexpected provider exception bodies, tokens or credentials. Operators
         # still get the attempt and exception type to diagnose provider faults.
@@ -428,7 +436,9 @@ async def callback(
             failure = failure or "GitHub identity verification failed; start again"
             attempt.status, attempt.error = "failed", failure
             return _page(
-                "GitHub sign-in failed", f"<p>{html.escape(failure)}</p>", status=400
+                "GitHub sign-in failed",
+                f"<p>{html.escape(failure)}</p>",
+                status=failure_status,
             )
         attempt.github_user_id, attempt.github_login = identity.user_id, identity.login
         attempt.status = "identity_verified"
@@ -642,6 +652,23 @@ async def _approved_attempt(
     return attempt
 
 
+async def link_history_floor(
+    session: AsyncSession, *, hotkey: str, github_user_id: int
+) -> datetime:
+    """The latest recorded link event for this hotkey or GitHub account."""
+    latest = await session.scalar(
+        select(
+            func.max(
+                func.coalesce(MinerGithubLink.revoked_at, MinerGithubLink.linked_at)
+            )
+        ).where(
+            (MinerGithubLink.hotkey == hotkey)
+            | (MinerGithubLink.github_user_id == github_user_id)
+        )
+    )
+    return latest or datetime.min.replace(tzinfo=UTC)
+
+
 def revocation_time(link: MinerGithubLink, now: datetime) -> datetime:
     """Never revoke before the link was recorded.
 
@@ -671,6 +698,8 @@ async def confirm(
     session: SessionDep,
     _authorization: Annotated[str | None, Header(alias="authorization")] = None,
 ) -> GithubLinkView:
+    # Disabling linking stops new links, including already approved attempts.
+    _client(request)
     now = datetime.now(UTC)
     try:
         async with session.begin():
@@ -692,10 +721,17 @@ async def confirm(
             now = datetime.now(UTC)
             # Only link history is clamped; the action nonce keeps this
             # replica's time.
-            linked_at = now
+            # Order the new link after every recorded event of this hotkey and
+            # this GitHub account, whichever replica (and clock) wrote it, so
+            # neither is ever recorded as linked to two identities at once.
+            linked_at = max(
+                now,
+                await link_history_floor(
+                    session, hotkey=body.hotkey, github_user_id=body.github_user_id
+                ),
+            )
             previous = await active_github_link(session, hotkey=body.hotkey)
             if previous:
-                linked_at = revocation_time(previous, now)
                 previous.revoked_at = linked_at
                 await session.flush()
             link_id = uuid4()

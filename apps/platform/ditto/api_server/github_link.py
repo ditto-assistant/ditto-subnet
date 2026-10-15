@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from urllib.parse import urlencode, urlsplit
@@ -14,9 +15,12 @@ from ditto_screening_protocol.contributor_identity import GithubLogin
 
 logger = logging.getLogger(__name__)
 ATTEMPT_TTL_SECONDS = 600
-# A consumed callback must finish its provider exchange within this window:
-# three requests (token, user, revocation) at the 60-second timeout cap.
+# A consumed callback must finish its provider exchange within this window.
+# httpx timeouts bound each connect/read/write separately, not a request, so
+# the exchange enforces its own total deadlines that fit inside the window.
 EXCHANGE_WINDOW_SECONDS = 180
+EXCHANGE_DEADLINE_SECONDS = 150
+TOKEN_REVOCATION_DEADLINE_SECONDS = 15
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,13 @@ class GithubLinkRejected(Exception):
     pass
 
 
+class GithubProviderUnavailable(GithubLinkRejected):
+    """GitHub did not answer usably (network, timeout, 5xx, malformed body).
+
+    A provider fault, not a decision by the miner or a rejected identity.
+    """
+
+
 class GithubLinkClient:
     def __init__(
         self,
@@ -78,6 +89,15 @@ class GithubLinkClient:
         return f"https://github.com/login/oauth/authorize?{query}"
 
     async def exchange(self, *, code: str, verifier: str) -> GithubIdentity:
+        try:
+            async with asyncio.timeout(EXCHANGE_DEADLINE_SECONDS):
+                return await self._exchange(code=code, verifier=verifier)
+        except TimeoutError:
+            raise GithubProviderUnavailable(
+                "GitHub did not answer in time; start a new link attempt"
+            ) from None
+
+    async def _exchange(self, *, code: str, verifier: str) -> GithubIdentity:
         try:
             async with httpx.AsyncClient(
                 transport=self.transport,
@@ -133,47 +153,60 @@ class GithubLinkClient:
                     verified = True
                     return identity
                 finally:
-                    # Revoke the single transient token on success or rejection.
-                    # Never revoke the user's other app tokens or authorization.
-                    try:
-                        revoked = await client.request(
-                            "DELETE",
-                            f"https://api.github.com/applications/{self.config.client_id}/token",
-                            auth=httpx.BasicAuth(
-                                self.config.client_id or "",
-                                self.config.client_secret or "",
-                            ),
-                            headers={
-                                "Accept": "application/vnd.github+json",
-                                "X-GitHub-Api-Version": "2022-11-28",
-                            },
-                            json={"access_token": token},
-                        )
-                        cleanup_ok = revoked.status_code == 204
-                        failure = f"status={revoked.status_code}"
-                    except Exception as exc:
-                        cleanup_ok = False
-                        failure = f"error_type={type(exc).__name__}"
-                    if not cleanup_ok:
-                        # A rejection hides this from the miner, and the token
-                        # stays valid, so operators need the signal. Never log
-                        # the token or the provider's response body.
-                        logger.warning(
-                            "GitHub transient token revocation failed: %s", failure
-                        )
+                    # Revoke the single transient token on success, rejection,
+                    # deadline or cancellation. The revocation runs as its own
+                    # shielded task with its own client and bound, so a
+                    # cancelled request still revokes it (and logs a failure).
+                    cleanup_ok = await asyncio.shield(
+                        asyncio.ensure_future(self._revoke_token(token))
+                    )
                     # Preserve the original rejection. Cleanup cannot turn a
                     # failed verification into success or expose provider errors.
                     if verified and not cleanup_ok:
-                        raise GithubLinkRejected(
+                        raise GithubProviderUnavailable(
                             "GitHub token cleanup failed; start a new link attempt"
                         ) from None
         except GithubLinkRejected:
             raise
         except (httpx.HTTPError, ValueError, TypeError, AttributeError):
             # Provider exceptions and bodies can carry secrets. Discard them.
-            raise GithubLinkRejected(
+            raise GithubProviderUnavailable(
                 "GitHub identity verification failed; start a new link attempt"
             ) from None
+
+    async def _revoke_token(self, token: str) -> bool:
+        """Revoke one transient token. Never the user's other tokens or grant."""
+        try:
+            async with httpx.AsyncClient(
+                transport=self.transport,
+                timeout=self.config.timeout_seconds,
+                follow_redirects=False,
+            ) as client:
+                revoked = await asyncio.wait_for(
+                    client.request(
+                        "DELETE",
+                        f"https://api.github.com/applications/{self.config.client_id}/token",
+                        auth=httpx.BasicAuth(
+                            self.config.client_id or "",
+                            self.config.client_secret or "",
+                        ),
+                        headers={
+                            "Accept": "application/vnd.github+json",
+                            "X-GitHub-Api-Version": "2022-11-28",
+                        },
+                        json={"access_token": token},
+                    ),
+                    TOKEN_REVOCATION_DEADLINE_SECONDS,
+                )
+            if revoked.status_code == 204:
+                return True
+            failure = f"status={revoked.status_code}"
+        except Exception as exc:
+            failure = f"error_type={type(exc).__name__}"
+        # A rejection hides this from the miner, and the token stays valid, so
+        # operators need the signal. Never log the token or the response body.
+        logger.warning("GitHub transient token revocation failed: %s", failure)
+        return False
 
     async def public_identity(self, login: str) -> GithubIdentity:
         """Revalidate a recorded display label before accepting a bounty claim.

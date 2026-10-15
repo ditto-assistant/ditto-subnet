@@ -108,7 +108,10 @@ async def require_verified_bounty_contributor(
     """Use only locally prepared evidence, never a client-supplied JSON object."""
     now = datetime.now(UTC)
     if (
-        evidence._seal is not _PREPARED
+        # Check the type first: a client-supplied object must be rejected,
+        # not fail with AttributeError while its fields are read.
+        type(evidence) is not PreparedBountyIdentity
+        or evidence._seal is not _PREPARED
         or evidence.netuid != netuid
         or evidence.hotkey != hotkey
         or evidence.github_login.casefold() != github_login.casefold()
