@@ -51,8 +51,8 @@ def add_subparser(
                 "--version",
                 type=int,
                 help=(
-                    "Also permit signing a published future version before its "
-                    "effective date."
+                    "Sign a published version that is not effective yet, ahead "
+                    "of its effective date. Outdated versions are refused."
                 ),
             )
             sub.add_argument(
@@ -116,6 +116,13 @@ def run(args: argparse.Namespace) -> int:
                 raise MinerCliError(
                     "no effective CLA has been published; maintainers must "
                     "provide approved text"
+                )
+            if status.current is not None and version.version < status.current.version:
+                # Uploads require the effective version; an older receipt would
+                # print as signed yet never satisfy the gate.
+                raise MinerCliError(
+                    f"CLA v{version.version} is outdated; the effective version is "
+                    f"v{status.current.version}. Sign it without --version."
                 )
             raw = client.get_cla_text(version=version.version)
             digest = hashlib.sha256(raw).hexdigest()

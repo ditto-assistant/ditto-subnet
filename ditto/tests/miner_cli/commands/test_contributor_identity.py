@@ -588,7 +588,7 @@ def test_unattended_github_link_signs_only_the_expected_account(capsys, case):
         return
     assert code == 1
     if case == "no_expected_id":
-        assert "--yes requires --expect-github-id" in err
+        assert "requires --expect-github-id" in err
         api.start_github_link.assert_not_called()
     else:
         assert "not the expected id 100; not linked" in err
@@ -851,6 +851,8 @@ def test_github_user_interrupt_exits_130_without_signing(stage, capsys):
         ),
         patch.object(link_github, "load_wallet") as load,
         patch("builtins.input", side_effect=KeyboardInterrupt),
+        # A person at a terminal presses Ctrl-C.
+        patch("sys.stdin.isatty", return_value=True),
     ):
         assert main(argv) == 130
     output = capsys.readouterr()
@@ -911,3 +913,79 @@ def test_unsigned_enforce_upload_stops_before_archive_or_payment(tmp_path):
         assert upload.run(make_args(tmp_path / "unpackaged.tgz")) == 1
     archive.assert_not_called()
     payment.assert_not_called()
+
+
+def test_piped_link_without_expected_id_is_refused_before_starting(capsys, monkeypatch):
+    api = client()
+    monkeypatch.setattr("sys.stdin", io.StringIO("LINK\n"))
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(link_github, "load_wallet") as load,
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture-session", "hotkey": KEY.ss58_address},
+        ),
+    ):
+        code = link_github.run(args(yes=False, expect_github_id=None))
+    assert code == 1
+    assert (
+        "non-interactive input requires --expect-github-id" in capsys.readouterr().err
+    )
+    api.start_github_link.assert_not_called()
+    load.assert_not_called()
+
+
+def test_completed_link_must_match_the_expected_account(capsys):
+    api = client()
+    attempt = uuid4()
+    api.start_github_link.return_value = GithubLinkStart(
+        netuid=118,
+        attempt_id=attempt,
+        authorize_url="https://dittobench.ai/fixture",
+        expires_in=600,
+    )
+    api.get_github_link_attempt.return_value = GithubLinkAttemptStatus(
+        attempt_id=attempt, status="linked", github_user_id=999, github_login="other"
+    )
+    api.get_github_link.return_value = SimpleNamespace(
+        netuid=118,
+        link=SimpleNamespace(
+            link_id=uuid4(),
+            link_attempt_id=attempt,
+            github_login="other",
+            github_user_id=999,
+        ),
+    )
+    with (
+        patch.object(link_github, "ApiClient", return_value=api),
+        patch.object(
+            link_github,
+            "load_miner_session",
+            return_value={"token": "fixture-session", "hotkey": KEY.ss58_address},
+        ),
+    ):
+        code = link_github.run(args(expect_github_id=100))
+    assert code == 1
+    assert "999 is not the expected id 100" in capsys.readouterr().err
+
+
+def test_cla_sign_refuses_an_outdated_version(tmp_path, capsys):
+    api = client()
+    current = version().model_copy(update={"version": 2})
+    api.get_cla_status.return_value = ClaStatus(
+        netuid=118, mode="enforce", current=current
+    )
+    api.get_cla_version.return_value = version()
+    handle, live = wallet()
+    with (
+        patch.object(cla, "ApiClient", return_value=api),
+        patch.object(cla, "load_wallet", return_value=(handle, live)),
+    ):
+        code = cla.run(args(version=1, output=tmp_path / "CLA.md"))
+    assert code == 1
+    assert "is outdated" in capsys.readouterr().err
+    # Refused before the text is fetched or anything is signed.
+    api.get_cla_text.assert_not_called()
+    live.hotkey.sign.assert_not_called()
+    api.sign_cla.assert_not_called()

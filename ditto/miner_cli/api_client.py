@@ -590,10 +590,12 @@ class ApiClient:
             raise ApiResponseError(_format_error(response, prefix="contributor"))
         return response
 
-    def get_github_link(self, *, token: str) -> GithubLinkStatus:
+    def get_github_link(
+        self, *, token: str, retryable: bool = False
+    ) -> GithubLinkStatus:
         return GithubLinkStatus.model_validate(
             self._contributor_response(
-                "GET", "/api/v1/me/github-link", token=token
+                "GET", "/api/v1/me/github-link", token=token, retryable=retryable
             ).json()
         )
 

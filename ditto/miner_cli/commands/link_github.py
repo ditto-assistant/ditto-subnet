@@ -230,11 +230,13 @@ def run(args: argparse.Namespace) -> int:
                     else "GitHub link revoked; its signed history is retained"
                 )
                 return 0
-            if args.yes and args.expect_github_id is None:
+            if (args.yes or not sys.stdin.isatty()) and args.expect_github_id is None:
                 # Whoever opens the launch URL first approves the account; an
-                # unattended run must not sign an account nobody checked.
+                # unattended run (--yes, or LINK piped in) must not sign an
+                # account nobody checked.
                 raise MinerCliError(
-                    "--yes requires --expect-github-id <numeric GitHub user id>"
+                    "--yes or non-interactive input requires --expect-github-id "
+                    "<numeric GitHub user id>"
                 )
             names = _wallet_names(args)
             started = client.start_github_link(token=token)
@@ -263,9 +265,22 @@ def run(args: argparse.Namespace) -> int:
                     continue
                 last_transient = None
                 if attempt.status == "linked":
-                    link = client.get_github_link(token=token).link
+                    try:
+                        link = client.get_github_link(token=token, retryable=True).link
+                    except TransientApiError as exc:
+                        last_transient = exc
+                        time.sleep(min(2, max(0, deadline - time.monotonic())))
+                        continue
                     if link is None or link.link_attempt_id != started.attempt_id:
                         raise MinerCliError("completed link changed; read its status")
+                    if (
+                        args.expect_github_id is not None
+                        and link.github_user_id != args.expect_github_id
+                    ):
+                        raise MinerCliError(
+                            f"linked GitHub account id {link.github_user_id} is not "
+                            f"the expected id {args.expect_github_id}"
+                        )
                     _print(link, bool(args.json))
                     return 0
                 if attempt.status in ("failed", "expired"):
@@ -291,11 +306,17 @@ def run(args: argparse.Namespace) -> int:
                             "the approving GitHub account is not the expected id "
                             f"{args.expect_github_id}; not linked"
                         )
-                    current = client.get_github_link(token=token).link
-                    if (
-                        current is not None
-                        and current.github_user_id != attempt.github_user_id
-                    ):
+                    try:
+                        current = client.get_github_link(
+                            token=token, retryable=True
+                        ).link
+                    except TransientApiError as exc:
+                        last_transient = exc
+                        time.sleep(min(2, max(0, deadline - time.monotonic())))
+                        continue
+                    if current is not None:
+                        # Any active link is revoked and replaced, even for the
+                        # same account (for example after a GitHub rename).
                         print(
                             "Linking revokes the active link to "
                             f"@{current.github_login} (id {current.github_user_id})",

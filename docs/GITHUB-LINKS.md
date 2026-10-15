@@ -35,9 +35,10 @@ wallet is loaded and the hotkey (or its owner coldkey with `--key-kind coldkey`)
 signs. Only then is the link recorded. Cancelling either side records no link.
 `--yes` skips only the CLI's pairing prompt; it does not bypass browser consent.
 Whoever opens the launch URL first chooses the approving account, and a headless
-run prints that URL to its logs, so `--yes` requires `--expect-github-id ID`
-and refuses any other account. Linking replaces an existing link; the CLI names
-the link it will revoke before signing.
+run prints that URL to its logs, so `--yes`, or a `LINK` piped in without a
+terminal, requires `--expect-github-id ID` and refuses any other account. Linking
+replaces an existing link, including one to the same account; the CLI names the
+link it will revoke before signing.
 
 Approving lets the hotkey claim GitHub bounty credit as that login, so the
 consent page warns to approve only a link started from your own CLI.
