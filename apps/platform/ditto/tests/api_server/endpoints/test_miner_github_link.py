@@ -1747,6 +1747,20 @@ async def test_start_prunes_abandoned_attempts_without_touching_links(
         expires=now + timedelta(minutes=10),
         verifier="live-verifier",
     )
+    # Confirmation refuses an accepted attempt past expiry, so pruning it only
+    # scrubs secrets that can no longer be used; a live one is left alone.
+    expired_accepted = attempt(
+        "accepted",
+        created=now - timedelta(minutes=20),
+        expires=now - timedelta(minutes=10),
+        verifier="expired-accepted",
+    )
+    live_accepted = attempt(
+        "accepted",
+        created=now,
+        expires=now + timedelta(minutes=10),
+        verifier="live-accepted",
+    )
     old_failed = attempt(
         "failed", created=now - timedelta(days=31), expires=now - timedelta(days=31)
     )
@@ -1754,7 +1768,16 @@ async def test_start_prunes_abandoned_attempts_without_touching_links(
         "failed", created=now - timedelta(days=1), expires=now - timedelta(days=1)
     )
     async with session_maker() as session, session.begin():
-        session.add_all([abandoned, live, old_failed, recent_failed])
+        session.add_all(
+            [
+                abandoned,
+                live,
+                expired_accepted,
+                live_accepted,
+                old_failed,
+                recent_failed,
+            ]
+        )
     started = await client.post(
         "/api/v1/me/github-link/start", headers={"authorization": f"Bearer {token}"}
     )
@@ -1770,6 +1793,11 @@ async def test_start_prunes_abandoned_attempts_without_touching_links(
     assert scrubbed.status == "expired"
     assert scrubbed.code_verifier is None and scrubbed.accept_token_hash is None
     assert rows[live.attempt_id].code_verifier == "live-verifier"
+    pruned_accepted = rows[expired_accepted.attempt_id]
+    assert pruned_accepted.status == "expired"
+    assert pruned_accepted.accept_token_hash is None
+    kept = rows[live_accepted.attempt_id]
+    assert kept.status == "accepted" and kept.accept_token_hash == "fixture-accept"
 
 
 async def test_attempt_status_rejects_a_malformed_attempt_id(
