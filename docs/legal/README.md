@@ -11,8 +11,9 @@ Publish the exact UTF-8 bytes and their SHA-256 through Backroom's
 and persists immutable text/metadata. The publication and effective dates are
 public; versions and effective dates must advance monotonically.
 
-Publication does not enable the gate. It starts `off`. Read adoption and
-history with `get_cla_policy`, then use `set_cla_policy` for `shadow`. Shadow
+Publication does not enable the gate. The migration seeds the policy as
+`off`. Read adoption and history with `get_cla_policy`, then use
+`set_cla_policy` for `shadow`. Shadow
 accepts unsigned artifacts and counts each accepted one without refusing it.
 Announce the effective date in miner docs before choosing `enforce`. Enforce
 requires currently effective published text, and every current or scheduled
@@ -54,3 +55,30 @@ not claim to be a current chain registration census. Unsigned includes
 outdated receipts. The shadow upload count covers accepted unsigned artifacts
 only: each observation commits with its upload, so rejected requests and exact
 accepted-artifact retries add none.
+
+## Activation and deploy order
+
+`off` means nothing is refused or counted, not that upload admission is
+untouched. In every mode, Python and the Go relay read the policy in
+`/upload/check`, and evaluate it under a shared `cla-policy` advisory lock when
+reserving a payment; Python evaluates it again when committing the artifact. A miner who has already signed the current version also gets an
+`agent_cla_bindings` row for each new artifact, recording consent provenance
+before enforcement starts.
+
+The gate fails closed: without the migrated tables and the seeded policy
+revision, every non-recovery upload check returns 500. Apply the migration
+before any API or relay release that contains the gate. The standard deploy
+already does this: `apps/platform/scripts/update.sh` runs `alembic upgrade
+head` before it restarts the API, and the Platform Deploy workflow's
+`relay-release` job runs only after that deploy job succeeds. A manual relay
+rollout must follow the same order.
+
+Before choosing `enforce`:
+
+- Publishing and policy writes take the `cla-policy` lock exclusively, and new
+  uploads queue behind a waiting writer. A writer therefore waits at most five
+  seconds for in-flight uploads, then returns a retryable 503 without
+  changing anything. There is no deadlock cycle.
+- A miner who paid but has not committed when enforcement starts gets 403/1106.
+  They recover by running `ditto cla sign` and retrying the upload within the
+  payment-recovery window; announce this with the effective date.
