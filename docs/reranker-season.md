@@ -24,7 +24,7 @@ A submission is a directory, packed as a tarball:
 
 | File | Requirement |
 |---|---|
-| `model.onnx` | Sequence-classification cross-encoder. Inputs `input_ids`, `attention_mask`, `token_type_ids` (int64, `[batch, seq]`). One output of shape `[batch, 1]` (float32 relevance logit). At most 100 MiB. No external data files. Only the default ONNX domain and `com.microsoft` operators. |
+| `model.onnx` | Sequence-classification cross-encoder. Inputs `input_ids`, `attention_mask`, `token_type_ids` (int64, `[batch, seq]`). An output named `logits` of shape `[batch, 1]` (float32 relevance logit). At most 100 MiB. No external data files. Only the default ONNX domain and `com.microsoft` operators. |
 | `vocab.txt` | Uncased BERT WordPiece vocabulary. Line N is token id N-1. `[PAD]`=0, `[UNK]`=100, `[CLS]`=101, `[SEP]`=102, which the product tokenizer hard-codes. At most 2 MiB. |
 | `manifest.json` | `{"contract": "reranker-season-v1", "base_model": "<hf id or none>", "base_model_license": "<spdx id>"}`. The licence must be in the allow-list below. |
 
@@ -76,7 +76,10 @@ highly, since most cases plant three or more memories.
 For each pool:
 
 1. Tokenize each `(question, candidate)` pair with the product tokenizer,
-   truncating longest-first to **256** tokens.
+   truncating longest-first to **128** tokens. The product reads
+   `ONNX_RERANK_MAXLEN` (default 256); its README and latency table use 128,
+   the incumbent scores higher at 128 on season pools (NDCG@10 0.792 vs 0.778)
+   and runs 25% faster, so a champion ships with 128.
 2. Run one batched forward pass. Scoring uses one intra-op thread so results
    are deterministic.
 3. Fuse the cross-encoder ranking with the base ranking by weighted RRF,
@@ -92,7 +95,7 @@ base (unreranked) NDCG@10, and the lift over base.
 | Gate | Rule |
 |---|---|
 | Structure | The artifact passes every check in "The artifact". |
-| Latency | p50 time for one 20-candidate pool, 4 intra-op threads, after warm-up, **≤ 50 ms** on the reference CPU. Measured once by the trusted screener, not by every validator, because validator hardware differs. |
+| Latency | p50 time to tokenize and score one 20-candidate pool, 4 intra-op threads, after warm-up, at most **3.5×** the incumbent's p50 measured on the same machine in the same run (interleaved pool by pool). This is the 50 ms budget expressed against the incumbent's ~14 ms in the product README; a ratio does not depend on the CPU. Measured once by the trusted screener, not by every validator. |
 | Overfit (before paying) | No regression against the incumbent on a LongMemEval-S retrieval slice. Required before the track pays; not required during shadow. |
 
 ## Winning
@@ -119,3 +122,19 @@ ramp starts (SN-180) and the next season enters shadow.
 LLM rerankers, rerankers that need GPUs, listwise or multi-stage rerankers,
 changes to the base retriever, training data supplied by Ditto beyond the public
 practice generator, and learned retrieval weights (Season 3, SN-164).
+
+## Measured baseline (2026-10-13)
+
+The product's shipped TinyBERT-L2 INT8 (`model.onnx` sha256 `d9c3f25f…`),
+scored with this package on 976 pools (bench v13 full, seeds 1–4), on debby
+(16-core x86):
+
+| max_len | NDCG@10 | Lift over BM25 base | p50 per pool (4 threads) |
+|---|---|---|---|
+| 256 | 0.778 | +0.060 | 43.4 ms |
+| 128 | 0.792 | +0.074 | 32.7 ms |
+
+The README's ~14 ms was measured on different hardware with shorter texts, so
+absolute milliseconds are not portable. That is why the gate is a ratio.
+The Python tokenizer reproduces the product's Go tokenizer exactly: 0
+mismatches over 19,536 (query, memory) pairs, including Unicode edge cases.
