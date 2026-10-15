@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
+from ditto.api_server import v13_scorer_cohort
 from ditto.api_server.endpoints import admin_v13_scorer_cohort
 from ditto.api_server.endpoints.admin_v13_scorer_cohort import (
     ActivateV13ScorerCohortRequest,
@@ -766,3 +767,43 @@ class TestPostWriteRoutingCheck:
                 await rotate_pin(request, None, session)
         async with session_maker() as session:
             assert await session.scalar(select(V13ScorerCohortRotation)) is None
+
+
+async def test_routability_uses_the_validated_settings_snapshot(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slot-settings revision committed mid-write cannot decide routing.
+
+    The write validates and records one revision. Every later "latest" read is
+    replaced by a racing revision that pauses every member; the rotation still
+    judges routability on the validated snapshot, while the issuance-side
+    reader without a snapshot keeps reading the latest revision.
+    """
+    settings = await _seed(
+        session_maker, heartbeats=[_managed(h) for h in _FOUR], pin=(_A, _B, _C)
+    )
+    racing = ValidatorSlotSettingsRevision(
+        revision=2,
+        parent_revision=1,
+        scope="*",
+        settings=ValidatorSlotSettings(paused_validator_hotkeys=list(_FOUR)).model_dump(
+            mode="json"
+        ),
+        checksum="0" * 64,
+        reason="racing settings revision",
+        actor="test",
+    )
+
+    async def latest(_session: AsyncSession) -> ValidatorSlotSettingsRevision:
+        return racing
+
+    monkeypatch.setattr(
+        v13_scorer_cohort, "latest_validator_slot_settings_revision", latest
+    )
+    request = TestActivateAndRotateMembership()._add_member(settings)
+    async with session_maker() as session:
+        rotated = await rotate_pin(request, None, session)
+    assert rotated.hotkeys == list(_FOUR)
+    assert rotated.slot_settings_revision == 1
+    assert await _evidence(session_maker) is None

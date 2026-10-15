@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated
@@ -240,20 +240,25 @@ async def pinned_validator_may_submit(
 
 
 async def pinned_cohort_packet(
-    session: AsyncSession, *, now: datetime
+    session: AsyncSession, *, now: datetime, paused: Set[str] | None = None
 ) -> CohortPacket | None:
-    return await _cohort_packet(session, now=now, report_only=False)
+    """See :func:`routable_cohort_packet` for ``paused``."""
+    return await _cohort_packet(session, now=now, report_only=False, paused=paused)
 
 
 async def report_only_current_cohort_packet(
     session: AsyncSession, *, now: datetime
 ) -> CohortPacket | None:
     """Observe the current pinned members without changing primary authority."""
-    return await _cohort_packet(session, now=now, report_only=True)
+    return await _cohort_packet(session, now=now, report_only=True, paused=None)
 
 
 async def _cohort_packet(
-    session: AsyncSession, *, now: datetime, report_only: bool
+    session: AsyncSession,
+    *,
+    now: datetime,
+    report_only: bool,
+    paused: Set[str] | None,
 ) -> CohortPacket | None:
     """The authority packet, while at least a quorum of its signers can route.
 
@@ -277,33 +282,43 @@ async def _cohort_packet(
     # records the last operator rotation and no longer gates leases.
     # ``report_only`` keeps its historical reader name for the same answer.
     del report_only
-    return await routable_cohort_packet(session, hotkeys=pin.hotkeys, now=now)
+    return await routable_cohort_packet(
+        session, hotkeys=pin.hotkeys, now=now, paused=paused
+    )
 
 
 async def routable_cohort_packet(
-    session: AsyncSession, *, hotkeys: Sequence[str], now: datetime
+    session: AsyncSession,
+    *,
+    hotkeys: Sequence[str],
+    now: datetime,
+    paused: Set[str] | None = None,
 ) -> CohortPacket | None:
     """:func:`_cohort_packet` for an explicit membership, stored or proposed.
 
     Activation and rotation evaluate the proposed membership with this before
-    they write, so a refused write never consumes a rotation ID.
+    they write, so a refused write never consumes a rotation ID. They pass the
+    pause set of the exact slot-settings revision they validated and record,
+    so routability is judged on that one snapshot rather than on whatever
+    revision is latest; every other caller reads the latest.
     """
     if not valid_membership(list(hotkeys)):
         return None
     authority = authority_from_packets(await member_packets(session, hotkeys, now=now))
     if authority is None:
         return None
-    settings = await latest_validator_slot_settings_revision(session)
-    if settings is None:
-        return None
-    try:
-        paused = set(
-            ValidatorSlotSettings.model_validate(
-                settings.settings
-            ).paused_validator_hotkeys
-        )
-    except ValidationError:
-        return None
+    if paused is None:
+        settings = await latest_validator_slot_settings_revision(session)
+        if settings is None:
+            return None
+        try:
+            paused = set(
+                ValidatorSlotSettings.model_validate(
+                    settings.settings
+                ).paused_validator_hotkeys
+            )
+        except ValidationError:
+            return None
     observations: list[int] = []
     routable: list[str] = []
     for hotkey in authority.supporters:

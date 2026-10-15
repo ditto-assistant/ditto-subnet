@@ -367,15 +367,17 @@ async def _require_routable(
     *,
     hotkeys: tuple[str, ...],
     packet: V13ScorerPacket,
+    paused: set[str],
     now: datetime,
 ) -> None:
     """At least a quorum of the proposed members can lease on ``packet`` now.
 
     Checked before the write so a refusal never consumes a rotation ID, and
-    again after it against the stored row.
+    again after it against the stored row, both on the validated slot-settings
+    snapshot (``paused``) the write records.
     """
     _require_routed_packet(
-        await routable_cohort_packet(session, hotkeys=hotkeys, now=now),
+        await routable_cohort_packet(session, hotkeys=hotkeys, now=now, paused=paused),
         packet=packet,
     )
 
@@ -436,7 +438,11 @@ async def activate_pin(
         if unpinned_live is not None:
             raise HTTPException(409, "nonmember V13 tickets must drain before pinning")
         await _require_routable(
-            session, hotkeys=payload.hotkeys, packet=payload.packet, now=now
+            session,
+            hotkeys=payload.hotkeys,
+            packet=payload.packet,
+            paused=paused,
+            now=now,
         )
         row = V13ScorerCohortPin(
             bench_version=13,
@@ -450,7 +456,8 @@ async def activate_pin(
         session.add(row)
         await session.flush()
         _require_routed_packet(
-            await pinned_cohort_packet(session, now=now), packet=payload.packet
+            await pinned_cohort_packet(session, now=now, paused=paused),
+            packet=payload.packet,
         )
     await session.refresh(row)
     return row
@@ -549,7 +556,11 @@ async def rotate_pin(
                 else "removed members' live V13 tickets must drain before rotation",
             )
         await _require_routable(
-            session, hotkeys=payload.hotkeys, packet=payload.packet, now=now
+            session,
+            hotkeys=payload.hotkeys,
+            packet=payload.packet,
+            paused=paused,
+            now=now,
         )
         row = V13ScorerCohortRotation(
             bench_version=13,
@@ -564,7 +575,8 @@ async def rotate_pin(
         session.add(row)
         await session.flush()
         _require_routed_packet(
-            await pinned_cohort_packet(session, now=now), packet=payload.packet
+            await pinned_cohort_packet(session, now=now, paused=paused),
+            packet=payload.packet,
         )
     await session.refresh(row)
     return row
