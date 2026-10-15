@@ -67,6 +67,9 @@ ActorDep = Annotated[str, Depends(admin_actor)]
 router = APIRouter(tags=["contributor-cla"], dependencies=[Depends(no_store)])
 ENFORCED_CLA_NOTICE = timedelta(hours=24)
 CLA_POLICY_WRITE_LOCK_TIMEOUT = "5s"
+# Raised before any write. Backroom matches this text to tell the operator
+# that nothing was applied, unlike a proxy 503 that can follow a commit.
+CLA_POLICY_BUSY_MESSAGE = "CLA policy is busy with in-flight uploads; retry shortly"
 # Public path values are validated before they reach integer/text columns, so
 # malformed input is a 422 rather than a database error.
 HotkeyPath = Annotated[str, Path(pattern=ADDRESS_PATTERN)]
@@ -114,9 +117,7 @@ async def lock_cla_policy_for_write(session: AsyncSession) -> None:
         await lock_identity_writes(session, namespace="cla-policy")
     except DBAPIError as exc:
         if getattr(getattr(exc.orig, "__cause__", None), "sqlstate", None) == ("55P03"):
-            raise HTTPException(
-                503, "CLA policy is busy with in-flight uploads; retry shortly"
-            ) from None
+            raise HTTPException(503, CLA_POLICY_BUSY_MESSAGE) from None
         raise
 
 

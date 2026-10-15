@@ -4171,6 +4171,9 @@ export async function fetchClaPolicy(rawInput: unknown = {}) {
   return claControlSchema.parse(await platformAdminRequest(`/api/v1/admin/cla/settings?${query}`))
 }
 
+/** Platform's contributor_cla.CLA_POLICY_BUSY_MESSAGE, raised before any write. */
+const CLA_POLICY_BUSY_MESSAGE = 'CLA policy is busy with in-flight uploads'
+
 export async function updateClaPolicy(actor: string, rawInput: unknown) {
   const input = claPolicyWriteInputSchema.parse(rawInput)
   type Body = PlatformOperations['set_policy_api_v1_admin_cla_settings_post']['requestBody']['content']['application/json']
@@ -4185,6 +4188,11 @@ export async function updateClaPolicy(actor: string, rawInput: unknown) {
     response = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', actor, body })
   } catch (error) {
     if (!(error instanceof PlatformAdminError) || error.failure === 'auth' || error.failure === 'request') throw error
+    // Platform's own lock-timeout 503 is raised before the write. Any other
+    // 503 may come from a proxy after the commit, so it stays unknown.
+    if (error.status === 503 && error.message.startsWith(CLA_POLICY_BUSY_MESSAGE)) {
+      throw new Error(`${error.message}. Nothing was applied: retry with the same expectedRevision.`)
+    }
     unknownOutcome = error.message
   }
   const parsed = unknownOutcome === null ? claSettingsRevisionSchema.safeParse(response) : null

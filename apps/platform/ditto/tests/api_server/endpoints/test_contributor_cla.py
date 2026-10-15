@@ -984,7 +984,7 @@ async def test_policy_write_gives_up_instead_of_queueing_uploads(
             },
         )
         assert busy.status_code == 503, busy.text
-        assert "retry" in busy.json()["message"]
+        assert busy.json()["message"] == contributor_cla.CLA_POLICY_BUSY_MESSAGE
     assert (await policy(client, "shadow"))["mode"] == "shadow"
 
 

@@ -6067,6 +6067,15 @@ describe('verified contributors and CLA rollout', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  it('reports nothing applied when Platform refuses the policy write as busy', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ error_code: 3000, message: 'CLA policy is busy with in-flight uploads; retry shortly', request_id: null }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
+      .rejects.toThrow('Nothing was applied: retry with the same expectedRevision.')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('fails without claiming a possible commit when the policy write is never sent', async () => {
     delete process.env.DITTO_ADMIN_API_TOKEN
     delete process.env.DITTO_PLATFORM_ADMIN_TOKEN

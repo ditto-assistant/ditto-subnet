@@ -545,7 +545,9 @@ or returns an unreadable revision, `applied` is null; if the follow-up read
 fails, `policy` is null. In
 each case `refresh_error` explains that the write may have committed. Read
 `get_cla_policy`; do not retry with the old `expectedRevision`. A 4xx, such as
-a revision conflict, still fails: nothing was applied.
+a revision conflict, still fails: nothing was applied. So does Platform's 503
+"CLA policy is busy with in-flight uploads", which is raised before the write;
+retry it with the same `expectedRevision`.
 
 When enforcement is on, new versions require at least 24 hours notice.
 `get_cla_policy` returns `minimum_enforced_notice_seconds` and
