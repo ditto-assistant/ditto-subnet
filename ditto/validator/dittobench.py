@@ -391,14 +391,37 @@ def _platform_route_proof_gap(payload: dict[str, object]) -> bool:
     because a systematically unprobeable submission must still run out of
     attempts instead of holding validator slots forever.
     """
+    return _bounded_retry_failure_code(payload) == _ROUTE_PROOF_UNAVAILABLE
+
+
+_SEED_DEADLINE_EXCEEDED = "seed_deadline_exceeded"
+
+# Scorer failures that are not the agent's to own but must still retry inside
+# the ORDINARY attempt budget. Never a subset of
+# ``_SANDBOX_INFRASTRUCTURE_CODES``: those mint a grant and raise the cap.
+#
+# ``seed_deadline_exceeded``: the harness did not acknowledge ``/seed`` within
+# the scorer's own deadline. A loaded validator host and a harness that embeds
+# too slowly are indistinguishable from inside one run, so the cause is named on
+# the ticket (it used to arrive as an anonymous ``scoring_error``) without
+# granting the unbounded re-lease a no-fault code would.
+_BOUNDED_RETRY_CODES = frozenset({_ROUTE_PROOF_UNAVAILABLE, _SEED_DEADLINE_EXCEEDED})
+
+assert not (_BOUNDED_RETRY_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
+
+
+def _bounded_retry_failure_code(payload: dict[str, object]) -> str | None:
+    """The scorer's bounded-retry infrastructure code, if it sent one."""
     failure = payload.get("failure")
     if not isinstance(failure, dict):
-        return False
-    return (
-        failure.get("kind") == "validator_infrastructure"
-        and failure.get("retryable") is True
-        and failure.get("code") == _ROUTE_PROOF_UNAVAILABLE
-    )
+        return None
+    if (
+        failure.get("kind") != "validator_infrastructure"
+        or failure.get("retryable") is not True
+    ):
+        return None
+    code = failure.get("code")
+    return code if isinstance(code, str) and code in _BOUNDED_RETRY_CODES else None
 
 
 def _agent_attributable_failure_code(payload: dict[str, object]) -> str | None:
@@ -1711,6 +1734,13 @@ class DittobenchClient:
                             f"run {run_id} could not prove its model route "
                             "disposition; the platform challenge was unfinished",
                             code=_ROUTE_PROOF_UNAVAILABLE,
+                            container_log_tail=log_tail,
+                        )
+                    if _bounded_retry_failure_code(data) == _SEED_DEADLINE_EXCEEDED:
+                        raise DittobenchError(
+                            f"run {run_id} harness did not acknowledge /seed "
+                            "within the scorer's seed deadline",
+                            code=_SEED_DEADLINE_EXCEEDED,
                             container_log_tail=log_tail,
                         )
                     # The unclassified branch, and the one agent 5fdadd33 landed

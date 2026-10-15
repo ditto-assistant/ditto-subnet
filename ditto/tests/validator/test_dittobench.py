@@ -2753,6 +2753,62 @@ class TestPlatformRouteProofGap:
         assert dittobench._platform_route_proof_gap(payload) is False
 
 
+class TestSeedDeadlineExceeded:
+    """A ``/seed`` that outlives the scorer's deadline is named, not no-fault.
+
+    ditto-subnet#2921: one validator's stalled seeds arrived as anonymous
+    ``scoring_error`` while the same artifacts seeded in minutes elsewhere. The
+    code must reach ``failure_detail``, but a harness that really embeds too
+    slowly must still run out of ordinary attempts.
+    """
+
+    _FAILURE = {
+        "kind": "validator_infrastructure",
+        "code": "seed_deadline_exceeded",
+        "retryable": True,
+    }
+
+    def test_never_mints_a_no_fault_grant(self) -> None:
+        assert "seed_deadline_exceeded" in dittobench._BOUNDED_RETRY_CODES
+        assert "seed_deadline_exceeded" not in dittobench._SANDBOX_INFRASTRUCTURE_CODES
+        payload: dict[str, object] = {"failure": self._FAILURE}
+        assert dittobench._sandbox_infrastructure_failure_code(payload) is None
+        assert dittobench._agent_attributable_failure_code(payload) is None
+        assert dittobench._platform_route_proof_gap(payload) is False
+
+    def test_requires_the_retryable_infrastructure_shape(self) -> None:
+        for kind, retryable in (
+            ("sandbox_failure", True),
+            ("validator_infrastructure", False),
+        ):
+            payload: dict[str, object] = {
+                "failure": {**self._FAILURE, "kind": kind, "retryable": retryable}
+            }
+            assert dittobench._bounded_retry_failure_code(payload) is None
+
+    @pytest.mark.asyncio
+    async def test_poll_hands_back_the_named_code(self) -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "failed",
+                    "error": "seeding v8 tool routing state failed: "
+                    "seed deadline exceeded",
+                    "failure": self._FAILURE,
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            with pytest.raises(DittobenchError) as raised:
+                await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                    "run-1", expected_bench_version=13
+                )
+        assert type(raised.value) is DittobenchError
+        assert raised.value.code == "seed_deadline_exceeded"
+        assert failure_detail(raised.value) == "seed_deadline_exceeded"
+
+
 # --- container log tail ----------------------------------------------------
 #
 # The failure this whole path exists for: agent 5fdadd33 burned four validator

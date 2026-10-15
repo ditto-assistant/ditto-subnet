@@ -1081,6 +1081,22 @@ func trustedSeedingInfrastructureFailure(err error) *store.Failure {
 			Retryable: true,
 		}
 	}
+	if errors.Is(err, runner.ErrSeedDeadlineExceeded) {
+		// The harness did not acknowledge /seed within the scorer's own
+		// deadline. That is ambiguous: an overloaded validator host and a
+		// harness that embeds too slowly look identical from here, and in
+		// production the same artifacts seed in minutes on peer validators.
+		// So it gets a named code instead of an anonymous scoring_error, but
+		// deliberately NOT one of the validator's no-fault
+		// `_SANDBOX_INFRASTRUCTURE_CODES`: like `route_proof_unavailable`, it
+		// re-runs inside the ordinary bounded attempt budget and never mints a
+		// grant, so a genuinely slow harness still runs out of attempts.
+		return &store.Failure{
+			Kind:      "validator_infrastructure",
+			Code:      "seed_deadline_exceeded",
+			Retryable: true,
+		}
+	}
 	return trustedEmbeddingInfrastructureFailure(err)
 }
 

@@ -3872,6 +3872,7 @@ PublicValidationFailureCode = Literal[
     "platform_capacity",
     "provider_failure",
     "provider_outage_parked",
+    "seed_deadline_exceeded",
 ]
 
 _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
@@ -3910,6 +3911,14 @@ _PUBLIC_INFRA_RELAY_CAUSES: frozenset[str] = frozenset(
 )
 
 
+# Named for the operator and the miner, but deliberately attributed to no one:
+# a harness that missed the scorer's /seed deadline is equally explained by an
+# overloaded validator host and by a slow harness (ditto-subnet#2921). The code
+# says only which stage stopped the run, which reveals nothing about the
+# submission, so the dashboard keeps its neutral "unattributed" hold copy.
+_PUBLIC_UNATTRIBUTED_CODES: frozenset[str] = frozenset({"seed_deadline_exceeded"})
+
+
 def public_validation_failure_code(
     failure_detail: str | None,
 ) -> PublicValidationFailureCode | None:
@@ -3925,6 +3934,8 @@ def public_validation_failure_code(
     if failure_detail in _PUBLIC_AGENT_FAILURE_CODES:
         return cast(PublicValidationFailureCode, failure_detail)
     if failure_detail in _PUBLIC_INFRA_RELAY_CAUSES:
+        return cast(PublicValidationFailureCode, failure_detail)
+    if failure_detail in _PUBLIC_UNATTRIBUTED_CODES:
         return cast(PublicValidationFailureCode, failure_detail)
     if ":" in failure_detail:
         _code, cause = failure_detail.split(":", 1)

@@ -2285,6 +2285,18 @@ class TestPublicValidationFailureCode:
             == "inference_lane_saturated"
         )
 
+    def test_seed_deadline_is_published_without_attribution(self) -> None:
+        assert (
+            public_validation_failure_code("seed_deadline_exceeded")
+            == "seed_deadline_exceeded"
+        )
+        assert (
+            public_validation_failure_code(
+                "model_relay_unavailable:seed_deadline_exceeded"
+            )
+            is None
+        )
+
     def test_prefixed_admission_code(self) -> None:
         assert (
             public_validation_failure_code(
