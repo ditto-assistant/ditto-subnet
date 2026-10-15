@@ -6075,4 +6075,13 @@ describe('verified contributors and CLA rollout', () => {
     expect(body).not.toHaveProperty('actor')
     expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
   })
+
+  it.each(['tomorrow', '2026-10-14', '2026-10-14T00:00:00'])('rejects effectiveAt %s before publishing', async (effectiveAt) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(publishClaVersion('operator@omniaura.ai', { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.', effectiveAt, reason: 'test-only publication transport', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) }))
+      .rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
