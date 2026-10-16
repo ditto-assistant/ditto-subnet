@@ -121,11 +121,11 @@ export class PlatformAdminError extends Error {
   }
 }
 
-function isTimeout(error: unknown) {
-  return (
-    error instanceof DOMException &&
-    (error.name === 'TimeoutError' || error.name === 'AbortError')
-  )
+function isTimeout(error: unknown, depth = 0): boolean {
+  if (error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError')) return true
+  // A body read can reject with a TypeError whose cause is the timeout.
+  const cause = error instanceof Error ? error.cause : undefined
+  return depth < 4 && cause !== undefined && isTimeout(cause, depth + 1)
 }
 
 // Connection-establishment failures: no byte of the request reached Platform.

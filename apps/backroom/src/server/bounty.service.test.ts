@@ -373,6 +373,15 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(reconcile('confirmed')).resolves.toMatchObject({ obligation_id: OBLIGATION })
   })
 
+  it('reports a review as unknown when its decision has no audit entry yet', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage())
+      .mockResolvedValueOnce(Response.json(claim({ submissions: [{ submission_id: SUBMISSION, decision: 'reject', decision_reason: reason }] })))
+      .mockResolvedValueOnce(Response.json(operator())))
+    await expect(reviewBountySubmission(ACTOR, {
+      claimId: CLAIM, submissionId: SUBMISSION, decision: 'reject', reason, confirmation: `REJECT BOUNTY CLAIM ${REPO}#2942 ${CLAIM}`,
+    })).rejects.toThrow('may have committed')
+  })
+
   it('reports a dispatch as unknown when its transfer has no audit entry yet', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage())
       .mockResolvedValueOnce(Response.json(claim({ obligations: [obligation({ transfers: [transfer('uncertain')] })] })))
