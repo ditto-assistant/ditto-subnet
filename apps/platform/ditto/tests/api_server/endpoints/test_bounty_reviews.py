@@ -27,10 +27,15 @@ from ditto.api_server import bounty_claims
 from ditto.api_server.bounty_deadlines import BountyDeadlineSweeper
 from ditto.db.models import (
     Bounty,
+    BountyActionNonce,
+    BountyAppeal,
+    BountyClaim,
     BountyEvent,
     BountyObligation,
     BountySlot,
     BountySlotAction,
+    BountySubmission,
+    BountyWithdrawal,
 )
 from ditto.tests.api_server.endpoints.test_bounties import publish as publish_bounty
 from ditto.tests.api_server.endpoints.test_bounty_claims import (
@@ -803,6 +808,42 @@ async def test_reassignment_moves_review_authority_and_extends_overdue(
     assert back.status_code == 200, back.text
     repeated = await review(world, claim, "accept")
     assert repeated.status_code == 409 and "already decided" in repeated.text
+
+
+async def test_each_nonce_is_the_record_of_exactly_one_signed_action(world):
+    # The nonce table is no replay cache to prune: each row is the nonce of
+    # the one action it authorized, which keeps it by foreign key, and a
+    # refused action writes none. It grows only with recorded actions.
+    await world.start(ALICE, BOB, CAROL)
+    alice = (await submit(world, ALICE, await claimed(world, ALICE))).json()
+    await review(world, alice, "reject")
+    rejection = next(e for e in await events(world) if e["kind"] == "rejected")
+    filed = await appeal(world, ALICE, alice, rejection["event_id"], "Fixture.")
+    assert filed.status_code == 200, filed.text
+    bob = await claimed(world, BOB)
+    assert (await withdraw(world, BOB, bob)).status_code == 200
+    assert (await world.hold(CAROL)).status_code == 200
+    late = await submit(world, BOB, bob)
+    assert late.status_code == 409, late.text
+    tables = {
+        "claim": BountyClaim,
+        "submit": BountySubmission,
+        "withdraw": BountyWithdrawal,
+        "appeal": BountyAppeal,
+    }
+    async with world.maker() as session:
+        nonces = (await session.execute(select(BountyActionNonce))).scalars().all()
+        used = {
+            action: set(await session.scalars(select(model.nonce)))
+            for action, model in tables.items()
+        }
+    assert sorted(n.action for n in nonces) == sorted(
+        ["claim", "claim", "claim", "submit", "withdraw", "appeal"]
+    )
+    for nonce in nonces:
+        owners = [action for action, found in used.items() if nonce.nonce in found]
+        assert owners == [nonce.action]
+    assert len(nonces) == sum(len(found) for found in used.values())
 
 
 async def test_review_history_is_append_only(world):

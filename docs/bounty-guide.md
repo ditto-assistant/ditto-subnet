@@ -58,8 +58,9 @@ the lowest open slot of the current round and pays and confirms the entry fee.
 Your delivery deadline starts when the fee is confirmed.
 
 If the command stops after the hold, finish with
-`uv run ditto bounty confirm CLAIM_ID`. Check a claim at any time with
-`uv run ditto bounty status CLAIM_ID`.
+`uv run ditto bounty confirm CLAIM_ID` on the same machine: the rehearsal fee
+derives from your claim's signature, which `claim` saved there and nobody else
+has. Check a claim at any time with `uv run ditto bounty status CLAIM_ID`.
 
 You never lose a fee to timing. A fee that arrives after its hold lapsed,
 after the slot went to someone else, after your link, CLA signature or owner
@@ -128,8 +129,8 @@ Every confirmed entry fee ends in exactly one outcome:
 | You withdraw, miss the deadline, or the work is rejected | Retained once the slot is reopened for a new claim |
 
 Accepted work can receive an award from the bounty's reward pool, with public
-credit. Awards never exceed the pool, and several accepted claims can share
-it. A bounty's terms never promise a particular amount.
+credit. Awards never exceed the pool in the revision you signed, and several
+accepted claims can share it. A bounty's terms never promise a particular amount.
 
 An award or refund is an obligation until it is paid. Payment needs approval
 by as many distinct operators as the payout policy requires for its amount,

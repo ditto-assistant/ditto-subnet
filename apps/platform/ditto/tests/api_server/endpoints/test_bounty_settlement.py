@@ -22,12 +22,14 @@ from ditto.api_server.bounty_obligations import required_approvals
 from ditto.api_server.bounty_settlement import TransferOutcome
 from ditto.chain import ChainConnectionError
 from ditto.db.models import BountyObligation
+from ditto.tests.api_server.endpoints.test_bounties import publish as publish_bounty
 from ditto.tests.api_server.endpoints.test_bounty_claims import (
     _ADMIN_TOKEN,
     _HEADERS,
     ALICE,
     BOB,
     CLAIMS,
+    ISSUE,
     REPO,
     World,
 )
@@ -195,6 +197,38 @@ async def test_awards_never_exceed_the_pool_and_need_accepted_work(world):
     # A shared award: each accepted claim takes its own part of the pool.
     assert (await award(world, second, 30_000_000_000)).status_code == 200
     assert (await world.refresh())["summary"]["awarded_alpha_rao"] == POOL
+
+
+@pytest.mark.parametrize("later_pool", [3 * POOL, POOL // 10])
+async def test_an_award_is_bounded_by_the_pool_its_claim_signed(world, later_pool):
+    await world.start(ALICE, BOB)
+    early = await claimed(world, ALICE)
+    later = await publish_bounty(
+        world.client,
+        issue=ISSUE,
+        expected=1,
+        terms={"reward_pool_alpha_rao": later_pool},
+    )
+    assert later.status_code == 200, later.text
+    await world.refresh()
+    late = await accepted(world, BOB)
+    assert late["revision"] == 2
+    first = (await submit(world, ALICE, early)).json()
+    first = (await review(world, first, "accept")).json()
+    assert first["revision"] == 1
+    # A larger later pool never raises what revision 1 offered, and a
+    # smaller one never strands its accepted work.
+    over = await award(world, first, POOL + 1)
+    assert over.status_code == 409 and "revision 1 reward pool" in over.text
+    assert (await award(world, first, POOL * 7 // 10)).status_code == 200
+    rest = later_pool - POOL * 7 // 10
+    if rest > 0:
+        assert (await award(world, late, rest + 1)).status_code == 409
+        assert (await award(world, late, rest)).status_code == 200
+    else:
+        refused = await award(world, late, 1)
+        assert refused.status_code == 409
+        assert "revision 2 reward pool: 0 alpha rao remain" in refused.text
 
 
 @pytest.mark.parametrize("outcome", ["rejected", "withdrawn", "expired"])

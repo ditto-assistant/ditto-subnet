@@ -7,7 +7,10 @@ private audit. The contributor side is in [bounty-guide.md](bounty-guide.md);
 the rules are in [bounty-claims.md](bounty-claims.md).
 
 v1 is rehearsal only: fees and transfers are simulated and no funds move.
-Live funding needs separate operator authorization (#2944).
+Live funding needs separate operator authorization (#2944), and every write
+here must first carry a proof-backed operator email: until then the actor each
+write records is the staff email Backroom asserts in `X-Admin-Actor`, not
+proof of a distinct operator (see [Deferred](bounty-claims.md#deferred)).
 
 ## Before publishing
 

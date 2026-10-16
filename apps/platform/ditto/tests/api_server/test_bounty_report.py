@@ -58,6 +58,18 @@ def test_the_recorded_round_reports_every_fee_and_award():
     assert made.facts == {"merged": 1}
 
 
+def test_a_later_smaller_pool_never_fails_an_award_its_claim_signed_for():
+    detail = copy.deepcopy(DETAIL)
+    first = detail["revisions"][0]
+    smaller = {**copy.deepcopy(first), "revision": 2}
+    smaller["terms"]["reward_pool_alpha_rao"] = 1
+    detail["revisions"].append(smaller)
+    detail["summary"].update(current_revision=2, reward_pool_alpha_rao=1)
+    made = report(detail, CLAIMS)
+    assert [check.name for check in made.checks if not check.ok] == []
+    assert made.reward_pool_alpha_rao == 1
+
+
 State = dict[str, dict[str, Any]]
 
 
@@ -91,7 +103,8 @@ def alice_refund(state: State) -> dict[str, Any]:
 
 
 def _award_over_pool(state: State) -> None:
-    state["detail"]["summary"]["reward_pool_alpha_rao"] = 1
+    # The pool alice's claim signed, not only the one the summary shows.
+    state["detail"]["revisions"][0]["terms"]["reward_pool_alpha_rao"] = 1
 
 
 def _award_on_rejected_work(state: State) -> None:

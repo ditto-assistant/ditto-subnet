@@ -90,6 +90,23 @@ def _claim(claim: BountyClaimView) -> BountyReportClaim:
     )
 
 
+def _awards_within_pools(detail: BountyDetail, claims: list[BountyClaimView]) -> bool:
+    """Whether each award kept the bounty's awards within its claim's pool.
+
+    A claim is bounded by the pool of the revision it signed. Awards are
+    recorded one at a time under the bounty's lock, so each one's pool covered
+    every award recorded before it and its own amount.
+    """
+    pools = {r.revision: r.terms.reward_pool_alpha_rao for r in detail.revisions}
+    awards = [(c.revision, award) for c in claims if (award := _award(c)) is not None]
+    return all(
+        sum(o.amount_alpha_rao for _, o in awards if o.created_at < award.created_at)
+        + award.amount_alpha_rao
+        <= pools[revision]
+        for revision, award in awards
+    )
+
+
 def _checks(
     detail: BountyDetail, claims: list[BountyClaimView]
 ) -> list[BountyReportCheck]:
@@ -98,13 +115,15 @@ def _checks(
     paid = [claim for claim in claims if claim.claimed_at is not None]
     awards = [o for o in obligations if o.kind == "award"]
     awarded = sum(o.amount_alpha_rao for o in awards)
-    pool = detail.summary.reward_pool_alpha_rao
     confirmed = [t for t in transfers if t.state == "confirmed"]
     return [
         BountyReportCheck(
             name="awards_within_pool",
-            ok=awarded <= pool,
-            detail=f"{awarded} of {pool} alpha rao awarded",
+            ok=_awards_within_pools(detail, claims),
+            detail=(
+                f"{awarded} alpha rao awarded; the current pool is "
+                f"{detail.summary.reward_pool_alpha_rao}"
+            ),
         ),
         BountyReportCheck(
             name="awards_on_accepted_work",

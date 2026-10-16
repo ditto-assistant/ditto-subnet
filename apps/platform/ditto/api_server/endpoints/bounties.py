@@ -154,7 +154,9 @@ async def pause_claims(
 async def hold(body: BountyClaimRequest, request: Request) -> BountyClaimView:
     """Verify a signed claim and hold one open slot until the fee is confirmed.
 
-    An exact retry of the same signed claim returns the original hold.
+    An exact retry of the same signed claim returns the original hold. In
+    rehearsal, this response is the only one that carries the claim's
+    simulated fee receipt; no claim read shows it.
     """
     state = request.app.state
     return await bounty_claims.hold_claim(

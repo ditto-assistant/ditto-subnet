@@ -22,11 +22,7 @@
     "hold_expires_at": "2026-10-16T02:00:25.924166Z",
     "claimed_at": "2026-10-16T01:30:25.971040Z",
     "deadline_at": null,
-    "simulated_receipt": {
-      "block_hash": "0xd95e97ee17c1271ad69e6962285eb216cd953160aa260f686ae6b52c20afd163",
-      "block_number": 0,
-      "extrinsic_index": 0
-    },
+    "simulated_receipt": null,
     "receipts": [
       {
         "block_hash": "0xd95e97ee17c1271ad69e6962285eb216cd953160aa260f686ae6b52c20afd163",
@@ -79,11 +75,7 @@
     "hold_expires_at": "2026-10-16T02:00:26.040445Z",
     "claimed_at": "2026-10-16T01:30:26.065462Z",
     "deadline_at": null,
-    "simulated_receipt": {
-      "block_hash": "0x225a64b5399cb7730c4796b096de821391f377ba8e1aecd12b7b9f06c46d6fb6",
-      "block_number": 0,
-      "extrinsic_index": 0
-    },
+    "simulated_receipt": null,
     "receipts": [
       {
         "block_hash": "0x225a64b5399cb7730c4796b096de821391f377ba8e1aecd12b7b9f06c46d6fb6",
@@ -198,11 +190,7 @@
     "hold_expires_at": "2026-10-16T02:00:26.130960Z",
     "claimed_at": "2026-10-16T01:30:26.151441Z",
     "deadline_at": null,
-    "simulated_receipt": {
-      "block_hash": "0x4745614047883dccdf0643462d708a3106e998c766c011bc9d9ae8f49700d3cd",
-      "block_number": 0,
-      "extrinsic_index": 0
-    },
+    "simulated_receipt": null,
     "receipts": [
       {
         "block_hash": "0x4745614047883dccdf0643462d708a3106e998c766c011bc9d9ae8f49700d3cd",
@@ -261,11 +249,7 @@
     "hold_expires_at": "2026-10-16T02:00:26.233994Z",
     "claimed_at": "2026-10-16T01:30:26.255145Z",
     "deadline_at": "2026-10-21T01:30:26.255145Z",
-    "simulated_receipt": {
-      "block_hash": "0x62c8042a66ce232dac37cfc88745a47c7285353e76915bd93d8b7a3d39a6faf0",
-      "block_number": 0,
-      "extrinsic_index": 0
-    },
+    "simulated_receipt": null,
     "receipts": [
       {
         "block_hash": "0x62c8042a66ce232dac37cfc88745a47c7285353e76915bd93d8b7a3d39a6faf0",

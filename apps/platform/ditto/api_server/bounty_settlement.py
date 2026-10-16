@@ -268,12 +268,13 @@ async def award_claim(
     """Award accepted work from the reward pool, with public credit."""
     if not body.reason.strip() or not body.attribution.strip():
         raise HTTPException(400, "reason and attribution must not be blank")
-    now = _now(clock)
     async with maker() as session, session.begin():
         claim = await session.get(BountyClaim, claim_id)
         if claim is None:
             raise HTTPException(404, "bounty claim not found")
         await locked_bounty(session, claim.bounty_id)
+        # Read under the lock, so awards' times order them as they were made.
+        now = _now(clock)
         _confirm(
             body.confirmation,
             bounty_award_confirmation(
@@ -308,12 +309,10 @@ async def award_claim(
         )
         if slot.claim_id != claim_id or slot.status != "accepted" or accepted is None:
             raise HTTPException(409, "only accepted work can be awarded")
-        pool = await session.scalar(
-            select(BountyRevision.reward_pool_alpha_rao)
-            .where(BountyRevision.bounty_id == claim.bounty_id)
-            .order_by(BountyRevision.revision.desc())
-            .limit(1)
-        )
+        # The pool the claim signed: a later revision applies to new claims only.
+        signed = await session.get(BountyRevision, (claim.bounty_id, claim.revision))
+        assert signed is not None
+        pool = signed.reward_pool_alpha_rao
         awarded = int(
             await session.scalar(
                 select(
@@ -324,12 +323,11 @@ async def award_claim(
                 )
             )
         )
-        assert pool is not None
         if awarded + body.amount_alpha_rao > pool:
             raise HTTPException(
                 409,
-                "awards would exceed the reward pool: "
-                f"{pool - awarded} alpha rao remain",
+                f"awards would exceed the revision {claim.revision} reward pool: "
+                f"{max(pool - awarded, 0)} alpha rao remain",
             )
         obligation = BountyObligation(
             obligation_id=uuid4(),

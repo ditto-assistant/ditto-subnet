@@ -4852,7 +4852,9 @@ export interface paths {
          * Hold
          * @description Verify a signed claim and hold one open slot until the fee is confirmed.
          *
-         *     An exact retry of the same signed claim returns the original hold.
+         *     An exact retry of the same signed claim returns the original hold. In
+         *     rehearsal, this response is the only one that carries the claim's
+         *     simulated fee receipt; no claim read shows it.
          */
         post: operations["hold_api_v1_bounties_claims_post"];
         delete?: never;

@@ -35,6 +35,7 @@ from ditto.api_models.bounty import (
     BountyClaimView,
     BountyConfirmRequest,
     BountyDetail,
+    BountyFeeReceipt,
     BountySubmitRequest,
     BountySummary,
     BountyWithdrawRequest,
@@ -44,6 +45,7 @@ from ditto.api_models.bounty import (
     bounty_submit_message,
     bounty_team_digest,
     bounty_withdraw_message,
+    simulated_fee_block_hash,
 )
 from ditto.api_models.contributor_identity import ContributorProof
 from ditto.miner_cli.api_client import ApiClient
@@ -274,14 +276,49 @@ def _print_claim(view: BountyClaimView) -> None:
         print(f"{fact.kind.capitalize()}: {fact.reference}")
 
 
-def _confirm_fee(client: ApiClient, view: BountyClaimView) -> BountyClaimView:
+def _cache(network_name: str) -> Path:
+    return Path.home() / ".cache" / "ditto" / "bounty" / network_name
+
+
+def _fee_receipt(claim_id: UUID, signature: str) -> BountyFeeReceipt:
+    """A claim's rehearsal fee receipt, from the claim's own signature."""
+    return BountyFeeReceipt(
+        block_hash=simulated_fee_block_hash(claim_id, signature),
+        block_number=0,
+        extrinsic_index=0,
+    )
+
+
+def _saved_receipt(network_name: str, claim_id: UUID) -> BountyFeeReceipt | None:
+    """The rehearsal receipt of a claim `claim` signed and saved here.
+
+    No claim read shows it: it derives from the claim's signature.
+    """
+    path = _cache(network_name) / "claims" / f"{claim_id}.json"
+    try:
+        saved = json.loads(path.read_text())
+        request = BountyClaimRequest.model_validate(saved["request"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return _fee_receipt(claim_id, request.proof.signature)
+
+
+def _confirm_fee(
+    client: ApiClient, view: BountyClaimView, receipt: BountyFeeReceipt | None
+) -> BountyClaimView:
     if view.state != "held":
         return view
-    if view.funding_mode != "rehearsal" or view.simulated_receipt is None:
+    if view.funding_mode != "rehearsal":
         raise MinerCliError(
             "live bounty fees are not enabled; this CLI pays rehearsal fees only"
         )
-    receipt = view.simulated_receipt
+    if receipt is None:
+        raise MinerCliError(
+            f"claim {view.claim_id} is not saved on this machine: its rehearsal "
+            "fee derives from the claim's signature, which only `ditto bounty "
+            "claim` saves where it signed. The hold lapses at "
+            f"{view.hold_expires_at.isoformat()}"
+        )
     print(
         f"Paying the rehearsal fee of {alpha(view.fee_alpha_rao)}: simulated, no "
         "funds move",
@@ -311,7 +348,7 @@ def _claim(client: ApiClient, args: argparse.Namespace, network_name: str) -> in
     if summary.claims_paused:
         raise MinerCliError("new claims are paused for this bounty")
     owner, name = summary.repo.split("/")
-    cache = Path.home() / ".cache" / "ditto" / "bounty" / network_name
+    cache = _cache(network_name)
     terms_path = _save(
         cache / f"{owner}-{name}-{summary.issue}-r{current.revision}.json",
         {
@@ -422,10 +459,11 @@ def _claim(client: ApiClient, args: argparse.Namespace, network_name: str) -> in
     except OSError as exc:
         print(
             f"warning: could not save claim {held.claim_id} locally ({exc}); "
-            f"finish later with `ditto bounty confirm {held.claim_id}`",
+            "paying its fee now, since `ditto bounty confirm` can't pay it later "
+            "without the saved claim",
             file=sys.stderr,
         )
-    result = _confirm_fee(client, held)
+    result = _confirm_fee(client, held, _fee_receipt(held.claim_id, signature))
     if args.json:
         _print_json(result)
     else:
@@ -500,7 +538,9 @@ def run(args: argparse.Namespace) -> int:
                 return 0
             view = client.get_bounty_claim(args.claim_id)
             if command == "confirm":
-                view = _confirm_fee(client, view)
+                view = _confirm_fee(
+                    client, view, _saved_receipt(network.name, args.claim_id)
+                )
             if args.json:
                 _print_json(view)
             else:

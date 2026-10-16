@@ -395,9 +395,16 @@ def simulated_transfer_block_hash(transfer_id: UUID) -> str:
     return f"0x{digest}"
 
 
-def simulated_fee_block_hash(claim_id: UUID) -> str:
-    """The one rehearsal receipt that pays a claim's fee; no funds move."""
-    digest = hashlib.sha256(f"{SIMULATED_FEE_DOMAIN}:{claim_id}".encode()).hexdigest()
+def simulated_fee_block_hash(claim_id: UUID, signature: str) -> str:
+    """The one rehearsal receipt that pays a claim's fee; no funds move.
+
+    It derives from the claim's own signature, which only the claimant and
+    Platform hold and no view shows. So nobody else can confirm the claim,
+    just as only the payee can pay a live fee.
+    """
+    digest = hashlib.sha256(
+        f"{SIMULATED_FEE_DOMAIN}:{claim_id}:{signature.lower()}".encode()
+    ).hexdigest()
     return f"0x{digest}"
 
 
@@ -698,7 +705,8 @@ class BountyClaimView(WireModel):
     hold_expires_at: datetime
     claimed_at: datetime | None
     deadline_at: datetime | None
-    # Rehearsal only: the receipt that pays this claim's fee without funds.
+    # Rehearsal only, and only in the hold's response to its signer: the
+    # receipt that pays this claim's fee without funds.
     simulated_receipt: BountyFeeReceipt | None
     receipts: list[BountyFeeReceipt]
     refunds: list[BountyRefundView]
@@ -769,7 +777,8 @@ class BountySummary(WireModel):
     claims_paused: bool
     slots: BountySlotCounts
     reviews_overdue: int
-    # Awards recorded against the reward pool; they never exceed it.
+    # Awards recorded against the reward pool. Each stays within the pool of
+    # the revision its claim signed, which a later revision never changes.
     awarded_alpha_rao: int
     published_at: datetime
     updated_at: datetime

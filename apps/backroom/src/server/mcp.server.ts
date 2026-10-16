@@ -907,7 +907,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   reassign_bounty_reviewer: 'Name the reviewer in force. Write; see help.',
   control_bounty_slot: 'Cancel (refunds) or reopen (retains) a slot. Write; see help.',
   decide_bounty_appeal: 'Uphold or deny an appeal; not its reviewer. Write; see help.',
-  award_bounty_claim: 'Award accepted work within the pool. Write; see help.',
+  award_bounty_claim: 'Award accepted work within its claim\'s pool. Write; see help.',
   set_bounty_payout_policy: 'Append approval thresholds. Write; see help.',
   approve_bounty_obligation: 'Approve exact payee, amount, policy. Write; see help.',
   dispatch_bounty_obligation: 'Dispatch an approved round once. Write; see help.',
@@ -1825,7 +1825,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('award_bounty_claim', {
     title: 'Award bounty claim',
-    description: 'Award accepted work amountAlphaRao with public attribution and a private reason (AWARD BOUNTY CLAIM {claimId} {amount} ALPHA RAO). Awards never exceed the bounty pool; a shared award awards each accepted claim. Recording an award moves no money. Requires backroom:write.',
+    description: 'Award accepted work amountAlphaRao with public attribution and a private reason (AWARD BOUNTY CLAIM {claimId} {amount} ALPHA RAO). Awards never exceed the pool of the revision the claim signed; a shared award awards each accepted claim. Recording an award moves no money. Requires backroom:write.',
     inputSchema: bountyCatalogInputs.award, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => awardBountyClaim(props.session.email, input)))
 

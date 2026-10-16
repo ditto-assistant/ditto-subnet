@@ -13,7 +13,9 @@ once, and an exact retry returns the original outcome.
 
 In v1 every bounty is in rehearsal funding, and the only fee verifier is the
 simulated one: each claim has exactly one rehearsal receipt, derived from its
-id, and no funds move. Live verification plugs in behind the same interface.
+id and its signature, and no funds move. Only the hold's response shows it, so
+only the claimant can confirm their own claim, as only the payee can pay a
+live fee. Live verification plugs in behind the same interface.
 """
 
 from __future__ import annotations
@@ -121,7 +123,7 @@ class BountyFeeVerifier(Protocol):
 
 
 class SimulatedBountyFeeVerifier:
-    """Rehearsal fees: one receipt per claim, derived from its id. No funds."""
+    """Rehearsal fees: one receipt per claim and its signature. No funds."""
 
     async def verify(
         self, receipt: BountyFeeReceipt, *, claim: BountyClaim
@@ -131,7 +133,7 @@ class SimulatedBountyFeeVerifier:
                 "live bounty fees need the live fee verifier, which is not enabled"
             )
         if (receipt.block_hash, receipt.block_number, receipt.extrinsic_index) != (
-            simulated_fee_block_hash(claim.claim_id),
+            simulated_fee_block_hash(claim.claim_id, claim.signature),
             0,
             0,
         ):
@@ -219,7 +221,7 @@ async def _retry_of(
     )
     if claim is None or not _same_claim(claim, body):
         raise HTTPException(409, "bounty action nonce already used")
-    return await claim_view(session, claim, now=now)
+    return await claim_view(session, claim, now=now, for_signer=True)
 
 
 async def hold_claim(
@@ -426,7 +428,7 @@ async def hold_claim(
                 )
             )
             await session.flush()
-            return await claim_view(session, claim, now=now)
+            return await claim_view(session, claim, now=now, for_signer=True)
     except IntegrityError as exc:
         # A concurrent request with this nonce committed first.
         if unique_violation(exc) != "pk_bounty_action_nonces":
@@ -612,8 +614,17 @@ async def read_claim(
 
 
 async def claim_view(
-    session: AsyncSession, claim: BountyClaim, *, now: datetime
+    session: AsyncSession,
+    claim: BountyClaim,
+    *,
+    now: datetime,
+    for_signer: bool = False,
 ) -> BountyClaimView:
+    """The claim as anyone may read it; ``for_signer`` adds its rehearsal receipt.
+
+    Only the hold's response, which goes to whoever sent the signed claim,
+    passes ``for_signer``.
+    """
     bounty = await session.get(Bounty, claim.bounty_id)
     slot = await session.get(BountySlot, claim.slot_id)
     assert bounty is not None and slot is not None
@@ -725,11 +736,11 @@ async def claim_view(
         else None,
         simulated_receipt=(
             BountyFeeReceipt(
-                block_hash=simulated_fee_block_hash(claim.claim_id),
+                block_hash=simulated_fee_block_hash(claim.claim_id, claim.signature),
                 block_number=0,
                 extrinsic_index=0,
             )
-            if claim.funding_mode == "rehearsal"
+            if for_signer and claim.funding_mode == "rehearsal"
             else None
         ),
         receipts=[

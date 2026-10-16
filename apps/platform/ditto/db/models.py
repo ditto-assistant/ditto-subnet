@@ -11927,6 +11927,13 @@ class ClaSettingsRevision(Base):
 
 
 class ClaShadowUpload(Base):
+    """An accepted upload from an unsigned hotkey while the CLA gate is shadow.
+
+    It commits with its paid upload, so it grows no faster than paid agents
+    and stops when the gate leaves shadow. Its count is the evidence an
+    operator reads before enforcing, so it is kept.
+    """
+
     __tablename__ = "cla_shadow_uploads"
     observation_id: Mapped[UUID] = mapped_column(
         SaUUID(as_uuid=True), primary_key=True, default=uuid4
@@ -12265,7 +12272,13 @@ class BountyClaimControl(Base):
 
 
 class BountyActionNonce(Base):
-    """One row per signed bounty action nonce, across every action. Append-only."""
+    """One row per signed bounty action nonce, across every action. Append-only.
+
+    Unlike a validator replay guard, it is never pruned: each row is the nonce
+    of the claim, submission, withdrawal or appeal it authorized, which keeps
+    it by foreign key, and a refused action writes none. It grows only with
+    recorded actions.
+    """
 
     __tablename__ = "bounty_action_nonces"
     nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)

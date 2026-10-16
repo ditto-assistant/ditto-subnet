@@ -76,6 +76,10 @@ def publication_refusals(terms: BountyTerms) -> list[str]:
             f"bounties have exactly {BOUNTY_ATTEMPTS_PER_ROUND} paid slots per round"
         )
     if terms.funding_mode != "rehearsal":
+        # Lifting this also needs every operator write to carry a
+        # proof-backed operator email (require_operator_proof): X-Admin-Actor
+        # alone is asserted, so distinct approvers are not yet proven
+        # (docs/bounty-claims.md).
         refusals.append(
             "live funding needs separate operator approval; publish in rehearsal mode"
         )

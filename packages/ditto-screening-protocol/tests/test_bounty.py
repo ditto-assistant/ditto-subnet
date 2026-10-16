@@ -270,11 +270,24 @@ def test_claim_message_requires_an_aware_time():
         )
 
 
-def test_simulated_receipt_is_bound_to_one_claim():
+def test_simulated_receipt_is_bound_to_one_claim_and_its_signature():
     claim = UUID("00000000-0000-4000-8000-000000000001")
-    expected = hashlib.sha256(f"ditto-bounty-simulated-fee:v1:{claim}".encode())
-    assert simulated_fee_block_hash(claim) == "0x" + expected.hexdigest()
-    assert simulated_fee_block_hash(claim) != simulated_fee_block_hash(NONCE)
+    signature = "AB" * 64
+    expected = hashlib.sha256(
+        f"ditto-bounty-simulated-fee:v1:{claim}:{'ab' * 64}".encode()
+    )
+    assert simulated_fee_block_hash(claim, signature) == "0x" + expected.hexdigest()
+    # Any case of the same signature derives the same receipt.
+    assert simulated_fee_block_hash(claim, signature.lower()) == (
+        simulated_fee_block_hash(claim, signature)
+    )
+    # The claim id alone, which the public board shows, never derives it.
+    assert simulated_fee_block_hash(claim, signature) != simulated_fee_block_hash(
+        NONCE, signature
+    )
+    assert simulated_fee_block_hash(claim, signature) != simulated_fee_block_hash(
+        claim, "cd" * 64
+    )
 
 
 @pytest.mark.parametrize(
@@ -463,7 +476,9 @@ def test_settlement_confirmations_and_simulated_transfers():
     ).hexdigest()
     assert simulated_transfer_block_hash(CLAIM) == "0x" + expected
     # A transfer receipt is never mistaken for a fee receipt.
-    assert simulated_transfer_block_hash(CLAIM) != simulated_fee_block_hash(CLAIM)
+    assert simulated_transfer_block_hash(CLAIM) != simulated_fee_block_hash(
+        CLAIM, "ab" * 64
+    )
 
 
 @pytest.mark.parametrize(

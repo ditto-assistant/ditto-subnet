@@ -157,7 +157,9 @@ Notes:
   for `hold_minutes`. The hold reserves the slot only for its fee.
 - **Claimed.** A fee receipt for the exact amount, paid by the payee, claims
   the held slot. The delivery deadline is `delivery_days` from that moment. A
-  receipt pays at most one claim.
+  receipt pays at most one claim. In rehearsal, a claim's one receipt derives
+  from its id and its signature, and only the hold's response shows it, so
+  only the claimant can confirm it, as only the payee can pay a live fee.
 - **Refunds, never forfeits.** A fee that cannot win its slot is recorded with
   a full refund obligation: the hold had lapsed (`hold_expired`), the slot had
   left the claim (`slot_lost`), the payee, link or CLA signature had changed
@@ -203,8 +205,10 @@ Every confirmed entry fee ends in exactly one disposition:
 | Rejected, expired or withdrawn | `fee_retained`, recorded when the slot is reopened, which is when the outcome becomes final |
 
 An operator can record one **award** per accepted claim, with public
-attribution, from the bounty's reward pool. Awards across claims never exceed
-the pool. Each refund and award is an **obligation**. Paying one needs as many
+attribution, from the bounty's reward pool. An award never takes the bounty's
+awards past the pool of the revision its claim signed, so a later revision
+neither raises nor cuts what an earlier claim was offered. Each refund and
+award is an **obligation**. Paying one needs as many
 distinct approvers as the payout policy sets for its amount. Each approval
 binds the obligation, its payee, its amount, the policy revision and the
 approval round, and whoever decided the award or accepted the work can't
@@ -242,12 +246,13 @@ operators.
 | GitHub account takeover redirects payment | The payee of record comes from the signed claim. GitHub can't sign any bounty action |
 | Replay of a captured claim or follow-up action | Domain, netuid, revision and digest, claim id, a shared single-use nonce, and the 24-hour freshness window |
 | Terms changed after work began | The claim binds `spec_digest`. New revisions apply to new claims only |
+| Someone else confirms a held claim and starts its deadline | Only the payee can pay a live fee. A rehearsal receipt derives from the claim's own signature, which no view shows, and only the hold's response carries it |
 | Squatting on slots | A short unpaid hold, a fee to claim, a fixed delivery deadline with no renewals, and one live slot per GitHub account and payee |
 | Placeholder pull requests | A submission names an exact commit, and the reviewer decides on that commit within the review target |
 | A pull request is rewritten after review | `submit` binds `head_sha`. New commits need a new signed submission |
 | A hotkey leaks, is sold, or changes owner | The new holder can make new claims but can't act on or redirect existing ones. A changed owner before fee confirmation refunds the fee, and afterwards an award's payout holds until the owner is the payee again |
 | A fee is lost to a race or a late payment | Every fee that can't win its slot is owed back in full |
-| An insider pays themselves | Approvals need distinct operators by amount, and the award decider and accepting reviewer can't approve |
+| An insider pays themselves | Approvals need distinct operators by amount, and the award decider and accepting reviewer can't approve. In v1 an operator is the staff email Backroom sends as `X-Admin-Actor` with the shared admin token, which is asserted, not proven, so these checks catch mistakes but not someone holding that token. Live funding needs a proof-backed operator email first (see Deferred) |
 
 ## Deferred
 
@@ -268,3 +273,10 @@ v1 deliberately leaves these parts of the #2045 proposal for later work:
   individually. A new round will need a new revision.
 - **Live funding.** Live fee verification and transfers need separate approval
   under the treasury contract in [maintenance-treasury.md](maintenance-treasury.md).
+  Before then, every bounty operator write must come from a proof-backed
+  Backroom session that carries the operator's email address
+  (`require_operator_proof`, as the canary endpoints do), so each approval
+  names a real, attributable operator. Today Backroom sends that email in the
+  `X-Admin-Actor` header with the shared admin token: an audit label, not
+  proof. In rehearsal the distinct-approver and recusal checks are therefore
+  accepted as guarding against mistakes only.

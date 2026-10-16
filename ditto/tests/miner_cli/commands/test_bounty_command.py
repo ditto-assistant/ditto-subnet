@@ -34,7 +34,7 @@ from ditto.api_models.bounty import (
 from ditto.api_models.contributor_identity import ClaStatus
 from ditto.miner_cli.__main__ import _build_parser, main
 from ditto.miner_cli.commands import bounty
-from ditto.miner_cli.errors import TransientApiError
+from ditto.miner_cli.errors import MinerCliError, TransientApiError
 
 HOTKEY = bittensor.Keypair.create_from_uri("//Alice")
 COLDKEY = bittensor.Keypair.create_from_uri("//Alice//cold")
@@ -98,7 +98,9 @@ def detail(**summary_over) -> BountyDetail:
 def claim_view(state: str = "held", **over) -> BountyClaimView:
     claim_id = over.pop("claim_id", uuid4())
     receipt = BountyFeeReceipt(
-        block_hash=simulated_fee_block_hash(claim_id), block_number=0, extrinsic_index=0
+        block_hash=simulated_fee_block_hash(claim_id, "ab" * 64),
+        block_number=0,
+        extrinsic_index=0,
     )
     base = {
         "claim_id": claim_id,
@@ -228,11 +230,15 @@ def test_claim_signs_the_exact_revision_after_typed_consent(home, capsys):
         ),
         bytes.fromhex(body.proof.signature),
     )
-    # The rehearsal fee is the hold's own simulated receipt.
+    # The rehearsal fee derives from the hold's id and the claim's signature.
     held = client.hold_bounty_claim.return_value
     claim_id, confirm = client.confirm_bounty_claim.call_args.args
     assert claim_id == held.claim_id
-    assert confirm.receipt == held.simulated_receipt
+    assert confirm.receipt == BountyFeeReceipt(
+        block_hash=simulated_fee_block_hash(held.claim_id, body.proof.signature),
+        block_number=0,
+        extrinsic_index=0,
+    )
     out = json.loads(capsys.readouterr().out)
     assert out["state"] == "claimed"
     saved = home / ".cache/ditto/bounty/local"
@@ -322,18 +328,37 @@ def test_a_refunded_fee_is_reported_and_exits_nonzero(capsys):
     assert "refund_owed" in out and "Refund owed (simulated): 2.5 alpha" in out
 
 
-def test_confirm_resends_only_a_live_hold():
+def test_confirm_pays_a_saved_hold_with_its_own_signature():
     client = api()
-    held = claim_view("held")
-    client.get_bounty_claim.return_value = held
+    held = client.hold_bounty_claim.return_value
+    client.confirm_bounty_claim.side_effect = MinerCliError("confirm failed: HTTP 500")
+    assert run([*claim_args(), "--confirmation", PHRASE], client) == 1
+    signature = client.hold_bounty_claim.call_args.args[0].proof.signature
+    # A claim read never shows the receipt; the saved claim's signature pays it.
+    client.get_bounty_claim.return_value = held.model_copy(
+        update={"simulated_receipt": None}
+    )
+    client.confirm_bounty_claim.reset_mock(side_effect=True)
+    client.confirm_bounty_claim.return_value = claim_view("claimed")
     assert run(["confirm", str(held.claim_id)], client) == 0
-    assert (
-        client.confirm_bounty_claim.call_args.args[1].receipt == held.simulated_receipt
+    claim_id, confirm = client.confirm_bounty_claim.call_args.args
+    assert claim_id == held.claim_id
+    assert confirm.receipt.block_hash == simulated_fee_block_hash(
+        held.claim_id, signature
     )
     client.confirm_bounty_claim.reset_mock()
     client.get_bounty_claim.return_value = claim_view("claimed")
     assert run(["confirm", str(held.claim_id)], client) == 0
     client.confirm_bounty_claim.assert_not_called()
+
+
+def test_confirm_without_the_saved_claim_sends_nothing(capsys):
+    client = api()
+    held = claim_view("held", simulated_receipt=None)
+    client.get_bounty_claim.return_value = held
+    assert run(["confirm", str(held.claim_id)], client) == 1
+    client.confirm_bounty_claim.assert_not_called()
+    assert "is not saved on this machine" in capsys.readouterr().err
 
 
 def test_status_list_and_show(capsys):

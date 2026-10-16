@@ -7,6 +7,7 @@ fake provider) and the real CLA signing flow. Only the chain is mocked.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -221,7 +222,8 @@ def travel(monkeypatch, delta: timedelta) -> None:
 async def test_claim_holds_the_lowest_open_slot_then_the_fee_claims_it(world):
     await world.start(ALICE)
     before = datetime.now(UTC)
-    held = await world.hold(ALICE)
+    body = world.body(ALICE)
+    held = await world.client.post(CLAIMS, json=body)
     assert held.status_code == 200, held.text
     claim = held.json()
     assert claim["state"] == "held" and claim["slot_status"] == "held"
@@ -232,7 +234,9 @@ async def test_claim_holds_the_lowest_open_slot_then_the_fee_claims_it(world):
     expires = datetime.fromisoformat(claim["hold_expires_at"])
     assert timedelta(minutes=30) <= expires - before <= timedelta(minutes=31)
     assert claim["simulated_receipt"] == {
-        "block_hash": simulated_fee_block_hash(UUID(claim["claim_id"])),
+        "block_hash": simulated_fee_block_hash(
+            UUID(claim["claim_id"]), body["proof"]["signature"]
+        ),
         "block_number": 0,
         "extrinsic_index": 0,
     }
@@ -606,6 +610,30 @@ async def test_claims_share_the_link_lock_with_other_readers(world):
     assert held.status_code == 200, held.text
 
 
+async def test_only_the_hold_response_carries_the_rehearsal_receipt(world):
+    await world.start(ALICE)
+    body = world.body(ALICE)
+    claim = (await world.client.post(CLAIMS, json=body)).json()
+    assert claim["simulated_receipt"] is not None
+    # An exact retry is the signer's own request, so it carries it too.
+    again = (await world.client.post(CLAIMS, json=body)).json()
+    assert again["simulated_receipt"] == claim["simulated_receipt"]
+    read = (await world.client.get(f"{CLAIMS}/{claim['claim_id']}")).json()
+    assert read["state"] == "held" and read["simulated_receipt"] is None
+    # The public board names the claim, but its id alone pays nothing.
+    guessed = hashlib.sha256(
+        f"ditto-bounty-simulated-fee:v1:{claim['claim_id']}".encode()
+    ).hexdigest()
+    forged = await world.confirm(
+        claim, {"block_hash": f"0x{guessed}", "block_number": 0, "extrinsic_index": 0}
+    )
+    assert forged.status_code == 402 and "rehearsal fee receipt" in forged.text
+    assert (await world.counts())["bounty_fee_payments"] == 0
+    paid = await world.confirm(claim)
+    assert paid.status_code == 200 and paid.json()["state"] == "claimed"
+    assert paid.json()["simulated_receipt"] is None
+
+
 async def test_receipts_are_bound_to_their_claim_and_charged_once(world):
     await world.start(ALICE, BOB)
     alice = (await world.hold(ALICE)).json()
@@ -810,9 +838,10 @@ async def test_simulated_verifier_refuses_live_funding():
         funding_mode="live",
         payee_coldkey=ALICE.coldkey.ss58_address,
         fee_alpha_rao=1,
+        signature="ab" * 64,
     )
     receipt = BountyFeeReceipt(
-        block_hash=simulated_fee_block_hash(claim.claim_id),
+        block_hash=simulated_fee_block_hash(claim.claim_id, claim.signature),
         block_number=0,
         extrinsic_index=0,
     )

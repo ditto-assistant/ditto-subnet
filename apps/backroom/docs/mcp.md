@@ -561,7 +561,7 @@ rehearsal funding only: fees and transfers are simulated, and no funds move.
 | `reassign_bounty_reviewer` | a new reviewer; overdue reviews get one more window |
 | `control_bounty_slot` | cancel (refunds a paid fee) or reopen (retains a final one) |
 | `decide_bounty_appeal` | uphold (fresh delivery window) or deny; never by its reviewer |
-| `award_bounty_claim` | an award on accepted work, within the reward pool |
+| `award_bounty_claim` | an award on accepted work, within the pool its claim signed |
 | `set_bounty_payout_policy` | a new revision of the approval thresholds |
 | `approve_bounty_obligation` | one approval binding payee, amount and policy revision |
 | `dispatch_bounty_obligation` | one dispatch of an approved round |
