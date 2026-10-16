@@ -16199,6 +16199,7 @@ export interface components {
             /** Claims */
             claims: components["schemas"]["BountyClaimView"][];
             detail: components["schemas"]["BountyDetail"];
+            report: components["schemas"]["BountyReport"];
             /** Reviewer Actor */
             reviewer_actor: string;
             /** Revisions */
@@ -16323,6 +16324,112 @@ export interface components {
             confirmation: string;
             /** Reason */
             reason: string;
+        };
+        /**
+         * BountyReport
+         * @description A source-safe account of one bounty for its evaluation (#2944).
+         *
+         *     It names only what public views show and counts operator actions without
+         *     naming operators, so it can be published as it is.
+         */
+        BountyReport: {
+            /** Appeals Denied */
+            appeals_denied: number;
+            /** Appeals Filed */
+            appeals_filed: number;
+            /** Appeals Upheld */
+            appeals_upheld: number;
+            awarded: components["schemas"]["BountyReportAmount"];
+            awards_paid: components["schemas"]["BountyReportAmount"];
+            /** Checks */
+            checks: components["schemas"]["BountyReportCheck"][];
+            /** Claims */
+            claims: components["schemas"]["BountyReportClaim"][];
+            /** Decisions */
+            decisions: {
+                [key: string]: number;
+            };
+            /** Facts */
+            facts: {
+                [key: string]: number;
+            };
+            fees_paid: components["schemas"]["BountyReportAmount"];
+            fees_refund_owed: components["schemas"]["BountyReportAmount"];
+            fees_refunded: components["schemas"]["BountyReportAmount"];
+            fees_retained: components["schemas"]["BountyReportAmount"];
+            fees_undecided: components["schemas"]["BountyReportAmount"];
+            /**
+             * Funding Mode
+             * @enum {string}
+             */
+            funding_mode: "rehearsal" | "live";
+            /** Median Review Seconds */
+            median_review_seconds: number | null;
+            /** Operator Actions */
+            operator_actions: number;
+            payments_return_owed: components["schemas"]["BountyReportAmount"];
+            payments_returned: components["schemas"]["BountyReportAmount"];
+            /** Reviews Overdue */
+            reviews_overdue: number;
+            /** Reward Pool Alpha Rao */
+            reward_pool_alpha_rao: number;
+            slots: components["schemas"]["BountySlotCounts"];
+            /** Transfers */
+            transfers: {
+                [key: string]: number;
+            };
+        };
+        /** BountyReportAmount */
+        BountyReportAmount: {
+            /** Alpha Rao */
+            alpha_rao: number;
+            /** Count */
+            count: number;
+        };
+        /**
+         * BountyReportCheck
+         * @description One settlement invariant, checked against the recorded history.
+         */
+        BountyReportCheck: {
+            /** Detail */
+            detail: string;
+            /** Name */
+            name: string;
+            /** Ok */
+            ok: boolean;
+        };
+        /** BountyReportClaim */
+        BountyReportClaim: {
+            /** Attribution */
+            attribution: string | null;
+            /** Award Alpha Rao */
+            award_alpha_rao: number;
+            /** Award State */
+            award_state: ("retained" | "awaiting_approval" | "approved" | "dispatched" | "uncertain" | "confirmed" | "failed") | null;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Claimed At */
+            claimed_at: string | null;
+            /** Decided At */
+            decided_at: string | null;
+            /**
+             * Fee
+             * @enum {string}
+             */
+            fee: "unpaid" | "undecided" | "refund_owed" | "refunded" | "retained";
+            /** Github Login */
+            github_login: string;
+            /** Outcome */
+            outcome: string;
+            /** Position */
+            position: number;
+            /** Round */
+            round: number;
+            /** Submissions */
+            submissions: number;
         };
         /** BountyReviewQueue */
         BountyReviewQueue: {

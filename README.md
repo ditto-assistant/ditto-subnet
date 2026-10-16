@@ -48,7 +48,8 @@ the public `ditto-screening-protocol` package in `ditto-screener`.
   custody, and accounting contract for SN118 maintenance bounties.
 - [Build bounties](docs/bounty-guide.md): claim a paid slot, deliver, and get
   reviewed and paid; [the claim contract](docs/bounty-claims.md) has the
-  signed messages and rules.
+  signed messages and rules, and [the operator runbook](docs/bounty-operations.md)
+  covers publishing, settlement, pausing and rehearsal.
 
 ## Development quickstart
 ```sh

@@ -6,7 +6,8 @@ paid slots: an alpha entry fee, an alpha reward pool, three slots per round, a
 five-day delivery deadline by default and no renewals. The parts of the
 proposal that v1 does not implement are listed under [Deferred](#deferred).
 The step-by-step walkthrough for contributors is the
-[contributor guide](bounty-guide.md).
+[contributor guide](bounty-guide.md), and operators follow the
+[operator runbook](bounty-operations.md).
 
 A claim does one job: it binds a paid slot on a bounty to a verifiable subnet
 identity and a payment destination, under terms that were public before the

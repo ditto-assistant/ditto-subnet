@@ -40,6 +40,7 @@ from ditto.api_server.bounty_obligations import (
     obligation_state,
     obligation_view,
 )
+from ditto.api_server.bounty_report import bounty_report
 from ditto.api_server.bounty_reviews import current_reviewer
 from ditto.db.models import (
     Bounty,
@@ -306,6 +307,23 @@ async def operator_view(session: AsyncSession, bounty_id: UUID) -> BountyOperato
         if claim_ids
         else []
     )
+    claim_views = [await claim_view(session, claim, now=now) for claim in claims]
+    appeal_views = [
+        BountyAdminAppealView(
+            appeal_id=appeal.appeal_id,
+            claim_id=appeal.claim_id,
+            subject_event_id=appeal.subject_event_id,
+            statement=appeal.reason,
+            reason_digest=appeal.reason_digest,
+            filed_at=appeal.filed_at,
+            upheld=decision.upheld if decision else None,
+            decided_by=decision.actor if decision else None,
+            decision_reason=decision.reason if decision else None,
+            decided_at=decision.decided_at if decision else None,
+        )
+        for appeal, decision in appeals
+    ]
+    audit = await _audit(session, bounty_id, claim_ids)
     return BountyOperatorView(
         detail=detail,
         reviewer_actor=await current_reviewer(session, bounty_id),
@@ -320,23 +338,12 @@ async def operator_view(session: AsyncSession, bounty_id: UUID) -> BountyOperato
             )
             for row in revisions
         ],
-        claims=[await claim_view(session, claim, now=now) for claim in claims],
-        appeals=[
-            BountyAdminAppealView(
-                appeal_id=appeal.appeal_id,
-                claim_id=appeal.claim_id,
-                subject_event_id=appeal.subject_event_id,
-                statement=appeal.reason,
-                reason_digest=appeal.reason_digest,
-                filed_at=appeal.filed_at,
-                upheld=decision.upheld if decision else None,
-                decided_by=decision.actor if decision else None,
-                decision_reason=decision.reason if decision else None,
-                decided_at=decision.decided_at if decision else None,
-            )
-            for appeal, decision in appeals
-        ],
-        audit=await _audit(session, bounty_id, claim_ids),
+        claims=claim_views,
+        appeals=appeal_views,
+        audit=audit,
+        report=bounty_report(
+            detail=detail, claims=claim_views, appeals=appeal_views, audit=audit
+        ),
     )
 
 

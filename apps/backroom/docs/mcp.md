@@ -536,7 +536,10 @@ rehearsal funding only: fees and transfers are simulated, and no funds move.
 - `get_bounty`: one bounty with everything public views hide: the reviewer in
   force, each revision's operator and reason, every claim, appeal statements, and
   a chronological `audit` of every operator record with its actor and reason.
-  Read it before a write and to verify one after.
+  Its `report` is a source-safe account of fees, awards, transfers, reviews and
+  appeals, with settlement checks that should all pass; the
+  [operator runbook](../../../docs/bounty-operations.md#read-the-report)
+  explains each field. Read it before a write and to verify one after.
 - `get_bounty_claim`: one claim's hold, receipts, submissions and decisions,
   appeals, obligations (with derived settlement state and transfers) and facts.
 - `get_bounty_queue`: `queue=reviews` lists submissions awaiting a decision,

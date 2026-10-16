@@ -1759,7 +1759,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_bounty', {
     title: 'Get bounty operator view',
-    description: 'One bounty with everything public views hide: the reviewer in force, each revision\'s operator, reviewer and reason, every claim with submissions, obligations and facts, appeal statements, and a chronological audit of every operator record (publication, pause, reassignment, review, appeal decision, cancel, reopen, award, approval, dispatch, fact) with actor and reason. Use it before any bounty write and to verify one after. Requires backroom:read.',
+    description: 'One bounty with everything public views hide: the reviewer in force, each revision\'s operator, reviewer and reason, every claim with submissions, obligations and facts, appeal statements, and a chronological audit of every operator record (publication, pause, reassignment, review, appeal decision, cancel, reopen, award, approval, dispatch, fact) with actor and reason, plus a source-safe report with settlement checks. Use it before any bounty write and to verify one after. Requires backroom:read.',
     inputSchema: bountyCatalogInputs.bounty, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchBounty(input)))
 

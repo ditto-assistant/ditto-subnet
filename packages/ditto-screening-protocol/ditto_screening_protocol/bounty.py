@@ -837,6 +837,73 @@ class BountyAdminAppealView(WireModel):
     decided_at: datetime | None
 
 
+class BountyReportAmount(WireModel):
+    count: int
+    alpha_rao: int
+
+
+class BountyReportCheck(WireModel):
+    """One settlement invariant, checked against the recorded history."""
+
+    name: str
+    ok: bool
+    detail: str
+
+
+# What became of a claim's entry fee.
+BountyReportFee = Literal["unpaid", "undecided", "refund_owed", "refunded", "retained"]
+
+
+class BountyReportClaim(WireModel):
+    claim_id: UUID
+    github_login: str
+    round: int
+    position: int
+    # The claim's own slot status once its fee is paid; its hold outcome before.
+    outcome: str
+    fee: BountyReportFee
+    award_alpha_rao: int
+    award_state: BountyObligationState | None
+    attribution: str | None
+    submissions: int
+    claimed_at: datetime | None
+    decided_at: datetime | None
+
+
+class BountyReport(WireModel):
+    """A source-safe account of one bounty for its evaluation (#2944).
+
+    It names only what public views show and counts operator actions without
+    naming operators, so it can be published as it is.
+    """
+
+    funding_mode: FundingMode
+    slots: BountySlotCounts
+    claims: list[BountyReportClaim]
+    # Paid entry fees and what became of them.
+    fees_paid: BountyReportAmount
+    fees_refunded: BountyReportAmount
+    fees_refund_owed: BountyReportAmount
+    fees_retained: BountyReportAmount
+    fees_undecided: BountyReportAmount
+    # Payments that never won a slot: late, lost, changed identity, duplicate.
+    payments_returned: BountyReportAmount
+    payments_return_owed: BountyReportAmount
+    reward_pool_alpha_rao: int
+    awarded: BountyReportAmount
+    awards_paid: BountyReportAmount
+    transfers: dict[BountyTransferState, int]
+    decisions: dict[BountyReviewDecision, int]
+    median_review_seconds: int | None
+    reviews_overdue: int
+    appeals_filed: int
+    appeals_upheld: int
+    appeals_denied: int
+    facts: dict[BountyFactKind, int]
+    operator_actions: int
+    checks: list[BountyReportCheck]
+
+
 class BountyOperatorView(WireModel):
     detail: BountyDetail
     reviewer_actor: str
@@ -844,6 +911,7 @@ class BountyOperatorView(WireModel):
     claims: list[BountyClaimView]
     appeals: list[BountyAdminAppealView]
     audit: list[BountyAuditEntry]
+    report: BountyReport
 
 
 class BountyReviewQueueItem(WireModel):
