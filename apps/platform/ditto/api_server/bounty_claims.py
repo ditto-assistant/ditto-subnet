@@ -648,7 +648,13 @@ async def claim_view(
                 BountyReview.submission_id == BountySubmission.submission_id,
             )
             .where(BountySubmission.claim_id == claim.claim_id)
-            .order_by(BountySubmission.submitted_at, BountySubmission.submission_id)
+            # A resubmission follows the decision before it, so on a tied
+            # timestamp decided submissions come first, the undecided last.
+            .order_by(
+                BountySubmission.submitted_at,
+                BountyReview.decided_at.asc().nulls_last(),
+                BountySubmission.submission_id,
+            )
         )
     ).all()
     appeals = (

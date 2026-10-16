@@ -392,19 +392,19 @@ async def review_queue(
 ) -> BountyReviewQueue:
     """Submissions awaiting a decision, the most overdue first."""
     now = bounty_claims.utcnow()
-    rows = (
-        await session.execute(
-            select(BountySlot, BountyClaim, Bounty)
-            .join(BountyClaim, BountyClaim.claim_id == BountySlot.claim_id)
-            .join(Bounty, Bounty.bounty_id == BountySlot.bounty_id)
-            .where(BountySlot.status == "submitted")
-            .order_by(BountySlot.review_due_at, BountySlot.slot_id)
-        )
-    ).all()
+    query = (
+        select(BountySlot, BountyClaim, Bounty)
+        .join(BountyClaim, BountyClaim.claim_id == BountySlot.claim_id)
+        .join(Bounty, Bounty.bounty_id == BountySlot.bounty_id)
+        .where(BountySlot.status == "submitted")
+        .order_by(BountySlot.review_due_at, BountySlot.slot_id)
+    )
+    if overdue_only:
+        # Only the overdue rows are read at all.
+        query = query.where(BountySlot.review_due_at <= now)
     queued = [
         (slot, claim, owner)
-        for slot, claim, owner in rows
-        if not overdue_only or now >= _due(slot)
+        for slot, claim, owner in (await session.execute(query)).tuples().all()
     ]
     # One read each for every item's latest submission and claimed terms.
     claim_ids = [claim.claim_id for _slot, claim, _owner in queued]

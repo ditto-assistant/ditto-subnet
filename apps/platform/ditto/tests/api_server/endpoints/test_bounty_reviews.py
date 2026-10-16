@@ -492,10 +492,16 @@ async def test_a_resubmission_at_the_same_instant_is_the_one_under_review(
     again = (await submit(world, ALICE, claim, sha="cd" * 20)).json()
     first, second = again["submissions"]
     assert first["submitted_at"] == second["submitted_at"]
-    # The undecided submission is under review, whatever the clock says.
+    # Even on a tied time the view lists the decided submission first and the
+    # one under review last, which is the one a reviewer decides.
+    assert (first["decision"], second["decision"]) == ("changes_requested", None)
+    assert second["head_sha"] == "cd" * 20
     decided = await review(world, again, "accept")
     assert decided.status_code == 200, decided.text
-    assert decided.json()["submissions"][-1]["decision"] == "accept"
+    # With every time frozen, look the decided submission up by its id.
+    by_id = {s["submission_id"]: s for s in decided.json()["submissions"]}
+    assert by_id[second["submission_id"]]["decision"] == "accept"
+    assert by_id[first["submission_id"]]["decision"] == "changes_requested"
 
 
 async def test_withdrawal_retains_the_fee_and_is_final(world):
@@ -719,6 +725,20 @@ async def test_cancellation_refunds_a_paid_fee(world):
             await session.scalar(select(func.count()).select_from(BountyObligation))
         )
     assert refunds == 1
+    # Reopening the cancelled paid slot keeps its refund as the fee's only
+    # disposition: a cancellation is never a retention.
+    reopened = await world.client.post(
+        f"{ADMIN}/slots/{claim['slot_id']}/reopen",
+        headers=_HEADERS,
+        json={
+            "reason": "fixture reopen after cancellation",
+            "confirmation": f"REOPEN BOUNTY SLOT {REPO}#{ISSUE} ROUND 1 SLOT "
+            f"{claim['position']}",
+        },
+    )
+    assert reopened.status_code == 200, reopened.text
+    after = (await world.client.get(f"{CLAIMS}/{claim['claim_id']}")).json()
+    assert [o["kind"] for o in after["obligations"]] == ["fee_refund"]
 
 
 async def test_reopening_is_explicit_and_admits_a_new_claim(world):

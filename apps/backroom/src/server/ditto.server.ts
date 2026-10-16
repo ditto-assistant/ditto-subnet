@@ -142,10 +142,13 @@ type Coded = { code?: unknown; errors?: unknown } | null | undefined
 
 function connectionError(path: string, error: unknown) {
   const detail = error instanceof Error ? error.message : String(error)
+  const direct = error as Coded
   const cause = (error as { cause?: Coded } | null)?.cause
   // A connection tried at several addresses fails as an AggregateError whose
-  // parts carry the codes.
-  const parts = Array.isArray(cause?.errors) ? (cause.errors as Coded[]) : []
+  // parts carry the codes, thrown directly or as the cause.
+  const parts = Array.isArray(direct?.errors)
+    ? (direct.errors as Coded[])
+    : Array.isArray(cause?.errors) ? (cause.errors as Coded[]) : []
   const codes = parts.length > 0 ? parts.map((part) => part?.code) : [cause?.code]
   // Never delivered only when every attempt is known to have failed before
   // connecting; a part with no code, or another code, may have been sent.
