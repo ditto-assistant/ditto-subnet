@@ -186,6 +186,24 @@ describe("bounty detail", () => {
     expect(screen.getByRole("note")).toHaveTextContent("Fees and payments are simulated");
   });
 
+  it("links only well-formed dependency references", async () => {
+    const edited = structuredClone(detail);
+    edited.revisions.at(-1)!.terms.dependencies = [
+      "ditto-assistant/ditto-subnet#12",
+      "owner/repo#abc",
+    ];
+    vi.mocked(getJSON).mockImplementation(((path: string) =>
+      path.split("?")[0] === `/public/bounties/${bountyId}`
+        ? Promise.resolve(edited)
+        : serve(path)) as typeof getJSON);
+    await openBounty();
+    expect(screen.getByText("ditto-assistant/ditto-subnet#12").closest("a")).toHaveAttribute(
+      "href",
+      "https://github.com/ditto-assistant/ditto-subnet/issues/12",
+    );
+    expect(screen.getByText("owner/repo#abc").closest("a")).toBeNull();
+  });
+
   it("shows each slot's effective status, claimant and deadline", async () => {
     await openBounty();
     for (const slot of detail.slots) {

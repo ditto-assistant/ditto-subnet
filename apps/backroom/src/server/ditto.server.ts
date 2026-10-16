@@ -129,8 +129,13 @@ function isTimeout(error: unknown) {
 }
 
 // Connection-establishment failures: no byte of the request reached Platform.
+// TLS certificate and handshake failures end the connection before the
+// request is written, so they belong here too.
 const NOT_CONNECTED = new Set([
   'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT',
+  'ERR_TLS_CERT_ALTNAME_INVALID', 'ERR_TLS_HANDSHAKE_TIMEOUT', 'ERR_SSL_WRONG_VERSION_NUMBER',
+  'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
 ])
 
 function connectionError(path: string, error: unknown) {

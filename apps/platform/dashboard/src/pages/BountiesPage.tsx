@@ -461,10 +461,17 @@ function BountyDetailBody(props: { view: BountyDetail }): JSX.Element {
                   <ul>
                     <For each={revision().terms.dependencies}>
                       {(reference) => {
-                        const [repo, issue] = reference.split("#") as [string, string];
+                        // Platform publishes only owner/repo#N; anything else
+                        // is shown as text rather than linked.
+                        const [, repo, issue] =
+                          /^([^#\s]+\/[^#\s]+)#([1-9][0-9]*)$/.exec(reference) ?? [];
                         return (
                           <li>
-                            <a href={githubIssue(repo, Number(issue))}>{reference}</a>
+                            {repo && issue ? (
+                              <a href={githubIssue(repo, Number(issue))}>{reference}</a>
+                            ) : (
+                              reference
+                            )}
                           </li>
                         );
                       }}

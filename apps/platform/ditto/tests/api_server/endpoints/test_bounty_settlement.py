@@ -441,6 +441,23 @@ async def test_an_executor_failure_is_logged_and_left_to_reconcile(
     assert "executor fixture fault" in str(record.exc_info[1])
 
 
+async def test_only_an_executor_of_the_same_funding_mode_reconciles(world, monkeypatch):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    await policy(world)
+    refund = obligation(claim, "fee_refund")
+    await approve(world, refund)
+    unknown = (await dispatch(world, refund, "unknown")).json()
+    transfer_id = unknown["transfers"][0]["transfer_id"]
+    monkeypatch.setattr(world.app.state.bounty_transfer_executor, "simulated", False)
+    refused = await reconcile(world, transfer_id, "confirmed")
+    assert refused.status_code == 409 and "funding mode" in refused.text
+    monkeypatch.undo()
+    # Nothing was recorded, so the right executor still settles it.
+    settled = (await reconcile(world, transfer_id, "confirmed")).json()
+    assert [t["state"] for t in settled["transfers"]] == ["confirmed"]
+
+
 async def test_an_uncertain_transfer_is_reconciled_before_anything_else(world):
     await world.start(ALICE)
     claim = await accepted(world, ALICE)

@@ -733,6 +733,12 @@ async def reconcile_transfer(
         )
         if transfer.state not in ("dispatched", "uncertain"):
             raise HTTPException(409, f"this transfer is already {transfer.state}")
+        # Only an executor of the transfer's own funding mode can say what
+        # became of it, as only one could have sent it.
+        if transfer.simulated != executor.simulated:
+            raise HTTPException(
+                409, "this transfer and the transfer executor differ in funding mode"
+            )
         session.expunge(obligation)
     try:
         outcome = await executor.lookup(

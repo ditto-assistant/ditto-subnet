@@ -169,7 +169,7 @@ describe('platformAdminRequest', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it.each(['ECONNREFUSED', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT'])('classifies %s as unreachable, not delivered', async (code) => {
+  it.each(['ECONNREFUSED', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID'])('classifies %s as unreachable, not delivered', async (code) => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause: { code } })))
 
