@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from ditto.api_models.bounty import simulated_transfer_block_hash
+from ditto.api_server.bounty_settlement import TransferOutcome
 from ditto.chain import ChainConnectionError
 from ditto.db.models import BountyObligation
 from ditto.tests.api_server.endpoints.test_bounty_claims import (
@@ -439,6 +440,31 @@ async def test_an_executor_failure_is_logged_and_left_to_reconcile(
     [record] = [r for r in caplog.records if "execute failed" in r.getMessage()]
     assert sent["transfers"][0]["transfer_id"] in record.getMessage()
     assert "executor fixture fault" in str(record.exc_info[1])
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [TransferOutcome("settled-ish"), TransferOutcome("confirmed")],
+    ids=["unknown-state", "confirmed-without-receipt"],
+)
+async def test_an_unrecordable_executor_outcome_is_left_uncertain(
+    world, caplog, monkeypatch, reported
+):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    await policy(world)
+    refund = obligation(claim, "fee_refund")
+    await approve(world, refund)
+    monkeypatch.setattr(
+        world.app.state.bounty_transfer_executor,
+        "execute",
+        AsyncMock(return_value=reported),
+    )
+    with caplog.at_level(logging.ERROR, logger="ditto.api_server.bounty_settlement"):
+        sent = await dispatch(world, refund)
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["state"] == "uncertain"
+    assert "unrecordable" in caplog.text
 
 
 async def test_only_an_executor_of_the_same_funding_mode_reconciles(world, monkeypatch):

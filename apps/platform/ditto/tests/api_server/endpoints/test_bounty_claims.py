@@ -517,7 +517,7 @@ async def test_a_slot_lost_without_lapse_is_refunded(world):
     assert lost["refunds"][0]["reason"] == "slot_lost"
 
 
-@pytest.mark.parametrize("change", ["owner", "unlinked", "cla"])
+@pytest.mark.parametrize("change", ["owner", "unlinked", "cla", "cla_resigned"])
 async def test_an_identity_change_before_payment_refunds_and_releases(world, change):
     await world.start(ALICE, BOB)
     claim = (await world.hold(ALICE)).json()
@@ -542,8 +542,11 @@ async def test_an_identity_change_before_payment_refunds_and_releases(world, cha
         )
         assert revoked.status_code == 200, revoked.text
     else:
-        # A newer agreement takes effect before the fee arrives.
-        await publish_cla(world.client, 2)
+        # A newer agreement takes effect before the fee arrives; signing it
+        # is still not the consent the hold was made under.
+        world.agreement = await publish_cla(world.client, 2)
+        if change == "cla_resigned":
+            await world.sign_cla(ALICE)
     changed = (await world.confirm(claim)).json()
     assert changed["state"] == "refund_owed"
     assert changed["refunds"][0]["reason"] == "identity_changed"

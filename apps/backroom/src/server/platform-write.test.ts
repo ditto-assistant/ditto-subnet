@@ -28,6 +28,8 @@ const uncertain = {
   '5xx': () => vi.fn().mockResolvedValueOnce(envelope('upstream exploded', 502)),
   timeout: () => vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError')),
   transport: () => vi.fn().mockRejectedValueOnce(new TypeError('socket closed after send')),
+  // Delivered before the redirect, so possibly applied (a 303 after a POST).
+  redirect: () => vi.fn().mockResolvedValueOnce(new Response(null, { status: 303, headers: { Location: '/elsewhere' } })),
 }
 const readBacks: Record<string, () => Promise<ReadBack<Row>>> = {
   applied: async () => ({ state: 'applied', value: committedRow }),
@@ -74,7 +76,6 @@ describe('platformAdminWrite decides every outcome once', () => {
     ['403', () => vi.fn().mockResolvedValueOnce(envelope('forbidden', 403)), PlatformAdminError, 1],
     ['400', () => vi.fn().mockResolvedValueOnce(envelope('bad input', 400)), PlatformAdminError, 1],
     ['422', () => vi.fn().mockResolvedValueOnce(envelope('invalid', 422)), PlatformAdminError, 1],
-    ['302', () => vi.fn().mockResolvedValueOnce(new Response(null, { status: 302, headers: { Location: '/elsewhere' } })), PlatformAdminError, 1],
     ['refused before the write', () => vi.fn().mockResolvedValueOnce(answers.busy()), NothingAppliedError, 1],
   ] as const)('fails as definitely not applied when %s, without reading back', async (_name, stub, type, calls) => {
     const fetchMock = stub()

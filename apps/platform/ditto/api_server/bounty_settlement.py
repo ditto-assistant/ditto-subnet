@@ -589,6 +589,25 @@ async def approve_obligation(
         return await obligation_view(session, obligation, policy)
 
 
+def _recordable(outcome: TransferOutcome, transfer_id: UUID) -> TransferOutcome:
+    """The executor's outcome if a transfer can record it, else ``uncertain``.
+
+    An unknown state, or a confirmation without its receipt, says nothing
+    reliable about the money, so the transfer waits for reconciliation.
+    """
+    receipt = (outcome.block_hash, outcome.block_number, outcome.extrinsic_index)
+    if outcome.state in ("failed", "expired", "uncertain") or (
+        outcome.state == "confirmed" and None not in receipt
+    ):
+        return outcome
+    logger.error(
+        "bounty transfer %s: executor reported unrecordable %r; uncertain",
+        transfer_id,
+        outcome,
+    )
+    return TransferOutcome("uncertain")
+
+
 async def _record_outcome(
     maker: async_sessionmaker[AsyncSession],
     *,
@@ -598,6 +617,7 @@ async def _record_outcome(
     reconciled_by: str | None = None,
     requested: str | None = None,
 ) -> BountyObligationView:
+    outcome = _recordable(outcome, transfer_id)
     async with maker() as session, session.begin():
         transfer = await session.get(BountyTransfer, transfer_id)
         assert transfer is not None

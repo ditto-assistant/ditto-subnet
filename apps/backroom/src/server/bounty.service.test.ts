@@ -216,8 +216,16 @@ const cases: Case[] = [
     path: `/api/v1/admin/bounties/obligations/${OBLIGATION}/dispatch`,
     body: { round: 1, rehearsal_outcome: 'confirmed' },
     committed: obligation({ transfers: [transfer('confirmed')] }),
-    applied: [Response.json(claim({ obligations: [obligation({ transfers: [transfer('uncertain')] })] }))],
+    applied: [
+      Response.json(claim({ obligations: [obligation({ transfers: [transfer('uncertain')] })] })),
+      Response.json(operator({ audit: [audit('transfer_dispatched', { obligation_id: OBLIGATION, reason: null, detail: 'round 1 via simulated: uncertain' })] })),
+    ],
     absent: [Response.json(claim({ obligations: [obligation()] }))],
+    // The round's one transfer was sent by another operator.
+    superseded: [
+      Response.json(claim({ obligations: [obligation({ transfers: [transfer('uncertain')] })] })),
+      Response.json(operator({ audit: [audit('transfer_dispatched', { actor: 'other@example.com', obligation_id: OBLIGATION, reason: null, detail: 'round 1 via simulated: uncertain' })] })),
+    ],
   },
   {
     name: 'reconcile_bounty_transfer',

@@ -612,14 +612,14 @@ possible commit as a failure or a definite refusal as a possible commit:
 - **Applied:** Platform answered 2xx, or the write was found by reading its
   target back. The tool returns the committed result.
 - **Nothing applied:** the request never reached Platform (configuration,
-  invalid URL or header, or no connection), Platform refused it (auth, 4xx,
-  or a redirect, which writes never follow), Platform refused it before
+  invalid URL or header, or no connection), Platform refused it (auth or
+  4xx), Platform refused it before
   writing (the 503 "CLA policy is busy with in-flight uploads"), or the read-
   back shows a different write already holds the target (another operator's
   revision `expectedRevision + 1`, a different text for the version, or a link
   revoked by someone else). The error says so.
-- **Unknown:** a timeout, 5xx or lost connection after sending, and the write
-  is not visible yet (Platform may still commit it) or could not be read
+- **Unknown:** a timeout, 5xx, lost connection or redirect after sending
+  (writes never follow one), and the write is not visible yet (Platform may still commit it) or could not be read
   back. `set_cla_policy` returns `applied: null`, the observed `policy` and a
   `refresh_error`; the other two fail with "may have committed".
 

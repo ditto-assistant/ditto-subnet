@@ -9652,6 +9652,14 @@ ALTER TABLE ONLY public.bounties
 
 
 --
+-- Name: bounty_appeals uq_bounty_appeals_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_appeals
+    ADD CONSTRAINT uq_bounty_appeals_claim_id UNIQUE (claim_id, appeal_id);
+
+
+--
 -- Name: bounty_appeals uq_bounty_appeals_nonce; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9721,6 +9729,14 @@ ALTER TABLE ONLY public.bounty_obligation_approvals
 
 ALTER TABLE ONLY public.bounty_obligations
     ADD CONSTRAINT uq_bounty_obligations_block_hash UNIQUE (block_hash, extrinsic_index, kind);
+
+
+--
+-- Name: bounty_obligations uq_bounty_obligations_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT uq_bounty_obligations_claim_id UNIQUE (claim_id, obligation_id);
 
 
 --
@@ -12920,11 +12936,35 @@ ALTER TABLE ONLY public.bounty_events
 
 
 --
+-- Name: bounty_events fk_bounty_events_claim_id_bounty_appeals; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_claim_id_bounty_appeals FOREIGN KEY (claim_id, appeal_id) REFERENCES public.bounty_appeals(claim_id, appeal_id);
+
+
+--
 -- Name: bounty_events fk_bounty_events_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.bounty_events
     ADD CONSTRAINT fk_bounty_events_claim_id_bounty_claims FOREIGN KEY (claim_id, bounty_id) REFERENCES public.bounty_claims(claim_id, bounty_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_claim_id_bounty_obligations; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_claim_id_bounty_obligations FOREIGN KEY (claim_id, obligation_id) REFERENCES public.bounty_obligations(claim_id, obligation_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_claim_id_bounty_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_claim_id_bounty_submissions FOREIGN KEY (claim_id, submission_id) REFERENCES public.bounty_submissions(claim_id, submission_id);
 
 
 --

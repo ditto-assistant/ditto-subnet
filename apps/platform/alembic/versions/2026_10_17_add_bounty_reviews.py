@@ -232,6 +232,8 @@ def upgrade() -> None:
         sa.UniqueConstraint("nonce"),
         # One appeal per decision.
         sa.UniqueConstraint("subject_event_id"),
+        # The target of an event's reference to an appeal of its claim.
+        sa.UniqueConstraint("claim_id", "appeal_id"),
         sa.ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
         # The appealed decision must be an event of the appeal's own claim.
         sa.ForeignKeyConstraint(
@@ -306,6 +308,21 @@ def upgrade() -> None:
         ["appeal_id"],
         ["appeal_id"],
     )
+    # An event's submission and appeal belong to the event's own claim.
+    op.create_foreign_key(
+        op.f("fk_bounty_events_claim_id_bounty_submissions"),
+        "bounty_events",
+        "bounty_submissions",
+        ["claim_id", "submission_id"],
+        ["claim_id", "submission_id"],
+    )
+    op.create_foreign_key(
+        op.f("fk_bounty_events_claim_id_bounty_appeals"),
+        "bounty_events",
+        "bounty_appeals",
+        ["claim_id", "appeal_id"],
+        ["claim_id", "appeal_id"],
+    )
     _replace_check(
         "bounty_events", "ck_bounty_events_kind", f"kind IN ({_quoted(EVENT_KINDS)})"
     )
@@ -343,6 +360,11 @@ def downgrade() -> None:
         "ck_bounty_events_kind",
         f"kind IN ({_quoted(P2_EVENT_KINDS)})",
     )
+    for constraint in (
+        "fk_bounty_events_claim_id_bounty_appeals",
+        "fk_bounty_events_claim_id_bounty_submissions",
+    ):
+        op.drop_constraint(op.f(constraint), "bounty_events", type_="foreignkey")
     op.drop_constraint(
         op.f("fk_bounty_events_appeal_id_bounty_appeals"),
         "bounty_events",

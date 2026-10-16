@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, within } from "@solidjs/testing-lib
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BountiesPage, alphaAmount } from "./BountiesPage";
 import { HTTPError, getJSON } from "../lib/api";
+import { refreshAllEndpoints } from "../data/useEndpoint";
 import { loadFixture } from "../test-fixtures";
 import type { BountyBoardPage, BountyClaimView, BountyDetail } from "../types/bounty";
 
@@ -239,6 +240,39 @@ describe("bounty detail", () => {
     expect(body).toHaveTextContent("Award 40 α (simulated) · Awaiting approval (1 of 2 approvals)");
     expect(body).toHaveTextContent("Credit: Alice built the board");
     expect(body).toHaveTextContent("Merged");
+  });
+
+  it("keeps an open claim record open when the bounty refreshes", async () => {
+    vi.mocked(getJSON).mockImplementation(((path: string) =>
+      serve(path).then((payload) => structuredClone(payload))) as typeof getJSON);
+    await openBounty();
+    const alice = claimOf("alice-dev");
+    fireEvent.click(within(slotRow(alice.position)).getByRole("button", { name: "Claim record" }));
+    await within(slotRow(alice.position)).findByText("Payments");
+    refreshAllEndpoints();
+    await vi.waitFor(() => expect(vi.mocked(getJSON).mock.calls.length).toBeGreaterThan(3));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const toggle = within(slotRow(alice.position)).getByRole("button", { name: "Claim record" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(within(slotRow(alice.position)).getByText("Payments")).toBeInTheDocument();
+  });
+
+  it("says a fee that never claimed a slot was received and refunded", async () => {
+    const alice = claimOf("alice-dev");
+    const edited = structuredClone(claims);
+    Object.assign(edited[alice.claim_id]!, { state: "refund_owed", claimed_at: null });
+    vi.mocked(getJSON).mockImplementation(((path: string) =>
+      path === `/bounties/claims/${alice.claim_id}`
+        ? Promise.resolve(edited[alice.claim_id])
+        : serve(path)) as typeof getJSON);
+    await openBounty();
+    const row = slotRow(alice.position);
+    fireEvent.click(within(row).getByRole("button", { name: "Claim record" }));
+    const body = (await within(row).findByText("Payments")).closest(
+      ".bounty-claim-body",
+    ) as HTMLElement;
+    expect(body).toHaveTextContent("received but not applied to a slot; refunded in full");
+    expect(body).not.toHaveTextContent("not paid");
   });
 
   it("names an award above the approval limit and a missing payout policy", async () => {

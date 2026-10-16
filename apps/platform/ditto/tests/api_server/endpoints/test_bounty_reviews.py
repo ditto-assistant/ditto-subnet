@@ -815,6 +815,44 @@ async def test_history_references_stay_within_their_bounty_and_claim(world):
                 await session.execute(statement, values)
             await session.rollback()
 
+    # An event's submission, appeal and obligation belong to its own claim.
+    accepted = (await review(world, alice, "accept")).json()
+    filed = await appeal(world, BOB, bob, rejection, "Fixture appeal.")
+    assert filed.status_code == 200, filed.text
+    refund = next(o for o in accepted["obligations"] if o["kind"] == "fee_refund")
+    linked = text(
+        "INSERT INTO bounty_events (bounty_id, kind, claim_id, submission_id, "
+        "appeal_id, obligation_id, recorded_at) VALUES (:bounty, 'submitted', "
+        ":claim, :submission, :appeal, :obligation, now())"
+    )
+    none = {"submission": None, "appeal": None, "obligation": None}
+    for values, constraint in (
+        (
+            {
+                "claim": bob["claim_id"],
+                **none,
+                "submission": alice["submissions"][-1]["submission_id"],
+            },
+            "fk_bounty_events_claim_id_bounty_submissions",
+        ),
+        (
+            {
+                "claim": alice["claim_id"],
+                **none,
+                "appeal": filed.json()["appeals"][0]["appeal_id"],
+            },
+            "fk_bounty_events_claim_id_bounty_appeals",
+        ),
+        (
+            {"claim": bob["claim_id"], **none, "obligation": refund["obligation_id"]},
+            "fk_bounty_events_claim_id_bounty_obligations",
+        ),
+    ):
+        async with world.maker() as session:
+            with pytest.raises(DBAPIError, match=constraint):
+                await session.execute(linked, {"bounty": alice["bounty_id"], **values})
+            await session.rollback()
+
 
 async def test_review_routes_declare_their_errors(app):
     paths = app.openapi()["paths"]

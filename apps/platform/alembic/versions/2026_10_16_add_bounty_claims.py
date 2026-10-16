@@ -212,6 +212,8 @@ def upgrade() -> None:
         sa.Column("simulated", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("block_hash", "extrinsic_index", "kind"),
+        # The target of an event's reference to an obligation of its claim.
+        sa.UniqueConstraint("claim_id", "obligation_id"),
         sa.ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         sa.ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
         # A fee obligation is the payment of its own claim, owed to its payer.

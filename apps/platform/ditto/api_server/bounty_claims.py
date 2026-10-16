@@ -465,7 +465,8 @@ async def _identity_changed(
     signature = await current_cla_signature(
         session, netuid=claim.netuid, hotkey=claim.hotkey, version=version
     )
-    return signature is None
+    # A signature of a newer agreement is consent the hold was not made under.
+    return signature is None or signature.signature_id != claim.cla_signature_id
 
 
 async def confirm_claim(

@@ -519,8 +519,14 @@ function BountyDetailBody(props: { view: BountyDetail }): JSX.Element {
                     </tr>
                   </thead>
                   <tbody>
-                    <For each={props.view.slots.filter((slot) => slot.round === round)}>
-                      {(slot) => <SlotRow slot={slot} />}
+                    {/* Keyed by id, not object: a refresh brings new objects,
+                        and an open claim record must survive it. */}
+                    <For
+                      each={props.view.slots
+                        .filter((slot) => slot.round === round)
+                        .map((slot) => slot.slot_id)}
+                    >
+                      {(slotId) => <SlotRow slot={slotsById().get(slotId)!} />}
                     </For>
                   </tbody>
                 </table>
@@ -531,14 +537,17 @@ function BountyDetailBody(props: { view: BountyDetail }): JSX.Element {
         <Show when={earlierClaims().length > 0}>
           <h4>Earlier claims</h4>
           <ul class="bounty-earlier">
-            <For each={earlierClaims()}>
-              {(event) => {
-                const slot = event.slot_id ? slotsById().get(event.slot_id) : undefined;
+            <For each={earlierClaims().map((event) => event.claim_id!)}>
+              {(claimId) => {
+                const slot = () => {
+                  const event = earlierClaims().find((item) => item.claim_id === claimId);
+                  return event?.slot_id ? slotsById().get(event.slot_id) : undefined;
+                };
                 return (
                   <li>
                     <ClaimToggle
-                      claimId={event.claim_id!}
-                      label={`${slot ? slotName(slot) : "Slot"} · claim ${event.claim_id!.slice(0, 8)}`}
+                      claimId={claimId}
+                      label={`${slot() ? slotName(slot()!) : "Slot"} · claim ${claimId.slice(0, 8)}`}
                     />
                   </li>
                 );
@@ -702,7 +711,11 @@ function ClaimBody(props: { view: BountyClaimView }): JSX.Element {
           <dd>
             {alphaAmount(view().fee_alpha_rao)}
             {simulated() ? " (simulated)" : ""} ·{" "}
-            {view().claimed_at ? `paid ${athDate(view().claimed_at)}` : "not paid"}
+            {view().claimed_at
+              ? `paid ${athDate(view().claimed_at)}`
+              : view().receipts.length > 0
+                ? "received but not applied to a slot; refunded in full"
+                : "not paid"}
           </dd>
         </div>
       </dl>

@@ -397,10 +397,15 @@ export async function dispatchBountyObligation(actor: string, rawInput: unknown)
   }, {
     parse: parsed(bountyObligationSchema),
     readBack: async () => {
-      const owed = obligationOf(await fetchBountyClaim({ claimId: input.claimId }), input.obligationId)
-      // A transfer for this round is this dispatch: one per round, ever.
-      if (owed?.transfers.some((transfer) => transfer.round === input.round)) return { state: 'applied', value: owed }
-      return { state: 'absent' }
+      const claim = await fetchBountyClaim({ claimId: input.claimId })
+      const owed = obligationOf(claim, input.obligationId)
+      if (!owed?.transfers.some((transfer) => transfer.round === input.round)) return { state: 'absent' }
+      // A round has one transfer, ever; it is this dispatch only if this
+      // operator sent it, which the audit records.
+      const dispatched = latest(await fetchBounty({ bountyId: claim.bounty_id }), ['transfer_dispatched'], (entry) =>
+        entry.obligation_id === input.obligationId && entry.detail.startsWith(`round ${input.round} via `))
+      if (dispatched?.actor === actor.trim()) return { state: 'applied', value: owed }
+      return { state: 'superseded', detail: `Round ${input.round} was already dispatched by ${dispatched?.actor ?? 'another operator'}` }
     },
     retryHint: 'read the claim first: a recorded transfer must be reconciled, never sent again.',
   })

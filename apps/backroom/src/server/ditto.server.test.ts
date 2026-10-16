@@ -205,7 +205,7 @@ describe('platformAdminRequest', () => {
     expect((error as Error).message).not.toContain('redirected')
   })
 
-  it('never follows a redirect on a write and reports it as a definite refusal', async () => {
+  it('never follows a redirect on a write and leaves its outcome to the read-back', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
     const fetchMock = vi.fn().mockResolvedValueOnce(new Response(null, { status: 301, headers: { Location: 'https://elsewhere.invalid/' } }))
       .mockResolvedValueOnce(Response.json({ ok: true }))
@@ -216,9 +216,10 @@ describe('platformAdminRequest', () => {
     await platformAdminRequest('/api/v1/admin/cla/settings')
 
     expect(fetchMock.mock.calls[0][1].redirect).toBe('manual')
-    expect((error as PlatformAdminError).failure).toBe('request')
+    // Delivered, so possibly applied: a transport failure the read-back settles.
+    expect((error as PlatformAdminError).failure).toBe('transport')
     expect((error as PlatformAdminError).status).toBe(301)
-    expect((error as Error).message).toContain('nothing was written')
+    expect((error as Error).message).toContain('may have been applied')
     expect(fetchMock.mock.calls[1][1].redirect).toBe('follow')
   })
 

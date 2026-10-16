@@ -12214,6 +12214,19 @@ class BountyEvent(Base):
         ForeignKeyConstraint(["submission_id"], ["bounty_submissions.submission_id"]),
         ForeignKeyConstraint(["appeal_id"], ["bounty_appeals.appeal_id"]),
         ForeignKeyConstraint(["obligation_id"], ["bounty_obligations.obligation_id"]),
+        # An event's submission, appeal and obligation belong to its claim.
+        ForeignKeyConstraint(
+            ["claim_id", "submission_id"],
+            ["bounty_submissions.claim_id", "bounty_submissions.submission_id"],
+        ),
+        ForeignKeyConstraint(
+            ["claim_id", "appeal_id"],
+            ["bounty_appeals.claim_id", "bounty_appeals.appeal_id"],
+        ),
+        ForeignKeyConstraint(
+            ["claim_id", "obligation_id"],
+            ["bounty_obligations.claim_id", "bounty_obligations.obligation_id"],
+        ),
         CheckConstraint(
             "kind IN (" + ",".join(f"'{k}'" for k in BOUNTY_EVENT_KINDS) + ")",
             name="kind",
@@ -12389,6 +12402,8 @@ class BountyObligation(Base):
     decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     __table_args__ = (
         UniqueConstraint("block_hash", "extrinsic_index", "kind"),
+        # The target of an event's reference to an obligation of its claim.
+        UniqueConstraint("claim_id", "obligation_id"),
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
         # A fee obligation is the payment of its own claim, owed to its payer.
@@ -12558,6 +12573,8 @@ class BountyAppeal(Base):
     __table_args__ = (
         UniqueConstraint("nonce"),
         UniqueConstraint("subject_event_id"),
+        # The target of an event's reference to an appeal of its claim.
+        UniqueConstraint("claim_id", "appeal_id"),
         ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
         # The appealed decision must be an event of the appeal's own claim.
         ForeignKeyConstraint(

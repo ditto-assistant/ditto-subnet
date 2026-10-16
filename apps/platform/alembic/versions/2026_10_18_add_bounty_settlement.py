@@ -254,6 +254,14 @@ def upgrade() -> None:
         ["obligation_id"],
         ["obligation_id"],
     )
+    # An event's obligation belongs to the event's own claim.
+    op.create_foreign_key(
+        op.f("fk_bounty_events_claim_id_bounty_obligations"),
+        "bounty_events",
+        "bounty_obligations",
+        ["claim_id", "obligation_id"],
+        ["claim_id", "obligation_id"],
+    )
     _replace_check(
         "bounty_events", "ck_bounty_events_kind", f"kind IN ({_quoted(EVENT_KINDS)})"
     )
@@ -318,11 +326,11 @@ def downgrade() -> None:
         "ck_bounty_events_kind",
         f"kind IN ({_quoted(P3_EVENT_KINDS)})",
     )
-    op.drop_constraint(
-        op.f("fk_bounty_events_obligation_id_bounty_obligations"),
-        "bounty_events",
-        type_="foreignkey",
-    )
+    for constraint in (
+        "fk_bounty_events_claim_id_bounty_obligations",
+        "fk_bounty_events_obligation_id_bounty_obligations",
+    ):
+        op.drop_constraint(op.f(constraint), "bounty_events", type_="foreignkey")
     op.drop_column("bounty_events", "obligation_id")
     for table in (
         "bounty_delivery_facts",

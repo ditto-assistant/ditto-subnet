@@ -277,10 +277,13 @@ export async function platformAdminRequest(
     }
     // Only a write can stop at a redirect; a GET that ends in 3xx (a 304, or a
     // redirect without a location) is an ordinary failed read.
+    // A write that meets a redirect was still delivered: the server may have
+    // applied it before redirecting (a 303 after a POST), so its outcome is
+    // left to the caller's read-back, never reported as refused.
     if (response.type === 'opaqueredirect' || (method !== 'GET' && response.status >= 300 && response.status < 400)) {
       throw new PlatformAdminError(
-        'request',
-        `The platform API redirected ${method} ${path}; it was not followed, so nothing was written.`,
+        'transport',
+        `The platform API answered ${method} ${path} with a redirect, which was not followed; the write may have been applied.`,
         response.status || null,
       )
     }
