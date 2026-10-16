@@ -175,6 +175,13 @@ CRAWLABLE_PAGES += (
         "Public audit history of Backroom actions, settings changes, "
         "and canary requests.",
     ),
+    (
+        "/bounties",
+        "bounties",
+        "Build bounties · Ditto SN118",
+        "Paid build work on Ditto repositories: signed terms, open slots, "
+        "claims, review decisions, awards, and payments.",
+    ),
 )
 
 CRAWLABLE_PAGE_PATHS: tuple[str, ...] = tuple(
@@ -352,6 +359,7 @@ def llms_txt(origin: str) -> str:
             f"- Recent submissions: {origin}/submissions",
             f"- ATH reviews: {origin}/ath",
             f"- Gamma service treasury: {origin}/gamma",
+            f"- Build bounties: {origin}/bounties",
             f"- Miner profile: {origin}/miner/{{hotkey}}",
             f"  or {origin}/h/{{handle}}",
             f"- Agent evidence: {origin}/agent/{{agent_id}}",
@@ -415,6 +423,8 @@ def llms_full_txt(origin: str) -> str:
             "| `/bench/glossary` | Metric and category vocabulary |",
             "| `/bench/timeline` | Historical bench releases |",
             "| `/bench/rollout` | Bench rollout progress and promotion gates |",
+            "| `/bounties` | Build bounties: current terms and slot counts |",
+            "| `/bounties/{{id}}` | One bounty: revisions, slots, and history |",
             "",
             "Source tarballs become downloadable only after the public-source",
             "window; review-held and rejected source stays private.",
@@ -470,6 +480,7 @@ def sitemap_xml(origin: str, snapshot: SeoSnapshot | None) -> str:
         (origin + "/submissions", "0.5", "hourly"),
         (origin + "/ath", "0.4", "hourly"),
         (origin + "/gamma", "0.4", "hourly"),
+        (origin + "/bounties", "0.4", "hourly"),
     ]
     if snapshot is not None:
         seen: set[str] = set()

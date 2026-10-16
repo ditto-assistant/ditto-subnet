@@ -19,6 +19,7 @@ export type PageName =
   | "submissions"
   | "reviews"
   | "ath"
+  | "bounties"
   | "benchmark";
 
 export type OperationsView = "validators" | "screeners" | "builds";
@@ -61,6 +62,10 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   ath: {
     title: "ATH reviews",
     sub: "Public queue of held high-score submissions · scores preserved, emissions paused",
+  },
+  bounties: {
+    title: "Bounties",
+    sub: "Paid build bounties · open slots, claims, reviews, awards, and payments",
   },
   benchmark: {
     title: "Benchmark",
@@ -153,6 +158,8 @@ export const PAGE_SCOPED_PARAMS: string[] = [
   "ditto",
   "reason",
   "attempt",
+  // The bounty a bounties-page reader opened.
+  "bounty",
 ];
 
 // The config knobs allowed to appear in the real query string.
