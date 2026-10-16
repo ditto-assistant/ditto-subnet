@@ -22,8 +22,8 @@ export type WriteOutcome<T> =
 
 /** The write definitely applied nothing; the message says what to do next. */
 export class NothingAppliedError extends Error {
-  constructor(message: string) {
-    super(message)
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
     this.name = 'NothingAppliedError'
   }
 }
@@ -42,8 +42,11 @@ export class NothingAppliedError extends Error {
  *   such as a lock timeout answered with 503.
  * - A 409 may be this same write already applied by an earlier attempt; the
  *   read-back decides, otherwise the 409 stands.
- * - A timeout, a 5xx or a transport failure, and a 2xx with an unreadable body,
- *   are settled by the read-back; an absent write stays unknown.
+ * - A timeout, a 5xx or a transport failure, and a 2xx with an unreadable body
+ *   (including a parser that throws), are settled by the read-back; an absent
+ *   write stays unknown.
+ * - Every error derived from a Platform failure keeps it as `cause`, so callers
+ *   can still read its status and details.
  *
  * `readBack` must be read-only and must recognise this exact write, not just
  * any write to the same target.
@@ -70,7 +73,9 @@ export async function platformAdminWrite<T>(
     if (!(error instanceof PlatformAdminError)) throw error
     if (error.failure === 'unreachable' || error.failure === 'auth') throw error
     if (options.refusedBeforeWrite?.(error)) {
-      throw new NothingAppliedError(`${error.message}. Nothing was applied: ${options.retryHint}`)
+      throw new NothingAppliedError(`${error.message}. Nothing was applied: ${options.retryHint}`, {
+        cause: error,
+      })
     }
     if (error.failure === 'request') {
       if (error.status !== 409) throw error
@@ -80,13 +85,20 @@ export async function platformAdminWrite<T>(
         throw new Error(
           `${error.message}. Reading the target back failed, so an earlier attempt may already have ` +
             'applied this write; read it before retrying.',
+          { cause: error },
         )
       }
       throw error
     }
-    return settle(error.message, options.readBack)
+    return settle(error, options.readBack)
   }
-  const value = options.parse(payload)
+  // A parser that throws reads the 2xx as unreadable, never as a failure.
+  let value: T | null = null
+  try {
+    value = options.parse(payload)
+  } catch {
+    value = null
+  }
   if (value !== null) return { state: 'committed', value }
   // Platform answers 2xx only after committing; settle the unreadable body. A
   // superseded target means the 2xx was not Platform committing this write.
@@ -103,18 +115,23 @@ export async function platformAdminWrite<T>(
   }
 }
 
-async function settle<T>(failure: string, readBack: () => Promise<ReadBack<T>>): Promise<WriteOutcome<T>> {
+async function settle<T>(
+  failure: PlatformAdminError,
+  readBack: () => Promise<ReadBack<T>>,
+): Promise<WriteOutcome<T>> {
   const seen = await tryReadBack(readBack)
   if (seen?.state === 'applied') return { state: 'committed', value: seen.value }
   if (seen?.state === 'superseded') {
-    throw new NothingAppliedError(`${failure}. ${seen.detail}, so this write cannot have applied.`)
+    throw new NothingAppliedError(`${failure.message}. ${seen.detail}, so this write cannot have applied.`, {
+      cause: failure,
+    })
   }
   return {
     state: 'unknown',
     reason:
       seen === undefined
-        ? `${failure}; reading the target back also failed`
-        : `${failure}; it is not visible yet and may still commit`,
+        ? `${failure.message}; reading the target back also failed`
+        : `${failure.message}; it is not visible yet and may still commit`,
   }
 }
 

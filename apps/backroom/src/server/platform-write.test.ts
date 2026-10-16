@@ -128,3 +128,42 @@ describe('platformAdminWrite decides every outcome once', () => {
     })
   })
 })
+
+describe('platformAdminWrite keeps every outcome decidable', () => {
+  function throwingParse(readBack: () => Promise<ReadBack<Row>>) {
+    return platformAdminWrite<Row>('/api/v1/admin/fixture', { actor: 'operator@example.com', body: { value: 1 } }, {
+      parse: () => { throw new Error('fixture parser bug') },
+      readBack,
+      retryHint: 'retry with the same input.',
+    })
+  }
+
+  it.each([
+    ['applied', { state: 'committed', value: committedRow }],
+    ['absent', { state: 'unknown', reason: expect.stringContaining('probably committed') }],
+  ])('settles a 2xx whose parser throws like an unreadable one (%s read-back)', async (seen, outcome) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(answers.ok()))
+    await expect(throwingParse(readBacks[seen])).resolves.toEqual(outcome)
+  })
+
+  async function rejection(promise: Promise<unknown>) {
+    try {
+      await promise
+    } catch (error) {
+      return error as Error
+    }
+    throw new Error('expected a rejection')
+  }
+
+  it.each([
+    ['a 409 whose read-back fails', answers.conflict, readBacks.failing, Error, 409],
+    ['a refusal before any write', answers.busy, readBacks.absent, NothingAppliedError, 503],
+    ['a superseded write after a 5xx', () => envelope('upstream exploded', 502), readBacks.superseded, NothingAppliedError, 502],
+  ])('keeps the Platform failure as the cause of %s', async (_name, answer, readBack, kind, status) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(answer()))
+    const error = await rejection(write(readBack))
+    expect(error).toBeInstanceOf(kind)
+    expect(error.cause).toBeInstanceOf(PlatformAdminError)
+    expect((error.cause as PlatformAdminError).status).toBe(status)
+  })
+})
