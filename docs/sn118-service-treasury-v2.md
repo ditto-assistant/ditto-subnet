@@ -1,7 +1,8 @@
 # SN118 service treasury v2: one collector and configurable service wallets
 
-Status: **implementation under review; no production allocation, wallet, or payment applied**.
-The existing v1 policy is shadow only, has two fixed fields and a 500 bps cap.
+Status: **v2 implementation supports signed enforcement; live activation must be verified separately**.
+This document describes the contract, not current production routing.
+The legacy v1 schema has two fixed fields and a 500 bps cap.
 This proposal supersedes its 25 bps GM / 25 bps maintenance example. It does
 not reinterpret any stored v1 revision or turn the current signer prototype on.
 
@@ -11,7 +12,7 @@ Carve approved service buckets from the **full miner emission vector before
 burn**. Let `S = sum(bucket_bps) / 10_000` and `B = burn_share`. Bucket `i`
 receives `bucket_bps[i] / 10_000` of that vector. The remaining `1 - S` is
 the virtual miner share: `B * (1 - S)` routes to the existing burn hotkey and
-`(1 - B) * (1 - S)` goes to eligible miners. At today's `B = 1`, the combined
+`(1 - B) * (1 - S)` goes to eligible miners. At `B = 1`, the combined
 1,000 bps service pool would still receive 10%; the other 90% would burn. An empty
 eligible miner vector burns its entire `(1 - S)` remainder while preserving
 approved service allocations. A missing, unregistered, or unverified service
@@ -29,7 +30,8 @@ For the confirmed combined service pool (`S = 0.10`):
 | 0% | 10% | 0% | 90% |
 
 These percentages are of the full miner emission vector. They are forecasts,
-not current routing: the active validator still sends all emission to burn.
+not verified current routing. Inspect the active signed policy and finalized
+receipts before describing live allocations.
 
 The configurable service pool is **0–10,000 bps total**, split between GM, Bitsec,
 Bitcast and later buckets. The earlier 1,000 bps pool is retained as an example,
