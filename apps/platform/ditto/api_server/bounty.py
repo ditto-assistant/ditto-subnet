@@ -427,6 +427,16 @@ async def board(
         await session.execute(
             select(BountySlot, BountyClaim)
             .outerjoin(BountyClaim, BountyClaim.claim_id == BountySlot.claim_id)
+            # Only what a slot's effective status and review deadline read.
+            .options(
+                load_only(
+                    BountySlot.bounty_id,
+                    BountySlot.status,
+                    BountySlot.deadline_at,
+                    BountySlot.review_due_at,
+                ),
+                load_only(BountyClaim.hold_expires_at),
+            )
             .where(BountySlot.bounty_id.in_(ids))
         )
     ).all():

@@ -522,7 +522,9 @@ async def settlement_queue(
                 repo=owner.repo,
                 issue=owner.issue_number,
                 claim_id=obligation.claim_id,
-                obligation=await obligation_view(session, obligation, policy),
+                obligation=await obligation_view(
+                    session, obligation, policy, state=current
+                ),
                 approvers=approvers,
             )
         )

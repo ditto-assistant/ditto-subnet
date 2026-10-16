@@ -159,8 +159,12 @@ async def obligation_view(
     session: AsyncSession,
     obligation: BountyObligation,
     policy: BountyPayoutPolicy | None,
+    *,
+    state: ObligationState | None = None,
 ) -> BountyObligationView:
-    state = await obligation_state(session, obligation, policy)
+    """The public view; pass a ``state`` already derived to skip deriving it."""
+    if state is None:
+        state = await obligation_state(session, obligation, policy)
     return BountyObligationView(
         obligation_id=obligation.obligation_id,
         kind=obligation.kind,  # type: ignore[arg-type]
