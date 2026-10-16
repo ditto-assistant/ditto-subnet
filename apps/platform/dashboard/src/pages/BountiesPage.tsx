@@ -117,7 +117,8 @@ export function claimOutcome(view: BountyClaimView): string {
   if (view.state === "held") return "Held for payment";
   if (view.state === "hold_expired") return "Hold ended unpaid";
   if (view.state === "refund_owed") return "Fee refund owed";
-  return STATUS_LABEL[view.slot_status];
+  // A status a newer API added still reads as itself, never blank.
+  return (STATUS_LABEL as Record<string, string | undefined>)[view.slot_status] ?? view.slot_status;
 }
 
 function selectedFromUrl(): string | null {

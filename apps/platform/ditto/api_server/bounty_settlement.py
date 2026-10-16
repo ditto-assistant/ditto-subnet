@@ -221,6 +221,7 @@ async def record_fee_disposition(
         return None
     existing = await session.scalar(
         select(BountyObligation).where(
+            BountyObligation.claim_id == claim.claim_id,
             BountyObligation.block_hash == payment.block_hash,
             BountyObligation.extrinsic_index == payment.extrinsic_index,
             BountyObligation.kind.in_(("fee_refund", "fee_retained")),

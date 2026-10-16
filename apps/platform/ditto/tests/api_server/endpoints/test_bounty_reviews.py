@@ -636,6 +636,32 @@ async def test_a_missed_deadline_can_be_appealed_and_denied(world, monkeypatch):
     assert denied.json()["appeals"][0]["upheld"] is False
 
 
+async def test_a_missed_rework_deadline_is_appealed_to_someone_else(world, monkeypatch):
+    await world.start(ALICE)
+    claim = (await submit(world, ALICE, await claimed(world, ALICE))).json()
+    assert (await review(world, claim, "changes_requested")).status_code == 200
+    travel(monkeypatch, timedelta(days=3, minutes=1))
+    # A late resubmission records the missed rework deadline.
+    late = await submit(world, ALICE, claim, sha="cd" * 20)
+    assert late.status_code == 409
+    missed = next(e for e in await events(world) if e["kind"] == "deadline_missed")
+    filed = (await appeal(world, ALICE, claim, missed["event_id"], "Outage.")).json()
+    appeal_id = filed["appeals"][0]["appeal_id"]
+    body = {
+        "upheld": False,
+        "reason": "fixture appeal review",
+        "confirmation": f"DENY BOUNTY APPEAL {appeal_id}",
+    }
+    route = f"{ADMIN}/appeals/{appeal_id}/decision"
+    # The reviewer who set the rework deadline does not judge missing it.
+    conflicted = await world.client.post(route, headers=AS_REVIEWER, json=body)
+    assert (
+        conflicted.status_code == 403 and "other than its reviewer" in conflicted.text
+    )
+    denied = await world.client.post(route, headers=_HEADERS, json=body)
+    assert denied.status_code == 200, denied.text
+
+
 async def test_cancellation_refunds_a_paid_fee(world):
     await world.start(ALICE, BOB)
     claim = await claimed(world, ALICE)

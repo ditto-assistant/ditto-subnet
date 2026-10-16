@@ -845,6 +845,21 @@ async def decide_appeal(
                 raise HTTPException(
                     403, "an appeal is decided by someone other than its reviewer"
                 )
+        elif subject.kind == "deadline_missed":
+            # A missed rework deadline was set by the reviewer who asked for
+            # changes; it is recorded at that deadline. A first delivery
+            # deadline has no reviewer to exclude.
+            setter = await session.scalar(
+                select(BountyReview.reviewer_actor).where(
+                    BountyReview.claim_id == claim.claim_id,
+                    BountyReview.decision == "changes_requested",
+                    BountyReview.rework_deadline_at == subject.recorded_at,
+                )
+            )
+            if setter == actor:
+                raise HTTPException(
+                    403, "an appeal is decided by someone other than its reviewer"
+                )
         await apply_deadlines(session, claim.bounty_id, now=now)
         slot = await _slot_of(session, claim)
         if slot.claim_id != claim.claim_id or slot.status != APPEALABLE[subject.kind]:

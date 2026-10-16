@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BountiesPage, alphaAmount } from "./BountiesPage";
+import { BountiesPage, alphaAmount, claimOutcome } from "./BountiesPage";
 import { HTTPError, getJSON } from "../lib/api";
 import { refreshAllEndpoints } from "../data/useEndpoint";
 import { loadFixture } from "../test-fixtures";
@@ -345,6 +345,11 @@ describe("bounty detail", () => {
 });
 
 describe("alphaAmount", () => {
+  it("names a claim status a newer API added instead of leaving it blank", () => {
+    const view = { ...claimOf("alice-dev"), state: "claimed", slot_status: "paused_for_audit" };
+    expect(claimOutcome(view as never)).toBe("paused_for_audit");
+  });
+
   it("is exact for every amount Platform serves", () => {
     expect(alphaAmount(2_000_000_000)).toBe("2 α");
     expect(alphaAmount(1)).toBe("0.000000001 α");
