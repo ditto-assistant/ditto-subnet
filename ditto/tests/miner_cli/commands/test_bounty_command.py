@@ -480,7 +480,11 @@ def test_appeal_binds_the_statement_digest(tmp_path):
     statement = tmp_path / "appeal.md"
     statement.write_text("The deadline fell during a fixture outage.\n")
     argv = ["appeal", str(view.claim_id), "--event", "42", "--reason-file"]
-    phrase = "APPEAL BOUNTY EVENT 42"
+    # The phrase names the claim as well as the event, like submit and withdraw.
+    unbound = "APPEAL BOUNTY EVENT 42"
+    assert run([*argv, str(statement), "--confirmation", unbound], client) == 1
+    client.appeal_bounty_decision.assert_not_called()
+    phrase = f"APPEAL BOUNTY CLAIM {view.claim_id} EVENT 42"
     assert run([*argv, str(statement), "--confirmation", phrase], client) == 0
     body = client.appeal_bounty_decision.call_args.args[1]
     assert body.reason == statement.read_text() and body.subject_event_id == 42

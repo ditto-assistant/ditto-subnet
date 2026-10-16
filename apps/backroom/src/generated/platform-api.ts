@@ -15771,6 +15771,8 @@ export interface components {
             filed_at: string;
             /** Reason Digest */
             reason_digest: string;
+            /** Restored Deadline At */
+            restored_deadline_at: string | null;
             /** Statement */
             statement: string;
             /** Subject Event Id */

@@ -54,6 +54,9 @@ const operator = (over: Record<string, unknown> = {}) => ({
   reviewer_actor: 'reviewer@example.com',
   revisions: [], claims: [claim()], appeals: [], audit: [], ...over,
 })
+const decided = (over: Record<string, unknown>) => ({
+  appeal_id: APPEAL, claim_id: CLAIM, decided_at: '2026-10-16T00:00:00Z', restored_deadline_at: null, ...over,
+})
 const envelope = (message: string, status: number) => Response.json({ error_code: 3000, message, request_id: null }, { status })
 const outage = () => envelope('upstream exploded', 502)
 
@@ -157,9 +160,9 @@ const cases: Case[] = [
     path: `/api/v1/admin/bounties/appeals/${APPEAL}/decision`,
     body: { upheld: false, reason, restore_days: null },
     committed: claim(),
-    applied: [Response.json(operator({ appeals: [{ appeal_id: APPEAL, claim_id: CLAIM, upheld: false, decided_by: ACTOR, decision_reason: reason }] }))],
-    absent: [Response.json(operator({ appeals: [{ appeal_id: APPEAL, claim_id: CLAIM, upheld: null, decided_by: null, decision_reason: null }] }))],
-    superseded: [Response.json(operator({ appeals: [{ appeal_id: APPEAL, claim_id: CLAIM, upheld: true, decided_by: 'other@example.com', decision_reason: 'other' }] }))],
+    applied: [Response.json(operator({ appeals: [decided({ upheld: false, decided_by: ACTOR, decision_reason: reason })] }))],
+    absent: [Response.json(operator({ appeals: [decided({ upheld: null, decided_by: null, decision_reason: null, decided_at: null })] }))],
+    superseded: [Response.json(operator({ appeals: [decided({ upheld: true, decided_by: 'other@example.com', decision_reason: 'other', restored_deadline_at: '2026-10-18T00:00:00Z' })] }))],
   },
   {
     name: 'award_bounty_claim',
@@ -324,18 +327,38 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(pause()).rejects.toThrow('may have committed')
   })
 
-  it('never takes an earlier inconclusive reconciliation for this one', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage())
-      .mockResolvedValueOnce(Response.json(claim({ obligations: [obligation({ transfers: [transfer('confirmed')] })] })))
-      .mockResolvedValueOnce(Response.json(operator({
-        audit: [
-          audit('transfer_reconciled', { reason: null, detail: `transfer ${TRANSFER} round 1: uncertain (asked unknown)`, recorded_at: '2026-10-16T01:00:00Z' }),
-          audit('transfer_reconciled', { actor: 'other@example.com', reason: null, detail: `transfer ${TRANSFER} round 1: confirmed (asked confirmed)`, recorded_at: '2026-10-16T02:00:00Z' }),
-        ],
-      }))))
-    await expect(reconcileBountyTransfer(ACTOR, {
-      claimId: CLAIM, transferId: TRANSFER, rehearsalOutcome: 'unknown', confirmation: `RECONCILE BOUNTY TRANSFER ${TRANSFER}`,
-    })).rejects.toBeInstanceOf(NothingAppliedError)
+  const reconcile = (rehearsalOutcome: string) => reconcileBountyTransfer(ACTOR, {
+    claimId: CLAIM, transferId: TRANSFER, rehearsalOutcome, confirmation: `RECONCILE BOUNTY TRANSFER ${TRANSFER}`,
+  })
+  const reconciled = (state: string, audits: ReturnType<typeof audit>[]) => vi.fn().mockResolvedValueOnce(outage())
+    .mockResolvedValueOnce(Response.json(claim({ obligations: [obligation({ transfers: [transfer(state)] })] })))
+    .mockResolvedValueOnce(Response.json(operator({ audit: audits })))
+
+  it.each([
+    [2, 'applied'],
+    [3, 'superseded'],
+  ])('compares the deadline an upheld appeal restored (restoreDays %i: %s)', async (restoreDays, expected) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator({
+      appeals: [decided({ upheld: true, decided_by: ACTOR, decision_reason: reason, restored_deadline_at: '2026-10-18T00:00:00Z' })],
+    }))))
+    const run = decideBountyAppeal(ACTOR, { bountyId: BOUNTY, appealId: APPEAL, upheld: true, restoreDays, reason, confirmation: `UPHOLD BOUNTY APPEAL ${APPEAL}` })
+    if (expected === 'applied') await expect(run).resolves.toMatchObject({ claim_id: CLAIM })
+    else await expect(run).rejects.toBeInstanceOf(NothingAppliedError)
+  })
+
+  it('reports an inconclusive reconciliation settled since by someone else as unknown, never applied or refused', async () => {
+    vi.stubGlobal('fetch', reconciled('confirmed', [
+      audit('transfer_reconciled', { reason: null, detail: `transfer ${TRANSFER} round 1: uncertain (asked unknown)`, recorded_at: '2026-10-16T01:00:00Z' }),
+      audit('transfer_reconciled', { actor: 'other@example.com', reason: null, detail: `transfer ${TRANSFER} round 1: confirmed (asked confirmed)`, recorded_at: '2026-10-16T02:00:00Z' }),
+    ]))
+    await expect(reconcile('unknown')).rejects.toThrow('may have committed')
+  })
+
+  it('recognises a live reconciliation, which records no requested outcome', async () => {
+    vi.stubGlobal('fetch', reconciled('confirmed', [
+      audit('transfer_reconciled', { reason: null, detail: `transfer ${TRANSFER} round 1: confirmed` }),
+    ]))
+    await expect(reconcile('confirmed')).resolves.toMatchObject({ obligation_id: OBLIGATION })
   })
 
   it('reads the payout policy revision this write targets, whatever followed it', async () => {

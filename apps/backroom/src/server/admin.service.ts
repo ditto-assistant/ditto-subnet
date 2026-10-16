@@ -537,7 +537,7 @@ import {
   platformAdminRequest,
   platformPublicRequest,
 } from './ditto.server'
-import { platformAdminWrite } from './platform-write'
+import { NothingAppliedError, platformAdminWrite } from './platform-write'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
 import {
   submissionDepositAddressControlSchema,
@@ -4259,8 +4259,13 @@ export async function updateClaPolicy(actor: string, rawInput: unknown) {
         const read = await readClaRevision(target)
         policy = read.policy
         if (read.row && isThisWrite(read.row)) applied = read.row
+        else if (read.row) {
+          // Only one revision can follow expectedRevision, and it is not this write's.
+          throw new NothingAppliedError(`Revision ${target} was already written by ${read.row.actor}, so this write cannot have applied.`)
+        }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof NothingAppliedError) throw error
       const status = applied ? `CLA policy revision ${applied.revision} was committed` : uncertain
       return { applied, policy: null, refresh_error: `${status}, but reading the refreshed policy failed; call get_cla_policy.` }
     }

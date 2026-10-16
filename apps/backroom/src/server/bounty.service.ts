@@ -267,8 +267,14 @@ export async function decideBountyAppeal(actor: string, rawInput: unknown) {
     readBack: async () => {
       const view = await fetchBounty({ bountyId: input.bountyId })
       const appeal = view.appeals.find((item) => item.appeal_id === input.appealId)
-      if (!appeal || appeal.upheld === null) return { state: 'absent' }
-      if (appeal.upheld === input.upheld && appeal.decided_by === actor.trim() && appeal.decision_reason === input.reason) {
+      if (!appeal || appeal.upheld === null || appeal.decided_at === null) return { state: 'absent' }
+      // An upheld appeal restores a deadline counted from its decision.
+      const restores = input.restoreDays === undefined ? null : Date.parse(appeal.decided_at) + input.restoreDays * 86_400_000
+      const restored = appeal.restored_deadline_at === null ? null : Date.parse(appeal.restored_deadline_at)
+      if (
+        appeal.upheld === input.upheld && appeal.decided_by === actor.trim() &&
+        appeal.decision_reason === input.reason && restored === restores
+      ) {
         const claim = view.claims.find((item) => item.claim_id === appeal.claim_id)
         if (claim) return { state: 'applied', value: claim }
       }
@@ -405,19 +411,22 @@ export async function reconcileBountyTransfer(actor: string, rawInput: unknown) 
       const owed = claim.obligations.find((item) => item.transfers.some((t) => t.transfer_id === input.transferId))
       const transfer = owed?.transfers.find((item) => item.transfer_id === input.transferId)
       if (!owed || !transfer) return { state: 'absent' }
-      // Every reconciliation is recorded with its operator, the outcome asked
-      // for and the state it left. Only an entry that left the transfer in
-      // its current state can be this write: an earlier inconclusive one that
-      // someone else settled since is not.
-      const mine = latest(await fetchBounty({ bountyId: claim.bounty_id }), ['transfer_reconciled'], (entry) =>
+      // Every reconciliation is recorded with its operator, the state it left
+      // and, for a rehearsal, the outcome asked for. Entries carry no id, so
+      // this operator's latest matching entry may be this write or an earlier
+      // identical one.
+      const own = latest(await fetchBounty({ bountyId: claim.bounty_id }), ['transfer_reconciled'], (entry) =>
         entry.actor === actor.trim() &&
         entry.detail.startsWith(`transfer ${input.transferId} `) &&
-        entry.detail.endsWith(`: ${transfer.state} (asked ${input.rehearsalOutcome})`))
-      if (mine) return { state: 'applied', value: owed }
-      if (!['dispatched', 'uncertain'].includes(transfer.state)) {
-        return { state: 'superseded', detail: `Transfer ${input.transferId} was already reconciled (${transfer.state})` }
-      }
-      return { state: 'absent' }
+        // A live executor records no requested outcome.
+        (entry.detail.endsWith(` (asked ${input.rehearsalOutcome})`) || !entry.detail.includes(' (asked ')))
+      const left = own?.detail.match(/: (\w+)(?: \(asked \w+\))?$/)?.[1]
+      if (own && left === transfer.state) return { state: 'applied', value: owed }
+      // A later settlement hides whether this write was the entry found.
+      if (own || ['dispatched', 'uncertain'].includes(transfer.state)) return { state: 'absent' }
+      // No record of this write, and the transfer is settled, so Platform
+      // refuses it if it is still in flight.
+      return { state: 'superseded', detail: `Transfer ${input.transferId} was already reconciled (${transfer.state})` }
     },
     retryHint: 'retry with the same input.',
   })

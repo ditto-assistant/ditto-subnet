@@ -191,6 +191,8 @@ export const bountyOperatorSchema = z.object({
     upheld: z.boolean().nullable(),
     decided_by: z.string().nullable(),
     decision_reason: z.string().nullable(),
+    decided_at: z.string().nullable(),
+    restored_deadline_at: z.string().nullable(),
   }).passthrough()),
   audit: z.array(auditEntrySchema),
 }).passthrough()

@@ -354,6 +354,7 @@ async def operator_view(session: AsyncSession, bounty_id: UUID) -> BountyOperato
             decided_by=decision.actor if decision else None,
             decision_reason=decision.reason if decision else None,
             decided_at=decision.decided_at if decision else None,
+            restored_deadline_at=decision.restored_deadline_at if decision else None,
         )
         for appeal, decision in appeals
     ]

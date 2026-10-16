@@ -565,7 +565,7 @@ def _act(client: ApiClient, args: argparse.Namespace) -> BountyClaimView:
         reason = args.reason_file.read_text(encoding="utf-8")
         if not reason.strip():
             raise MinerCliError("the appeal statement is empty")
-        phrase = f"APPEAL BOUNTY EVENT {args.event}"
+        phrase = f"APPEAL BOUNTY CLAIM {claim_id} EVENT {args.event}"
         print(
             f"Appealing event {args.event} of claim {claim_id}; the statement's "
             f"digest is {bounty_reason_digest(reason)}",

@@ -840,6 +840,8 @@ class BountyAdminAppealView(WireModel):
     decided_by: str | None
     decision_reason: str | None
     decided_at: datetime | None
+    # The delivery deadline an upheld appeal restored; null otherwise.
+    restored_deadline_at: datetime | None
 
 
 class BountyReportAmount(WireModel):

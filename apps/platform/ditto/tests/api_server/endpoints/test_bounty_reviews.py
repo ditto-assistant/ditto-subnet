@@ -541,6 +541,12 @@ async def test_appeals_are_decided_by_someone_else(world):
     assert datetime.fromisoformat(
         restored_slot["deadline_at"]
     ) - datetime.fromisoformat(decided["recorded_at"]) == timedelta(days=2)
+    # Operators see the deadline the decision restored, so a retry can be told
+    # apart from a different decision.
+    bounty_id = detail["summary"]["bounty_id"]
+    view = (await world.client.get(f"{ADMIN}/{bounty_id}", headers=_HEADERS)).json()
+    [admin_appeal] = view["appeals"]
+    assert admin_appeal["restored_deadline_at"] == restored_slot["deadline_at"]
     # The restored claim delivers again, then its new commit is reviewed.
     assert (await submit(world, ALICE, restored, sha="cd" * 20)).status_code == 200
 

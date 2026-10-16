@@ -111,7 +111,7 @@ uv run ditto bounty appeal CLAIM_ID --event EVENT_ID --reason-file appeal.md \
 
 The event id is listed next to the decision in the bounty's history on the
 board, and in `uv run ditto bounty show <owner/repo#issue> --json`. Type
-`APPEAL BOUNTY EVENT <id>` to sign. Your statement stays private; only its
+`APPEAL BOUNTY CLAIM <claim id> EVENT <id>` to sign. Your statement stays private; only its
 SHA-256 is public. An operator upholds or denies the appeal, and a rejection
 is never judged by the reviewer who rejected it. An upheld appeal restores
 your claim with a new delivery deadline. While an appeal is pending, the slot

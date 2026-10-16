@@ -6177,6 +6177,15 @@ describe('verified contributors and CLA rollout', () => {
       expect(fetchMock).toHaveBeenCalledTimes(3)
     })
 
+    it('fails as not applied when the fallback read finds another operator\'s revision', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(envelope('upstream exploded', 503))
+        .mockResolvedValueOnce(control({ ...claShadowRevisionFixture, actor: 'someone-else@omniaura.ai' })))
+      await expect(updateClaPolicy('operator@omniaura.ai', input))
+        .rejects.toThrow('Revision 1 was already written by someone-else@omniaura.ai, so this write cannot have applied.')
+    })
+
     it('fails as not applied when another operator wrote the next revision', async () => {
       process.env.DITTO_ADMIN_API_TOKEN = 'secret'
       vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
