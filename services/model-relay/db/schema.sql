@@ -58,6 +58,60 @@ CREATE TYPE public.ticketstatus AS ENUM (
 
 
 --
+-- Name: bounty_history_immutable(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.bounty_history_immutable() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN RAISE EXCEPTION 'bounty history is append-only'; END $$;
+
+
+--
+-- Name: bounty_slot_status_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.bounty_slot_status_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'bounty slots cannot be deleted';
+          END IF;
+          IF to_jsonb(NEW) - 'status' - 'status_changed_at' - 'claim_id' - 'deadline_at' - 'review_due_at' IS DISTINCT FROM to_jsonb(OLD) - 'status' - 'status_changed_at' - 'claim_id' - 'deadline_at' - 'review_due_at'
+          THEN
+            RAISE EXCEPTION 'only a bounty slot status can change';
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
+-- Name: bounty_transfer_outcome_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.bounty_transfer_outcome_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'bounty transfers cannot be deleted';
+          END IF;
+          IF OLD.state NOT IN ('dispatched', 'uncertain') THEN
+            RAISE EXCEPTION 'a settled bounty transfer cannot change';
+          END IF;
+          IF to_jsonb(NEW) - 'state' - 'block_hash' - 'block_number'
+               - 'extrinsic_index' - 'settled_at'
+             IS DISTINCT FROM to_jsonb(OLD) - 'state' - 'block_hash'
+               - 'block_number' - 'extrinsic_index' - 'settled_at'
+          THEN
+            RAISE EXCEPTION 'only a bounty transfer outcome can change';
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
 -- Name: coding_hosted_assignment_guard(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -282,6 +336,16 @@ CREATE FUNCTION public.coding_hosted_private_task_guard() RETURNS trigger
 
 
 --
+-- Name: contributor_identity_immutable(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.contributor_identity_immutable() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN RAISE EXCEPTION 'contributor identity history is append-only'; END $$;
+
+
+--
 -- Name: enforce_v13_ticket_cohort(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -301,6 +365,47 @@ CREATE FUNCTION public.enforce_v13_ticket_cohort() RETURNS trigger
             IF pinned IS NOT NULL AND NOT (pinned ? NEW.validator_hotkey) THEN
               RAISE EXCEPTION 'V13 ticket validator is outside pinned scorer cohort';
             END IF;
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
+-- Name: github_link_attempt_linked_immutable(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.github_link_attempt_linked_immutable() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF OLD.status = 'linked' AND (
+            to_jsonb(NEW) - 'session_id' IS DISTINCT FROM to_jsonb(OLD) - 'session_id'
+            OR (NEW.session_id IS NOT NULL
+                AND NEW.session_id IS DISTINCT FROM OLD.session_id)
+          ) THEN
+            RAISE EXCEPTION 'linked GitHub attempts are immutable';
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
+-- Name: github_link_revocation_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.github_link_revocation_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'GitHub link history cannot be deleted';
+          END IF;
+          IF OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL
+             OR NEW.revoked_at < OLD.linked_at
+             OR (to_jsonb(NEW) - 'revoked_at')
+                IS DISTINCT FROM (to_jsonb(OLD) - 'revoked_at')
+          THEN
+            RAISE EXCEPTION 'GitHub proof is immutable; only revocation is allowed';
           END IF;
           RETURN NEW;
         END $$;
@@ -1144,6 +1249,16 @@ CREATE TABLE public.admin_activity_outcomes (
 
 
 --
+-- Name: agent_cla_bindings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_cla_bindings (
+    agent_id uuid NOT NULL,
+    signature_id uuid NOT NULL
+);
+
+
+--
 -- Name: agent_kingship; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1487,6 +1602,500 @@ CREATE TABLE public.benchmark_rollouts (
 
 
 --
+-- Name: bounties; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounties (
+    bounty_id uuid NOT NULL,
+    repo text NOT NULL,
+    issue_number integer NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounties_issue CHECK ((issue_number > 0)),
+    CONSTRAINT ck_bounties_repo CHECK ((repo = lower(repo)))
+);
+
+
+--
+-- Name: bounty_action_nonces; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_action_nonces (
+    nonce uuid NOT NULL,
+    action text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_action_nonces_action CHECK ((action = ANY (ARRAY['claim'::text, 'submit'::text, 'withdraw'::text, 'appeal'::text])))
+);
+
+
+--
+-- Name: bounty_appeal_decisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_appeal_decisions (
+    appeal_id uuid NOT NULL,
+    upheld boolean NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    decided_at timestamp with time zone NOT NULL,
+    restored_deadline_at timestamp with time zone,
+    CONSTRAINT ck_bounty_appeal_decisions_restored_deadline CHECK ((upheld = (restored_deadline_at IS NOT NULL)))
+);
+
+
+--
+-- Name: bounty_appeals; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_appeals (
+    appeal_id uuid NOT NULL,
+    claim_id uuid NOT NULL,
+    subject_event_id bigint NOT NULL,
+    reason text NOT NULL,
+    reason_digest text NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    key_kind text NOT NULL,
+    signer text NOT NULL,
+    signature text NOT NULL,
+    filed_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_appeals_appeal CHECK (((length(reason_digest) = 64) AND (key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text]))))
+);
+
+
+--
+-- Name: bounty_claim_controls; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_claim_controls (
+    control_id bigint NOT NULL,
+    bounty_id uuid NOT NULL,
+    paused boolean NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: bounty_claim_controls_control_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_claim_controls ALTER COLUMN control_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_claim_controls_control_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bounty_claims; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_claims (
+    claim_id uuid NOT NULL,
+    bounty_id uuid NOT NULL,
+    revision integer NOT NULL,
+    spec_digest text NOT NULL,
+    slot_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    payee_coldkey text NOT NULL,
+    github_login text NOT NULL,
+    team_digest text NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    key_kind text NOT NULL,
+    signer text NOT NULL,
+    signature text NOT NULL,
+    owner_block bigint NOT NULL,
+    owner_block_hash text NOT NULL,
+    github_link_id uuid NOT NULL,
+    github_user_id bigint NOT NULL,
+    cla_signature_id uuid NOT NULL,
+    funding_mode text NOT NULL,
+    fee_alpha_rao bigint NOT NULL,
+    fee_escrow_coldkey text NOT NULL,
+    fee_escrow_hotkey text NOT NULL,
+    held_at timestamp with time zone NOT NULL,
+    hold_expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_claims_claim CHECK (((key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text])) AND (fee_alpha_rao > 0) AND (hold_expires_at > held_at) AND (github_user_id > 0) AND (funding_mode = ANY (ARRAY['rehearsal'::text, 'live'::text])) AND ((key_kind = 'coldkey'::text) OR (signer = hotkey)) AND ((key_kind = 'hotkey'::text) OR (signer = payee_coldkey))))
+);
+
+
+--
+-- Name: bounty_delivery_facts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_delivery_facts (
+    fact_id bigint NOT NULL,
+    claim_id uuid NOT NULL,
+    kind text NOT NULL,
+    reference text NOT NULL,
+    actor text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_delivery_facts_fact CHECK (((kind = ANY (ARRAY['merged'::text, 'deployed'::text, 'adopted'::text])) AND (length(reference) > 0)))
+);
+
+
+--
+-- Name: bounty_delivery_facts_fact_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_delivery_facts ALTER COLUMN fact_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_delivery_facts_fact_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bounty_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_events (
+    event_id bigint NOT NULL,
+    bounty_id uuid NOT NULL,
+    kind text NOT NULL,
+    revision integer,
+    round integer,
+    slot_id uuid,
+    recorded_at timestamp with time zone NOT NULL,
+    claim_id uuid,
+    submission_id uuid,
+    appeal_id uuid,
+    obligation_id uuid,
+    CONSTRAINT ck_bounty_events_claim_scope CHECK (((claim_id IS NOT NULL) OR (kind = ANY (ARRAY['revision_published'::text, 'round_opened'::text, 'claims_paused'::text, 'claims_resumed'::text, 'reviewer_reassigned'::text, 'slot_cancelled'::text, 'slot_reopened'::text])))),
+    CONSTRAINT ck_bounty_events_kind CHECK ((kind = ANY (ARRAY['revision_published'::text, 'round_opened'::text, 'slot_held'::text, 'hold_expired'::text, 'hold_released'::text, 'slot_claimed'::text, 'fee_refund_owed'::text, 'claims_paused'::text, 'claims_resumed'::text, 'submitted'::text, 'withdrawn'::text, 'deadline_missed'::text, 'review_overdue'::text, 'rework_requested'::text, 'accepted'::text, 'rejected'::text, 'reviewer_reassigned'::text, 'appeal_filed'::text, 'appeal_upheld'::text, 'appeal_denied'::text, 'slot_cancelled'::text, 'slot_reopened'::text, 'fee_retained'::text, 'award_recorded'::text, 'obligation_approved'::text, 'transfer_dispatched'::text, 'transfer_confirmed'::text, 'transfer_failed'::text, 'transfer_uncertain'::text, 'fact_recorded'::text]))),
+    CONSTRAINT ck_bounty_events_obligation_ref CHECK (((obligation_id IS NULL) OR (claim_id IS NOT NULL))),
+    CONSTRAINT ck_bounty_events_review_refs CHECK ((((submission_id IS NULL) OR (claim_id IS NOT NULL)) AND ((appeal_id IS NULL) OR (claim_id IS NOT NULL))))
+);
+
+
+--
+-- Name: bounty_events_event_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_events ALTER COLUMN event_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_events_event_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bounty_fee_payments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_fee_payments (
+    block_hash text NOT NULL,
+    extrinsic_index integer NOT NULL,
+    block_number bigint NOT NULL,
+    claim_id uuid NOT NULL,
+    payer_coldkey text NOT NULL,
+    amount_alpha_rao bigint NOT NULL,
+    simulated boolean NOT NULL,
+    outcome text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_fee_payments_payment CHECK (((amount_alpha_rao > 0) AND (extrinsic_index >= 0) AND (block_number >= 0) AND (outcome = ANY (ARRAY['allocated'::text, 'refund_owed'::text]))))
+);
+
+
+--
+-- Name: bounty_obligation_approvals; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_obligation_approvals (
+    approval_id uuid NOT NULL,
+    obligation_id uuid NOT NULL,
+    round integer NOT NULL,
+    payee_coldkey text NOT NULL,
+    amount_alpha_rao bigint NOT NULL,
+    policy_revision integer NOT NULL,
+    actor text NOT NULL,
+    approved_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_obligation_approvals_approval CHECK (((round > 0) AND (amount_alpha_rao > 0)))
+);
+
+
+--
+-- Name: bounty_obligations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_obligations (
+    obligation_id uuid NOT NULL,
+    bounty_id uuid NOT NULL,
+    claim_id uuid NOT NULL,
+    kind text NOT NULL,
+    reason text NOT NULL,
+    payee_coldkey text NOT NULL,
+    amount_alpha_rao bigint NOT NULL,
+    block_hash text,
+    extrinsic_index integer,
+    simulated boolean NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    submission_id uuid,
+    attribution text,
+    actor text,
+    decision_reason text,
+    CONSTRAINT ck_bounty_obligations_obligation CHECK (((kind = ANY (ARRAY['fee_refund'::text, 'fee_retained'::text, 'award'::text])) AND (amount_alpha_rao > 0) AND (reason = ANY (ARRAY['hold_expired'::text, 'slot_lost'::text, 'identity_changed'::text, 'duplicate_payment'::text, 'cancelled'::text, 'system_fault'::text, 'accepted'::text, 'rejected'::text, 'expired'::text, 'withdrawn'::text, 'accepted_work'::text])) AND ((kind = 'award'::text) = (block_hash IS NULL)) AND ((block_hash IS NULL) = (extrinsic_index IS NULL)) AND ((kind = 'award'::text) = (submission_id IS NOT NULL)) AND ((kind = 'award'::text) = (actor IS NOT NULL)) AND ((kind = 'award'::text) = (decision_reason IS NOT NULL)) AND ((kind = 'award'::text) OR (attribution IS NULL))))
+);
+
+
+--
+-- Name: bounty_payout_policies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_payout_policies (
+    revision integer NOT NULL,
+    single_approver_max_alpha_rao bigint NOT NULL,
+    dual_approver_max_alpha_rao bigint NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_payout_policies_policy CHECK (((revision > 0) AND (single_approver_max_alpha_rao >= 0) AND (dual_approver_max_alpha_rao >= single_approver_max_alpha_rao)))
+);
+
+
+--
+-- Name: bounty_reviewer_assignments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_reviewer_assignments (
+    assignment_id bigint NOT NULL,
+    bounty_id uuid NOT NULL,
+    reviewer_actor text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    assigned_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: bounty_reviewer_assignments_assignment_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_reviewer_assignments ALTER COLUMN assignment_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_reviewer_assignments_assignment_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bounty_reviews; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_reviews (
+    submission_id uuid NOT NULL,
+    claim_id uuid NOT NULL,
+    decision text NOT NULL,
+    reason text NOT NULL,
+    attribution text,
+    rework_deadline_at timestamp with time zone,
+    reviewer_actor text NOT NULL,
+    decided_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_reviews_review CHECK (((decision = ANY (ARRAY['accept'::text, 'changes_requested'::text, 'reject'::text])) AND ((decision = 'changes_requested'::text) = (rework_deadline_at IS NOT NULL)) AND ((decision = 'accept'::text) OR (attribution IS NULL))))
+);
+
+
+--
+-- Name: bounty_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_revisions (
+    bounty_id uuid NOT NULL,
+    revision integer NOT NULL,
+    title text NOT NULL,
+    scope text NOT NULL,
+    public_interfaces text NOT NULL,
+    acceptance_evidence text NOT NULL,
+    dependencies jsonb NOT NULL,
+    reviewer_login text NOT NULL,
+    entry_fee_alpha_rao bigint NOT NULL,
+    reward_pool_alpha_rao bigint NOT NULL,
+    attempts_per_round integer NOT NULL,
+    delivery_days integer NOT NULL,
+    review_days integer NOT NULL,
+    hold_minutes integer NOT NULL,
+    funding_mode text NOT NULL,
+    fee_escrow_coldkey text NOT NULL,
+    fee_escrow_hotkey text NOT NULL,
+    spec_digest text NOT NULL,
+    reviewer_actor text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    published_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_revisions_terms CHECK (((revision > 0) AND (length(spec_digest) = 64) AND (entry_fee_alpha_rao >= 0) AND (reward_pool_alpha_rao >= 0) AND ((attempts_per_round >= 1) AND (attempts_per_round <= 10)) AND ((delivery_days >= 1) AND (delivery_days <= 60)) AND ((review_days >= 1) AND (review_days <= 60)) AND ((hold_minutes >= 1) AND (hold_minutes <= 1440)) AND (funding_mode = ANY (ARRAY['rehearsal'::text, 'live'::text]))))
+);
+
+
+--
+-- Name: bounty_rounds; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_rounds (
+    bounty_id uuid NOT NULL,
+    round integer NOT NULL,
+    opened_revision integer NOT NULL,
+    opened_at timestamp with time zone NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    CONSTRAINT ck_bounty_rounds_round CHECK ((round > 0))
+);
+
+
+--
+-- Name: bounty_slot_actions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_slot_actions (
+    action_id bigint NOT NULL,
+    slot_id uuid NOT NULL,
+    claim_id uuid,
+    action text NOT NULL,
+    cancel_kind text,
+    prior_status text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_slot_actions_slot_action CHECK (((action = ANY (ARRAY['cancel'::text, 'reopen'::text])) AND ((action = 'cancel'::text) = (cancel_kind IS NOT NULL)) AND ((cancel_kind IS NULL) OR (cancel_kind = ANY (ARRAY['team'::text, 'system_fault'::text]))) AND ((action <> 'cancel'::text) OR (prior_status = ANY (ARRAY['open'::text, 'claimed'::text, 'submitted'::text, 'rework'::text]))) AND ((action <> 'reopen'::text) OR (prior_status = ANY (ARRAY['expired'::text, 'withdrawn'::text, 'rejected'::text, 'cancelled'::text])))))
+);
+
+
+--
+-- Name: bounty_slot_actions_action_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_slot_actions ALTER COLUMN action_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_slot_actions_action_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bounty_slots; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_slots (
+    slot_id uuid NOT NULL,
+    bounty_id uuid NOT NULL,
+    round integer NOT NULL,
+    "position" integer NOT NULL,
+    status text NOT NULL,
+    status_changed_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    claim_id uuid,
+    deadline_at timestamp with time zone,
+    review_due_at timestamp with time zone,
+    CONSTRAINT ck_bounty_slots_claim CHECK ((((status <> 'open'::text) OR (claim_id IS NULL)) AND ((status <> ALL (ARRAY['held'::text, 'claimed'::text, 'submitted'::text, 'rework'::text, 'accepted'::text, 'rejected'::text, 'expired'::text, 'withdrawn'::text])) OR (claim_id IS NOT NULL)) AND ((status <> 'claimed'::text) OR (deadline_at IS NOT NULL)) AND ((status <> 'rework'::text) OR (deadline_at IS NOT NULL)) AND ((status <> 'submitted'::text) OR (review_due_at IS NOT NULL)))),
+    CONSTRAINT ck_bounty_slots_position CHECK (("position" > 0)),
+    CONSTRAINT ck_bounty_slots_status CHECK ((status = ANY (ARRAY['open'::text, 'held'::text, 'claimed'::text, 'submitted'::text, 'rework'::text, 'accepted'::text, 'rejected'::text, 'expired'::text, 'withdrawn'::text, 'cancelled'::text])))
+);
+
+
+--
+-- Name: bounty_submissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_submissions (
+    submission_id uuid NOT NULL,
+    claim_id uuid NOT NULL,
+    pr_number integer NOT NULL,
+    head_sha text NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    key_kind text NOT NULL,
+    signer text NOT NULL,
+    signature text NOT NULL,
+    submitted_at timestamp with time zone NOT NULL,
+    review_due_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_submissions_submission CHECK (((pr_number > 0) AND (head_sha ~ '^[0-9a-f]{40}$'::text) AND (key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text])) AND (review_due_at > submitted_at)))
+);
+
+
+--
+-- Name: bounty_transfer_reconciliations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_transfer_reconciliations (
+    reconciliation_id bigint NOT NULL,
+    transfer_id uuid NOT NULL,
+    actor text NOT NULL,
+    requested text,
+    state text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_transfer_reconciliations_reconciliation CHECK (((state = ANY (ARRAY['dispatched'::text, 'confirmed'::text, 'failed'::text, 'expired'::text, 'uncertain'::text])) AND ((requested IS NULL) OR (requested = ANY (ARRAY['confirmed'::text, 'failed'::text, 'expired'::text, 'unknown'::text])))))
+);
+
+
+--
+-- Name: bounty_transfer_reconciliations_reconciliation_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_transfer_reconciliations ALTER COLUMN reconciliation_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_transfer_reconciliations_reconciliation_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bounty_transfers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_transfers (
+    transfer_id uuid NOT NULL,
+    obligation_id uuid NOT NULL,
+    round integer NOT NULL,
+    executor text NOT NULL,
+    simulated boolean NOT NULL,
+    state text NOT NULL,
+    block_hash text,
+    block_number bigint,
+    extrinsic_index integer,
+    actor text NOT NULL,
+    dispatched_at timestamp with time zone NOT NULL,
+    settled_at timestamp with time zone,
+    CONSTRAINT ck_bounty_transfers_transfer CHECK (((state = ANY (ARRAY['dispatched'::text, 'confirmed'::text, 'failed'::text, 'expired'::text, 'uncertain'::text])) AND (round > 0) AND ((state = 'confirmed'::text) = (block_hash IS NOT NULL)) AND ((block_hash IS NULL) = (extrinsic_index IS NULL)) AND ((block_hash IS NULL) = (block_number IS NULL)) AND ((state = ANY (ARRAY['dispatched'::text, 'uncertain'::text])) = (settled_at IS NULL))))
+);
+
+
+--
+-- Name: bounty_withdrawals; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_withdrawals (
+    claim_id uuid NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    key_kind text NOT NULL,
+    signer text NOT NULL,
+    signature text NOT NULL,
+    withdrawn_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_withdrawals_withdrawal CHECK ((key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text])))
+);
+
+
+--
 -- Name: burn_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1525,6 +2134,70 @@ CREATE SEQUENCE public.burn_settings_revisions_revision_seq
 --
 
 ALTER SEQUENCE public.burn_settings_revisions_revision_seq OWNED BY public.burn_settings_revisions.revision;
+
+
+--
+-- Name: cla_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cla_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    mode text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_cla_settings_revisions_mode CHECK ((mode = ANY (ARRAY['off'::text, 'shadow'::text, 'enforce'::text])))
+);
+
+
+--
+-- Name: cla_shadow_uploads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cla_shadow_uploads (
+    observation_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    cla_version integer,
+    created_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: cla_signatures; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cla_signatures (
+    signature_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    coldkey text NOT NULL,
+    cla_version integer NOT NULL,
+    cla_sha256 text NOT NULL,
+    signature text NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    signed_at timestamp with time zone NOT NULL,
+    owner_block bigint NOT NULL,
+    owner_block_hash text NOT NULL
+);
+
+
+--
+-- Name: cla_versions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cla_versions (
+    version integer NOT NULL,
+    sha256 text NOT NULL,
+    text text NOT NULL,
+    published_at timestamp with time zone NOT NULL,
+    effective_at timestamp with time zone NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    CONSTRAINT ck_cla_versions_identity CHECK (((version > 0) AND (length(sha256) = 64)))
+);
 
 
 --
@@ -3571,6 +4244,86 @@ CREATE TABLE public.miner_ditto_links (
     revoked_at timestamp with time zone,
     CONSTRAINT ck_miner_ditto_links_miner_ditto_links_linked_via_check CHECK ((linked_via = ANY (ARRAY['dashboard'::text, 'cli'::text]))),
     CONSTRAINT ck_miner_ditto_links_miner_ditto_links_user_id_len CHECK (((length(ditto_user_id) >= 1) AND (length(ditto_user_id) <= 128)))
+);
+
+
+--
+-- Name: miner_github_action_nonces; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_github_action_nonces (
+    nonce uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    action text NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    signature text NOT NULL,
+    signer text NOT NULL,
+    key_kind text NOT NULL,
+    link_id uuid NOT NULL,
+    created_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: miner_github_link_attempts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_github_link_attempts (
+    attempt_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    session_id uuid,
+    launch_hash text NOT NULL,
+    state_hash text,
+    code_verifier text,
+    browser_binding_hash text,
+    accept_token_hash text,
+    status text NOT NULL,
+    github_user_id bigint,
+    github_login text,
+    error text,
+    created_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_miner_github_link_attempts_status CHECK ((status = ANY (ARRAY['pending'::text, 'identity_verified'::text, 'accepted'::text, 'linked'::text, 'failed'::text, 'expired'::text])))
+);
+
+
+--
+-- Name: miner_github_links; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_github_links (
+    link_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    hotkey text NOT NULL,
+    coldkey text NOT NULL,
+    github_user_id bigint NOT NULL,
+    github_login text NOT NULL,
+    link_attempt_id uuid NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    key_kind text NOT NULL,
+    signer text NOT NULL,
+    signature text NOT NULL,
+    linked_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    owner_block bigint NOT NULL,
+    owner_block_hash text NOT NULL,
+    CONSTRAINT ck_miner_github_links_github_id CHECK ((github_user_id > 0)),
+    CONSTRAINT ck_miner_github_links_key_kind CHECK ((key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text])))
+);
+
+
+--
+-- Name: miner_github_operator_revocations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_github_operator_revocations (
+    link_id uuid NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    revoked_at timestamp with time zone NOT NULL
 );
 
 
@@ -7350,6 +8103,14 @@ ALTER TABLE ONLY public.admin_activity_outcomes
 
 
 --
+-- Name: agent_cla_bindings pk_agent_cla_bindings; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_cla_bindings
+    ADD CONSTRAINT pk_agent_cla_bindings PRIMARY KEY (agent_id);
+
+
+--
 -- Name: agent_kingship pk_agent_kingship; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7422,11 +8183,219 @@ ALTER TABLE ONLY public.benchmark_rollouts
 
 
 --
+-- Name: bounties pk_bounties; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounties
+    ADD CONSTRAINT pk_bounties PRIMARY KEY (bounty_id);
+
+
+--
+-- Name: bounty_action_nonces pk_bounty_action_nonces; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_action_nonces
+    ADD CONSTRAINT pk_bounty_action_nonces PRIMARY KEY (nonce);
+
+
+--
+-- Name: bounty_appeal_decisions pk_bounty_appeal_decisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_appeal_decisions
+    ADD CONSTRAINT pk_bounty_appeal_decisions PRIMARY KEY (appeal_id);
+
+
+--
+-- Name: bounty_appeals pk_bounty_appeals; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_appeals
+    ADD CONSTRAINT pk_bounty_appeals PRIMARY KEY (appeal_id);
+
+
+--
+-- Name: bounty_claim_controls pk_bounty_claim_controls; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claim_controls
+    ADD CONSTRAINT pk_bounty_claim_controls PRIMARY KEY (control_id);
+
+
+--
+-- Name: bounty_claims pk_bounty_claims; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT pk_bounty_claims PRIMARY KEY (claim_id);
+
+
+--
+-- Name: bounty_delivery_facts pk_bounty_delivery_facts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_delivery_facts
+    ADD CONSTRAINT pk_bounty_delivery_facts PRIMARY KEY (fact_id);
+
+
+--
+-- Name: bounty_events pk_bounty_events; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT pk_bounty_events PRIMARY KEY (event_id);
+
+
+--
+-- Name: bounty_fee_payments pk_bounty_fee_payments; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_fee_payments
+    ADD CONSTRAINT pk_bounty_fee_payments PRIMARY KEY (block_hash, extrinsic_index);
+
+
+--
+-- Name: bounty_obligation_approvals pk_bounty_obligation_approvals; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligation_approvals
+    ADD CONSTRAINT pk_bounty_obligation_approvals PRIMARY KEY (approval_id);
+
+
+--
+-- Name: bounty_obligations pk_bounty_obligations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT pk_bounty_obligations PRIMARY KEY (obligation_id);
+
+
+--
+-- Name: bounty_payout_policies pk_bounty_payout_policies; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_payout_policies
+    ADD CONSTRAINT pk_bounty_payout_policies PRIMARY KEY (revision);
+
+
+--
+-- Name: bounty_reviewer_assignments pk_bounty_reviewer_assignments; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_reviewer_assignments
+    ADD CONSTRAINT pk_bounty_reviewer_assignments PRIMARY KEY (assignment_id);
+
+
+--
+-- Name: bounty_reviews pk_bounty_reviews; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_reviews
+    ADD CONSTRAINT pk_bounty_reviews PRIMARY KEY (submission_id);
+
+
+--
+-- Name: bounty_revisions pk_bounty_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_revisions
+    ADD CONSTRAINT pk_bounty_revisions PRIMARY KEY (bounty_id, revision);
+
+
+--
+-- Name: bounty_rounds pk_bounty_rounds; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_rounds
+    ADD CONSTRAINT pk_bounty_rounds PRIMARY KEY (bounty_id, round);
+
+
+--
+-- Name: bounty_slot_actions pk_bounty_slot_actions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slot_actions
+    ADD CONSTRAINT pk_bounty_slot_actions PRIMARY KEY (action_id);
+
+
+--
+-- Name: bounty_slots pk_bounty_slots; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT pk_bounty_slots PRIMARY KEY (slot_id);
+
+
+--
+-- Name: bounty_submissions pk_bounty_submissions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_submissions
+    ADD CONSTRAINT pk_bounty_submissions PRIMARY KEY (submission_id);
+
+
+--
+-- Name: bounty_transfer_reconciliations pk_bounty_transfer_reconciliations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_transfer_reconciliations
+    ADD CONSTRAINT pk_bounty_transfer_reconciliations PRIMARY KEY (reconciliation_id);
+
+
+--
+-- Name: bounty_transfers pk_bounty_transfers; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_transfers
+    ADD CONSTRAINT pk_bounty_transfers PRIMARY KEY (transfer_id);
+
+
+--
+-- Name: bounty_withdrawals pk_bounty_withdrawals; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_withdrawals
+    ADD CONSTRAINT pk_bounty_withdrawals PRIMARY KEY (claim_id);
+
+
+--
 -- Name: burn_settings_revisions pk_burn_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.burn_settings_revisions
     ADD CONSTRAINT pk_burn_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: cla_settings_revisions pk_cla_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_settings_revisions
+    ADD CONSTRAINT pk_cla_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: cla_shadow_uploads pk_cla_shadow_uploads; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_shadow_uploads
+    ADD CONSTRAINT pk_cla_shadow_uploads PRIMARY KEY (observation_id);
+
+
+--
+-- Name: cla_signatures pk_cla_signatures; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_signatures
+    ADD CONSTRAINT pk_cla_signatures PRIMARY KEY (signature_id);
+
+
+--
+-- Name: cla_versions pk_cla_versions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_versions
+    ADD CONSTRAINT pk_cla_versions PRIMARY KEY (version);
 
 
 --
@@ -7771,6 +8740,38 @@ ALTER TABLE ONLY public.miner_ditto_link_attempts
 
 ALTER TABLE ONLY public.miner_ditto_links
     ADD CONSTRAINT pk_miner_ditto_links PRIMARY KEY (miner_hotkey);
+
+
+--
+-- Name: miner_github_action_nonces pk_miner_github_action_nonces; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_action_nonces
+    ADD CONSTRAINT pk_miner_github_action_nonces PRIMARY KEY (nonce);
+
+
+--
+-- Name: miner_github_link_attempts pk_miner_github_link_attempts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_link_attempts
+    ADD CONSTRAINT pk_miner_github_link_attempts PRIMARY KEY (attempt_id);
+
+
+--
+-- Name: miner_github_links pk_miner_github_links; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_links
+    ADD CONSTRAINT pk_miner_github_links PRIMARY KEY (link_id);
+
+
+--
+-- Name: miner_github_operator_revocations pk_miner_github_operator_revocations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_operator_revocations
+    ADD CONSTRAINT pk_miner_github_operator_revocations PRIMARY KEY (link_id);
 
 
 --
@@ -8646,6 +9647,166 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 
 --
+-- Name: bounties uq_bounties_repo; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounties
+    ADD CONSTRAINT uq_bounties_repo UNIQUE (repo, issue_number);
+
+
+--
+-- Name: bounty_appeals uq_bounty_appeals_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_appeals
+    ADD CONSTRAINT uq_bounty_appeals_claim_id UNIQUE (claim_id, appeal_id);
+
+
+--
+-- Name: bounty_appeals uq_bounty_appeals_nonce; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_appeals
+    ADD CONSTRAINT uq_bounty_appeals_nonce UNIQUE (nonce);
+
+
+--
+-- Name: bounty_appeals uq_bounty_appeals_subject_event_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_appeals
+    ADD CONSTRAINT uq_bounty_appeals_subject_event_id UNIQUE (subject_event_id);
+
+
+--
+-- Name: bounty_claims uq_bounty_claims_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT uq_bounty_claims_claim_id UNIQUE (claim_id, bounty_id);
+
+
+--
+-- Name: bounty_claims uq_bounty_claims_nonce; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT uq_bounty_claims_nonce UNIQUE (nonce);
+
+
+--
+-- Name: bounty_delivery_facts uq_bounty_delivery_facts_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_delivery_facts
+    ADD CONSTRAINT uq_bounty_delivery_facts_claim_id UNIQUE (claim_id, kind);
+
+
+--
+-- Name: bounty_events uq_bounty_events_event_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT uq_bounty_events_event_id UNIQUE (event_id, claim_id);
+
+
+--
+-- Name: bounty_fee_payments uq_bounty_fee_payments_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_fee_payments
+    ADD CONSTRAINT uq_bounty_fee_payments_claim_id UNIQUE (claim_id, block_hash, extrinsic_index, payer_coldkey);
+
+
+--
+-- Name: bounty_obligation_approvals uq_bounty_obligation_approvals_obligation_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligation_approvals
+    ADD CONSTRAINT uq_bounty_obligation_approvals_obligation_id UNIQUE (obligation_id, round, actor, policy_revision);
+
+
+--
+-- Name: bounty_obligations uq_bounty_obligations_block_hash; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT uq_bounty_obligations_block_hash UNIQUE (block_hash, extrinsic_index);
+
+
+--
+-- Name: bounty_obligations uq_bounty_obligations_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT uq_bounty_obligations_claim_id UNIQUE (claim_id, obligation_id);
+
+
+--
+-- Name: bounty_slots uq_bounty_slots_bounty_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT uq_bounty_slots_bounty_id UNIQUE (bounty_id, round, "position");
+
+
+--
+-- Name: bounty_slots uq_bounty_slots_slot_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT uq_bounty_slots_slot_id UNIQUE (slot_id, bounty_id);
+
+
+--
+-- Name: bounty_submissions uq_bounty_submissions_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_submissions
+    ADD CONSTRAINT uq_bounty_submissions_claim_id UNIQUE (claim_id, submission_id);
+
+
+--
+-- Name: bounty_submissions uq_bounty_submissions_nonce; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_submissions
+    ADD CONSTRAINT uq_bounty_submissions_nonce UNIQUE (nonce);
+
+
+--
+-- Name: bounty_transfers uq_bounty_transfers_obligation_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_transfers
+    ADD CONSTRAINT uq_bounty_transfers_obligation_id UNIQUE (obligation_id, round);
+
+
+--
+-- Name: bounty_withdrawals uq_bounty_withdrawals_nonce; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_withdrawals
+    ADD CONSTRAINT uq_bounty_withdrawals_nonce UNIQUE (nonce);
+
+
+--
+-- Name: cla_signatures uq_cla_signatures_hotkey_version; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_signatures
+    ADD CONSTRAINT uq_cla_signatures_hotkey_version UNIQUE (netuid, hotkey, cla_version);
+
+
+--
+-- Name: cla_signatures uq_cla_signatures_nonce; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_signatures
+    ADD CONSTRAINT uq_cla_signatures_nonce UNIQUE (nonce);
+
+
+--
 -- Name: coding_hosted_assignments uq_coding_hosted_assignments_assignment_sha256; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8739,6 +9900,30 @@ ALTER TABLE ONLY public.coding_hosted_private_tasks
 
 ALTER TABLE ONLY public.coding_hosted_terminal_reservations
     ADD CONSTRAINT uq_coding_hosted_terminal_reservations_identity_sha256 UNIQUE (identity_sha256);
+
+
+--
+-- Name: miner_github_link_attempts uq_miner_github_link_attempts_launch_hash; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_link_attempts
+    ADD CONSTRAINT uq_miner_github_link_attempts_launch_hash UNIQUE (launch_hash);
+
+
+--
+-- Name: miner_github_link_attempts uq_miner_github_link_attempts_state_hash; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_link_attempts
+    ADD CONSTRAINT uq_miner_github_link_attempts_state_hash UNIQUE (state_hash);
+
+
+--
+-- Name: miner_github_links uq_miner_github_links_nonce; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_links
+    ADD CONSTRAINT uq_miner_github_links_nonce UNIQUE (nonce);
 
 
 --
@@ -9003,10 +10188,94 @@ CREATE UNIQUE INDEX benchmark_rollouts_transition_idx ON public.benchmark_rollou
 
 
 --
+-- Name: bounty_claim_controls_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_claim_controls_bounty_idx ON public.bounty_claim_controls USING btree (bounty_id, control_id);
+
+
+--
+-- Name: bounty_claims_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_claims_bounty_idx ON public.bounty_claims USING btree (bounty_id);
+
+
+--
+-- Name: bounty_claims_slot_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_claims_slot_idx ON public.bounty_claims USING btree (slot_id);
+
+
+--
+-- Name: bounty_events_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_events_bounty_idx ON public.bounty_events USING btree (bounty_id, event_id);
+
+
+--
+-- Name: bounty_fee_payments_allocated_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX bounty_fee_payments_allocated_idx ON public.bounty_fee_payments USING btree (claim_id) WHERE (outcome = 'allocated'::text);
+
+
+--
+-- Name: bounty_obligations_award_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX bounty_obligations_award_idx ON public.bounty_obligations USING btree (claim_id) WHERE (kind = 'award'::text);
+
+
+--
+-- Name: bounty_obligations_claim_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_obligations_claim_idx ON public.bounty_obligations USING btree (claim_id);
+
+
+--
+-- Name: bounty_reviewer_assignments_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_reviewer_assignments_bounty_idx ON public.bounty_reviewer_assignments USING btree (bounty_id, assignment_id);
+
+
+--
+-- Name: bounty_submissions_claim_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_submissions_claim_idx ON public.bounty_submissions USING btree (claim_id);
+
+
+--
+-- Name: bounty_transfer_reconciliations_transfer_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_transfer_reconciliations_transfer_idx ON public.bounty_transfer_reconciliations USING btree (transfer_id);
+
+
+--
+-- Name: bounty_transfers_live_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX bounty_transfers_live_idx ON public.bounty_transfers USING btree (obligation_id) WHERE (state = ANY (ARRAY['dispatched'::text, 'uncertain'::text, 'confirmed'::text]));
+
+
+--
 -- Name: burn_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX burn_settings_scope_revision_idx ON public.burn_settings_revisions USING btree (scope, revision);
+
+
+--
+-- Name: cla_shadow_uploads_netuid_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX cla_shadow_uploads_netuid_idx ON public.cla_shadow_uploads USING btree (netuid);
 
 
 --
@@ -9483,6 +10752,48 @@ CREATE INDEX miner_ditto_link_attempts_hotkey_idx ON public.miner_ditto_link_att
 --
 
 CREATE INDEX miner_ditto_links_user_idx ON public.miner_ditto_links USING btree (ditto_user_id);
+
+
+--
+-- Name: miner_github_link_attempts_closed_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_github_link_attempts_closed_created_idx ON public.miner_github_link_attempts USING btree (created_at) WHERE (status = ANY (ARRAY['failed'::text, 'expired'::text]));
+
+
+--
+-- Name: miner_github_link_attempts_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_github_link_attempts_hotkey_idx ON public.miner_github_link_attempts USING btree (hotkey, expires_at);
+
+
+--
+-- Name: miner_github_link_attempts_open_expiry_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_github_link_attempts_open_expiry_idx ON public.miner_github_link_attempts USING btree (expires_at) WHERE (status = ANY (ARRAY['pending'::text, 'identity_verified'::text, 'accepted'::text]));
+
+
+--
+-- Name: miner_github_links_active_github_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX miner_github_links_active_github_key ON public.miner_github_links USING btree (github_user_id) WHERE (revoked_at IS NULL);
+
+
+--
+-- Name: miner_github_links_active_hotkey_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX miner_github_links_active_hotkey_key ON public.miner_github_links USING btree (hotkey) WHERE (revoked_at IS NULL);
+
+
+--
+-- Name: miner_github_links_attempt_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_github_links_attempt_idx ON public.miner_github_links USING btree (link_attempt_id);
 
 
 --
@@ -10074,6 +11385,384 @@ CREATE INDEX validator_weights_fold_history_lookup_idx ON public.validator_weigh
 
 
 --
+-- Name: agent_cla_bindings agent_cla_bindings_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER agent_cla_bindings_immutable BEFORE DELETE OR UPDATE ON public.agent_cla_bindings FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: agent_cla_bindings agent_cla_bindings_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER agent_cla_bindings_no_truncate BEFORE TRUNCATE ON public.agent_cla_bindings FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: bounties bounties_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounties_immutable BEFORE DELETE OR UPDATE ON public.bounties FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounties bounties_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounties_no_truncate BEFORE TRUNCATE ON public.bounties FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_action_nonces bounty_action_nonces_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_action_nonces_immutable BEFORE DELETE OR UPDATE ON public.bounty_action_nonces FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_action_nonces bounty_action_nonces_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_action_nonces_no_truncate BEFORE TRUNCATE ON public.bounty_action_nonces FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_appeal_decisions bounty_appeal_decisions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_appeal_decisions_immutable BEFORE DELETE OR UPDATE ON public.bounty_appeal_decisions FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_appeal_decisions bounty_appeal_decisions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_appeal_decisions_no_truncate BEFORE TRUNCATE ON public.bounty_appeal_decisions FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_appeals bounty_appeals_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_appeals_immutable BEFORE DELETE OR UPDATE ON public.bounty_appeals FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_appeals bounty_appeals_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_appeals_no_truncate BEFORE TRUNCATE ON public.bounty_appeals FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_claim_controls bounty_claim_controls_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_claim_controls_immutable BEFORE DELETE OR UPDATE ON public.bounty_claim_controls FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_claim_controls bounty_claim_controls_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_claim_controls_no_truncate BEFORE TRUNCATE ON public.bounty_claim_controls FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_claims bounty_claims_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_claims_immutable BEFORE DELETE OR UPDATE ON public.bounty_claims FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_claims bounty_claims_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_claims_no_truncate BEFORE TRUNCATE ON public.bounty_claims FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_delivery_facts bounty_delivery_facts_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_delivery_facts_immutable BEFORE DELETE OR UPDATE ON public.bounty_delivery_facts FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_delivery_facts bounty_delivery_facts_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_delivery_facts_no_truncate BEFORE TRUNCATE ON public.bounty_delivery_facts FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_events bounty_events_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_events_immutable BEFORE DELETE OR UPDATE ON public.bounty_events FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_events bounty_events_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_events_no_truncate BEFORE TRUNCATE ON public.bounty_events FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_fee_payments bounty_fee_payments_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_fee_payments_immutable BEFORE DELETE OR UPDATE ON public.bounty_fee_payments FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_fee_payments bounty_fee_payments_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_fee_payments_no_truncate BEFORE TRUNCATE ON public.bounty_fee_payments FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_obligation_approvals bounty_obligation_approvals_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_obligation_approvals_immutable BEFORE DELETE OR UPDATE ON public.bounty_obligation_approvals FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_obligation_approvals bounty_obligation_approvals_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_obligation_approvals_no_truncate BEFORE TRUNCATE ON public.bounty_obligation_approvals FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_obligations bounty_obligations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_obligations_immutable BEFORE DELETE OR UPDATE ON public.bounty_obligations FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_obligations bounty_obligations_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_obligations_no_truncate BEFORE TRUNCATE ON public.bounty_obligations FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_payout_policies bounty_payout_policies_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_payout_policies_immutable BEFORE DELETE OR UPDATE ON public.bounty_payout_policies FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_payout_policies bounty_payout_policies_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_payout_policies_no_truncate BEFORE TRUNCATE ON public.bounty_payout_policies FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_reviewer_assignments bounty_reviewer_assignments_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_reviewer_assignments_immutable BEFORE DELETE OR UPDATE ON public.bounty_reviewer_assignments FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_reviewer_assignments bounty_reviewer_assignments_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_reviewer_assignments_no_truncate BEFORE TRUNCATE ON public.bounty_reviewer_assignments FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_reviews bounty_reviews_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_reviews_immutable BEFORE DELETE OR UPDATE ON public.bounty_reviews FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_reviews bounty_reviews_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_reviews_no_truncate BEFORE TRUNCATE ON public.bounty_reviews FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_revisions bounty_revisions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_revisions_immutable BEFORE DELETE OR UPDATE ON public.bounty_revisions FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_revisions bounty_revisions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_revisions_no_truncate BEFORE TRUNCATE ON public.bounty_revisions FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_rounds bounty_rounds_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_rounds_immutable BEFORE DELETE OR UPDATE ON public.bounty_rounds FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_rounds bounty_rounds_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_rounds_no_truncate BEFORE TRUNCATE ON public.bounty_rounds FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_slot_actions bounty_slot_actions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_slot_actions_immutable BEFORE DELETE OR UPDATE ON public.bounty_slot_actions FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_slot_actions bounty_slot_actions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_slot_actions_no_truncate BEFORE TRUNCATE ON public.bounty_slot_actions FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_slots bounty_slots_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_slots_no_truncate BEFORE TRUNCATE ON public.bounty_slots FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_slots bounty_slots_status_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_slots_status_only BEFORE DELETE OR UPDATE ON public.bounty_slots FOR EACH ROW EXECUTE FUNCTION public.bounty_slot_status_only();
+
+
+--
+-- Name: bounty_submissions bounty_submissions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_submissions_immutable BEFORE DELETE OR UPDATE ON public.bounty_submissions FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_submissions bounty_submissions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_submissions_no_truncate BEFORE TRUNCATE ON public.bounty_submissions FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_transfer_reconciliations bounty_transfer_reconciliations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_transfer_reconciliations_immutable BEFORE DELETE OR UPDATE ON public.bounty_transfer_reconciliations FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_transfer_reconciliations bounty_transfer_reconciliations_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_transfer_reconciliations_no_truncate BEFORE TRUNCATE ON public.bounty_transfer_reconciliations FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_transfers bounty_transfers_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_transfers_no_truncate BEFORE TRUNCATE ON public.bounty_transfers FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_transfers bounty_transfers_outcome_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_transfers_outcome_only BEFORE DELETE OR UPDATE ON public.bounty_transfers FOR EACH ROW EXECUTE FUNCTION public.bounty_transfer_outcome_only();
+
+
+--
+-- Name: bounty_withdrawals bounty_withdrawals_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_withdrawals_immutable BEFORE DELETE OR UPDATE ON public.bounty_withdrawals FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_withdrawals bounty_withdrawals_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_withdrawals_no_truncate BEFORE TRUNCATE ON public.bounty_withdrawals FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: cla_settings_revisions cla_settings_revisions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_settings_revisions_immutable BEFORE DELETE OR UPDATE ON public.cla_settings_revisions FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_settings_revisions cla_settings_revisions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_settings_revisions_no_truncate BEFORE TRUNCATE ON public.cla_settings_revisions FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_shadow_uploads cla_shadow_uploads_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_shadow_uploads_immutable BEFORE DELETE OR UPDATE ON public.cla_shadow_uploads FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_shadow_uploads cla_shadow_uploads_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_shadow_uploads_no_truncate BEFORE TRUNCATE ON public.cla_shadow_uploads FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_signatures cla_signatures_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_signatures_immutable BEFORE DELETE OR UPDATE ON public.cla_signatures FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_signatures cla_signatures_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_signatures_no_truncate BEFORE TRUNCATE ON public.cla_signatures FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_versions cla_versions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_versions_immutable BEFORE DELETE OR UPDATE ON public.cla_versions FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: cla_versions cla_versions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cla_versions_no_truncate BEFORE TRUNCATE ON public.cla_versions FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
 -- Name: coding_catalog_exposures coding_catalog_exposures_append_only_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -10330,6 +12019,55 @@ CREATE TRIGGER efficiency_bonuses_curve_guard BEFORE INSERT OR UPDATE OF agent_i
 --
 
 CREATE TRIGGER efficiency_cohort_snapshots_curve_guard BEFORE INSERT OR UPDATE ON public.efficiency_cohort_snapshots FOR EACH ROW EXECUTE FUNCTION public.guard_efficiency_snapshot_curve();
+
+
+--
+-- Name: miner_github_action_nonces miner_github_action_nonces_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_action_nonces_immutable BEFORE DELETE OR UPDATE ON public.miner_github_action_nonces FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: miner_github_action_nonces miner_github_action_nonces_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_action_nonces_no_truncate BEFORE TRUNCATE ON public.miner_github_action_nonces FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: miner_github_link_attempts miner_github_link_attempts_linked_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_link_attempts_linked_immutable BEFORE UPDATE ON public.miner_github_link_attempts FOR EACH ROW EXECUTE FUNCTION public.github_link_attempt_linked_immutable();
+
+
+--
+-- Name: miner_github_links miner_github_links_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_links_immutable BEFORE DELETE OR UPDATE ON public.miner_github_links FOR EACH ROW EXECUTE FUNCTION public.github_link_revocation_only();
+
+
+--
+-- Name: miner_github_links miner_github_links_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_links_no_truncate BEFORE TRUNCATE ON public.miner_github_links FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: miner_github_operator_revocations miner_github_operator_revocations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_operator_revocations_immutable BEFORE DELETE OR UPDATE ON public.miner_github_operator_revocations FOR EACH ROW EXECUTE FUNCTION public.contributor_identity_immutable();
+
+
+--
+-- Name: miner_github_operator_revocations miner_github_operator_revocations_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER miner_github_operator_revocations_no_truncate BEFORE TRUNCATE ON public.miner_github_operator_revocations FOR EACH STATEMENT EXECUTE FUNCTION public.contributor_identity_immutable();
 
 
 --
@@ -10977,6 +12715,22 @@ ALTER TABLE ONLY public.admin_activity_outcomes
 
 
 --
+-- Name: agent_cla_bindings fk_agent_cla_bindings_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_cla_bindings
+    ADD CONSTRAINT fk_agent_cla_bindings_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: agent_cla_bindings fk_agent_cla_bindings_signature_id_cla_signatures; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_cla_bindings
+    ADD CONSTRAINT fk_agent_cla_bindings_signature_id_cla_signatures FOREIGN KEY (signature_id) REFERENCES public.cla_signatures(signature_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: agent_kingship fk_agent_kingship_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11062,6 +12816,366 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.benchmark_rollout_members
     ADD CONSTRAINT fk_benchmark_rollout_members_rollout_id_benchmark_rollouts FOREIGN KEY (rollout_id) REFERENCES public.benchmark_rollouts(rollout_id) ON DELETE CASCADE;
+
+
+--
+-- Name: bounty_appeal_decisions fk_bounty_appeal_decisions_appeal_id_bounty_appeals; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_appeal_decisions
+    ADD CONSTRAINT fk_bounty_appeal_decisions_appeal_id_bounty_appeals FOREIGN KEY (appeal_id) REFERENCES public.bounty_appeals(appeal_id);
+
+
+--
+-- Name: bounty_appeals fk_bounty_appeals_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_appeals
+    ADD CONSTRAINT fk_bounty_appeals_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_appeals fk_bounty_appeals_nonce_bounty_action_nonces; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_appeals
+    ADD CONSTRAINT fk_bounty_appeals_nonce_bounty_action_nonces FOREIGN KEY (nonce) REFERENCES public.bounty_action_nonces(nonce);
+
+
+--
+-- Name: bounty_appeals fk_bounty_appeals_subject_event_id_bounty_events; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_appeals
+    ADD CONSTRAINT fk_bounty_appeals_subject_event_id_bounty_events FOREIGN KEY (subject_event_id, claim_id) REFERENCES public.bounty_events(event_id, claim_id);
+
+
+--
+-- Name: bounty_claim_controls fk_bounty_claim_controls_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claim_controls
+    ADD CONSTRAINT fk_bounty_claim_controls_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_claims fk_bounty_claims_bounty_id_bounty_revisions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT fk_bounty_claims_bounty_id_bounty_revisions FOREIGN KEY (bounty_id, revision) REFERENCES public.bounty_revisions(bounty_id, revision);
+
+
+--
+-- Name: bounty_claims fk_bounty_claims_cla_signature_id_cla_signatures; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT fk_bounty_claims_cla_signature_id_cla_signatures FOREIGN KEY (cla_signature_id) REFERENCES public.cla_signatures(signature_id);
+
+
+--
+-- Name: bounty_claims fk_bounty_claims_github_link_id_miner_github_links; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT fk_bounty_claims_github_link_id_miner_github_links FOREIGN KEY (github_link_id) REFERENCES public.miner_github_links(link_id);
+
+
+--
+-- Name: bounty_claims fk_bounty_claims_nonce_bounty_action_nonces; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT fk_bounty_claims_nonce_bounty_action_nonces FOREIGN KEY (nonce) REFERENCES public.bounty_action_nonces(nonce);
+
+
+--
+-- Name: bounty_claims fk_bounty_claims_slot_id_bounty_slots; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT fk_bounty_claims_slot_id_bounty_slots FOREIGN KEY (slot_id, bounty_id) REFERENCES public.bounty_slots(slot_id, bounty_id);
+
+
+--
+-- Name: bounty_delivery_facts fk_bounty_delivery_facts_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_delivery_facts
+    ADD CONSTRAINT fk_bounty_delivery_facts_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_appeal_id_bounty_appeals; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_appeal_id_bounty_appeals FOREIGN KEY (appeal_id) REFERENCES public.bounty_appeals(appeal_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_bounty_id_bounty_revisions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_bounty_id_bounty_revisions FOREIGN KEY (bounty_id, revision) REFERENCES public.bounty_revisions(bounty_id, revision);
+
+
+--
+-- Name: bounty_events fk_bounty_events_bounty_id_bounty_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_bounty_id_bounty_rounds FOREIGN KEY (bounty_id, round) REFERENCES public.bounty_rounds(bounty_id, round);
+
+
+--
+-- Name: bounty_events fk_bounty_events_claim_id_bounty_appeals; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_claim_id_bounty_appeals FOREIGN KEY (claim_id, appeal_id) REFERENCES public.bounty_appeals(claim_id, appeal_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_claim_id_bounty_claims FOREIGN KEY (claim_id, bounty_id) REFERENCES public.bounty_claims(claim_id, bounty_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_claim_id_bounty_obligations; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_claim_id_bounty_obligations FOREIGN KEY (claim_id, obligation_id) REFERENCES public.bounty_obligations(claim_id, obligation_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_claim_id_bounty_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_claim_id_bounty_submissions FOREIGN KEY (claim_id, submission_id) REFERENCES public.bounty_submissions(claim_id, submission_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_obligation_id_bounty_obligations; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_obligation_id_bounty_obligations FOREIGN KEY (obligation_id) REFERENCES public.bounty_obligations(obligation_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_slot_id_bounty_slots; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_slot_id_bounty_slots FOREIGN KEY (slot_id, bounty_id) REFERENCES public.bounty_slots(slot_id, bounty_id);
+
+
+--
+-- Name: bounty_events fk_bounty_events_submission_id_bounty_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_submission_id_bounty_submissions FOREIGN KEY (submission_id) REFERENCES public.bounty_submissions(submission_id);
+
+
+--
+-- Name: bounty_fee_payments fk_bounty_fee_payments_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_fee_payments
+    ADD CONSTRAINT fk_bounty_fee_payments_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_obligation_approvals fk_bounty_obligation_approvals_obligation_id_bounty_obligations; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligation_approvals
+    ADD CONSTRAINT fk_bounty_obligation_approvals_obligation_id_bounty_obligations FOREIGN KEY (obligation_id) REFERENCES public.bounty_obligations(obligation_id);
+
+
+--
+-- Name: bounty_obligation_approvals fk_bounty_obligation_approvals_policy_revision_bounty_p_70ac; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligation_approvals
+    ADD CONSTRAINT fk_bounty_obligation_approvals_policy_revision_bounty_p_70ac FOREIGN KEY (policy_revision) REFERENCES public.bounty_payout_policies(revision);
+
+
+--
+-- Name: bounty_obligations fk_bounty_obligations_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT fk_bounty_obligations_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_obligations fk_bounty_obligations_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT fk_bounty_obligations_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_obligations fk_bounty_obligations_claim_id_bounty_fee_payments; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT fk_bounty_obligations_claim_id_bounty_fee_payments FOREIGN KEY (claim_id, block_hash, extrinsic_index, payee_coldkey) REFERENCES public.bounty_fee_payments(claim_id, block_hash, extrinsic_index, payer_coldkey);
+
+
+--
+-- Name: bounty_obligations fk_bounty_obligations_claim_id_bounty_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT fk_bounty_obligations_claim_id_bounty_submissions FOREIGN KEY (claim_id, submission_id) REFERENCES public.bounty_submissions(claim_id, submission_id);
+
+
+--
+-- Name: bounty_reviewer_assignments fk_bounty_reviewer_assignments_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_reviewer_assignments
+    ADD CONSTRAINT fk_bounty_reviewer_assignments_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_reviews fk_bounty_reviews_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_reviews
+    ADD CONSTRAINT fk_bounty_reviews_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_reviews fk_bounty_reviews_claim_id_bounty_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_reviews
+    ADD CONSTRAINT fk_bounty_reviews_claim_id_bounty_submissions FOREIGN KEY (claim_id, submission_id) REFERENCES public.bounty_submissions(claim_id, submission_id);
+
+
+--
+-- Name: bounty_revisions fk_bounty_revisions_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_revisions
+    ADD CONSTRAINT fk_bounty_revisions_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_rounds fk_bounty_rounds_bounty_id_bounty_revisions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_rounds
+    ADD CONSTRAINT fk_bounty_rounds_bounty_id_bounty_revisions FOREIGN KEY (bounty_id, opened_revision) REFERENCES public.bounty_revisions(bounty_id, revision);
+
+
+--
+-- Name: bounty_slot_actions fk_bounty_slot_actions_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slot_actions
+    ADD CONSTRAINT fk_bounty_slot_actions_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_slot_actions fk_bounty_slot_actions_slot_id_bounty_slots; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slot_actions
+    ADD CONSTRAINT fk_bounty_slot_actions_slot_id_bounty_slots FOREIGN KEY (slot_id) REFERENCES public.bounty_slots(slot_id);
+
+
+--
+-- Name: bounty_slots fk_bounty_slots_bounty_id_bounty_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT fk_bounty_slots_bounty_id_bounty_rounds FOREIGN KEY (bounty_id, round) REFERENCES public.bounty_rounds(bounty_id, round);
+
+
+--
+-- Name: bounty_slots fk_bounty_slots_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT fk_bounty_slots_claim_id_bounty_claims FOREIGN KEY (claim_id, bounty_id) REFERENCES public.bounty_claims(claim_id, bounty_id);
+
+
+--
+-- Name: bounty_submissions fk_bounty_submissions_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_submissions
+    ADD CONSTRAINT fk_bounty_submissions_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_submissions fk_bounty_submissions_nonce_bounty_action_nonces; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_submissions
+    ADD CONSTRAINT fk_bounty_submissions_nonce_bounty_action_nonces FOREIGN KEY (nonce) REFERENCES public.bounty_action_nonces(nonce);
+
+
+--
+-- Name: bounty_transfer_reconciliations fk_bounty_transfer_reconciliations_transfer_id_bounty_transfers; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_transfer_reconciliations
+    ADD CONSTRAINT fk_bounty_transfer_reconciliations_transfer_id_bounty_transfers FOREIGN KEY (transfer_id) REFERENCES public.bounty_transfers(transfer_id);
+
+
+--
+-- Name: bounty_transfers fk_bounty_transfers_obligation_id_bounty_obligations; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_transfers
+    ADD CONSTRAINT fk_bounty_transfers_obligation_id_bounty_obligations FOREIGN KEY (obligation_id) REFERENCES public.bounty_obligations(obligation_id);
+
+
+--
+-- Name: bounty_withdrawals fk_bounty_withdrawals_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_withdrawals
+    ADD CONSTRAINT fk_bounty_withdrawals_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_withdrawals fk_bounty_withdrawals_nonce_bounty_action_nonces; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_withdrawals
+    ADD CONSTRAINT fk_bounty_withdrawals_nonce_bounty_action_nonces FOREIGN KEY (nonce) REFERENCES public.bounty_action_nonces(nonce);
+
+
+--
+-- Name: cla_signatures fk_cla_signatures_cla_version_cla_versions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cla_signatures
+    ADD CONSTRAINT fk_cla_signatures_cla_version_cla_versions FOREIGN KEY (cla_version) REFERENCES public.cla_versions(version);
 
 
 --
@@ -11206,6 +13320,38 @@ ALTER TABLE ONLY public.inference_grants
 
 ALTER TABLE ONLY public.inference_requests
     ADD CONSTRAINT fk_inference_requests_grant_id_inference_grants FOREIGN KEY (grant_id) REFERENCES public.inference_grants(grant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: miner_github_link_attempts fk_miner_github_link_attempts_session_id_miner_sessions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_link_attempts
+    ADD CONSTRAINT fk_miner_github_link_attempts_session_id_miner_sessions FOREIGN KEY (session_id) REFERENCES public.miner_sessions(session_id) ON DELETE SET NULL;
+
+
+--
+-- Name: miner_github_links fk_miner_github_links_link_attempt_id_miner_github_link_fb62; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_links
+    ADD CONSTRAINT fk_miner_github_links_link_attempt_id_miner_github_link_fb62 FOREIGN KEY (link_attempt_id) REFERENCES public.miner_github_link_attempts(attempt_id);
+
+
+--
+-- Name: miner_github_links fk_miner_github_links_nonce_miner_github_action_nonces; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_links
+    ADD CONSTRAINT fk_miner_github_links_nonce_miner_github_action_nonces FOREIGN KEY (nonce) REFERENCES public.miner_github_action_nonces(nonce);
+
+
+--
+-- Name: miner_github_operator_revocations fk_miner_github_operator_revocations_link_id_miner_github_links; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_github_operator_revocations
+    ADD CONSTRAINT fk_miner_github_operator_revocations_link_id_miner_github_links FOREIGN KEY (link_id) REFERENCES public.miner_github_links(link_id);
 
 
 --

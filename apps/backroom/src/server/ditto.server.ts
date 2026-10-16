@@ -92,8 +92,18 @@ export async function platformPublicRequest(path: string) {
   return payload
 }
 
-/** Why a platform admin call failed, so callers can write honest copy. */
-export type PlatformAdminFailure = 'timeout' | 'auth' | 'server' | 'request'
+/**
+ * Why a platform admin call failed, so callers can write honest copy.
+ *
+ * Whether Platform may have acted is decided here, once, for every caller:
+ * - nothing was sent: a plain Error (bad configuration, an invalid URL or
+ *   header) or 'unreachable' (no connection was ever established);
+ * - Platform answered: 'auth' (401/403), 'request' (any other 3xx/4xx; writes
+ *   never follow redirects) or 'server' (5xx), each with its status;
+ * - the request may have reached Platform without a definite answer:
+ *   'timeout' or 'transport'.
+ */
+export type PlatformAdminFailure = 'unreachable' | 'timeout' | 'auth' | 'server' | 'request' | 'transport'
 
 export class PlatformAdminError extends Error {
   readonly failure: PlatformAdminFailure
@@ -111,11 +121,42 @@ export class PlatformAdminError extends Error {
   }
 }
 
-function isTimeout(error: unknown) {
-  return (
-    error instanceof DOMException &&
-    (error.name === 'TimeoutError' || error.name === 'AbortError')
-  )
+function isTimeout(error: unknown, depth = 0): boolean {
+  if (error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError')) return true
+  // A body read can reject with a TypeError whose cause is the timeout.
+  const cause = error instanceof Error ? error.cause : undefined
+  return depth < 4 && cause !== undefined && isTimeout(cause, depth + 1)
+}
+
+// Connection-establishment failures: no byte of the request reached Platform.
+// TLS certificate and handshake failures end the connection before the
+// request is written, so they belong here too.
+const NOT_CONNECTED = new Set([
+  'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT',
+  'ERR_TLS_CERT_ALTNAME_INVALID', 'ERR_TLS_HANDSHAKE_TIMEOUT', 'ERR_SSL_WRONG_VERSION_NUMBER',
+  'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+])
+
+type Coded = { code?: unknown; errors?: unknown } | null | undefined
+
+function connectionError(path: string, error: unknown) {
+  const detail = error instanceof Error ? error.message : String(error)
+  const direct = error as Coded
+  const cause = (error as { cause?: Coded } | null)?.cause
+  // A connection tried at several addresses fails as an AggregateError whose
+  // parts carry the codes, thrown directly or as the cause. A single failure
+  // carries its code on the cause, or on the rejection itself.
+  const parts = Array.isArray(direct?.errors)
+    ? (direct.errors as Coded[])
+    : Array.isArray(cause?.errors) ? (cause.errors as Coded[]) : []
+  const codes = parts.length > 0 ? parts.map((part) => part?.code) : [cause?.code ?? direct?.code]
+  // Never delivered only when every attempt is known to have failed before
+  // connecting; a part with no code, or another code, may have been sent.
+  const code = codes.every((item) => typeof item === 'string' && NOT_CONNECTED.has(item)) ? codes[0] : undefined
+  return typeof code === 'string'
+    ? new PlatformAdminError('unreachable', `The platform API could not be reached for ${path} (${code}): ${detail}`)
+    : new PlatformAdminError('transport', `The platform API connection failed during ${path}: ${detail}`)
 }
 
 export async function platformAdminRequest(
@@ -172,26 +213,34 @@ export async function platformAdminRequest(
     throw new Error(`refusing to retry a ${method} to ${path}: it is not idempotent`)
   }
 
+  // Validate the URL and headers before sending, so an invalid base URL or
+  // header value is a plain Error that never reached Platform rather than a
+  // fetch rejection that reads as a possibly delivered request.
+  const url = new URL(`${baseUrl}${path}`).href
+  const headers = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${token}`,
+    ...(actor ? { 'X-Admin-Actor': actor } : {}),
+    ...(operatorProof ? { 'X-Backroom-Operator-Proof': operatorProof } : {}),
+    ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+  }
+  new Headers(headers)
+
   let attempt = 0
   for (;;) {
     let response: Response
     try {
-      response = await fetch(`${baseUrl}${path}`, {
+      response = await fetch(url, {
         method,
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token}`,
-          ...(actor ? { 'X-Admin-Actor': actor } : {}),
-          ...(operatorProof ? { 'X-Backroom-Operator-Proof': operatorProof } : {}),
-          ...(options.body === undefined
-            ? {}
-            : { 'Content-Type': 'application/json' }),
-        },
+        headers,
         body,
+        // A write must not follow a redirect: fetch would replay a POST as a
+        // bodyless GET and report that answer as the write's.
+        redirect: method === 'GET' ? 'follow' : 'manual',
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {
-      if (!isTimeout(error)) throw error
+      if (!isTimeout(error)) throw connectionError(path, error)
       if (attempt++ < retries) continue
       throw new PlatformAdminError(
         'timeout',
@@ -208,7 +257,38 @@ export async function platformAdminRequest(
       // Shared server helpers can run outside a TanStack response context.
     }
 
-    const payload = decodeResponseBody(await response.text())
+    let text: string
+    try {
+      text = await response.text()
+    } catch (error) {
+      // A failed status is already known without its body: classify it below
+      // rather than reporting a definite rejection as a lost connection.
+      if (!response.ok) {
+        text = ''
+      } else {
+        if (!isTimeout(error)) throw connectionError(path, error)
+        if (attempt++ < retries) continue
+        throw new PlatformAdminError(
+          'timeout',
+          `The platform API did not finish answering ${path} within ${Math.round(
+            timeoutMs / 1000,
+          )}s${retries > 0 ? ` (${attempt} attempts)` : ''}.`,
+        )
+      }
+    }
+    // Only a write can stop at a redirect; a GET that ends in 3xx (a 304, or a
+    // redirect without a location) is an ordinary failed read.
+    // A write that meets a redirect was still delivered: the server may have
+    // applied it before redirecting (a 303 after a POST), so its outcome is
+    // left to the caller's read-back, never reported as refused.
+    if (response.type === 'opaqueredirect' || (method !== 'GET' && response.status >= 300 && response.status < 400)) {
+      throw new PlatformAdminError(
+        'transport',
+        `The platform API answered ${method} ${path} with a redirect, which was not followed; the write may have been applied.`,
+        response.status || null,
+      )
+    }
+    const payload = decodeResponseBody(text)
     if (response.ok) return payload
     if (response.status >= 500 && attempt++ < retries) continue
     const message = errorMessage(payload, response.status)

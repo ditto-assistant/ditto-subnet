@@ -73,6 +73,18 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
     ``ditto.tests.db.queries.test_bans``; here we stub it so the endpoint
     tests need no bans row. Ban-specific tests re-stub this to ``True``.
     """
+    # This module isolates existing upload behavior with fake sessions. CLA
+    # policy modes/signatures are covered against PostgreSQL separately.
+    from ditto.api_server.cla import ClaGateDecision
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.evaluate_cla_gate",
+        AsyncMock(return_value=ClaGateDecision("off", True, None, None, "")),
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.lock_identity_writes",
+        AsyncMock(return_value=None),
+    )
     monkeypatch.setattr(
         "ditto.api_server.endpoints.upload.is_hotkey_banned",
         AsyncMock(return_value=False),
@@ -669,9 +681,17 @@ class TestUploadCheck:
 
     @pytest.mark.parametrize("offset_seconds", [-301, 301])
     async def test_signed_request_outside_clock_window_is_rejected(
-        self, app: FastAPI, client: httpx.AsyncClient, offset_seconds: int
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        offset_seconds: int,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         override_get_chain_client(app)
+        now = int(time.time())
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.time", SimpleNamespace(time=lambda: now)
+        )
         keypair = _make_keypair()
         body = _signed_request_body(keypair=keypair)
         body.update(
@@ -679,7 +699,7 @@ class TestUploadCheck:
                 keypair,
                 hotkey=keypair.ss58_address,
                 sha256=_GOOD_SHA256,
-                signature_timestamp=int(time.time()) + offset_seconds,
+                signature_timestamp=now + offset_seconds,
             )
         )
         response = await client.post("/api/v1/upload/check", json=body)

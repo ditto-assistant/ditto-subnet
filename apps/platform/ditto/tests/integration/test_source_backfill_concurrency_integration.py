@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ditto.api_models import benchmark_contract as benchmark_contract_module
@@ -39,6 +39,7 @@ from ditto.db.models import (
     ValidatorHeartbeat,
     ValidatorTicket,
 )
+from ditto.tests.pgharness import truncate_test_tables
 
 pytestmark = pytest.mark.integration
 
@@ -103,7 +104,7 @@ async def test_concurrent_source_backfill_respects_atomic_fleet_cap(
     )
 
     async with maker() as session, session.begin():
-        await session.execute(text("TRUNCATE TABLE benchmark_rollouts, agents CASCADE"))
+        await truncate_test_tables(session, "benchmark_rollouts", "agents")
         session.add(rollout)
         for index in range(2):
             agent_id = uuid4()

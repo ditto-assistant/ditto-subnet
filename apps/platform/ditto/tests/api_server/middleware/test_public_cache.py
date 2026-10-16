@@ -4,9 +4,12 @@ import asyncio
 
 import httpx
 import pytest
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 
-from ditto.api_server.middleware.public_cache import PublicCacheMiddleware
+from ditto.api_server.middleware.public_cache import (
+    PublicCacheMiddleware,
+    _policy_from_cache_control,
+)
 from ditto.api_server.middleware.sized_gzip import SizedGZipMiddleware
 
 
@@ -37,6 +40,10 @@ class _RefreshGate:
         self.done.set()
 
 
+_PINNED_ETAG = '"' + "ab" * 32 + '"'
+_WEAK_ETAG = 'W/"' + "cd" * 16 + '"'
+
+
 def _build(
     clock: _Clock,
     *,
@@ -55,7 +62,114 @@ def _build(
         "stale_fail": 0,
         "outside": 0,
         "big": 0,
+        "pinned": 0,
+        "weak": 0,
+        "pinned_big": 0,
+        "split": 0,
+        "validating": 0,
+        "uncacheable": 0,
+        "no_cache": 0,
+        "split_fields": 0,
+        "uncacheable_big": 0,
     }
+    seen_validators: list[str | None] = []
+
+    @app.get("/api/v1/public/pinned")
+    async def pinned() -> Response:
+        # Content-addressed like the pinned CLA text: the endpoint owns its
+        # digest validator and hardening headers.
+        calls["pinned"] += 1
+        return Response(
+            content=b"TEST FIXTURE ONLY",
+            media_type="text/plain",
+            headers={
+                "ETag": _PINNED_ETAG,
+                "Cache-Control": "public, max-age=10",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.get("/api/v1/public/pinned-big")
+    async def pinned_big() -> Response:
+        # Large enough to gzip, like real agreement text behind a digest ETag.
+        calls["pinned_big"] += 1
+        return Response(
+            content=b"TEST FIXTURE ONLY. " * 300,
+            media_type="text/plain",
+            headers={"ETag": _PINNED_ETAG, "Cache-Control": "public, max-age=10"},
+        )
+
+    @app.get("/api/v1/public/split-cache-control")
+    async def split_cache_control() -> Response:
+        calls["split"] += 1
+        response = Response(content=b"TEST FIXTURE ONLY", media_type="text/plain")
+        response.raw_headers.extend(
+            [
+                (b"cache-control", b"public, max-age=10"),
+                (b"cache-control", b"no-store"),
+            ]
+        )
+        return response
+
+    @app.get("/api/v1/public/validating")
+    async def validating(request: Request) -> Response:
+        # Answers its own conditional requests, like the CLA text endpoint.
+        calls["validating"] += 1
+        validator = request.headers.get("if-none-match")
+        seen_validators.append(validator)
+        headers = {"ETag": _WEAK_ETAG, "Cache-Control": "public, max-age=10"}
+        if validator is not None:
+            return Response(status_code=304, headers={"ETag": '"stale-strong"'})
+        return Response(b"TEST FIXTURE ONLY", media_type="text/plain", headers=headers)
+
+    @app.get("/api/v1/public/uncacheable")
+    async def uncacheable() -> Response:
+        calls["uncacheable"] += 1
+        return Response(
+            b"TEST FIXTURE ONLY",
+            media_type="text/plain",
+            headers={"ETag": _PINNED_ETAG, "Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/v1/public/uncacheable-big")
+    async def uncacheable_big() -> Response:
+        # Large enough to gzip, but not cacheable: served through the cache.
+        calls["uncacheable_big"] += 1
+        return Response(
+            content=b"TEST FIXTURE ONLY. " * 300,
+            media_type="text/plain",
+            headers={"ETag": _PINNED_ETAG, "Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/v1/public/no-cache")
+    async def no_cache() -> Response:
+        calls["no_cache"] += 1
+        return Response(
+            b"TEST FIXTURE ONLY",
+            media_type="text/plain",
+            headers={"Cache-Control": "no-cache, max-age=10"},
+        )
+
+    @app.get("/api/v1/public/split-fields")
+    async def split_fields() -> Response:
+        calls["split_fields"] += 1
+        response = Response(b"TEST FIXTURE ONLY", media_type="text/plain")
+        response.raw_headers.extend(
+            [
+                (b"cache-control", b"public, max-age=10"),
+                (b"cache-control", b"immutable"),
+            ]
+        )
+        return response
+
+    @app.get("/api/v1/public/weak")
+    async def weak() -> Response:
+        calls["weak"] += 1
+        return Response(
+            content=b"TEST FIXTURE ONLY",
+            media_type="text/plain",
+            headers={"ETag": _WEAK_ETAG, "Cache-Control": "public, max-age=10"},
+        )
 
     @app.get("/api/v1/public/cached")
     async def cached(response: Response) -> dict:
@@ -124,6 +238,7 @@ def _build(
         # each already-compressed/identity representation independently.
         app.add_middleware(SizedGZipMiddleware, minimum_size=1000, compresslevel=6)
     app.add_middleware(PublicCacheMiddleware, now=clock, disabled=disabled)
+    app.state.seen_validators = seen_validators
     return app, calls
 
 
@@ -393,3 +508,185 @@ async def test_gzip_wrapped_304_carries_vary(clock: _Clock) -> None:
     assert second.status_code == 304
     assert second.content == b""
     assert second.headers["Vary"] == "Accept-Encoding"
+
+
+async def test_endpoint_validator_and_hardening_headers_survive_the_cache(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        miss = await client.get("/api/v1/public/pinned")
+        hit = await client.get("/api/v1/public/pinned")
+        revalidated = await client.get(
+            "/api/v1/public/pinned", headers={"If-None-Match": _PINNED_ETAG}
+        )
+    assert (miss.headers["X-Public-Cache"], hit.headers["X-Public-Cache"]) == (
+        "MISS",
+        "HIT",
+    )
+    for response in (miss, hit):
+        assert response.headers["etag"] == _PINNED_ETAG
+        assert response.headers["x-content-type-options"] == "nosniff"
+    # A client that pinned the published digest revalidates from the cache.
+    assert revalidated.status_code == 304
+    assert revalidated.headers["etag"] == _PINNED_ETAG
+    assert calls["pinned"] == 1
+
+
+async def test_declared_weak_etag_revalidates_with_either_form(clock: _Clock) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        miss = await client.get(
+            "/api/v1/public/weak", headers={"If-None-Match": _WEAK_ETAG}
+        )
+        echoed = await client.get(
+            "/api/v1/public/weak", headers={"If-None-Match": _WEAK_ETAG}
+        )
+        strong = await client.get(
+            "/api/v1/public/weak", headers={"If-None-Match": _WEAK_ETAG[2:]}
+        )
+    # A client echoing the endpoint's own weak validator must get a 304.
+    for response in (miss, echoed, strong):
+        assert response.status_code == 304
+        assert response.headers["etag"] == _WEAK_ETAG
+    assert calls["weak"] == 1
+
+
+async def test_cached_gzip_entry_weakens_a_declared_etag_and_still_revalidates(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock, gzip=True)
+    gzip = {"Accept-Encoding": "gzip"}
+    identity = {"Accept-Encoding": "identity"}
+    async with _client(app) as client:
+        compressed = await client.get("/api/v1/public/pinned-big", headers=gzip)
+        plain = await client.get("/api/v1/public/pinned-big", headers=identity)
+        revalidated = {
+            name: await client.get(
+                "/api/v1/public/pinned-big",
+                headers={**headers, "If-None-Match": _PINNED_ETAG},
+            )
+            for name, headers in (("gzip", gzip), ("identity", identity))
+        }
+    # Distinct bytes never share a strong validator.
+    assert compressed.headers["content-encoding"] == "gzip"
+    assert compressed.headers["etag"] == "W/" + _PINNED_ETAG
+    assert "content-encoding" not in plain.headers
+    assert plain.headers["etag"] == _PINNED_ETAG
+    # A client pinning the published digest revalidates either variant.
+    assert revalidated["gzip"].status_code == 304
+    assert revalidated["gzip"].headers["etag"] == "W/" + _PINNED_ETAG
+    assert revalidated["identity"].status_code == 304
+    assert revalidated["identity"].headers["etag"] == _PINNED_ETAG
+    assert calls["pinned_big"] == 2
+
+
+async def test_no_store_in_any_cache_control_field_prevents_caching(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        for _ in range(2):
+            response = await client.get("/api/v1/public/split-cache-control")
+            assert response.status_code == 200
+            assert response.headers.get("x-public-cache") != "HIT"
+    assert calls["split"] == 2
+
+
+async def test_cold_conditional_request_is_answered_and_stored_by_the_cache(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        cold = await client.get(
+            "/api/v1/public/validating", headers={"If-None-Match": _WEAK_ETAG[2:]}
+        )
+        warm = await client.get(
+            "/api/v1/public/validating", headers={"If-None-Match": _WEAK_ETAG}
+        )
+        full = await client.get("/api/v1/public/validating")
+    # The endpoint never sees the validator, so it cannot answer its own 304
+    # with a different validator, and the cold request fills the cache.
+    assert app.state.seen_validators == [None]
+    assert calls["validating"] == 1
+    for response in (cold, warm):
+        assert response.status_code == 304
+        assert response.headers["etag"] == _WEAK_ETAG
+        assert response.headers["vary"] == "Accept-Encoding"
+    assert full.status_code == 200 and full.headers["x-public-cache"] == "HIT"
+
+
+async def test_uncacheable_response_still_answers_a_matching_validator(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        matched = await client.get(
+            "/api/v1/public/uncacheable", headers={"If-None-Match": _PINNED_ETAG}
+        )
+        missed = await client.get(
+            "/api/v1/public/uncacheable", headers={"If-None-Match": '"other"'}
+        )
+    assert matched.status_code == 304 and matched.content == b""
+    assert matched.headers["etag"] == _PINNED_ETAG
+    assert matched.headers["cache-control"] == "no-store"
+    assert missed.status_code == 200 and missed.content == b"TEST FIXTURE ONLY"
+    assert calls["uncacheable"] == 2
+
+
+async def test_no_cache_responses_are_never_stored(clock: _Clock) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        for _ in range(2):
+            response = await client.get("/api/v1/public/no-cache")
+            assert response.headers.get("x-public-cache") != "HIT"
+    assert calls["no_cache"] == 2
+
+
+@pytest.mark.parametrize(
+    ("header", "policy"),
+    [
+        ("public, max-age=15, stale-while-revalidate=60", (15.0, 60.0)),
+        ("Public, Max-Age=30", (30.0, 0.0)),
+        # An extension directive is neither a refusal nor a lifetime.
+        ("public, max-age=60, x-no-cache-hint=1", (60.0, 0.0)),
+        ("public, x-private-hint, max-age=5", (5.0, 0.0)),
+        ("public, x-max-age=60", (0.0, 0.0)),
+        ("no-cache, max-age=10", (0.0, 0.0)),
+        ('private="set-cookie", max-age=10', (0.0, 0.0)),
+        ("public, no-store", (0.0, 0.0)),
+    ],
+)
+def test_cache_control_directives_match_by_name(
+    header: str, policy: tuple[float, float]
+) -> None:
+    assert _policy_from_cache_control(header) == policy
+
+
+async def test_split_header_fields_are_stored_whole(clock: _Clock) -> None:
+    app, calls = _build(clock)
+    async with _client(app) as client:
+        await client.get("/api/v1/public/split-fields")
+        hit = await client.get("/api/v1/public/split-fields")
+    assert hit.headers["x-public-cache"] == "HIT"
+    assert hit.headers["cache-control"] == "public, max-age=10, immutable"
+    assert calls["split_fields"] == 1
+
+
+async def test_uncacheable_gzip_response_gets_the_same_weak_validator(
+    clock: _Clock,
+) -> None:
+    app, calls = _build(clock, gzip=True)
+    gzip = {"Accept-Encoding": "gzip"}
+    async with _client(app) as client:
+        full = await client.get("/api/v1/public/uncacheable-big", headers=gzip)
+        revalidated = await client.get(
+            "/api/v1/public/uncacheable-big",
+            headers={**gzip, "If-None-Match": _PINNED_ETAG},
+        )
+    assert full.headers["content-encoding"] == "gzip"
+    # The stored and the pass-through paths apply one rule to encoded bytes.
+    assert full.headers["etag"] == "W/" + _PINNED_ETAG
+    assert revalidated.status_code == 304
+    assert revalidated.headers["etag"] == "W/" + _PINNED_ETAG
+    assert calls["uncacheable_big"] == 2

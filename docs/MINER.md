@@ -912,3 +912,31 @@ Registering the same hotkey again restores eligibility automatically. A
 different hotkey is a separate miner identity and requires a new signed, paid
 upload, unless you attest an owner link to the previous hotkey. The link
 shares one slot, and the best registered hotkey in that family holds it.
+
+## GitHub identity and contributor agreement
+
+Use `uv run ditto link-github --wallet.name YOUR_WALLET --wallet.hotkey YOUR_HOTKEY`
+to verify a GitHub account through browser consent and a signed hotkey link.
+`uv run ditto link-github status` shows the active numeric account id and login.
+See [GitHub links](GITHUB-LINKS.md) for unlinking, coldkey proofs and privacy.
+
+After maintainers publish an approved agreement, review and sign it with:
+
+```bash
+uv run ditto cla sign --wallet.name YOUR_WALLET --wallet.hotkey YOUR_HOTKEY
+uv run ditto cla status --wallet.name YOUR_WALLET --wallet.hotkey YOUR_HOTKEY
+```
+
+The command saves the complete text, prints its version, SHA-256 and effective
+date, and asks you to type `SIGN CLA <version> <sha256>` exactly. It refuses a
+hash mismatch and has no `--yes` shortcut. For reviewed automation, the exact
+same digest-bound text can be supplied as `--confirmation`. A published future
+version may be signed early with `--version N`.
+
+The gate initially stays `off`; in `shadow`, unsigned uploads are counted and
+accepted. In `enforce`, both the prepayment check and the actual upload require
+the currently effective version. `ditto upload` checks before preflight or any
+payment. When a new version becomes effective, sign again before your next
+submission. Existing scored agents are not altered. Maintainers announce the
+effective date before enforcement; [the rollout guide](legal/README.md) explains
+how published versions and receipts are checked.

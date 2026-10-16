@@ -1,0 +1,346 @@
+{
+  "summary": {
+    "bounty_id": "6e3d16e9-d082-4cdd-9da3-1a8abe7ed907",
+    "repo": "ditto-assistant/ditto-subnet",
+    "issue": 2942,
+    "title": "Fixture: build the public bounty board",
+    "current_revision": 1,
+    "spec_digest": "2eabb0e1e1567f84667810cb6f9693975dd180198c52dde62d6b9c966bed10be",
+    "entry_fee_alpha_rao": 2000000000,
+    "reward_pool_alpha_rao": 100000000000,
+    "delivery_days": 5,
+    "review_days": 7,
+    "reviewer_login": "reviewer-fixture",
+    "funding_mode": "rehearsal",
+    "current_round": 1,
+    "claims_paused": false,
+    "slots": {
+      "open": 0,
+      "held": 0,
+      "claimed": 1,
+      "submitted": 0,
+      "rework": 0,
+      "closed": 2
+    },
+    "reviews_overdue": 0,
+    "awarded_alpha_rao": 40000000000,
+    "published_at": "2026-10-16T01:30:25.883445Z",
+    "updated_at": "2026-10-16T01:30:25.883445Z"
+  },
+  "revisions": [
+    {
+      "revision": 1,
+      "spec_digest": "2eabb0e1e1567f84667810cb6f9693975dd180198c52dde62d6b9c966bed10be",
+      "terms": {
+        "title": "Fixture: build the public bounty board",
+        "scope": "Fixture scope. Not real work.",
+        "public_interfaces": "Fixture interface.",
+        "acceptance_evidence": "Fixture tests pass.",
+        "dependencies": [
+          "ditto-assistant/ditto-subnet#2889"
+        ],
+        "reviewer_login": "reviewer-fixture",
+        "entry_fee_alpha_rao": 2000000000,
+        "reward_pool_alpha_rao": 100000000000,
+        "attempts_per_round": 3,
+        "delivery_days": 5,
+        "review_days": 7,
+        "hold_minutes": 30,
+        "funding_mode": "rehearsal",
+        "fee_escrow_coldkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+        "fee_escrow_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+      },
+      "published_at": "2026-10-16T01:30:25.883445Z"
+    }
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "opened_revision": 1,
+      "opened_at": "2026-10-16T01:30:25.883445Z"
+    }
+  ],
+  "slots": [
+    {
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "round": 1,
+      "position": 1,
+      "status": "accepted",
+      "status_changed_at": "2026-10-16T01:30:26.104290Z",
+      "hold_expires_at": null,
+      "deadline_at": null,
+      "review_due_at": null,
+      "review_overdue": false,
+      "claimant": {
+        "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+        "hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        "payee_coldkey": "5FWfU64fUQG6iZGcxDEHfBSagweCcaFVbi3wgNBFkmFoZcNg",
+        "github_login": "alice-dev",
+        "revision": 1
+      }
+    },
+    {
+      "slot_id": "17f97e90-0e16-4442-b4d5-268436142908",
+      "round": 1,
+      "position": 2,
+      "status": "rejected",
+      "status_changed_at": "2026-10-16T01:30:26.186723Z",
+      "hold_expires_at": null,
+      "deadline_at": null,
+      "review_due_at": null,
+      "review_overdue": false,
+      "claimant": {
+        "claim_id": "ffcec8d8-9329-45a2-9a77-a1cfe4b54513",
+        "hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+        "payee_coldkey": "5DRUZLgg59jWvH6nV1UCAUuYagfNyB9kpxzGykiA12TXr4nc",
+        "github_login": "bob-dev",
+        "revision": 1
+      }
+    },
+    {
+      "slot_id": "b112178f-8246-4c5d-88af-f1dd8d65c366",
+      "round": 1,
+      "position": 3,
+      "status": "claimed",
+      "status_changed_at": "2026-10-16T01:30:26.255145Z",
+      "hold_expires_at": null,
+      "deadline_at": "2026-10-21T01:30:26.255145Z",
+      "review_due_at": null,
+      "review_overdue": false,
+      "claimant": {
+        "claim_id": "cbfa161d-c323-483b-b443-21b60a614281",
+        "hotkey": "5E4p1GhM2Ktk1MBtkhUSm2NwwTbVR95krSWDHLahLtRn7JrD",
+        "payee_coldkey": "5EALFU5zdK5Y8w32gxLrBnkaUnh7Dy8yu55jAwJnLTQpNmvh",
+        "github_login": "carol-dev",
+        "revision": 1
+      }
+    }
+  ],
+  "events": [
+    {
+      "event_id": 1,
+      "kind": "revision_published",
+      "revision": 1,
+      "round": null,
+      "slot_id": null,
+      "claim_id": null,
+      "recorded_at": "2026-10-16T01:30:25.883445Z"
+    },
+    {
+      "event_id": 2,
+      "kind": "round_opened",
+      "revision": 1,
+      "round": 1,
+      "slot_id": null,
+      "claim_id": null,
+      "recorded_at": "2026-10-16T01:30:25.883445Z"
+    },
+    {
+      "event_id": 3,
+      "kind": "slot_held",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "ade00ca8-3bf3-419e-925d-f7eb173fa9fa",
+      "recorded_at": "2026-10-16T01:30:25.924166Z"
+    },
+    {
+      "event_id": 4,
+      "kind": "slot_claimed",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "ade00ca8-3bf3-419e-925d-f7eb173fa9fa",
+      "recorded_at": "2026-10-16T01:30:25.971040Z"
+    },
+    {
+      "event_id": 5,
+      "kind": "withdrawn",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "ade00ca8-3bf3-419e-925d-f7eb173fa9fa",
+      "recorded_at": "2026-10-16T01:30:25.994986Z"
+    },
+    {
+      "event_id": 6,
+      "kind": "fee_retained",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "ade00ca8-3bf3-419e-925d-f7eb173fa9fa",
+      "recorded_at": "2026-10-16T01:30:26.014244Z"
+    },
+    {
+      "event_id": 7,
+      "kind": "slot_reopened",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "ade00ca8-3bf3-419e-925d-f7eb173fa9fa",
+      "recorded_at": "2026-10-16T01:30:26.014244Z"
+    },
+    {
+      "event_id": 8,
+      "kind": "slot_held",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.040445Z"
+    },
+    {
+      "event_id": 9,
+      "kind": "slot_claimed",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.065462Z"
+    },
+    {
+      "event_id": 10,
+      "kind": "submitted",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.080960Z"
+    },
+    {
+      "event_id": 11,
+      "kind": "fee_refund_owed",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.104290Z"
+    },
+    {
+      "event_id": 12,
+      "kind": "accepted",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.104290Z"
+    },
+    {
+      "event_id": 13,
+      "kind": "slot_held",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "17f97e90-0e16-4442-b4d5-268436142908",
+      "claim_id": "ffcec8d8-9329-45a2-9a77-a1cfe4b54513",
+      "recorded_at": "2026-10-16T01:30:26.130960Z"
+    },
+    {
+      "event_id": 14,
+      "kind": "slot_claimed",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "17f97e90-0e16-4442-b4d5-268436142908",
+      "claim_id": "ffcec8d8-9329-45a2-9a77-a1cfe4b54513",
+      "recorded_at": "2026-10-16T01:30:26.151441Z"
+    },
+    {
+      "event_id": 15,
+      "kind": "submitted",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "17f97e90-0e16-4442-b4d5-268436142908",
+      "claim_id": "ffcec8d8-9329-45a2-9a77-a1cfe4b54513",
+      "recorded_at": "2026-10-16T01:30:26.167578Z"
+    },
+    {
+      "event_id": 16,
+      "kind": "rejected",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "17f97e90-0e16-4442-b4d5-268436142908",
+      "claim_id": "ffcec8d8-9329-45a2-9a77-a1cfe4b54513",
+      "recorded_at": "2026-10-16T01:30:26.186723Z"
+    },
+    {
+      "event_id": 17,
+      "kind": "appeal_filed",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "17f97e90-0e16-4442-b4d5-268436142908",
+      "claim_id": "ffcec8d8-9329-45a2-9a77-a1cfe4b54513",
+      "recorded_at": "2026-10-16T01:30:26.216588Z"
+    },
+    {
+      "event_id": 18,
+      "kind": "slot_held",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "b112178f-8246-4c5d-88af-f1dd8d65c366",
+      "claim_id": "cbfa161d-c323-483b-b443-21b60a614281",
+      "recorded_at": "2026-10-16T01:30:26.233994Z"
+    },
+    {
+      "event_id": 19,
+      "kind": "slot_claimed",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "b112178f-8246-4c5d-88af-f1dd8d65c366",
+      "claim_id": "cbfa161d-c323-483b-b443-21b60a614281",
+      "recorded_at": "2026-10-16T01:30:26.255145Z"
+    },
+    {
+      "event_id": 20,
+      "kind": "award_recorded",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.280772Z"
+    },
+    {
+      "event_id": 21,
+      "kind": "obligation_approved",
+      "revision": 1,
+      "round": null,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.301722Z"
+    },
+    {
+      "event_id": 22,
+      "kind": "transfer_dispatched",
+      "revision": 1,
+      "round": null,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.318292Z"
+    },
+    {
+      "event_id": 23,
+      "kind": "transfer_confirmed",
+      "revision": 1,
+      "round": null,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.324264Z"
+    },
+    {
+      "event_id": 24,
+      "kind": "obligation_approved",
+      "revision": 1,
+      "round": null,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.519129Z"
+    },
+    {
+      "event_id": 25,
+      "kind": "fact_recorded",
+      "revision": 1,
+      "round": 1,
+      "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+      "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+      "recorded_at": "2026-10-16T01:30:26.531880Z"
+    }
+  ]
+}

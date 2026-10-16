@@ -11,10 +11,72 @@ import asyncio
 
 import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ditto.db.models import Base
+from ditto.tests import pgharness
+from ditto.tests.pgharness import _build_reset_sql, truncate_test_tables
+
+
+async def test_legacy_truncate_restores_append_only_guard(session_maker) -> None:
+    async with session_maker() as session, session.begin():
+        await truncate_test_tables(session, "agents")
+    async with session_maker() as session:
+        with pytest.raises(DBAPIError, match="append-only"):
+            await session.execute(text("TRUNCATE agent_cla_bindings"))
+        await session.rollback()
+
+
+async def test_legacy_truncate_restarts_identity_like_the_full_reset(
+    session_maker,
+) -> None:
+    insert = text(
+        "INSERT INTO admin_activity (action, method, details, source) "
+        "VALUES ('fixture', 'POST', '{}', 'test') RETURNING id"
+    )
+    async with session_maker() as session, session.begin():
+        await session.execute(insert)
+        await session.execute(insert)
+        await truncate_test_tables(session, "admin_activity")
+        # A truncated table is fresh: its identity starts over at 1.
+        assert (await session.execute(insert)).scalar_one() == 1
+
+
+@pytest.mark.parametrize("mode", ["O", "A"])
+@pytest.mark.parametrize("reset", ["legacy", "template"])
+async def test_reset_restores_original_truncate_guard_mode(
+    engine: AsyncEngine, mode: str, reset: str
+) -> None:
+    enable = {
+        "O": "ALTER TABLE agent_cla_bindings ENABLE TRIGGER "
+        "agent_cla_bindings_no_truncate",
+        "A": "ALTER TABLE agent_cla_bindings ENABLE ALWAYS TRIGGER "
+        "agent_cla_bindings_no_truncate",
+    }
+    async with engine.connect() as conn, conn.begin():
+        await conn.execute(text(enable[mode]))
+        if reset == "legacy":
+            await truncate_test_tables(conn, "agents")
+            assert await conn.scalar(text("SHOW lock_timeout")) == "10s"
+        else:
+            raw = await conn.get_raw_connection()
+            driver = raw.driver_connection
+            assert driver is not None
+            await driver.execute(await _build_reset_sql(driver))
+        assert (
+            await conn.scalar(
+                text(
+                    "SELECT tgenabled::text FROM pg_trigger "
+                    "WHERE tgrelid = 'agent_cla_bindings'::regclass "
+                    "AND tgname = 'agent_cla_bindings_no_truncate'"
+                )
+            )
+            == mode
+        )
+        with pytest.raises(DBAPIError, match="append-only"):
+            await conn.execute(text("TRUNCATE agent_cla_bindings"))
+        await conn.rollback()
 
 
 async def test_tests_run_on_postgres_not_sqlite(session: AsyncSession) -> None:
@@ -295,3 +357,22 @@ async def test_timestamps_round_trip_timezone_aware(session: AsyncSession) -> No
     assert row is not None
     assert row.banned_at.tzinfo is not None, "timestamp came back naive"
     assert row.banned_at == datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+
+async def test_truncate_lock_timeout_holds_on_an_autocommit_connection(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pgharness, "TRUNCATE_LOCK_TIMEOUT_MS", 200)
+    async with engine.connect() as holder, holder.begin():
+        await holder.execute(text("LOCK TABLE agents IN ACCESS SHARE MODE"))
+        autocommit = await engine.connect()
+        try:
+            await autocommit.execution_options(isolation_level="AUTOCOMMIT")
+            # A SET LOCAL before the truncate would be lost here and the
+            # truncate would wait on the holder indefinitely.
+            with pytest.raises(DBAPIError, match="lock timeout"):
+                await asyncio.wait_for(
+                    truncate_test_tables(autocommit, "agents"), timeout=10
+                )
+        finally:
+            await autocommit.close()

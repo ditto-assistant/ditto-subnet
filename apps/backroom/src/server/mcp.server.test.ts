@@ -1,3 +1,4 @@
+import { contributorFixture, claStatusFixture, claControlFixture, claShadowRevisionFixture, claVersionFixture } from './contributor.test-fixtures'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -406,6 +407,7 @@ describe('Backroom MCP tools', () => {
         'get_screener_replay_process_readiness',
         'register_screener_replay_process_key',
         'revoke_screener_replay_process_key',
+        'revoke_miner_github_link',
         'create_screener_bootstrap_grant',
         'get_screener_review_settings',
         'get_screener_fanout_shadow',
@@ -460,6 +462,31 @@ describe('Backroom MCP tools', () => {
         'get_v13_report_only_current_packet',
         'get_screening_submission',
         'get_source_release_policy',
+        'get_miner_github_link',
+        'get_github_contributor_status',
+        'get_github_link_revocation_preflight',
+        'get_miner_cla_status',
+        'get_cla_policy',
+        'set_cla_policy',
+        'publish_cla_version',
+        'get_bounty_board',
+        'get_bounty',
+        'get_bounty_claim',
+        'get_bounty_queue',
+        'get_bounty_payout_policy',
+        'preview_bounty_revision',
+        'publish_bounty_revision',
+        'set_bounty_claims_paused',
+        'review_bounty_submission',
+        'reassign_bounty_reviewer',
+        'control_bounty_slot',
+        'decide_bounty_appeal',
+        'award_bounty_claim',
+        'set_bounty_payout_policy',
+        'approve_bounty_obligation',
+        'dispatch_bounty_obligation',
+        'reconcile_bounty_transfer',
+        'record_bounty_fact',
         'get_owner_attestations',
         'get_submission_cooldown',
         'get_treasury_settings',
@@ -668,7 +695,13 @@ describe('Backroom MCP tools', () => {
     // Measure the serialized UTF-8 catalog, including guarded Gamma controls.
     // The quarantine batch execute now publishes its real decisions schema
     // instead of `{}` (about 1.5 KB), which takes the catalog past 180,000.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(182_000)
+    // Eight contributor tools now include audited exact-link recovery. Keep
+    // UUID schemas compact and allow this addition; prose budgets stay fixed.
+    // The eighteen build-bounty operator tools (#2942) publish compact catalog
+    // schemas (ids as format uuid, terms as an object; services parse
+    // strictly) and one-line summaries with procedures in tool help: measured
+    // 197,867 bytes together. Keep the same ~0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(198_400)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -11414,4 +11447,101 @@ describe('Backroom MCP tools', () => {
     }
   })
 
+})
+
+
+describe('contributor identity and CLA MCP tools', () => {
+  it('exposes exact-link recovery preflight as read-only', async () => {
+    const { githubRevocationFixture } = await import('./contributor.test-fixtures')
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(githubRevocationFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({ name: 'get_github_link_revocation_preflight', arguments: { linkId: contributorFixture.link.link_id } })
+    expect(readJsonResult(response)).toEqual(githubRevocationFixture)
+    const tools = await client.listTools()
+    expect(tools.tools.find((tool) => tool.name === 'get_github_link_revocation_preflight')?.annotations)
+      .toMatchObject({ readOnlyHint: true, destructiveHint: false })
+    await client.close(); await server.close()
+  })
+
+  it('refuses GitHub recovery without write scope', async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({ name: 'revoke_miner_github_link', arguments: {
+      linkId: contributorFixture.link.link_id, reason: 'recover a verified hostile link',
+      confirmation: `REVOKE GITHUB LINK ${contributorFixture.link.link_id}`,
+    } })
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(TOOL_SCOPE_REQUIREMENTS.get('revoke_miner_github_link')).toBe(BACKROOM_WRITE_SCOPE)
+    await client.close(); await server.close()
+  })
+
+  it('attributes destructive recovery to the current operator', async () => {
+    const { revokedGithubFixture } = await import('./contributor.test-fixtures')
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ...revokedGithubFixture,
+      operator_revocation: { ...revokedGithubFixture.operator_revocation, actor: session.email },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const tools = await client.listTools()
+    expect(tools.tools.find((tool) => tool.name === 'revoke_miner_github_link')?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false })
+    const result = await client.callTool({ name: 'revoke_miner_github_link', arguments: {
+      linkId: contributorFixture.link.link_id, reason: 'recover a verified hostile link',
+      confirmation: `REVOKE GITHUB LINK ${contributorFixture.link.link_id}`,
+      actor: 'untrusted-input@invalid.example',
+    } })
+    expect(result.isError).not.toBe(true)
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty('actor')
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe(session.email)
+    await client.close(); await server.close()
+  })
+
+  it('returns numeric GitHub identity, exact consent status and rollout adoption with read scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json(claStatusFixture)).mockResolvedValueOnce(Response.json(claControlFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    expect(readJsonResult(await client.callTool({ name: 'get_miner_github_link', arguments: { hotkey: 'fixture' } }))).toEqual(contributorFixture)
+    expect(readJsonResult(await client.callTool({ name: 'get_miner_cla_status', arguments: { hotkey: 'fixture' } }))).toEqual(claStatusFixture)
+    expect(readJsonResult(await client.callTool({ name: 'get_cla_policy', arguments: {} }))).toMatchObject({ current: { mode: 'off' }, unsigned_active_hotkeys: 1 })
+    await client.close(); await server.close()
+  })
+
+  it.each(['set_cla_policy', 'publish_cla_version'])('refuses %s without write scope', async (name) => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const args = name === 'set_cla_policy' ? { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' } : { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test publication scope', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) }
+    const refused = await client.callTool({ name, arguments: args })
+    expect(refused.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(TOOL_SCOPE_REQUIREMENTS.get(name)).toBe(BACKROOM_WRITE_SCOPE)
+    await client.close(); await server.close()
+  })
+
+  it.each(['set_cla_policy', 'publish_cla_version'])('marks %s as destructive and non-idempotent', async (name) => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const tools = await client.listTools()
+    expect(tools.tools.find((tool) => tool.name === name)?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false })
+    await client.close(); await server.close()
+  })
+
+  it('attributes writes to the current signed-in operator', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claShadowRevisionFixture)).mockResolvedValueOnce(Response.json(claControlFixture)).mockResolvedValueOnce(Response.json(claVersionFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    await client.callTool({ name: 'set_cla_policy', arguments: { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' } })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ mode: 'shadow' })
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe(session.email)
+    await client.callTool({ name: 'publish_cla_version', arguments: { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test publication attribution', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) } })
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({ version: 1 })
+    expect(fetchMock.mock.calls[2][1].headers['X-Admin-Actor']).toBe(session.email)
+    await client.close(); await server.close()
+  })
 })

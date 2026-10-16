@@ -262,7 +262,14 @@ class TestRouteDiscoveryIsSingleton:
             async with app.router.lifespan_context(app):
                 observed_source = app.state.coding_private_catalog_source
                 observed_evidence = app.state.coding_hippius_evidence_runtime
+                # Opened by a public GitHub lookup; shutdown must close it.
+                github_pool = app.state.github_link._public_client()
+                sweeper = app.state.bounty_deadline_sweeper
+                sweeping = sweeper._task is not None
         evidence_factory.observed_runtime = observed_evidence
+        evidence_factory.github_pool = github_pool
+        evidence_factory.bounty_sweeping = sweeping
+        evidence_factory.bounty_sweeper_closed = sweeper._task is None
         return refresher, catalog_factory, observed_source, evidence_factory
 
     @pytest.mark.parametrize(
@@ -283,6 +290,19 @@ class TestRouteDiscoveryIsSingleton:
             janitor.start.assert_not_awaited()
         # Registered for cleanup on every role, so shutdown stays symmetric.
         janitor.aclose.assert_awaited_once()
+
+    @pytest.mark.parametrize("role,sweeps", [("relay", False), ("platform", True)])
+    async def test_only_platform_sweeps_bounty_deadlines(
+        self, monkeypatch, role, sweeps
+    ):
+        *_, evidence = await self._refresher_for_role(role, monkeypatch)
+        assert evidence.bounty_sweeping is sweeps
+        assert evidence.bounty_sweeper_closed
+
+    @pytest.mark.parametrize("role", ["relay", "platform"])
+    async def test_shutdown_closes_the_github_lookup_pool(self, monkeypatch, role):
+        *_, evidence = await self._refresher_for_role(role, monkeypatch)
+        assert evidence.github_pool.is_closed
 
     async def test_relay_does_not_start_route_discovery(self, monkeypatch):
         (

@@ -1,3 +1,5 @@
+import { fetchMinerGithubLink, fetchGithubContributor, fetchClaPolicy, updateClaPolicy, publishClaVersion, fetchGithubRevocationPreflight, revokeMinerGithubLink } from './admin.service'
+import { contributorFixture, claStatusFixture, claControlFixture, claShadowRevisionFixture, claVersionFixture, githubRevocationFixture, revokedGithubFixture } from './contributor.test-fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   startBenchmarkRollout,
@@ -5947,5 +5949,368 @@ describe('lease revocation ledger', () => {
       total: 0,
       revocations: [],
     })
+  })
+})
+
+
+describe('verified contributors and CLA rollout', () => {
+  it('rejects malformed recovery IDs before any Platform request', async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchGithubRevocationPreflight({ linkId: 'not-a-uuid' })).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reads exact recovery guards and carries the operator on revocation', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(githubRevocationFixture))
+      .mockResolvedValueOnce(Response.json(revokedGithubFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const linkId = contributorFixture.link.link_id
+    expect(await fetchGithubRevocationPreflight({ linkId })).toEqual(githubRevocationFixture)
+    const result = await revokeMinerGithubLink('operator@omniaura.ai', {
+      linkId, reason: 'recover a verified hostile link', confirmation: githubRevocationFixture.confirmation,
+      actor: 'untrusted-input@invalid.example',
+    })
+    expect(result).toEqual(revokedGithubFixture)
+    expect(fetchMock.mock.calls[1][0]).toContain(`/admin/github-links/${linkId}/revoke`)
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      reason: 'recover a verified hostile link', confirmation: githubRevocationFixture.confirmation,
+    })
+    expect(fetchMock.mock.calls[1][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
+  })
+
+  describe('when the GitHub link revocation outcome is not a plain success', () => {
+    const linkId = contributorFixture.link.link_id
+    const revokeInput = { linkId, reason: 'recover a verified hostile link', confirmation: githubRevocationFixture.confirmation }
+    const envelope = (message: string, status: number) => Response.json({ error_code: 3000, message, request_id: null }, { status })
+
+    it.each([
+      ['a timeout', () => Promise.reject(new DOMException('timed out', 'TimeoutError'))],
+      ['an already revoked retry', () => envelope('GitHub link is already revoked', 409)],
+    ] as const)('returns its own revocation found by the read-back after %s', async (_name, failure) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockImplementationOnce(failure).mockResolvedValueOnce(Response.json(revokedGithubFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await revokeMinerGithubLink('operator@omniaura.ai', revokeInput)).toEqual(revokedGithubFixture)
+      expect(fetchMock.mock.calls[1][0]).toMatch(new RegExp(`/admin/github-links/${linkId}$`))
+    })
+
+    it('reports a possible revocation that is not visible yet', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('upstream exploded', 502))
+        .mockResolvedValueOnce(Response.json(githubRevocationFixture)))
+      await expect(revokeMinerGithubLink('operator@omniaura.ai', revokeInput))
+        .rejects.toThrow(/revocation may have committed .*Retry revoke_miner_github_link with the same input/)
+    })
+
+    it.each([
+      ['another operator', { ...revokedGithubFixture, operator_revocation: { ...revokedGithubFixture.operator_revocation, actor: 'someone-else@omniaura.ai' } }, 'already revoked by someone-else@omniaura.ai'],
+      ['its miner', { ...revokedGithubFixture, operator_revocation: null }, 'already unlinked by its miner'],
+    ])('fails as not applied when %s revoked it first', async (_name, control, message) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json(control)))
+      await expect(revokeMinerGithubLink('operator@omniaura.ai', revokeInput)).rejects.toThrow(message)
+    })
+
+    it.each([[401], [404], [422]])('fails without a read-back after a %i', async (status) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockResolvedValueOnce(envelope('refused', status))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(revokeMinerGithubLink('operator@omniaura.ai', revokeInput)).rejects.toThrow('refused')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('preserves signed public identity and resolves a numeric account to its hotkey consent', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json(claStatusFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await fetchMinerGithubLink({ hotkey: 'fixture' })).toEqual(contributorFixture)
+    expect(await fetchGithubContributor({ githubUserId: 100 })).toEqual({ ...contributorFixture, cla: claStatusFixture, cla_error: null })
+    expect(fetchMock.mock.calls[1][0]).toContain('/public/github-account/100')
+  })
+
+  it('keeps the resolved GitHub identity when only the CLA read fails', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json({ detail: 'upstream exploded' }, { status: 503 })))
+    const result = await fetchGithubContributor({ githubUserId: 100 })
+    expect(result).toMatchObject({ ...contributorFixture, cla: null })
+    expect(result.cla_error).toBe('Identity resolved, but reading CLA status failed: upstream exploded')
+  })
+
+  it.each([2 ** 53, Number.MAX_VALUE])('rejects an unsafe GitHub id %s instead of looking up a rounded one', async (githubUserId) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchGithubContributor({ githubUserId })).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('pages policy history and reads adoption without synthesizing consent', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ...claControlFixture, history_limit: 10, history_offset: 10 }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await fetchClaPolicy({ historyLimit: 10, historyOffset: 10 })).toMatchObject({ unsigned_active_hotkeys: 1, history_limit: 10, history_offset: 10 })
+    expect(fetchMock.mock.calls[0][0]).toContain('history_limit=10&history_offset=10')
+  })
+
+  it('forwards revision, confirmation and the signed-in operator on policy changes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claShadowRevisionFixture)).mockResolvedValueOnce(Response.json(claControlFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
+      .toEqual({ applied: claShadowRevisionFixture, policy: claControlFixture, refresh_error: null })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ expected_revision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' })
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
+  })
+
+  it('reports a committed policy change even when the follow-up read fails', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claShadowRevisionFixture))
+      .mockResolvedValueOnce(Response.json({ detail: 'upstream exploded' }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const updated = await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' })
+    expect(updated).toMatchObject({ applied: claShadowRevisionFixture, policy: null })
+    expect(updated.refresh_error).toContain('revision 1 was committed')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports nothing applied when Platform refuses the policy write as busy', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ error_code: 3000, message: 'CLA policy is busy with in-flight uploads; retry shortly', request_id: null }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
+      .rejects.toThrow('Nothing was applied: retry with the same expectedRevision.')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails without claiming a possible commit when the policy write is never sent', async () => {
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    delete process.env.DITTO_PLATFORM_ADMIN_TOKEN
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
+      .rejects.toThrow('not configured')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  describe('when the policy write outcome is not a plain success', () => {
+    const input = { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }
+    const envelope = (message: string, status: number) => Response.json({ error_code: 3000, message, request_id: null }, { status })
+    const control = (current: object) => Response.json({ ...claControlFixture, current })
+    const uncertain = [
+      ['a 5xx', () => envelope('upstream exploded', 502)],
+      ['a timeout', () => Promise.reject(new DOMException('timed out', 'TimeoutError'))],
+      ['a lost connection', () => Promise.reject(new TypeError('socket closed after send'))],
+    ] as const
+
+    it.each(uncertain)('returns the revision the read-back finds after %s', async (_name, failure) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockImplementationOnce(failure)
+        .mockResolvedValueOnce(control(claShadowRevisionFixture))
+        .mockResolvedValueOnce(control(claShadowRevisionFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    })
+
+    it.each(uncertain)('reports an unknown outcome with the observed policy after %s', async (_name, failure) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockImplementationOnce(failure).mockResolvedValueOnce(Response.json(claControlFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      const result = await updateClaPolicy('operator@omniaura.ai', input)
+      expect(result).toMatchObject({ applied: null, policy: claControlFixture })
+      expect(result.refresh_error).toContain('may have committed')
+      expect(result.refresh_error).toContain('not visible yet')
+      expect(result.refresh_error).toContain('Retry with the same input')
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('fails as not applied when an unreadable 2xx meets a revision by another operator', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({ unexpected: true }))
+        .mockResolvedValueOnce(control({ ...claShadowRevisionFixture, actor: 'someone-else@omniaura.ai' })))
+      await expect(updateClaPolicy('operator@omniaura.ai', input))
+        .rejects.toThrow('Revision 1 was already written by someone-else@omniaura.ai, so this write cannot have applied.')
+    })
+
+    it('finds its revision beyond the first history page', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const later = { ...claShadowRevisionFixture, revision: 31, parent_revision: 30, actor: 'someone-else@omniaura.ai' }
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later, history: [later], history_total: 32 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later, history: [claShadowRevisionFixture], history_total: 32 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later }))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock.mock.calls[2][0]).toContain('history_limit=1&history_offset=30')
+    })
+
+    it('re-anchors the history page when another revision commits between reads', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const later = (revision: number) => ({ ...claShadowRevisionFixture, revision, parent_revision: revision - 1, actor: 'someone-else@omniaura.ai' })
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(31), history: [later(31)], history_total: 32 }))
+        // Revision 32 commits before the page read, so offset 30 lands on 2.
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(32), history: [later(2)], history_total: 33 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(32), history: [claShadowRevisionFixture], history_total: 33 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(32) }))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock.mock.calls[2][0]).toContain('history_limit=1&history_offset=30')
+      expect(fetchMock.mock.calls[3][0]).toContain('history_limit=1&history_offset=31')
+    })
+
+    it('reports a commit the fallback read finds after the read-back failed', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(envelope('upstream exploded', 503))
+        .mockResolvedValueOnce(control(claShadowRevisionFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    })
+
+    it('fails as not applied when the fallback read finds another operator\'s revision', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(envelope('upstream exploded', 503))
+        .mockResolvedValueOnce(control({ ...claShadowRevisionFixture, actor: 'someone-else@omniaura.ai' })))
+      await expect(updateClaPolicy('operator@omniaura.ai', input))
+        .rejects.toThrow('Revision 1 was already written by someone-else@omniaura.ai, so this write cannot have applied.')
+    })
+
+    it('fails as not applied when another operator wrote the next revision', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(control({ ...claShadowRevisionFixture, actor: 'someone-else@omniaura.ai' })))
+      await expect(updateClaPolicy('operator@omniaura.ai', input))
+        .rejects.toThrow('Revision 1 was already written by someone-else@omniaura.ai, so this write cannot have applied.')
+    })
+
+    it('returns its own earlier revision when a retry meets the revision guard', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('CLA policy revision changed; refresh before applying', 409))
+        .mockResolvedValueOnce(control(claShadowRevisionFixture))
+        .mockResolvedValueOnce(control(claShadowRevisionFixture)))
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+    })
+
+    it.each([
+      ['a revision guard owned by someone else', envelope('CLA policy revision changed; refresh before applying', 409), 2],
+      ['an auth failure', envelope('bad token', 401), 1],
+      ['a confirmation refusal', envelope('explicit CLA gate confirmation is required', 422), 1],
+    ])('does not report success after %s', async (_name, response, calls) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockResolvedValueOnce(response)
+        .mockResolvedValueOnce(control({ ...claShadowRevisionFixture, actor: 'someone-else@omniaura.ai' }))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(updateClaPolicy('operator@omniaura.ai', input)).rejects.toThrow()
+      expect(fetchMock).toHaveBeenCalledTimes(calls)
+    })
+
+    it('reports a probably committed write whose 2xx body is unreadable', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({ unexpected: true }))
+        .mockResolvedValueOnce(envelope('upstream exploded', 503))
+        .mockResolvedValueOnce(envelope('upstream exploded', 503)))
+      const result = await updateClaPolicy('operator@omniaura.ai', input)
+      expect(result).toMatchObject({ applied: null, policy: null })
+      expect(result.refresh_error).toContain('probably committed')
+      expect(result.refresh_error).toContain('call get_cla_policy')
+    })
+  })
+
+  it('publishes only explicit immutable text metadata with operator attribution', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(claVersionFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    await publishClaVersion('operator@omniaura.ai', { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test-only publication transport', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body).toMatchObject({ version: 1, sha256: 'ab'.repeat(32), effective_at: '2026-10-14T00:00:00Z' })
+    expect(body).not.toHaveProperty('actor')
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
+  })
+
+  describe('when the publish outcome is not a plain success', () => {
+    const publishInput = { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test-only publication transport', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) }
+    const envelope = (message: string, status: number) => Response.json({ error_code: 3000, message, request_id: null }, { status })
+
+    it('returns the committed version after a timeout or a duplicate retry', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json(claVersionFixture))
+        .mockResolvedValueOnce(envelope('CLA versions must increase and effective dates must not move backwards', 409))
+        .mockResolvedValueOnce(Response.json(claVersionFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).resolves.toEqual(claVersionFixture)
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).resolves.toEqual(claVersionFixture)
+      expect(fetchMock.mock.calls[1][0]).toMatch(/\/api\/v1\/public\/cla\/versions\/1$/)
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+    })
+
+    it('reports a possible commit that is not visible yet', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('upstream exploded', 502))
+        .mockResolvedValueOnce(envelope('CLA version is not published', 404)))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput))
+        .rejects.toThrow(/may have committed \(upstream exploded; it is not visible yet and may still commit\)\. Retry publish_cla_version with the same input/)
+    })
+
+    it('fails as not applied when the version holds different text after a timeout', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json({ ...claVersionFixture, sha256: 'cd'.repeat(32) })))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput))
+        .rejects.toThrow('CLA version 1 is already published with a different digest or effective date, so this write cannot have applied.')
+    })
+
+    it('returns the committed version when the 2xx body is unreadable', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({ unexpected: true }))
+        .mockResolvedValueOnce(Response.json(claVersionFixture)))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).resolves.toEqual(claVersionFixture)
+    })
+
+    it('explains a 409 whose read-back fails instead of reporting a plain conflict', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('CLA versions must increase and effective dates must not move backwards', 409))
+        .mockResolvedValueOnce(envelope('rate limited', 429)))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput))
+        .rejects.toThrow('an earlier attempt may already have applied this write')
+    })
+
+    it('keeps a conflicting 409 when the version holds different text', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('CLA versions must increase and effective dates must not move backwards', 409))
+        .mockResolvedValueOnce(Response.json({ ...claVersionFixture, sha256: 'cd'.repeat(32) })))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).rejects.toThrow('CLA versions must increase')
+    })
+
+    it.each([
+      [envelope('CLA policy is busy with in-flight uploads; retry shortly', 503), 'Nothing was applied: retry with the same input.'],
+      [envelope('CLA text does not match the supplied digest or exceeds the size limit', 400), 'does not match the supplied digest'],
+    ])('fails without a read-back when nothing was applied (%#)', async (response, message) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockResolvedValueOnce(response)
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).rejects.toThrow(message)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it.each(['tomorrow', '2026-10-14', '2026-10-14T00:00:00'])('rejects effectiveAt %s before publishing', async (effectiveAt) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(publishClaVersion('operator@omniaura.ai', { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.', effectiveAt, reason: 'test-only publication transport', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) }))
+      .rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

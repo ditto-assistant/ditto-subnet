@@ -1,3 +1,13 @@
+import {
+  contributorHotkeyInputSchema, githubAccountInputSchema, claPolicyReadInputSchema,
+  claPolicyWriteInputSchema, claPublishInputSchema,
+  githubRevocationReadInputSchema, githubRevocationWriteInputSchema,
+} from '../lib/contributor.schemas'
+import {
+  fetchMinerGithubLink, fetchGithubContributor, fetchMinerClaStatus, fetchClaPolicy,
+  updateClaPolicy, publishClaVersion,
+  fetchGithubRevocationPreflight, revokeMinerGithubLink,
+} from './admin.service'
 import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.schemas'
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
@@ -10,6 +20,27 @@ import {
   v13ReplayPackageWriteInputSchema,
 } from '../lib/v13-private.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
+import { bountyBoardInputSchema, bountyCatalogInputs, bountyQueueInputSchema } from '../lib/bounty.schemas'
+import {
+  approveBountyObligation,
+  awardBountyClaim,
+  controlBountySlot,
+  decideBountyAppeal,
+  dispatchBountyObligation,
+  fetchBounty,
+  fetchBountyBoard,
+  fetchBountyClaim,
+  fetchBountyPayoutPolicy,
+  fetchBountyQueue,
+  previewBountyRevision,
+  publishBountyRevision,
+  reassignBountyReviewer,
+  reconcileBountyTransfer,
+  recordBountyFact,
+  reviewBountySubmission,
+  setBountyClaimsPaused,
+  setBountyPayoutPolicy,
+} from './bounty.service'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 import { observerGrant } from './treasury-observer-access.server'
@@ -474,6 +505,21 @@ export const WRITE_TOOL_NAMES = new Set([
   'authorize_conversation_retry',
   'unban_hotkey',
   'set_source_release_policy',
+  'set_cla_policy',
+  'publish_cla_version',
+  'revoke_miner_github_link',
+  'publish_bounty_revision',
+  'set_bounty_claims_paused',
+  'review_bounty_submission',
+  'reassign_bounty_reviewer',
+  'control_bounty_slot',
+  'decide_bounty_appeal',
+  'award_bounty_claim',
+  'set_bounty_payout_policy',
+  'approve_bounty_obligation',
+  'dispatch_bounty_obligation',
+  'reconcile_bounty_transfer',
+  'record_bounty_fact',
   'set_burn_settings',
   'set_confirmation_bundle_settings',
   'authorize_confirmation_bundle_retest',
@@ -841,6 +887,32 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_inference_traces: 'Page trace archive objects by partition.',
   download_inference_trace: 'Presigned trace URL; artifact scope.',
   peek_inference_trace: 'Peek trace records; artifact scope.',
+  get_miner_github_link: 'Read active verified GitHub/hotkey proof. See help.',
+  get_github_link_revocation_preflight: 'Read exact-link revoke guard, audit and confirmation. See help.',
+  revoke_miner_github_link: 'Revoke exact link; actor, reason and confirmation. Write; see help.',
+  get_github_contributor_status: 'Numeric GitHub ID to hotkey and CLA; never payee authority. See help.',
+  get_miner_cla_status: 'Read effective CLA and hotkey consent receipt. See help.',
+  get_cla_policy: 'Read CLA mode, notice, history and adoption. See help.',
+  set_cla_policy: 'Set CLA mode with revision and confirmation. Write; see help.',
+  publish_cla_version: 'Publish approved pinned CLA; no activation. Write; see help.',
+  get_bounty_board: 'List build bounties: terms, slots, pause, awards.',
+  get_bounty: 'Operator view of one bounty: claims, appeals, full private audit.',
+  get_bounty_claim: 'Read one bounty claim: submissions, obligations, facts.',
+  get_bounty_queue: 'Review queue (overdue first) or settlement queue with approvers.',
+  get_bounty_payout_policy: 'Read approval thresholds in force, or one exact revision; null when unset.',
+  preview_bounty_revision: 'Digest, exact phrase and refusals for a revision; writes nothing.',
+  publish_bounty_revision: 'Publish a previewed bounty revision. Write; see help.',
+  set_bounty_claims_paused: 'Pause or resume new holds. Write; see help.',
+  review_bounty_submission: 'Accept, request changes, or reject one submission. Write; see help.',
+  reassign_bounty_reviewer: 'Name the reviewer in force. Write; see help.',
+  control_bounty_slot: 'Cancel (refunds) or reopen (retains) a slot. Write; see help.',
+  decide_bounty_appeal: 'Uphold or deny an appeal; not its reviewer. Write; see help.',
+  award_bounty_claim: 'Award accepted work within its claim\'s pool. Write; see help.',
+  set_bounty_payout_policy: 'Append approval thresholds. Write; see help.',
+  approve_bounty_obligation: 'Approve exact payee, amount, policy. Write; see help.',
+  dispatch_bounty_obligation: 'Dispatch an approved round once. Write; see help.',
+  reconcile_bounty_transfer: 'Settle a dispatched or uncertain transfer. Write; see help.',
+  record_bounty_fact: 'Record a merge, deploy or adoption fact. Write; see help.',
   get_owner_attestations:
     'Read signed direct owner links/revocations; non-transitive copy-review evidence.',
   list_lease_revocations:
@@ -1628,6 +1700,164 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     async (input) => result(await fetchV13ReplayPrivateStatistics(input)),
   )
 
+
+  registerTool('get_github_link_revocation_preflight', {
+    title: 'Inspect GitHub link',
+    description: 'Read an exact linkId, its original signed identity proof, revocation blocker and exact confirmation. Returns the append-only operator audit after revocation. Use for a hostile or compromised link; no signing key or OAuth token is exposed. Requires backroom:read.',
+    // The service still validates UUIDs; the catalog needs only their format.
+    inputSchema: githubRevocationReadInputSchema.extend({ linkId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGithubRevocationPreflight(input)))
+
+  registerTool('revoke_miner_github_link', {
+    title: 'Revoke GitHub link',
+    description: 'Revoke exactly linkId using REVOKE GITHUB LINK {linkId} and an operator reason. Writes an immutable audit with the current signed-in operator and preserves the original miner signature. The preflight and mutation share the same active-link guard; a link revoked by someone else fails, while a retry of your own revocation returns it. If the outcome cannot be decided, retry with the same input. Frees the GitHub account for a new verified link and never changes payees or submissions. Requires backroom:write.',
+    inputSchema: githubRevocationWriteInputSchema.extend({ linkId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => revokeMinerGithubLink(props.session.email, input)))
+
+  registerTool('get_miner_github_link', {
+    title: 'Get verified miner GitHub link',
+    description: 'Read the active signed link between a miner hotkey and an OAuth-verified numeric GitHub user id. Login is a recorded display label; renames require re-linking. The receipt includes its signature, nonce, issue time, and finalized Owner(hotkey) snapshot. No OAuth state, tokens or secrets are returned. Identity only; never derive payment destinations from this link. Requires backroom:read.',
+    inputSchema: contributorHotkeyInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchMinerGithubLink(input)))
+
+  registerTool('get_github_contributor_status', {
+    title: 'Get GitHub contributor identity and CLA',
+    description: 'Resolve an authenticated GitHub PR author numeric id to its active linked hotkey and current CLA status. Always use the numeric author id, never a login string: logins can be renamed or reused. is_current reports effective-version consent, not a bounty award or payee authorization. An unlinked account returns link=null and cla=null. If only the CLA read fails, the identity is still returned with cla=null and cla_error naming the failure; never read that as unsigned. Requires backroom:read.',
+    inputSchema: githubAccountInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGithubContributor(input)))
+
+  registerTool('get_miner_cla_status', {
+    title: 'Get miner CLA consent',
+    description: 'Read the currently effective immutable CLA version and this hotkey signature receipt. is_current means a matching version/digest receipt exists; a historical signature alone does not meet a newly effective version. A pending future version does not supersede the current one. The signature is consent only and cannot redirect payment. Requires backroom:read.',
+    inputSchema: contributorHotkeyInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchMinerClaStatus(input)))
+
+  registerTool('get_cla_policy', {
+    title: 'Get CLA rollout and adoption',
+    description: 'Read the append-only CLA off/shadow/enforce policy, current effective version, newest-first paged history and adoption counts. active_hotkeys_basis=non_retired_submissions counts distinct hotkeys with a non-rejected, non-banned, non-retired submission, not current chain registrations. Unsigned includes outdated receipts. unsigned_shadow_uploads counts unsigned artifacts accepted in shadow mode, recorded in the same transaction as the upload; rejected requests and exact retries add no observations. Requires backroom:read and changes nothing.',
+    inputSchema: claPolicyReadInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchClaPolicy(input)))
+
+  registerTool('set_cla_policy', {
+    title: 'Set CLA rollout mode',
+    description: 'Append a CLA policy revision using the exact expectedRevision, operator reason, and confirmation SET CLA GATE OFF, SET CLA GATE SHADOW or SET CLA GATE ENFORCE. Enforce requires published currently effective maintainer-approved text, and every current or scheduled version needs 24 hours notice first; get_cla_policy reports earliest_enforcement_at. Start off, measure adoption in shadow and announce the date before enforcing. Existing scored agents remain unchanged. Returns the committed revision as applied with the refreshed policy. If the outcome cannot be decided (timeout, 5xx or lost connection, and the revision is not visible yet), applied is null and refresh_error says it may have committed: retry with the same input, which returns your revision once visible. A definite refusal fails and applied nothing. Write outcomes in docs/mcp.md. Requires backroom:write.',
+    inputSchema: claPolicyWriteInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => updateClaPolicy(props.session.email, input)))
+
+  registerTool('publish_cla_version', {
+    title: 'Publish approved pinned CLA text',
+    description: 'Publish the exact UTF-8 bytes of maintainer-approved docs/legal/CLA-vN.md with its SHA-256, version, effective date and operator reason. Supply confirmation PUBLISH CLA {version} {sha256}. Text and digest are immutable; versions and effective dates advance monotonically. Never publish test fixtures or draft legal wording. This only publishes the registry entry and does not change rollout mode. If the outcome cannot be decided, it fails with may have committed: retry with the same input, which returns an already committed publication instead of failing. Write outcomes in docs/mcp.md. Requires backroom:write.',
+    // The service still parses effectiveAt strictly; the catalog needs only its format.
+    inputSchema: claPublishInputSchema.extend({ effectiveAt: z.string().meta({ format: 'date-time' }) }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => publishClaVersion(props.session.email, input)))
+
+  registerTool('get_bounty_board', {
+    title: 'List build bounties',
+    description: 'Page the public build-bounty board: each bounty with its current revision terms, effective slot counts, claims pause, overdue reviews and recorded awards. Filter by repo and issue to find one. Requires backroom:read.',
+    inputSchema: bountyBoardInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBountyBoard(input)))
+
+  registerTool('get_bounty', {
+    title: 'Get bounty operator view',
+    description: 'One bounty with everything public views hide: the reviewer in force, each revision\'s operator, reviewer and reason, every claim with submissions, obligations and facts, appeal statements, and a chronological audit of every operator record (publication, pause, reassignment, review, appeal decision, cancel, reopen, award, approval, dispatch, fact) with actor and reason, plus a source-safe report with settlement checks. Use it before any bounty write and to verify one after. Requires backroom:read.',
+    inputSchema: bountyCatalogInputs.bounty, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBounty(input)))
+
+  registerTool('get_bounty_claim', {
+    title: 'Get bounty claim',
+    description: 'Read one claim: its hold, fee receipts, slot status, exact-commit submissions and decisions, appeals, obligations with derived settlement state and transfers, and delivery facts. Requires backroom:read.',
+    inputSchema: bountyCatalogInputs.claim, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBountyClaim(input)))
+
+  registerTool('get_bounty_queue', {
+    title: 'Get bounty work queue',
+    description: 'queue=reviews lists submissions awaiting a decision, the most overdue first, with the reviewer in force; overdueOnly narrows it. queue=settlement lists obligations still needing an operator (awaiting_approval, over_policy_limit, approved, dispatched, uncertain, failed) with the operators who approved the current round; state narrows it, and state=confirmed shows paid ones. Requires backroom:read.',
+    inputSchema: bountyQueueInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBountyQueue(input)))
+
+  registerTool('get_bounty_payout_policy', {
+    title: 'Get bounty payout policy',
+    description: 'Read the payout policy revision in force: amounts up to single_approver_max_alpha_rao need one approver, up to dual_approver_max_alpha_rao two distinct approvers, and nobody may approve more. Returns null before the first revision, when no obligation can be approved. Pass revision to read that exact revision instead, or null when it does not exist. Requires backroom:read.',
+    inputSchema: bountyCatalogInputs.policyRead, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBountyPayoutPolicy(input)))
+
+  registerTool('preview_bounty_revision', {
+    title: 'Preview bounty revision',
+    description: 'Return the exact spec digest, the confirmation phrase PUBLISH BOUNTY {repo}#{issue} REVISION {n} {digest}, and every refusal for these terms. Writes nothing. Repos are lowercase owner/name; v1 requires rehearsal funding, three slots and distinct escrow keys. Requires backroom:read.',
+    inputSchema: bountyCatalogInputs.preview, annotations: toolAnnotations('read'),
+  }, async (input) => result(await previewBountyRevision(props.session.email, input)))
+
+  registerTool('publish_bounty_revision', {
+    title: 'Publish bounty revision',
+    description: 'Publish revision expectedRevision+1 with the exact phrase from preview_bounty_revision, the private reviewerActor and an operator reason. Revision 1 opens round 1 with three slots; later revisions never change existing slots. A changed revision fails; an uncertain outcome is settled by reading the revision back, so retry with the same input. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.publish, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => publishBountyRevision(props.session.email, input)))
+
+  registerTool('set_bounty_claims_paused', {
+    title: 'Pause or resume bounty claims',
+    description: 'Pause (PAUSE BOUNTY CLAIMS {repo}#{issue}) or resume (RESUME BOUNTY CLAIMS {repo}#{issue}) new holds with an operator reason. Existing holds still complete so no paid fee is stranded. The operator and reason stay private. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.pause, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => setBountyClaimsPaused(props.session.email, input)))
+
+  registerTool('review_bounty_submission', {
+    title: 'Review bounty submission',
+    description: 'Only the reviewer in force decides one exact submissionId: accept (ACCEPT BOUNTY CLAIM {repo}#{issue} {claimId}; optional public attribution; refunds the fee), changes_requested (REQUEST CHANGES ON ...; reworkDays sets the recorded rework deadline) or reject (REJECT ...; fee retained when the slot is reopened; appealable). The reason is public, the reviewer private. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.review, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => reviewBountySubmission(props.session.email, input)))
+
+  registerTool('reassign_bounty_reviewer', {
+    title: 'Reassign bounty reviewer',
+    description: 'Name a new reviewer in force with REASSIGN BOUNTY REVIEWER {repo}#{issue} and a reason. Overdue reviews get one more review window. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.reassign, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => reassignBountyReviewer(props.session.email, input)))
+
+  registerTool('control_bounty_slot', {
+    title: 'Cancel or reopen bounty slot',
+    description: 'action=cancel (CANCEL BOUNTY SLOT {repo}#{issue} ROUND {r} SLOT {p}; kind team or system_fault) cancels an open, claimed, submitted or rework slot and refunds a paid fee in full; a held slot is refused. action=reopen (REOPEN BOUNTY SLOT ...) reopens an expired, withdrawn, rejected or cancelled slot for a new claim, records a retained fee for a rejected, expired or withdrawn claim, and is refused while an appeal is pending. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.slot, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => controlBountySlot(props.session.email, input)))
+
+  registerTool('decide_bounty_appeal', {
+    title: 'Decide bounty appeal',
+    description: 'Uphold (UPHOLD BOUNTY APPEAL {appealId}; restoreDays required) or deny (DENY BOUNTY APPEAL {appealId}) an appeal of a rejection or missed deadline. The reviewer of the appealed rejection may not decide it. Upholding restores the claim to claimed with a fresh delivery window. Read the statement with get_bounty first. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.appeal, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => decideBountyAppeal(props.session.email, input)))
+
+  registerTool('award_bounty_claim', {
+    title: 'Award bounty claim',
+    description: 'Award accepted work amountAlphaRao with public attribution and a private reason (AWARD BOUNTY CLAIM {claimId} {amount} ALPHA RAO). Awards never exceed the pool of the revision the claim signed; a shared award awards each accepted claim. Recording an award moves no money. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.award, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => awardBountyClaim(props.session.email, input)))
+
+  registerTool('set_bounty_payout_policy', {
+    title: 'Set bounty payout policy',
+    description: 'Append payout policy revision expectedRevision+1 (SET BOUNTY PAYOUT POLICY {revision}) with single- and dual-approver limits in alpha rao. Approvals under an older revision stop counting. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.policy, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => setBountyPayoutPolicy(props.session.email, input)))
+
+  registerTool('approve_bounty_obligation', {
+    title: 'Approve bounty obligation',
+    description: 'Approve one obligation round binding its exact payee, amount and the policy revision in force (APPROVE BOUNTY OBLIGATION {obligationId} ROUND {r} {amount} ALPHA RAO TO {payee}). Whoever decided the award or accepted the work may not approve it; amounts above the single limit need a second, distinct approver. An award is held while its hotkey owner is not its payee. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.approve, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => approveBountyObligation(props.session.email, input)))
+
+  registerTool('dispatch_bounty_obligation', {
+    title: 'Dispatch bounty obligation',
+    description: 'Dispatch an approved round once (DISPATCH BOUNTY OBLIGATION {obligationId} ROUND {r}). The dispatch is recorded before sending; a held award is refused. A failed or expired transfer needs fresh approvals for the next round; an unknown outcome is uncertain and must be reconciled first. v1 is simulated: rehearsalOutcome names the outcome (confirmed, failed or unknown) and is required; no funds move. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.dispatch, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => dispatchBountyObligation(props.session.email, input)))
+
+  registerTool('reconcile_bounty_transfer', {
+    title: 'Reconcile bounty transfer',
+    description: 'Settle a dispatched or uncertain transfer from what the executor (chain) shows (RECONCILE BOUNTY TRANSFER {transferId}). Never resend an uncertain transfer; reconcile it. rehearsalOutcome is required, and each reconciliation is audited with its operator. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.reconcile, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => reconcileBountyTransfer(props.session.email, input)))
+
+  registerTool('record_bounty_fact', {
+    title: 'Record bounty delivery fact',
+    description: 'Record a public merged, deployed or adopted fact for accepted work (RECORD BOUNTY {KIND} {claimId}). Facts are never payment conditions. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.fact, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => recordBountyFact(props.session.email, input)))
 
   registerTool(
     'get_owner_attestations',

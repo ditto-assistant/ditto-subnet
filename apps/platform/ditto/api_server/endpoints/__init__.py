@@ -297,6 +297,11 @@ __all__ = [
     "miner_auth_router",
     "miner_avatars_router",
     "miner_ditto_link_router",
+    "miner_github_link_router",
+    "contributor_cla_router",
+    "bounties_admin_router",
+    "bounties_claims_router",
+    "bounties_public_router",
     "feedback_track_router",
     "ditto_callback_challenge_router",
     "miner_mcp_router",
@@ -321,3 +326,13 @@ __all__ = [
     "validator_coding_evaluation_router",
     "validator_confirmation_router",
 ]
+
+from ditto.api_server.endpoints.bounties import admin_router as bounties_admin_router
+from ditto.api_server.endpoints.bounties import (
+    claims_router as bounties_claims_router,
+)
+from ditto.api_server.endpoints.bounties import public_router as bounties_public_router
+from ditto.api_server.endpoints.contributor_cla import router as contributor_cla_router
+from ditto.api_server.endpoints.miner_github_link import (
+    router as miner_github_link_router,
+)

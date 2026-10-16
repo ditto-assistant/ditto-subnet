@@ -78,7 +78,10 @@ async def effective_submission_settings(
     )
 
 
-async def _lock_coldkey(session: AsyncSession, miner_coldkey: str) -> None:
+async def lock_upload_admission_coldkey(
+    session: AsyncSession, miner_coldkey: str
+) -> None:
+    """Serialize one coldkey's admissions until the transaction ends."""
     if session.get_bind().dialect.name == "postgresql":
         await session.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:coldkey, 0))"),
@@ -113,7 +116,7 @@ async def reserve_upload_admission(
 ) -> UploadAdmission:
     """Reserve one eligible coldkey slot so payment cannot lose a later race."""
     current = _utc(now or datetime.now(UTC))
-    await _lock_coldkey(session, miner_coldkey)
+    await lock_upload_admission_coldkey(session, miner_coldkey)
     existing = await session.get(
         UploadAdmissionReservation, miner_coldkey, with_for_update=True
     )
@@ -241,7 +244,7 @@ async def consume_or_enforce_upload_admission(
 ) -> None:
     """Consume a matching reservation, or enforce cooldown for a legacy client."""
     current = _utc(now or datetime.now(UTC))
-    await _lock_coldkey(session, miner_coldkey)
+    await lock_upload_admission_coldkey(session, miner_coldkey)
     existing = await session.get(
         UploadAdmissionReservation, miner_coldkey, with_for_update=True
     )

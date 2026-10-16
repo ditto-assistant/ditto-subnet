@@ -1,0 +1,266 @@
+{
+  "ade00ca8-3bf3-419e-925d-f7eb173fa9fa": {
+    "claim_id": "ade00ca8-3bf3-419e-925d-f7eb173fa9fa",
+    "bounty_id": "6e3d16e9-d082-4cdd-9da3-1a8abe7ed907",
+    "repo": "ditto-assistant/ditto-subnet",
+    "issue": 2942,
+    "revision": 1,
+    "spec_digest": "2eabb0e1e1567f84667810cb6f9693975dd180198c52dde62d6b9c966bed10be",
+    "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+    "round": 1,
+    "position": 1,
+    "state": "claimed",
+    "slot_status": "withdrawn",
+    "hotkey": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy",
+    "payee_coldkey": "5CoQ1eiHdYkPjAJA449CRzaFdzAfNh3Lxem2dAFRxFMmLNpW",
+    "github_login": "dave-dev",
+    "funding_mode": "rehearsal",
+    "fee_alpha_rao": 2000000000,
+    "fee_escrow_coldkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    "fee_escrow_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "held_at": "2026-10-16T01:30:25.924166Z",
+    "hold_expires_at": "2026-10-16T02:00:25.924166Z",
+    "claimed_at": "2026-10-16T01:30:25.971040Z",
+    "deadline_at": null,
+    "simulated_receipt": null,
+    "receipts": [
+      {
+        "block_hash": "0xd95e97ee17c1271ad69e6962285eb216cd953160aa260f686ae6b52c20afd163",
+        "block_number": 0,
+        "extrinsic_index": 0
+      }
+    ],
+    "refunds": [],
+    "submissions": [],
+    "appeals": [],
+    "obligations": [
+      {
+        "obligation_id": "e416fe77-f0a3-4a10-9a3c-9a79f0a914a9",
+        "kind": "fee_retained",
+        "reason": "withdrawn",
+        "payee_coldkey": "5CoQ1eiHdYkPjAJA449CRzaFdzAfNh3Lxem2dAFRxFMmLNpW",
+        "amount_alpha_rao": 2000000000,
+        "state": "retained",
+        "round": 0,
+        "approvals": 0,
+        "approvals_required": 0,
+        "attribution": null,
+        "simulated": true,
+        "created_at": "2026-10-16T01:30:26.014244Z",
+        "transfers": []
+      }
+    ],
+    "facts": []
+  },
+  "258b347b-8184-41d9-acdd-afbba6a81da4": {
+    "claim_id": "258b347b-8184-41d9-acdd-afbba6a81da4",
+    "bounty_id": "6e3d16e9-d082-4cdd-9da3-1a8abe7ed907",
+    "repo": "ditto-assistant/ditto-subnet",
+    "issue": 2942,
+    "revision": 1,
+    "spec_digest": "2eabb0e1e1567f84667810cb6f9693975dd180198c52dde62d6b9c966bed10be",
+    "slot_id": "d4b7ce41-aa64-40ea-9ff6-e740a72fbcad",
+    "round": 1,
+    "position": 1,
+    "state": "claimed",
+    "slot_status": "accepted",
+    "hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "payee_coldkey": "5FWfU64fUQG6iZGcxDEHfBSagweCcaFVbi3wgNBFkmFoZcNg",
+    "github_login": "alice-dev",
+    "funding_mode": "rehearsal",
+    "fee_alpha_rao": 2000000000,
+    "fee_escrow_coldkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    "fee_escrow_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "held_at": "2026-10-16T01:30:26.040445Z",
+    "hold_expires_at": "2026-10-16T02:00:26.040445Z",
+    "claimed_at": "2026-10-16T01:30:26.065462Z",
+    "deadline_at": null,
+    "simulated_receipt": null,
+    "receipts": [
+      {
+        "block_hash": "0x225a64b5399cb7730c4796b096de821391f377ba8e1aecd12b7b9f06c46d6fb6",
+        "block_number": 0,
+        "extrinsic_index": 0
+      }
+    ],
+    "refunds": [
+      {
+        "obligation_id": "5e155514-9717-47dd-a87b-016a7a23c4f8",
+        "reason": "accepted",
+        "payee_coldkey": "5FWfU64fUQG6iZGcxDEHfBSagweCcaFVbi3wgNBFkmFoZcNg",
+        "amount_alpha_rao": 2000000000,
+        "receipt": {
+          "block_hash": "0x225a64b5399cb7730c4796b096de821391f377ba8e1aecd12b7b9f06c46d6fb6",
+          "block_number": 0,
+          "extrinsic_index": 0
+        },
+        "simulated": true,
+        "created_at": "2026-10-16T01:30:26.104290Z"
+      }
+    ],
+    "submissions": [
+      {
+        "submission_id": "b0a76ab9-3e2d-4263-bba6-c5d42ed3407e",
+        "pr_number": 7,
+        "head_sha": "abababababababababababababababababababab",
+        "submitted_at": "2026-10-16T01:30:26.080960Z",
+        "review_due_at": "2026-10-23T01:30:26.080960Z",
+        "decision": "accept",
+        "decision_reason": "fixture accept decision",
+        "attribution": "Credit to alice-dev",
+        "rework_deadline_at": null,
+        "decided_at": "2026-10-16T01:30:26.104290Z"
+      }
+    ],
+    "appeals": [],
+    "obligations": [
+      {
+        "obligation_id": "5e155514-9717-47dd-a87b-016a7a23c4f8",
+        "kind": "fee_refund",
+        "reason": "accepted",
+        "payee_coldkey": "5FWfU64fUQG6iZGcxDEHfBSagweCcaFVbi3wgNBFkmFoZcNg",
+        "amount_alpha_rao": 2000000000,
+        "state": "confirmed",
+        "round": 1,
+        "approvals": 1,
+        "approvals_required": 1,
+        "attribution": null,
+        "simulated": true,
+        "created_at": "2026-10-16T01:30:26.104290Z",
+        "transfers": [
+          {
+            "transfer_id": "ead05b5b-4970-47f8-bead-9c6a6f15dc6b",
+            "round": 1,
+            "state": "confirmed",
+            "receipt": {
+              "block_hash": "0xc11a43e7b596e301cc0a70c644095160dcbb781409dfa47b608e086b41b9c5dd",
+              "block_number": 0,
+              "extrinsic_index": 0
+            },
+            "simulated": true,
+            "dispatched_at": "2026-10-16T01:30:26.318292Z",
+            "settled_at": "2026-10-16T01:30:26.324264Z"
+          }
+        ]
+      },
+      {
+        "obligation_id": "cc8ce6a7-a832-4f1f-ac01-5c9903f67602",
+        "kind": "award",
+        "reason": "accepted_work",
+        "payee_coldkey": "5FWfU64fUQG6iZGcxDEHfBSagweCcaFVbi3wgNBFkmFoZcNg",
+        "amount_alpha_rao": 40000000000,
+        "state": "awaiting_approval",
+        "round": 1,
+        "approvals": 1,
+        "approvals_required": 2,
+        "attribution": "Alice built the board",
+        "simulated": true,
+        "created_at": "2026-10-16T01:30:26.280772Z",
+        "transfers": []
+      }
+    ],
+    "facts": [
+      {
+        "kind": "merged",
+        "reference": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "recorded_at": "2026-10-16T01:30:26.531880Z"
+      }
+    ]
+  },
+  "ffcec8d8-9329-45a2-9a77-a1cfe4b54513": {
+    "claim_id": "ffcec8d8-9329-45a2-9a77-a1cfe4b54513",
+    "bounty_id": "6e3d16e9-d082-4cdd-9da3-1a8abe7ed907",
+    "repo": "ditto-assistant/ditto-subnet",
+    "issue": 2942,
+    "revision": 1,
+    "spec_digest": "2eabb0e1e1567f84667810cb6f9693975dd180198c52dde62d6b9c966bed10be",
+    "slot_id": "17f97e90-0e16-4442-b4d5-268436142908",
+    "round": 1,
+    "position": 2,
+    "state": "claimed",
+    "slot_status": "rejected",
+    "hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    "payee_coldkey": "5DRUZLgg59jWvH6nV1UCAUuYagfNyB9kpxzGykiA12TXr4nc",
+    "github_login": "bob-dev",
+    "funding_mode": "rehearsal",
+    "fee_alpha_rao": 2000000000,
+    "fee_escrow_coldkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    "fee_escrow_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "held_at": "2026-10-16T01:30:26.130960Z",
+    "hold_expires_at": "2026-10-16T02:00:26.130960Z",
+    "claimed_at": "2026-10-16T01:30:26.151441Z",
+    "deadline_at": null,
+    "simulated_receipt": null,
+    "receipts": [
+      {
+        "block_hash": "0x4745614047883dccdf0643462d708a3106e998c766c011bc9d9ae8f49700d3cd",
+        "block_number": 0,
+        "extrinsic_index": 0
+      }
+    ],
+    "refunds": [],
+    "submissions": [
+      {
+        "submission_id": "3af3c977-c1a5-4f24-8831-732019d9a42f",
+        "pr_number": 7,
+        "head_sha": "abababababababababababababababababababab",
+        "submitted_at": "2026-10-16T01:30:26.167578Z",
+        "review_due_at": "2026-10-23T01:30:26.167578Z",
+        "decision": "reject",
+        "decision_reason": "fixture reject decision",
+        "attribution": null,
+        "rework_deadline_at": null,
+        "decided_at": "2026-10-16T01:30:26.186723Z"
+      }
+    ],
+    "appeals": [
+      {
+        "appeal_id": "f6089c5c-8b3a-4c61-9284-e022212d84e0",
+        "subject_event_id": 16,
+        "reason_digest": "85688c275cc010aa531f19cc3fd25b2e966208b152e5a0264a7b6caa7351be97",
+        "filed_at": "2026-10-16T01:30:26.216588Z",
+        "upheld": null,
+        "decided_at": null
+      }
+    ],
+    "obligations": [],
+    "facts": []
+  },
+  "cbfa161d-c323-483b-b443-21b60a614281": {
+    "claim_id": "cbfa161d-c323-483b-b443-21b60a614281",
+    "bounty_id": "6e3d16e9-d082-4cdd-9da3-1a8abe7ed907",
+    "repo": "ditto-assistant/ditto-subnet",
+    "issue": 2942,
+    "revision": 1,
+    "spec_digest": "2eabb0e1e1567f84667810cb6f9693975dd180198c52dde62d6b9c966bed10be",
+    "slot_id": "b112178f-8246-4c5d-88af-f1dd8d65c366",
+    "round": 1,
+    "position": 3,
+    "state": "claimed",
+    "slot_status": "claimed",
+    "hotkey": "5E4p1GhM2Ktk1MBtkhUSm2NwwTbVR95krSWDHLahLtRn7JrD",
+    "payee_coldkey": "5EALFU5zdK5Y8w32gxLrBnkaUnh7Dy8yu55jAwJnLTQpNmvh",
+    "github_login": "carol-dev",
+    "funding_mode": "rehearsal",
+    "fee_alpha_rao": 2000000000,
+    "fee_escrow_coldkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    "fee_escrow_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "held_at": "2026-10-16T01:30:26.233994Z",
+    "hold_expires_at": "2026-10-16T02:00:26.233994Z",
+    "claimed_at": "2026-10-16T01:30:26.255145Z",
+    "deadline_at": "2026-10-21T01:30:26.255145Z",
+    "simulated_receipt": null,
+    "receipts": [
+      {
+        "block_hash": "0x62c8042a66ce232dac37cfc88745a47c7285353e76915bd93d8b7a3d39a6faf0",
+        "block_number": 0,
+        "extrinsic_index": 0
+      }
+    ],
+    "refunds": [],
+    "submissions": [],
+    "appeals": [],
+    "obligations": [],
+    "facts": []
+  }
+}

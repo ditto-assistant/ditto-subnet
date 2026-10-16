@@ -1094,3 +1094,13 @@ and read the per-case notes before upload.
 ## License
 
 MIT ([LICENSE](LICENSE)). The `ditto-harness` dependency is also MIT-licensed.
+
+### Contributor agreement before upload
+
+When Platform enables CLA enforcement, run `uv run ditto cla sign` with your
+wallet flags, review the saved document and confirm its exact version/digest.
+`uv run ditto cla status` reports whether your receipt covers the currently
+effective version. `ditto upload` checks this before preflight or payment.
+The initial rollout is off; new effective versions require re-signing before
+your next submission. See [miner setup](../../docs/MINER.md) and the
+[CLA rollout guide](../../docs/legal/README.md).

@@ -49,12 +49,19 @@ export function fixtureNameFor(path: string): string | null {
       const version = params.get("bench_version");
       return version === null || version === "7" ? "leaderboard" : "leaderboard-v6";
     }
+    case "/public/bounties":
+      return "bounty-board";
     case "/public/activity": {
       if (params.get("review") === "ath") return "activity-ath";
       if (params.get("q")) return "activity-single";
       return "activity";
     }
     default: {
+      const bounty = /^\/public\/bounties\/([^/]+)$/.exec(pathname);
+      if (bounty) {
+        const recorded = loadFixture<{ summary: { bounty_id: string } }>("bounty-detail");
+        return bounty[1] === recorded.summary.bounty_id ? "bounty-detail" : null;
+      }
       const agent = /^\/public\/agent\/([^/]+)\/(pipeline|scores|summary)$/.exec(pathname);
       if (!agent) return null;
       const [, id, kind] = agent;

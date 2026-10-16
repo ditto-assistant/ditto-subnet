@@ -49,3 +49,32 @@ condition = "AND"
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]{40}$''']
 paths = ['''^dashboard/src/components/EntityPanel\.stack\.test\.tsx$''']
+
+# The public SS58 address of the well-known Substrate development key //Bob,
+# used as a bounty's fee escrow coldkey in the publication tests. An address is
+# not a credential.
+[[allowlists]]
+description = "Public development-key escrow address in the bounty tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty$''']
+paths = ['''^ditto/tests/api_server/endpoints/test_bounties\.py$''']
+
+# Public SS58 addresses in the recorded bounty board fixtures: the //Bob
+# development escrow and the payee coldkeys of the four deterministic test
+# contributors (//Alice//cold, //Bob//cold, //Carol//cold, //Dave//cold). The
+# fixtures are verbatim API recordings, and addresses are not credentials.
+[[allowlists]]
+description = "Public test-key addresses in the recorded bounty board fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = [
+  '''^5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty$''',
+  '''^5FWfU64fUQG6iZGcxDEHfBSagweCcaFVbi3wgNBFkmFoZcNg$''',
+  '''^5DRUZLgg59jWvH6nV1UCAUuYagfNyB9kpxzGykiA12TXr4nc$''',
+  '''^5EALFU5zdK5Y8w32gxLrBnkaUnh7Dy8yu55jAwJnLTQpNmvh$''',
+  '''^5CoQ1eiHdYkPjAJA449CRzaFdzAfNh3Lxem2dAFRxFMmLNpW$''',
+]
+paths = ['''^dashboard/fixtures/bounty-(board|detail|claims)\.json$''']

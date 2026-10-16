@@ -1,6 +1,7 @@
 package upload
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -131,7 +133,7 @@ func insertPaidAgent(t *testing.T, pool *pgxpool.Pool, hotkey, coldkey, sha stri
 }
 
 func TestPaymentRecoveryForwardsToPythonUnchanged(t *testing.T) {
-	want := validCheckJSON(`"payment_block_hash":"0x` + strings.Repeat("1", 64) + `","payment_block_number":7,"payment_extrinsic_index":2`)
+	want := validCheckJSON(`"name":"original-name","payment_block_hash":"0x` + strings.Repeat("1", 64) + `","payment_block_number":7,"payment_extrinsic_index":2`)
 	called := false
 	legacy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -147,6 +149,24 @@ func TestPaymentRecoveryForwardsToPythonUnchanged(t *testing.T) {
 	d.handleCheck(w, r)
 	if !called || w.Code != http.StatusTeapot {
 		t.Fatalf("legacy called=%v status=%d", called, w.Code)
+	}
+}
+
+func TestCheckNameValidationMatchesPython(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		valid bool
+	}{
+		{`null`, true}, {`"original-name"`, true},
+		{`"` + strings.Repeat("猫", 64) + `"`, true},
+		{`""`, false}, {`"` + strings.Repeat("猫", 65) + `"`, false}, {`42`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, valid, _ := parseCheckRequest([]byte(validCheckJSON(`"name":` + tc.name)))
+			if valid != tc.valid {
+				t.Fatalf("valid=%v want=%v", valid, tc.valid)
+			}
+		})
 	}
 }
 
@@ -432,5 +452,356 @@ func TestConcurrentReservationsSerializeFirstSubmission(t *testing.T) {
 	}
 	if succeeded != 1 || blocked != 1 {
 		t.Fatalf("succeeded=%d blocked=%d", succeeded, blocked)
+	}
+}
+
+func TestCLAUploadGateParityBeforePayment(t *testing.T) {
+	for _, mode := range []string{"off", "shadow", "enforce"} {
+		t.Run(mode, func(t *testing.T) {
+			pool := testutil.NewTestPGPool(t)
+			secret, hotkey := newSignedHotkey(t)
+			d := uploadDeps(pool, "5Owner", time.Time{})
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_versions (version,sha256,text,published_at,effective_at,actor,reason)
+				VALUES (1,$1,'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.',now(),$2,'fixture','test')`, strings.Repeat("a", 64), d.now().Add(-time.Minute))
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+				VALUES (1,0,$1,'fixture','test rollout',now())`, mode)
+			body := signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), map[string]any{"reserve_submission_slot": true})
+			unsigned := serveCheck(t, d, body)
+			if mode == "enforce" {
+				if unsigned.OK || unsigned.PaymentRequired || unsigned.AdmissionToken != nil || len(unsigned.ErrorCodes) != 1 || unsigned.ErrorCodes[0] != 1106 {
+					t.Fatalf("unsigned enforce gate: %+v", unsigned)
+				}
+			} else if !unsigned.OK {
+				t.Fatalf("default/shadow must accept: %+v", unsigned)
+			}
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_signatures (signature_id,netuid,hotkey,coldkey,cla_version,cla_sha256,signature,nonce,issued_at,signed_at,owner_block,owner_block_hash)
+				VALUES ($1,118,$2,'fixture-owner',1,$3,$4,$5,now(),now(),123,$6)`, uuid.New(), hotkey, strings.Repeat("a", 64), strings.Repeat("ab", 64), uuid.New(), "0x"+strings.Repeat("a", 64))
+			accepted := serveCheck(t, d, body)
+			if !accepted.OK {
+				t.Fatalf("current signature must accept: %+v", accepted)
+			}
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_versions (version,sha256,text,published_at,effective_at,actor,reason)
+				VALUES (2,$1,'TEST FIXTURE ONLY V2',now(),$2,'fixture','test')`, strings.Repeat("c", 64), d.now().Add(-time.Second))
+			outdated := serveCheck(t, d, body)
+			if (mode == "enforce") == outdated.OK {
+				t.Fatalf("outdated version gate: %+v", outdated)
+			}
+		})
+	}
+}
+
+func TestCLAReservationsForDifferentColdkeysOverlap(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	now := time.Now().UTC()
+	d := uploadDeps(pool, "fixture", now)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	defer close(release)
+	d.Now = func() time.Time {
+		started <- struct{}{}
+		<-release
+		return now
+	}
+	done := make(chan error, 2)
+	for _, coldkey := range []string{"5FirstOwner", "5SecondOwner"} {
+		go func() {
+			_, _, err := d.reserve(t.Context(), coldkey, fixtureAddress, strings.Repeat("b", 64), now)
+			done <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case err := <-done:
+			t.Fatalf("reservation failed before the shared gate: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("different coldkeys were serialized by the policy lock")
+		}
+	}
+	// Both readers have reached the gate while holding their policy lock.
+	release <- struct{}{}
+	release <- struct{}{}
+	for range 2 {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent reservations did not commit")
+		}
+	}
+}
+
+func TestCLAAgreementEffectiveDuringColdkeyWaitApplies(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	coldkey, hotkey := "5Owner", fixtureAddress
+	d := uploadDeps(pool, coldkey, now)
+	testutil.SeedSQL(t, pool, `INSERT INTO cla_versions (version,sha256,text,published_at,effective_at,actor,reason)
+		VALUES (1,$1,'TEST FIXTURE ONLY',now(),$2,'fixture','test')`, strings.Repeat("a", 64), now.Add(-time.Minute))
+	testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+		VALUES (1,0,'enforce','fixture','test rollout',now())`)
+	// The hotkey signed v1, so it passes the gate until v2 takes effect.
+	testutil.SeedSQL(t, pool, `INSERT INTO cla_signatures (signature_id,netuid,hotkey,coldkey,cla_version,cla_sha256,signature,nonce,issued_at,signed_at,owner_block,owner_block_hash)
+		VALUES ($1,118,$2,'fixture-owner',1,$3,$4,$5,now(),now(),123,$6)`, uuid.New(), hotkey, strings.Repeat("a", 64), strings.Repeat("ab", 64), uuid.New(), "0x"+strings.Repeat("a", 64))
+	effective := now.Add(time.Minute)
+	testutil.SeedSQL(t, pool, `INSERT INTO cla_versions (version,sha256,text,published_at,effective_at,actor,reason)
+		VALUES (2,$1,'TEST FIXTURE ONLY V2',now(),$2,'fixture','test')`, strings.Repeat("c", 64), effective)
+	var mu sync.Mutex
+	clock := now
+	d.Now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return clock
+	}
+	// Another request holds this coldkey's admission lock.
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", coldkey); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := d.reserve(context.Background(), coldkey, hotkey, strings.Repeat("b", 64), now)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted").Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the reservation never waited for the coldkey lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// v2 takes effect while the reservation waits.
+	mu.Lock()
+	clock = effective.Add(time.Second)
+	mu.Unlock()
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		var required *claRequiredError
+		if !errors.As(err, &required) || !strings.Contains(required.message, "v2") {
+			t.Fatalf("the agreement that took effect during the wait was not enforced: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reservation did not finish")
+	}
+	var reservations int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM upload_admission_reservations").Scan(&reservations); err != nil || reservations != 0 {
+		t.Fatalf("reservations=%d err=%v", reservations, err)
+	}
+}
+
+func TestCLARevisionChangesBeforeReservation(t *testing.T) {
+	for _, mode := range []string{"off", "shadow"} {
+		t.Run(mode, func(t *testing.T) {
+			pool := testutil.NewTestPGPool(t)
+			secret, hotkey := newSignedHotkey(t)
+			now := time.Now().UTC()
+			d := uploadDeps(pool, "5Owner", now)
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_versions (version,sha256,text,published_at,effective_at,actor,reason)
+				VALUES (1,$1,'TEST FIXTURE ONLY',now(),$2,'fixture','test')`, strings.Repeat("a", 64), now.Add(-time.Minute))
+			testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+				VALUES (1,0,$1,'fixture','test rollout',now())`, mode)
+			calls := 0
+			d.Now = func() time.Time {
+				calls++
+				if calls == 2 {
+					testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+						VALUES (2,1,'enforce','fixture','test rollout',now())`)
+				}
+				return now
+			}
+			result := serveCheck(t, d, signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), map[string]any{"reserve_submission_slot": true}))
+			if result.OK || result.PaymentRequired || result.AdmissionToken != nil || len(result.ErrorCodes) != 1 || result.ErrorCodes[0] != errorCLARequired {
+				t.Fatalf("changed policy admitted unsigned upload: %+v", result)
+			}
+			var reservations int
+			if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM upload_admission_reservations").Scan(&reservations); err != nil || reservations != 0 {
+				t.Fatalf("unexpected admission rows=%d err=%v", reservations, err)
+			}
+		})
+	}
+}
+
+func TestCLAReservationCoordinatesWithPlatformPolicyLock(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	now := time.Now().UTC()
+	d := uploadDeps(pool, "5Owner", now)
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(t.Context()) }()
+	// The exact SQL and namespace used by Platform's lock_identity_writes.
+	if _, err := tx.Exec(t.Context(), "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", "cla-policy"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := d.reserve(t.Context(), "5Owner", fixtureAddress, strings.Repeat("b", 64), now)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case err := <-done:
+			t.Fatalf("reservation bypassed policy lock: %v", err)
+		default:
+		}
+		var waiting bool
+		if err := pool.QueryRow(t.Context(), `SELECT EXISTS (
+			SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+		)`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reservation did not wait for the Platform policy lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := tx.Exec(t.Context(), `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+		VALUES (1,0,'enforce','fixture','test rollout',now())`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		var rejected *claRequiredError
+		if !errors.As(err, &rejected) {
+			t.Fatalf("reservation missed the committed policy revision: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reservation did not resume after policy publication")
+	}
+}
+
+func TestCLAShadowChecksDoNotFloodWarnings(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	secret, hotkey := newSignedHotkey(t)
+	d := uploadDeps(pool, "5Owner", time.Time{})
+	var logs bytes.Buffer
+	d.Logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+		VALUES (1,0,'shadow','fixture','test rollout',now())`)
+	body := signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), nil)
+	for range 3 {
+		if result := serveCheck(t, d, body); !result.OK {
+			t.Fatalf("shadow check refused: %+v", result)
+		}
+	}
+	if strings.Contains(logs.String(), `"level":"WARN"`) {
+		t.Fatalf("preflight polling emitted warnings: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "unsigned CLA prepayment check") {
+		t.Fatal("debug diagnostic missing")
+	}
+	var observed int
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM cla_shadow_uploads").Scan(&observed); err != nil {
+		t.Fatal(err)
+	}
+	if observed != 0 {
+		t.Fatalf("dry-run checks counted as upload attempts: %d", observed)
+	}
+}
+
+func TestCLAMissingPolicyFailsClosedBeforeAdmission(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	secret, hotkey := newSignedHotkey(t)
+	d := uploadDeps(pool, "5Owner", time.Time{})
+	// Deliberately simulate a corrupted/missing migration seed. Default off
+	// requires the immutable audited row; it is never inferred from absence.
+	testutil.SeedSQL(t, pool, "ALTER TABLE cla_settings_revisions DISABLE TRIGGER cla_settings_revisions_no_truncate")
+	testutil.SeedSQL(t, pool, "TRUNCATE cla_settings_revisions")
+	testutil.SeedSQL(t, pool, "ALTER TABLE cla_settings_revisions ENABLE TRIGGER cla_settings_revisions_no_truncate")
+	body := signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), map[string]any{"reserve_submission_slot": true})
+	r := httptest.NewRequest("POST", "/api/v1/upload/check", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	relayhttp.RequestIDMiddleware(testLogger(), http.HandlerFunc(d.handleCheck)).ServeHTTP(w, r)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("missing policy did not fail closed: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var reservations int
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM upload_admission_reservations").Scan(&reservations); err != nil {
+		t.Fatal(err)
+	}
+	if reservations != 0 {
+		t.Fatalf("missing policy created %d admission reservations", reservations)
+	}
+}
+
+func TestCLAUnknownModeFailsClosedBeforeAdmission(t *testing.T) {
+	for _, phase := range []string{"preflight", "reservation"} {
+		t.Run(phase, func(t *testing.T) {
+			pool := testutil.NewTestPGPool(t)
+			secret, hotkey := newSignedHotkey(t)
+			now := time.Now().UTC()
+			d := uploadDeps(pool, "5Owner", now)
+			// Simulate a future policy migration that an older relay cannot interpret.
+			testutil.SeedSQL(t, pool, "ALTER TABLE cla_settings_revisions DROP CONSTRAINT ck_cla_settings_revisions_mode")
+			publishUnknown := func() {
+				testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+					VALUES (1,0,'future-mode','fixture','forward compatibility test',now())`)
+			}
+			if phase == "preflight" {
+				publishUnknown()
+			} else {
+				calls := 0
+				d.Now = func() time.Time {
+					calls++
+					if calls == 2 {
+						publishUnknown()
+					}
+					return now
+				}
+			}
+			body := signedCheckJSON(t, secret, hotkey, strings.Repeat("b", 64), map[string]any{"reserve_submission_slot": true})
+			r := httptest.NewRequest("POST", "/api/v1/upload/check", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			d.handleCheck(w, r)
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("unknown mode was accepted: %d %s", w.Code, w.Body.String())
+			}
+			var reservations int
+			if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM upload_admission_reservations").Scan(&reservations); err != nil || reservations != 0 {
+				t.Fatalf("unknown mode created admissions=%d err=%v", reservations, err)
+			}
+		})
+	}
+}
+
+func TestRecoveryPreservesPythonCLARefusal(t *testing.T) {
+	// Recovery is delegated to the Python handler that owns payment lookup
+	// and CLA enforcement. The relay must not turn its refusal into success.
+	d := &Deps{Legacy: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":false,"error_codes":[1106],"messages":["run ditto cla sign"],"payment_required":false}`))
+	})}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/upload/check", strings.NewReader(validCheckJSON(`"payment_block_hash":"0x`+strings.Repeat("1", 64)+`","payment_block_number":123,"payment_extrinsic_index":0`)))
+	d.handleCheck(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"error_codes":[1106]`) || !strings.Contains(w.Body.String(), `"payment_required":false`) {
+		t.Fatalf("legacy CLA refusal changed: %d %s", w.Code, w.Body.String())
 	}
 }
