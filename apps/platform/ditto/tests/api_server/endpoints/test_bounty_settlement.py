@@ -686,7 +686,8 @@ async def test_delivery_facts_are_public_records_of_accepted_work(world):
 
 async def test_fee_obligations_and_reviews_belong_to_their_own_claim(world):
     """The database refuses a fee owed against another claim's payment, to
-    anyone but its payer, and a review of another claim's submission."""
+    anyone but its payer, and a review or an award of another claim's
+    submission."""
     await world.start(ALICE, BOB)
     alice = (await submit(world, ALICE, await claimed(world, ALICE))).json()
     bob = await claimed(world, BOB)
@@ -739,6 +740,27 @@ async def test_fee_obligations_and_reviews_belong_to_their_own_claim(world):
                 {
                     "submission": alice["submissions"][-1]["submission_id"],
                     "claim": bob["claim_id"],
+                },
+            )
+        await session.rollback()
+    async with world.maker() as session:
+        with pytest.raises(
+            DBAPIError, match="fk_bounty_obligations_claim_id_bounty_submissions"
+        ):
+            await session.execute(
+                text(
+                    "INSERT INTO bounty_obligations (obligation_id, bounty_id, "
+                    "claim_id, kind, reason, payee_coldkey, amount_alpha_rao, "
+                    "simulated, submission_id, attribution, actor, decision_reason, "
+                    "created_at) VALUES (gen_random_uuid(), :bounty, :claim, "
+                    "'award', 'accepted_work', :payee, 1, true, :submission, "
+                    "'fixture credit', 'operator', 'fixture award', now())"
+                ),
+                {
+                    "bounty": alice["bounty_id"],
+                    "claim": bob["claim_id"],
+                    "payee": BOB.coldkey.ss58_address,
+                    "submission": alice["submissions"][-1]["submission_id"],
                 },
             )
         await session.rollback()

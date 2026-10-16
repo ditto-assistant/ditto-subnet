@@ -70,6 +70,25 @@ def test_a_later_smaller_pool_never_fails_an_award_its_claim_signed_for():
     assert made.reward_pool_alpha_rao == 1
 
 
+@pytest.mark.parametrize(
+    ("amount", "ok"), [(60_000_000_000, True), (60_000_000_001, False)]
+)
+def test_awards_recorded_at_the_same_instant_count_against_each_other(amount, ok):
+    claims = copy.deepcopy(CLAIMS)
+    alice = by_login(claims, "alice-dev")
+    award = next(o for o in alice["obligations"] if o["kind"] == "award")
+    tied = {
+        **copy.deepcopy(award),
+        "obligation_id": "00000000-0000-4000-8000-0000000000aa",
+        "amount_alpha_rao": amount,
+    }
+    by_login(claims, "carol-dev")["obligations"].append(tied)
+    made = report(DETAIL, claims)
+    # Alice's 40 alpha and this award share an instant against a 100 alpha pool.
+    check = next(c for c in made.checks if c.name == "awards_within_pool")
+    assert check.ok is ok
+
+
 State = dict[str, dict[str, Any]]
 
 

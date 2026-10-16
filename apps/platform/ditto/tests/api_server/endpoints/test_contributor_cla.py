@@ -1116,6 +1116,18 @@ async def test_off_gate_reads_only_the_policy_and_offers_nothing_to_bind(
     assert shadow.signature_id == UUID(receipt.json()["signature_id"])
 
 
+async def test_the_policy_write_timeout_bounds_only_its_lock(session_maker):
+    from ditto.api_server.endpoints import contributor_cla
+
+    show = text("SELECT current_setting('lock_timeout')")
+    async with session_maker() as session, session.begin():
+        before = await session.scalar(show)
+        await contributor_cla.lock_cla_policy_for_write(session)
+        # The write after the lock keeps the session's own timeout.
+        assert await session.scalar(show) == before
+    assert before != contributor_cla.CLA_POLICY_WRITE_LOCK_TIMEOUT
+
+
 async def test_enforce_without_an_effective_agreement_refuses_uploads(
     app, session_maker, monkeypatch
 ):

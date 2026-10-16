@@ -12438,7 +12438,11 @@ class BountyObligation(Base):
                 "bounty_fee_payments.payer_coldkey",
             ],
         ),
-        ForeignKeyConstraint(["submission_id"], ["bounty_submissions.submission_id"]),
+        # An award credits a submission of its own claim.
+        ForeignKeyConstraint(
+            ["claim_id", "submission_id"],
+            ["bounty_submissions.claim_id", "bounty_submissions.submission_id"],
+        ),
         CheckConstraint(
             "kind IN ('fee_refund','fee_retained','award') AND amount_alpha_rao > 0"
             " AND reason IN ("

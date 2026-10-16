@@ -113,6 +113,7 @@ async def lock_cla_policy_for_write(session: AsyncSession) -> None:
     exclusive request queues every new upload behind it, so an operator write
     waits only briefly and reports a retryable 503 instead.
     """
+    previous = await session.scalar(text("SELECT current_setting('lock_timeout')"))
     await session.execute(
         text("SELECT set_config('lock_timeout', :timeout, true)"),
         {"timeout": CLA_POLICY_WRITE_LOCK_TIMEOUT},
@@ -123,6 +124,12 @@ async def lock_cla_policy_for_write(session: AsyncSession) -> None:
         if getattr(getattr(exc.orig, "__cause__", None), "sqlstate", None) == ("55P03"):
             raise HTTPException(503, CLA_POLICY_BUSY_MESSAGE) from None
         raise
+    # Only this wait is bounded: the write that follows in this transaction
+    # keeps the session's own timeout, so a slow row lock is never a 500.
+    await session.execute(
+        text("SELECT set_config('lock_timeout', :timeout, true)"),
+        {"timeout": previous},
+    )
 
 
 def version_view(row: ClaVersion) -> ClaVersionView:

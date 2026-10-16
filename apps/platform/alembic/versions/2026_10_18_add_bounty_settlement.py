@@ -114,12 +114,13 @@ def upgrade() -> None:
     op.add_column("bounty_obligations", sa.Column("actor", sa.Text()))
     # Private: why the operator decided the award.
     op.add_column("bounty_obligations", sa.Column("decision_reason", sa.Text()))
+    # An award credits a submission of its own claim.
     op.create_foreign_key(
-        op.f("fk_bounty_obligations_submission_id_bounty_submissions"),
+        op.f("fk_bounty_obligations_claim_id_bounty_submissions"),
         "bounty_obligations",
         "bounty_submissions",
-        ["submission_id"],
-        ["submission_id"],
+        ["claim_id", "submission_id"],
+        ["claim_id", "submission_id"],
     )
     _replace_check(
         "bounty_obligations",
@@ -357,7 +358,7 @@ def downgrade() -> None:
         _obligation_check(settled=False),
     )
     op.drop_constraint(
-        op.f("fk_bounty_obligations_submission_id_bounty_submissions"),
+        op.f("fk_bounty_obligations_claim_id_bounty_submissions"),
         "bounty_obligations",
         type_="foreignkey",
     )

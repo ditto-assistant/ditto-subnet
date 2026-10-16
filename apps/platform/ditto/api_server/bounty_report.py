@@ -95,13 +95,13 @@ def _awards_within_pools(detail: BountyDetail, claims: list[BountyClaimView]) ->
 
     A claim is bounded by the pool of the revision it signed. Awards are
     recorded one at a time under the bounty's lock, so each one's pool covered
-    every award recorded before it and its own amount.
+    every award recorded before it and its own amount. Awards recorded at the
+    same instant count against each other, so a tie never hides an over-award.
     """
     pools = {r.revision: r.terms.reward_pool_alpha_rao for r in detail.revisions}
     awards = [(c.revision, award) for c in claims if (award := _award(c)) is not None]
     return all(
-        sum(o.amount_alpha_rao for _, o in awards if o.created_at < award.created_at)
-        + award.amount_alpha_rao
+        sum(o.amount_alpha_rao for _, o in awards if o.created_at <= award.created_at)
         <= pools[revision]
         for revision, award in awards
     )

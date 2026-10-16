@@ -6,7 +6,10 @@ import httpx
 import pytest
 from fastapi import FastAPI, Request, Response
 
-from ditto.api_server.middleware.public_cache import PublicCacheMiddleware
+from ditto.api_server.middleware.public_cache import (
+    PublicCacheMiddleware,
+    _policy_from_cache_control,
+)
 from ditto.api_server.middleware.sized_gzip import SizedGZipMiddleware
 
 
@@ -638,6 +641,26 @@ async def test_no_cache_responses_are_never_stored(clock: _Clock) -> None:
             response = await client.get("/api/v1/public/no-cache")
             assert response.headers.get("x-public-cache") != "HIT"
     assert calls["no_cache"] == 2
+
+
+@pytest.mark.parametrize(
+    ("header", "policy"),
+    [
+        ("public, max-age=15, stale-while-revalidate=60", (15.0, 60.0)),
+        ("Public, Max-Age=30", (30.0, 0.0)),
+        # An extension directive is neither a refusal nor a lifetime.
+        ("public, max-age=60, x-no-cache-hint=1", (60.0, 0.0)),
+        ("public, x-private-hint, max-age=5", (5.0, 0.0)),
+        ("public, x-max-age=60", (0.0, 0.0)),
+        ("no-cache, max-age=10", (0.0, 0.0)),
+        ('private="set-cookie", max-age=10', (0.0, 0.0)),
+        ("public, no-store", (0.0, 0.0)),
+    ],
+)
+def test_cache_control_directives_match_by_name(
+    header: str, policy: tuple[float, float]
+) -> None:
+    assert _policy_from_cache_control(header) == policy
 
 
 async def test_split_header_fields_are_stored_whole(clock: _Clock) -> None:

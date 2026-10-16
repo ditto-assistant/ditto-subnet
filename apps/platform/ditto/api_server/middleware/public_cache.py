@@ -31,7 +31,6 @@ import asyncio
 import hashlib
 import logging
 import os
-import re
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
@@ -47,8 +46,6 @@ if TYPE_CHECKING:
 
 _PREFIX = "/api/v1/public/"
 _MAX_ENTRIES = 512
-_MAX_AGE = re.compile(r"max-age=(\d+)")
-_STALE_WHILE_REVALIDATE = re.compile(r"stale-while-revalidate=(\d+)")
 _REFRESH_FAILURE_BACKOFF_SECONDS = 5.0
 
 _CACHEABLE_HEADERS = (
@@ -154,16 +151,23 @@ def _stored_headers(headers: Headers) -> dict[str, str]:
 def _policy_from_cache_control(value: str | None) -> tuple[float, float]:
     if not value:
         return 0.0, 0.0
-    lowered = value.lower()
+    # Directives by name, so an extension such as x-no-cache-hint=1 or
+    # x-max-age=60 is neither a refusal nor a lifetime.
+    directives = {
+        name.strip(): argument.strip()
+        for name, _, argument in (
+            directive.partition("=") for directive in value.lower().split(",")
+        )
+    }
     # no-cache forbids serving without revalidation, which this cache never does.
-    if "no-store" in lowered or "private" in lowered or "no-cache" in lowered:
+    if directives.keys() & {"no-store", "private", "no-cache"}:
         return 0.0, 0.0
-    max_age = _MAX_AGE.search(lowered)
-    stale = _STALE_WHILE_REVALIDATE.search(lowered)
-    return (
-        float(max_age.group(1)) if max_age else 0.0,
-        float(stale.group(1)) if stale else 0.0,
-    )
+
+    def seconds(name: str) -> float:
+        argument = directives.get(name, "")
+        return float(argument) if argument.isdigit() else 0.0
+
+    return seconds("max-age"), seconds("stale-while-revalidate")
 
 
 class PublicCacheMiddleware(BaseHTTPMiddleware):
