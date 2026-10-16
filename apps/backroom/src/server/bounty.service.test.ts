@@ -414,6 +414,17 @@ describe('bounty read-backs find this write, not the latest state', () => {
 })
 
 describe('bounty inputs are canonical before any request', () => {
+  it.each([
+    [{ upheld: false, restoreDays: 2 }],
+    [{ upheld: true }],
+  ])('refuses an appeal decision %o Platform would refuse, before any request', async (decision) => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(decideBountyAppeal(ACTOR, { bountyId: BOUNTY, appealId: APPEAL, reason, confirmation: 'x', ...decision }))
+      .rejects.toThrow('restoreDays is required to uphold an appeal')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('reads back a review sent with uppercase ids against the lowercase record', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(outage())
       .mockResolvedValueOnce(Response.json(claim({ submissions: [{ submission_id: SUBMISSION, decision: 'reject', decision_reason: reason }] })))

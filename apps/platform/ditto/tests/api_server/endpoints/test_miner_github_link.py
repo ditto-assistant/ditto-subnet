@@ -961,8 +961,13 @@ async def test_exchange_failure_is_terminal_and_redacts_unexpected_details(
     assert (diagnostic in caplog.text) is unexpected
     async with session_maker() as session:
         attempt = await session.get(MinerGithubLinkAttempt, UUID(body["attempt_id"]))
-        assert attempt.status == "failed" and attempt.code_verifier is None
-        assert attempt.error == expected
+        assert attempt.status == "failed" and attempt.error == expected
+        # A finished attempt keeps no verifier or binding material.
+        assert (
+            attempt.code_verifier,
+            attempt.browser_binding_hash,
+            attempt.accept_token_hash,
+        ) == (None, None, None)
 
 
 async def test_expired_status_poll_does_not_lock_or_mutate_the_attempt(
@@ -1612,6 +1617,31 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
     with pytest.raises(BountyIdentityRejected, match="not found") as gone:
         await verify(provider.login)
     assert type(gone.value.__cause__) is GithubLinkRejected
+
+
+async def test_a_cancelled_consent_keeps_no_secrets(app, client, session_maker):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    started, _, consent = await browser_flow(client, token, accept=False)
+    cancelled = await client.post(
+        "/api/v1/miner-auth/github/accept",
+        data={
+            "attempt_id": started["attempt_id"],
+            "accept_token": consent,
+            "decision": "cancel",
+        },
+        headers={"origin": "http://localhost"},
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    async with session_maker() as session:
+        attempt = await session.get(MinerGithubLinkAttempt, UUID(started["attempt_id"]))
+        assert attempt.status == "failed"
+        assert (
+            attempt.code_verifier,
+            attempt.browser_binding_hash,
+            attempt.accept_token_hash,
+        ) == (None, None, None)
 
 
 @pytest.mark.parametrize("failure", ["origin", "binding", "token", "decision"])

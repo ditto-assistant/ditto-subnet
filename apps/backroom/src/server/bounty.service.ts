@@ -272,6 +272,10 @@ export async function controlBountySlot(actor: string, rawInput: unknown) {
 
 export async function decideBountyAppeal(actor: string, rawInput: unknown) {
   const input = bountyAppealDecisionInputSchema.parse(rawInput)
+  // Platform's rule, checked before sending: only an upheld appeal restores.
+  if (input.upheld !== (input.restoreDays !== undefined)) {
+    throw new Error('restoreDays is required to uphold an appeal, and only then.')
+  }
   const outcome = await platformAdminWrite(`${ADMIN}/appeals/${input.appealId}/decision`, {
     actor,
     body: { upheld: input.upheld, reason: input.reason, restore_days: input.restoreDays ?? null, confirmation: input.confirmation },
