@@ -1032,6 +1032,74 @@ class TestProvisionalIncumbent:
         assert epoch_recipients[str(_HELD_ID)]["paid"] is False
         assert "paid" not in epoch_recipients[str(_RUNNER_UP_ID)]
 
+    async def test_promoted_generation_inherits_the_crown_on_the_public_board(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The pinned champion's family promotes a newer upload, nothing is held.
+
+        The next pin carries the crown through the owner family, so the public
+        projection must name the new representative, not a senior rival that
+        the classic first-seen walk would crown once the exact pinned agent has
+        left the pool.
+        """
+        await self._arm(app, session, session_maker)
+        crowned = await _seed(
+            session,
+            hotkey=_LEADER_HOTKEY,
+            name="crowned generation",
+            composite=0.80,
+            sha256="ab" * 32,
+            agent_id=_HELD_ID,
+            created_at=_NOW - timedelta(days=4),
+        )
+        rival = await _seed(
+            session,
+            hotkey=_RUNNER_UP_HOTKEY,
+            name="senior rival",
+            composite=0.80,
+            sha256="cd" * 32,
+            agent_id=_RUNNER_UP_ID,
+            created_at=_NOW - timedelta(days=3),
+        )
+        read = self._epochs(app)
+        await self._read(client)
+        async with session_maker() as pin_session:
+            first_pin = await latest_pin(pin_session, netuid=118)
+        assert first_pin is not None and first_pin.champion_agent_id == crowned
+
+        # Inside the band over the rival, but above its own family's crowned
+        # generation, so it becomes the family representative.
+        promoted = await _seed(
+            session,
+            hotkey=_LEADER_HOTKEY,
+            name="promoted generation",
+            composite=0.805,
+            sha256="ef" * 32,
+            created_at=_NOW - timedelta(days=1),
+        )
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        assert {entry["agent_id"] for entry in board["entries"]} == {
+            str(promoted),
+            str(rival),
+        }
+        emissions = board["emissions"]
+        assert emissions["crown_incumbent_agent_id"] == str(promoted)
+        assert emissions["champion_agent_id"] == str(promoted)
+        projection = emissions["next_pin_projection"]
+        assert projection["champion_agent_id"] == str(promoted)
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        served = await self._read(client)
+        assert served["crown_incumbent_agent_id"] == str(promoted)
+        async with session_maker() as pin_session:
+            pin = await latest_pin(pin_session, netuid=118)
+        assert pin is not None and pin.epoch_index == 25_029
+        assert pin.champion_agent_id == promoted
+
     async def test_a_challenger_that_clears_the_band_takes_the_paid_crown(
         self,
         app: FastAPI,
