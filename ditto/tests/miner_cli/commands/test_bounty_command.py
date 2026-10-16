@@ -376,6 +376,16 @@ def test_list_reads_every_page_of_the_board(capsys):
     assert (len(whole["items"]), whole["total"], whole["limit"]) == (101, 101, 101)
 
 
+def test_a_board_that_ends_before_its_total_is_an_error(capsys):
+    client = api()
+    summary = detail().summary
+    client.list_bounties.side_effect = lambda *, limit, offset: BountyBoardPage(
+        items=[summary] if offset == 0 else [], total=3, limit=limit, offset=offset
+    )
+    assert run(["list"], client) == 1
+    assert "ended early: 1 of 3" in capsys.readouterr().err
+
+
 def test_an_empty_board_lists_as_an_empty_page(capsys):
     client = api()
     client.list_bounties.side_effect = lambda *, limit, offset: BountyBoardPage(

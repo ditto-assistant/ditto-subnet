@@ -187,6 +187,14 @@ async def test_the_review_queue_lists_overdue_first(world, monkeypatch):
     assert [item["overdue"] for item in queue["items"]] == [True, False]
     assert queue["items"][0]["reviewer_actor"] == "reviewer-private@example.com"
     assert queue["items"][0]["submission"]["head_sha"] == "ab" * 20
+    # Each item carries its own claim's latest submission and claimed terms.
+    assert [item["submission"]["submission_id"] for item in queue["items"]] == [
+        first["submissions"][-1]["submission_id"],
+        second["submissions"][-1]["submission_id"],
+    ]
+    assert {item["title"] for item in queue["items"]} == {
+        world.detail["summary"]["title"]
+    }
     overdue = (
         await world.client.get(
             f"{ADMIN}/queue/reviews", headers=_HEADERS, params={"overdue_only": True}

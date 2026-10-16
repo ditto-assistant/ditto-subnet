@@ -140,19 +140,16 @@ const NOT_CONNECTED = new Set([
 
 type Coded = { code?: unknown; errors?: unknown } | null | undefined
 
-/** Every error code on a failure: its own, and those of an AggregateError's
- * parts, which is how a connection attempt to several addresses fails. */
-function codesOf(error: Coded): unknown[] {
-  const parts = Array.isArray(error?.errors) ? (error.errors as Coded[]) : []
-  return [error?.code, ...parts.map((part) => part?.code)]
-}
-
 function connectionError(path: string, error: unknown) {
   const detail = error instanceof Error ? error.message : String(error)
-  const failure = error as (Coded & { cause?: Coded }) | null
-  const codes = [...codesOf(failure?.cause), ...codesOf(failure)].filter((code) => typeof code === 'string')
-  // Never delivered only when every attempt failed before connecting.
-  const code = codes.length > 0 && codes.every((item) => NOT_CONNECTED.has(item as string)) ? codes[0] : undefined
+  const cause = (error as { cause?: Coded } | null)?.cause
+  // A connection tried at several addresses fails as an AggregateError whose
+  // parts carry the codes.
+  const parts = Array.isArray(cause?.errors) ? (cause.errors as Coded[]) : []
+  const codes = parts.length > 0 ? parts.map((part) => part?.code) : [cause?.code]
+  // Never delivered only when every attempt is known to have failed before
+  // connecting; a part with no code, or another code, may have been sent.
+  const code = codes.every((item) => typeof item === 'string' && NOT_CONNECTED.has(item)) ? codes[0] : undefined
   return typeof code === 'string'
     ? new PlatformAdminError('unreachable', `The platform API could not be reached for ${path} (${code}): ${detail}`)
     : new PlatformAdminError('transport', `The platform API connection failed during ${path}: ${detail}`)

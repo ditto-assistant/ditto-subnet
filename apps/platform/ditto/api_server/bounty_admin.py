@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import exists, select
+from sqlalchemy import exists, select, tuple_
 
 from ditto.api_models.bounty import (
     BountyAdminAppealView,
@@ -382,6 +382,11 @@ async def operator_view(session: AsyncSession, bounty_id: UUID) -> BountyOperato
     )
 
 
+def _due(slot: BountySlot) -> datetime:
+    assert slot.review_due_at is not None
+    return slot.review_due_at
+
+
 async def review_queue(
     session: AsyncSession, *, overdue_only: bool = False
 ) -> BountyReviewQueue:
@@ -396,32 +401,52 @@ async def review_queue(
             .order_by(BountySlot.review_due_at, BountySlot.slot_id)
         )
     ).all()
+    queued = [
+        (slot, claim, owner)
+        for slot, claim, owner in rows
+        if not overdue_only or now >= _due(slot)
+    ]
+    # One read each for every item's latest submission and claimed terms.
+    claim_ids = [claim.claim_id for _slot, claim, _owner in queued]
+    latest: dict[UUID, BountySubmission] = {
+        submission.claim_id: submission
+        for submission in await session.scalars(
+            select(BountySubmission)
+            .where(BountySubmission.claim_id.in_(claim_ids))
+            .order_by(BountySubmission.claim_id, BountySubmission.submitted_at.desc())
+            .distinct(BountySubmission.claim_id)
+        )
+    }
+    pairs = {(claim.bounty_id, claim.revision) for _slot, claim, _owner in queued}
+    titles: dict[tuple[UUID, int], str] = {
+        (bounty_id, number): title
+        for bounty_id, number, title in (
+            await session.execute(
+                select(
+                    BountyRevision.bounty_id,
+                    BountyRevision.revision,
+                    BountyRevision.title,
+                ).where(
+                    tuple_(BountyRevision.bounty_id, BountyRevision.revision).in_(pairs)
+                )
+            )
+        ).all()
+    }
     items: list[BountyReviewQueueItem] = []
     reviewers: dict[UUID, str] = {}
-    for slot, claim, owner in rows:
-        assert slot.review_due_at is not None
-        overdue = now >= slot.review_due_at
-        if overdue_only and not overdue:
-            continue
-        submission = await session.scalar(
-            select(BountySubmission)
-            .where(BountySubmission.claim_id == claim.claim_id)
-            .order_by(BountySubmission.submitted_at.desc())
-            .limit(1)
-        )
-        assert submission is not None
+    for slot, claim, owner in queued:
+        overdue = now >= _due(slot)
+        submission = latest[claim.claim_id]
         if owner.bounty_id not in reviewers:
             reviewers[owner.bounty_id] = await current_reviewer(
                 session, owner.bounty_id
             )
-        revision = await session.get(BountyRevision, (claim.bounty_id, claim.revision))
-        assert revision is not None
         items.append(
             BountyReviewQueueItem(
                 bounty_id=owner.bounty_id,
                 repo=owner.repo,
                 issue=owner.issue_number,
-                title=revision.title,
+                title=titles[(claim.bounty_id, claim.revision)],
                 claim_id=claim.claim_id,
                 slot_id=slot.slot_id,
                 round=slot.round,

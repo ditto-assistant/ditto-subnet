@@ -183,9 +183,10 @@ describe('platformAdminRequest', () => {
   it.each([
     [['ECONNREFUSED', 'EHOSTUNREACH'], 'unreachable'],
     [['ECONNREFUSED', 'ECONNRESET'], 'transport'],
+    [['ECONNREFUSED', undefined], 'transport'],
   ])('classifies an aggregate connection failure %o as %s', async (codes, failure) => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
-    const cause = Object.assign(new AggregateError(codes.map((code) => Object.assign(new Error(code), { code }))), {})
+    const cause = new AggregateError(codes.map((code) => Object.assign(new Error(code ?? 'unknown'), code ? { code } : {})))
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause })))
 
     const error = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', body: { mode: 'shadow' } })

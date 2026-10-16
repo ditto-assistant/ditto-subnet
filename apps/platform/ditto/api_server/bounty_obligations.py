@@ -12,7 +12,8 @@ transfers, so no write can leave the two disagreeing:
   of distinct operators approved it under the revision in force, and
   ``awaiting_approval`` before that;
 - an amount above the policy's dual-approver limit is ``over_policy_limit``:
-  nobody can approve it until a policy revision raises the limit. With no
+  nobody can approve it until a policy revision raises the limit, so this
+  outranks ``failed``, whose fresh approvals could not arrive. With no
   policy configured yet, the round awaits approval with no known requirement.
 """
 
@@ -52,7 +53,11 @@ def required_approvals(amount: int, policy: BountyPayoutPolicy | None) -> int | 
     """Distinct approvers an amount needs; ``None`` when nobody may approve it."""
     if policy is None:
         return None
-    if amount <= policy.single_approver_max_alpha_rao:
+    # The schema keeps single <= dual; bounding it here too means no policy
+    # can ever let one operator approve more than the dual cap.
+    if amount <= min(
+        policy.single_approver_max_alpha_rao, policy.dual_approver_max_alpha_rao
+    ):
         return 1
     if amount <= policy.dual_approver_max_alpha_rao:
         return 2

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -16,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from ditto.api_models.bounty import simulated_transfer_block_hash
+from ditto.api_server.bounty_obligations import required_approvals
 from ditto.api_server.bounty_settlement import TransferOutcome
 from ditto.chain import ChainConnectionError
 from ditto.db.models import BountyObligation
@@ -482,6 +484,27 @@ async def test_only_an_executor_of_the_same_funding_mode_reconciles(world, monke
     # Nothing was recorded, so the right executor still settles it.
     settled = (await reconcile(world, transfer_id, "confirmed")).json()
     assert [t["state"] for t in settled["transfers"]] == ["confirmed"]
+
+
+async def test_no_policy_lets_one_operator_approve_above_the_dual_cap():
+    inverted = SimpleNamespace(
+        single_approver_max_alpha_rao=100, dual_approver_max_alpha_rao=50
+    )
+    assert [required_approvals(amount, inverted) for amount in (50, 80)] == [1, None]
+
+
+async def test_a_failed_transfer_above_a_lowered_limit_reads_over_the_limit(world):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    await policy(world)
+    refund = obligation(claim, "fee_refund")
+    await approve(world, refund)
+    assert (await dispatch(world, refund, "failed")).json()["state"] == "failed"
+    # No fresh approval can arrive until the limit is raised again.
+    lowered = await policy(world, expected=1, single=1, dual=FEE - 1)
+    assert lowered.status_code == 200, lowered.text
+    owed = obligation(await claim_of(world, claim), "fee_refund")
+    assert (owed["state"], owed["approvals_required"]) == ("over_policy_limit", None)
 
 
 async def test_an_uncertain_transfer_is_reconciled_before_anything_else(world):
