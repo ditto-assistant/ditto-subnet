@@ -970,6 +970,38 @@ def test_completed_link_must_match_the_expected_account(capsys):
     assert "999 is not the expected id 100" in capsys.readouterr().err
 
 
+def test_cla_sign_reports_an_unpublished_requested_version(tmp_path, capsys):
+    from ditto.miner_cli.api_client import ApiClient
+
+    def reply(request):
+        assert request.url.path == "/api/v1/public/cla/versions/9"
+        return httpx.Response(
+            404, json={"error_code": 1004, "message": "CLA version is not published"}
+        )
+
+    real = ApiClient(
+        client=httpx.Client(
+            base_url="http://platform.test", transport=httpx.MockTransport(reply)
+        )
+    )
+    api = client()
+    api.get_cla_version.side_effect = lambda *, version: real.get_cla_version(
+        version=version
+    )
+    handle, live = wallet()
+    with (
+        patch.object(cla, "ApiClient", return_value=api),
+        patch.object(cla, "load_wallet", return_value=(handle, live)),
+    ):
+        code = cla.run(args(version=9, output=tmp_path / "CLA.md"))
+    assert code == 1
+    err = capsys.readouterr().err
+    # The requested version is named as unpublished, not "no effective CLA".
+    assert "CLA version is not published" in err
+    assert "no effective CLA" not in err
+    live.hotkey.sign.assert_not_called()
+
+
 def test_cla_sign_refuses_an_outdated_version(tmp_path, capsys):
     api = client()
     current = version().model_copy(update={"version": 2})

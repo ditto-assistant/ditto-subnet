@@ -534,6 +534,83 @@ class TestUploadHappyPath:
         pay.assert_not_called()
         register.assert_not_called()
 
+    @pytest.mark.parametrize("source", ["explicit", "saved"])
+    @pytest.mark.parametrize(
+        "rejection",
+        [
+            PaymentAmountMismatchError("payment amount mismatch"),
+            PaymentRecoveryExpiredError("payment recovery window expired"),
+        ],
+    )
+    def test_unsigned_rejected_recovery_reports_consent_before_paying_again(
+        self, good_tar: Path, capsys, source: str, rejection: Exception
+    ) -> None:
+        client = MagicMock()
+        client.get_cla_status.return_value = ClaStatus(
+            netuid=118,
+            mode="enforce",
+            current=ClaVersionView(
+                version=2,
+                sha256="a" * 64,
+                published_at=datetime.now(UTC),
+                effective_at=datetime.now(UTC),
+            ),
+        )
+        client.post_upload_check.side_effect = rejection
+        receipt = _payment_receipt()
+        pending = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256=_good_preflight().sha256,
+            payment=receipt,
+        )
+        flags = (
+            {
+                "payment_block_hash": receipt.block_hash,
+                "payment_block_number": receipt.block_number,
+                "payment_extrinsic_index": receipt.extrinsic_index,
+            }
+            if source == "explicit"
+            else {}
+        )
+        with (
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(
+                    MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner"),
+                    MagicMock(),
+                ),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient", _patch_api_client(client)
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payment",
+                return_value=receipt if source == "saved" else None,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.load_pending_payments_for_hotkey",
+                return_value=(pending,) if source == "saved" else (),
+            ),
+            patch("ditto.miner_cli.commands.upload.clear_pending_payment") as clear,
+            patch("ditto.miner_cli.commands.upload.submit_eval_payment") as pay,
+        ):
+            assert run(make_args(good_tar, pay_again=True, **flags)) == 1
+        assert "ditto cla sign" in capsys.readouterr().err
+        # Only the exempt recovery was checked; no replacement was attempted.
+        client.post_upload_check.assert_called_once()
+        pay.assert_not_called()
+        clear.assert_not_called()
+
     @pytest.mark.parametrize("saved", [1, 2])
     @pytest.mark.parametrize("different", ["name", "digest"])
     def test_unsigned_reassigned_receipt_requires_current_consent(

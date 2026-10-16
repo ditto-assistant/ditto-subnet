@@ -506,6 +506,63 @@ async def test_policy_change_before_admission_rechecks_consent(
         )
 
 
+async def test_an_agreement_that_takes_effect_during_the_coldkey_wait_applies(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.api_server.endpoints import upload
+    from ditto.db.queries import submission_settings
+
+    setup(app, session_maker)
+    first = await publish(client)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    signature = await client.post("/api/v1/cla/sign", json=signed(alice, first))
+    assert signature.status_code == 200, signature.text
+    await publish(client, 2, effective=datetime.now(UTC) + timedelta(days=1))
+    await elapse_cla_notice(session_maker)
+    await policy(client, "enforce")
+    original = submission_settings.lock_upload_admission_coldkey
+
+    async def v2_takes_effect_during_the_wait(session, miner_coldkey):
+        await original(session, miner_coldkey)
+        async with session_maker() as other, other.begin():
+            await other.execute(
+                text("ALTER TABLE cla_versions DISABLE TRIGGER cla_versions_immutable")
+            )
+            await other.execute(
+                text(
+                    "UPDATE cla_versions "
+                    "SET effective_at = now() - interval '1 second' "
+                    "WHERE version = 2"
+                )
+            )
+            await other.execute(
+                text("ALTER TABLE cla_versions ENABLE TRIGGER cla_versions_immutable")
+            )
+
+    monkeypatch.setattr(
+        submission_settings,
+        "lock_upload_admission_coldkey",
+        v2_takes_effect_during_the_wait,
+    )
+    monkeypatch.setattr(
+        upload, "lock_upload_admission_coldkey", v2_takes_effect_during_the_wait
+    )
+    body = _signed_request_body(keypair=alice)
+    body["reserve_submission_slot"] = True
+    response = await client.post("/api/v1/upload/check", json=body)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["error_codes"] == [1106] and result["admission_token"] is None
+    assert "v2" in result["messages"][0]
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                text("SELECT count(*) FROM upload_admission_reservations")
+            )
+            == 0
+        )
+
+
 async def test_upload_agent_enforces_before_payment_verification_or_storage(
     app, client, session_maker
 ):

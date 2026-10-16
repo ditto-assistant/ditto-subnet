@@ -79,6 +79,11 @@ class GithubLinkClient:
         self.config = config
         self.transport = transport
         self._public: httpx.AsyncClient | None = None
+        # Revocations the client owns until they finish. A cancelled request
+        # stops waiting for its revocation, but the event loop keeps only weak
+        # references to tasks, so without this one could be collected before
+        # the token is revoked.
+        self._revocations: set[asyncio.Task[bool]] = set()
 
     @property
     def enabled(self) -> bool:
@@ -101,8 +106,17 @@ class GithubLinkClient:
         return self._public
 
     async def aclose(self) -> None:
+        # Pending revocations finish first; each has its own deadline.
+        if self._revocations:
+            await asyncio.gather(*self._revocations, return_exceptions=True)
         if self._public is not None:
             await self._public.aclose()
+
+    def _start_revocation(self, token: str) -> asyncio.Task[bool]:
+        task = asyncio.ensure_future(self._revoke_token(token))
+        self._revocations.add(task)
+        task.add_done_callback(self._revocations.discard)
+        return task
 
     def authorize_url(self, *, state: str, verifier: str) -> str:
         query = urlencode(
@@ -196,11 +210,10 @@ class GithubLinkClient:
                 finally:
                     # Revoke the single transient token on success, rejection,
                     # deadline or cancellation. The revocation runs as its own
-                    # shielded task with its own client and bound, so a
-                    # cancelled request still revokes it (and logs a failure).
-                    cleanup_ok = await asyncio.shield(
-                        asyncio.ensure_future(self._revoke_token(token))
-                    )
+                    # shielded task with its own client and bound, owned by
+                    # this client, so a cancelled request still revokes it
+                    # (and logs a failure).
+                    cleanup_ok = await asyncio.shield(self._start_revocation(token))
                     # Preserve the original rejection. Cleanup cannot turn a
                     # failed verification into success or expose provider errors.
                     if verified and not cleanup_ok:

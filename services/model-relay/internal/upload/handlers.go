@@ -301,6 +301,11 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 	if err != nil {
 		return nil, settings{}, err
 	}
+	if err := q.LockUploadAdmissionColdkey(ctx, coldkey); err != nil {
+		return nil, current, err
+	}
+	// Evaluate the gate after the coldkey wait, at a fresh time: an agreement
+	// that became effective while this request waited applies to it.
 	consent, err := q.GetClaUploadGate(ctx, postgres.GetClaUploadGateParams{
 		Netuid: d.Cfg.Chain.NetuidInt32(), Hotkey: hotkey,
 		ObservedAt: pgtype.Timestamptz{Time: d.now(), Valid: true},
@@ -310,9 +315,6 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 	}
 	if rejection := claGateRejection(consent); rejection != nil {
 		return nil, current, rejection
-	}
-	if err := q.LockUploadAdmissionColdkey(ctx, coldkey); err != nil {
-		return nil, current, err
 	}
 	existing, err := q.GetUploadAdmissionForColdkey(ctx, coldkey)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {

@@ -440,6 +440,11 @@ def _run_upload(
         except (PaymentAmountMismatchError, PaymentRecoveryExpiredError) as error:
             if receipt is None:
                 raise
+            if cla_error is not None:
+                # Only the exact recovery was exempt from current consent. A
+                # replacement payment is a new contribution, so report the
+                # requirement before asking to pay again.
+                raise MinerCliError(cla_error) from None
             _authorize_replacement_payment(args=args, error=error, receipt=receipt)
             check_response = _check(None)
             if check_response.ok and check_response.admission_token is not None:

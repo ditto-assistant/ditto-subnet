@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -529,6 +530,79 @@ func TestCLAReservationsForDifferentColdkeysOverlap(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("concurrent reservations did not commit")
 		}
+	}
+}
+
+func TestCLAAgreementEffectiveDuringColdkeyWaitApplies(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	coldkey, hotkey := "5Owner", fixtureAddress
+	d := uploadDeps(pool, coldkey, now)
+	testutil.SeedSQL(t, pool, `INSERT INTO cla_versions (version,sha256,text,published_at,effective_at,actor,reason)
+		VALUES (1,$1,'TEST FIXTURE ONLY',now(),$2,'fixture','test')`, strings.Repeat("a", 64), now.Add(-time.Minute))
+	testutil.SeedSQL(t, pool, `INSERT INTO cla_settings_revisions (revision,parent_revision,mode,actor,reason,created_at)
+		VALUES (1,0,'enforce','fixture','test rollout',now())`)
+	// The hotkey signed v1, so it passes the gate until v2 takes effect.
+	testutil.SeedSQL(t, pool, `INSERT INTO cla_signatures (signature_id,netuid,hotkey,coldkey,cla_version,cla_sha256,signature,nonce,issued_at,signed_at,owner_block,owner_block_hash)
+		VALUES ($1,118,$2,'fixture-owner',1,$3,$4,$5,now(),now(),123,$6)`, uuid.New(), hotkey, strings.Repeat("a", 64), strings.Repeat("ab", 64), uuid.New(), "0x"+strings.Repeat("a", 64))
+	effective := now.Add(time.Minute)
+	testutil.SeedSQL(t, pool, `INSERT INTO cla_versions (version,sha256,text,published_at,effective_at,actor,reason)
+		VALUES (2,$1,'TEST FIXTURE ONLY V2',now(),$2,'fixture','test')`, strings.Repeat("c", 64), effective)
+	var mu sync.Mutex
+	clock := now
+	d.Now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return clock
+	}
+	// Another request holds this coldkey's admission lock.
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", coldkey); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := d.reserve(context.Background(), coldkey, hotkey, strings.Repeat("b", 64), now)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted").Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the reservation never waited for the coldkey lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// v2 takes effect while the reservation waits.
+	mu.Lock()
+	clock = effective.Add(time.Second)
+	mu.Unlock()
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		var required *claRequiredError
+		if !errors.As(err, &required) || !strings.Contains(required.message, "v2") {
+			t.Fatalf("the agreement that took effect during the wait was not enforced: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reservation did not finish")
+	}
+	var reservations int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM upload_admission_reservations").Scan(&reservations); err != nil || reservations != 0 {
+		t.Fatalf("reservations=%d err=%v", reservations, err)
 	}
 }
 

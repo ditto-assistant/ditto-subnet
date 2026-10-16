@@ -100,6 +100,7 @@ from ditto.db.queries.submission_settings import (
     effective_submission_settings,
     get_upload_admission,
     get_upload_admission_for_coldkey,
+    lock_upload_admission_coldkey,
     release_upload_admission_for_exact_retry,
     reserve_upload_admission,
 )
@@ -447,6 +448,9 @@ async def check(
         try:
             async with session.begin():
                 await lock_identity_writes(session, namespace="cla-policy", shared=True)
+                # Evaluate consent after the coldkey wait: an agreement that took
+                # effect while this check waited applies to it.
+                await lock_upload_admission_coldkey(session, owner_coldkey)
                 cla_message = await _cla_check_message(
                     session, body=body, netuid=netuid
                 )

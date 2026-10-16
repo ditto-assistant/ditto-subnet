@@ -64,6 +64,8 @@ class Provider:
     users_reply = None
     users_delay = 0.0
     users_headers: dict[str, str] = {}
+    # When set, a revocation waits for it before GitHub answers.
+    revoke_gate: asyncio.Event | None = None
 
     def __init__(self):
         self.requests = []
@@ -98,6 +100,8 @@ class Provider:
                 assert json.loads(request.content) == {"access_token": TOKEN}
                 if self.revoke_transport_error:
                     raise httpx.ConnectError(f"fixture transport {TOKEN} {SECRET}")
+                if self.revoke_gate is not None:
+                    await self.revoke_gate.wait()
                 return httpx.Response(self.revoke_status)
             if request.url.path.startswith("/users/"):
                 expected = base64.b64encode(
@@ -2092,6 +2096,27 @@ async def test_exchange_deadline_fails_as_an_outage_and_still_revokes(
     assert callback.status_code == 502, callback.text
     assert "did not answer in time" in callback.text
     assert [r.method for r in provider.requests].count("DELETE") == 1
+
+
+async def test_a_cancelled_exchange_still_finishes_its_revocation(app, session_maker):
+    provider = setup(app, session_maker)
+    github = app.state.github_link
+    provider.revoke_gate = asyncio.Event()
+    exchange = asyncio.create_task(
+        github.exchange(code="fixture-code", verifier="fixture-verifier")
+    )
+    while not any(r.method == "DELETE" for r in provider.requests):
+        await asyncio.sleep(0.01)
+    exchange.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await exchange
+    # The client, not the cancelled request, holds the pending revocation.
+    [pending] = github._revocations
+    assert not pending.done()
+    provider.revoke_gate.set()
+    await github.aclose()
+    assert pending.result() is True
+    assert not github._revocations
 
 
 async def test_confirm_stops_when_linking_is_disabled(app, client, session_maker):
