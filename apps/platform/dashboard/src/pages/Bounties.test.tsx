@@ -257,10 +257,15 @@ describe("bounty detail", () => {
     expect(within(slotRow(alice.position)).getByText("Payments")).toBeInTheDocument();
   });
 
-  it("says a fee that never claimed a slot was received and refunded", async () => {
+  it.each([
+    ["confirmed", "refunded in full"],
+    ["awaiting_approval", "owed back in full"],
+  ])("says a fee that never claimed a slot was received, its refund %s", async (state, label) => {
     const alice = claimOf("alice-dev");
     const edited = structuredClone(claims);
     Object.assign(edited[alice.claim_id]!, { state: "refund_owed", claimed_at: null });
+    edited[alice.claim_id]!.obligations.find((o) => o.kind === "fee_refund")!.state =
+      state as never;
     vi.mocked(getJSON).mockImplementation(((path: string) =>
       path === `/bounties/claims/${alice.claim_id}`
         ? Promise.resolve(edited[alice.claim_id])
@@ -271,7 +276,7 @@ describe("bounty detail", () => {
     const body = (await within(row).findByText("Payments")).closest(
       ".bounty-claim-body",
     ) as HTMLElement;
-    expect(body).toHaveTextContent("received but not applied to a slot; refunded in full");
+    expect(body).toHaveTextContent(`received but not applied to a slot; ${label}`);
     expect(body).not.toHaveTextContent("not paid");
   });
 

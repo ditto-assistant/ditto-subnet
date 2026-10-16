@@ -323,6 +323,13 @@ def upgrade() -> None:
         ["claim_id", "appeal_id"],
         ["claim_id", "appeal_id"],
     )
+    # A NULL claim would skip those composite keys, so a reference needs one.
+    op.create_check_constraint(
+        op.f("ck_bounty_events_review_refs"),
+        "bounty_events",
+        "(submission_id IS NULL OR claim_id IS NOT NULL)"
+        " AND (appeal_id IS NULL OR claim_id IS NOT NULL)",
+    )
     _replace_check(
         "bounty_events", "ck_bounty_events_kind", f"kind IN ({_quoted(EVENT_KINDS)})"
     )
@@ -359,6 +366,9 @@ def downgrade() -> None:
         "bounty_events",
         "ck_bounty_events_kind",
         f"kind IN ({_quoted(P2_EVENT_KINDS)})",
+    )
+    op.drop_constraint(
+        op.f("ck_bounty_events_review_refs"), "bounty_events", type_="check"
     )
     for constraint in (
         "fk_bounty_events_claim_id_bounty_appeals",

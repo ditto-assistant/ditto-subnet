@@ -875,6 +875,23 @@ async def test_history_references_stay_within_their_bounty_and_claim(world):
             {"claim": bob["claim_id"], **none, "obligation": refund["obligation_id"]},
             "fk_bounty_events_claim_id_bounty_obligations",
         ),
+        # Without a claim the composite keys would not apply at all.
+        (
+            {
+                "claim": None,
+                **none,
+                "submission": alice["submissions"][-1]["submission_id"],
+            },
+            "ck_bounty_events_review_refs",
+        ),
+        (
+            {"claim": None, **none, "appeal": filed.json()["appeals"][0]["appeal_id"]},
+            "ck_bounty_events_review_refs",
+        ),
+        (
+            {"claim": None, **none, "obligation": refund["obligation_id"]},
+            "ck_bounty_events_obligation_ref",
+        ),
     ):
         async with world.maker() as session:
             with pytest.raises(DBAPIError, match=constraint):

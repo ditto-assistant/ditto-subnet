@@ -714,7 +714,13 @@ function ClaimBody(props: { view: BountyClaimView }): JSX.Element {
             {view().claimed_at
               ? `paid ${athDate(view().claimed_at)}`
               : view().receipts.length > 0
-                ? "received but not applied to a slot; refunded in full"
+                ? // Refunded only once its transfer is confirmed; owed until then.
+                  view().obligations.some(
+                    (obligation) =>
+                      obligation.kind === "fee_refund" && obligation.state === "confirmed",
+                  )
+                  ? "received but not applied to a slot; refunded in full"
+                  : "received but not applied to a slot; owed back in full"
                 : "not paid"}
           </dd>
         </div>

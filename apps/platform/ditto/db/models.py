@@ -12227,6 +12227,15 @@ class BountyEvent(Base):
             ["claim_id", "obligation_id"],
             ["bounty_obligations.claim_id", "bounty_obligations.obligation_id"],
         ),
+        # A NULL claim would skip those composite keys, so a reference needs one.
+        CheckConstraint(
+            "(submission_id IS NULL OR claim_id IS NOT NULL)"
+            " AND (appeal_id IS NULL OR claim_id IS NOT NULL)",
+            name="review_refs",
+        ),
+        CheckConstraint(
+            "obligation_id IS NULL OR claim_id IS NOT NULL", name="obligation_ref"
+        ),
         CheckConstraint(
             "kind IN (" + ",".join(f"'{k}'" for k in BOUNTY_EVENT_KINDS) + ")",
             name="kind",
