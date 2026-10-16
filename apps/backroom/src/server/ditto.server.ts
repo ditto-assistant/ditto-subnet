@@ -263,7 +263,9 @@ export async function platformAdminRequest(
         )
       }
     }
-    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+    // Only a write can stop at a redirect; a GET that ends in 3xx (a 304, or a
+    // redirect without a location) is an ordinary failed read.
+    if (response.type === 'opaqueredirect' || (method !== 'GET' && response.status >= 300 && response.status < 400)) {
       throw new PlatformAdminError(
         'request',
         `The platform API redirected ${method} ${path}; it was not followed, so nothing was written.`,

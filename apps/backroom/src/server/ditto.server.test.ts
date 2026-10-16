@@ -180,6 +180,17 @@ describe('platformAdminRequest', () => {
     expect((error as PlatformAdminError).status).toBeNull()
   })
 
+  it('reports a GET that ends in a 3xx as a failed read, not a redirect', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(null, { status: 304 })))
+
+    const error = await platformAdminRequest('/api/v1/admin/cla/settings').catch((caught: unknown) => caught)
+
+    expect((error as PlatformAdminError).failure).toBe('request')
+    expect((error as PlatformAdminError).status).toBe(304)
+    expect((error as Error).message).not.toContain('redirected')
+  })
+
   it('never follows a redirect on a write and reports it as a definite refusal', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
     const fetchMock = vi.fn().mockResolvedValueOnce(new Response(null, { status: 301, headers: { Location: 'https://elsewhere.invalid/' } }))

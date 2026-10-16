@@ -135,10 +135,13 @@ def transfer_view(transfer: BountyTransfer) -> BountyTransferView:
         receipt=(
             BountyFeeReceipt(
                 block_hash=transfer.block_hash,
-                block_number=transfer.block_number or 0,
-                extrinsic_index=transfer.extrinsic_index or 0,
+                block_number=transfer.block_number,
+                extrinsic_index=transfer.extrinsic_index,
             )
+            # The schema records all three or none; never fill one in.
             if transfer.block_hash is not None
+            and transfer.block_number is not None
+            and transfer.extrinsic_index is not None
             else None
         ),
         simulated=transfer.simulated,
