@@ -114,6 +114,7 @@ from ditto.db.queries.scores import (
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+    nonce_expires_at,
 )
 from ditto_screening_protocol.treasury_enforcement import (
     EnforcingTreasuryPin,
@@ -1342,7 +1343,11 @@ async def scores(
                 nonce=x_validator_ledger_nonce,
                 validator_hotkey=x_validator_hotkey,
                 now=auth_now,
-                expires_at=auth_now + _LEDGER_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=auth_now,
+                    requested_at=x_validator_ledger_requested_at,
+                    max_age=_LEDGER_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -1479,7 +1484,11 @@ async def _authorize_ledger_request(
                 nonce=x_validator_ledger_nonce,
                 validator_hotkey=x_validator_hotkey,
                 now=auth_now,
-                expires_at=auth_now + _LEDGER_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=auth_now,
+                    requested_at=x_validator_ledger_requested_at,
+                    max_age=_LEDGER_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
