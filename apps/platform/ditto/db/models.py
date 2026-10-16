@@ -12142,10 +12142,16 @@ class BountySlot(Base):
     )
     __table_args__ = (
         UniqueConstraint("bounty_id", "round", "position"),
+        # The target of references that must stay within the slot's bounty.
+        UniqueConstraint("slot_id", "bounty_id"),
         ForeignKeyConstraint(
             ["bounty_id", "round"], ["bounty_rounds.bounty_id", "bounty_rounds.round"]
         ),
-        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"], use_alter=True),
+        ForeignKeyConstraint(
+            ["claim_id", "bounty_id"],
+            ["bounty_claims.claim_id", "bounty_claims.bounty_id"],
+            use_alter=True,
+        ),
         CheckConstraint("position > 0", name="position"),
         CheckConstraint(
             "status IN (" + ",".join(f"'{s}'" for s in BOUNTY_SLOT_STATUSES) + ")",
@@ -12188,8 +12194,23 @@ class BountyEvent(Base):
     )
     __table_args__ = (
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
-        ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
-        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        # Every reference stays within the event's own bounty.
+        ForeignKeyConstraint(
+            ["bounty_id", "revision"],
+            ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
+        ),
+        ForeignKeyConstraint(
+            ["bounty_id", "round"], ["bounty_rounds.bounty_id", "bounty_rounds.round"]
+        ),
+        ForeignKeyConstraint(
+            ["slot_id", "bounty_id"], ["bounty_slots.slot_id", "bounty_slots.bounty_id"]
+        ),
+        ForeignKeyConstraint(
+            ["claim_id", "bounty_id"],
+            ["bounty_claims.claim_id", "bounty_claims.bounty_id"],
+        ),
+        # The target of an appeal's reference to an event of its own claim.
+        UniqueConstraint("event_id", "claim_id"),
         ForeignKeyConstraint(["submission_id"], ["bounty_submissions.submission_id"]),
         ForeignKeyConstraint(["appeal_id"], ["bounty_appeals.appeal_id"]),
         ForeignKeyConstraint(["obligation_id"], ["bounty_obligations.obligation_id"]),
@@ -12278,11 +12299,15 @@ class BountyClaim(Base):
     )
     __table_args__ = (
         UniqueConstraint("nonce"),
+        # The target of references that must stay within the claim's bounty.
+        UniqueConstraint("claim_id", "bounty_id"),
         ForeignKeyConstraint(
             ["bounty_id", "revision"],
             ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
         ),
-        ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
+        ForeignKeyConstraint(
+            ["slot_id", "bounty_id"], ["bounty_slots.slot_id", "bounty_slots.bounty_id"]
+        ),
         ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
         ForeignKeyConstraint(["github_link_id"], ["miner_github_links.link_id"]),
         ForeignKeyConstraint(["cla_signature_id"], ["cla_signatures.signature_id"]),
@@ -12316,6 +12341,8 @@ class BountyFeePayment(Base):
     )
     __table_args__ = (
         ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        # The target of an obligation's composite reference to its payment.
+        UniqueConstraint("claim_id", "block_hash", "extrinsic_index", "payer_coldkey"),
         CheckConstraint(
             "amount_alpha_rao > 0 AND extrinsic_index >= 0 AND block_number >= 0"
             " AND outcome IN ('allocated','refund_owed')",
@@ -12364,9 +12391,15 @@ class BountyObligation(Base):
         UniqueConstraint("block_hash", "extrinsic_index", "kind"),
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        # A fee obligation is the payment of its own claim, owed to its payer.
         ForeignKeyConstraint(
-            ["block_hash", "extrinsic_index"],
-            ["bounty_fee_payments.block_hash", "bounty_fee_payments.extrinsic_index"],
+            ["claim_id", "block_hash", "extrinsic_index", "payee_coldkey"],
+            [
+                "bounty_fee_payments.claim_id",
+                "bounty_fee_payments.block_hash",
+                "bounty_fee_payments.extrinsic_index",
+                "bounty_fee_payments.payer_coldkey",
+            ],
         ),
         ForeignKeyConstraint(["submission_id"], ["bounty_submissions.submission_id"]),
         CheckConstraint(
@@ -12438,6 +12471,8 @@ class BountySubmission(Base):
     )
     __table_args__ = (
         UniqueConstraint("nonce"),
+        # The target of a review's composite reference to its submission.
+        UniqueConstraint("claim_id", "submission_id"),
         ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
         ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
         CheckConstraint(
@@ -12467,7 +12502,11 @@ class BountyReview(Base):
         TIMESTAMP(timezone=True), nullable=False
     )
     __table_args__ = (
-        ForeignKeyConstraint(["submission_id"], ["bounty_submissions.submission_id"]),
+        # A review decides a submission of its own claim.
+        ForeignKeyConstraint(
+            ["claim_id", "submission_id"],
+            ["bounty_submissions.claim_id", "bounty_submissions.submission_id"],
+        ),
         ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
         CheckConstraint(
             "decision IN ('accept','changes_requested','reject')"
@@ -12520,7 +12559,11 @@ class BountyAppeal(Base):
         UniqueConstraint("nonce"),
         UniqueConstraint("subject_event_id"),
         ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
-        ForeignKeyConstraint(["subject_event_id"], ["bounty_events.event_id"]),
+        # The appealed decision must be an event of the appeal's own claim.
+        ForeignKeyConstraint(
+            ["subject_event_id", "claim_id"],
+            ["bounty_events.event_id", "bounty_events.claim_id"],
+        ),
         ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
         CheckConstraint(
             "length(reason_digest) = 64 AND key_kind IN ('hotkey','coldkey')",
@@ -12540,8 +12583,15 @@ class BountyAppealDecision(Base):
     decided_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
+    # Upholding restores a delivery deadline; it is part of the decision.
+    restored_deadline_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     __table_args__ = (
         ForeignKeyConstraint(["appeal_id"], ["bounty_appeals.appeal_id"]),
+        CheckConstraint(
+            "upheld = (restored_deadline_at IS NOT NULL)", name="restored_deadline"
+        ),
     )
 
 
@@ -12669,6 +12719,37 @@ class BountyTransfer(Base):
             unique=True,
             postgresql_where=text("state IN ('dispatched','uncertain','confirmed')"),
         ),
+    )
+
+
+class BountyTransferReconciliation(Base):
+    """Who reconciled a transfer, what they asked for, and what it showed.
+
+    Append-only. A check that leaves the transfer uncertain is recorded too.
+    """
+
+    __tablename__ = "bounty_transfer_reconciliations"
+    reconciliation_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    transfer_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    # The rehearsal outcome requested; None for a live executor's chain lookup.
+    requested: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["transfer_id"], ["bounty_transfers.transfer_id"]),
+        CheckConstraint(
+            "state IN ("
+            + ",".join(f"'{s}'" for s in BOUNTY_TRANSFER_STATES)
+            + ") AND (requested IS NULL OR requested IN "
+            "('confirmed','failed','expired','unknown'))",
+            name="reconciliation",
+        ),
+        Index("bounty_transfer_reconciliations_transfer_idx", "transfer_id"),
     )
 
 

@@ -824,7 +824,7 @@ dev = [
 
 [[package]]
 name = "ditto-screening-protocol"
-version = "0.25.0"
+version = "0.26.0"
 source = { directory = "../../packages/ditto-screening-protocol" }
 dependencies = [
     { name = "pydantic" },

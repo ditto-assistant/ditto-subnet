@@ -44,6 +44,7 @@ from ditto.api_models.bounty import (
     simulated_fee_block_hash,
 )
 from ditto.api_server.bounty_deadlines import (
+    DEADLINE_STATUSES,
     apply_deadlines,
     effective_slot_status,
     release_slot,
@@ -86,6 +87,7 @@ from ditto.db.queries.contributor_identity import (
     active_github_link,
     current_cla_signature,
     current_cla_version,
+    lock_identity_writes,
 )
 
 if TYPE_CHECKING:
@@ -310,6 +312,9 @@ async def hold_claim(
     except BountyIdentityRejected as exc:
         raise HTTPException(403, str(exc)) from exc
 
+    # The hold and every record of it start after verification, so a slow
+    # chain or GitHub call can't shorten it or leave a lapsed hold standing.
+    now = (clock or utcnow)()
     await settle_deadlines(maker, bounty_id, now=now)
     try:
         async with maker() as session, session.begin():
@@ -448,9 +453,14 @@ async def _identity_changed(
     """Whether the payee, link or CLA signature behind the hold has changed."""
     if owner_coldkey != claim.payee_coldkey:
         return True
+    # The hold's own order (bounty, then link, then CLA policy), so an unlink,
+    # revocation or new CLA version can't commit between these reads and the
+    # fee's allocation. Readers share; identity writers take them exclusively.
+    await lock_identity_writes(session, namespace="github-link", shared=True)
     link = await active_github_link(session, hotkey=claim.hotkey)
     if link is None or link.link_id != claim.github_link_id:
         return True
+    await lock_identity_writes(session, namespace="cla-policy", shared=True)
     version = await current_cla_version(session)
     signature = await current_cla_signature(
         session, netuid=claim.netuid, hotkey=claim.hotkey, version=version
@@ -559,7 +569,8 @@ async def confirm_claim(
                     claim_id=claim.claim_id,
                     kind="fee_refund",
                     reason=reason,
-                    payee_coldkey=claim.payee_coldkey,
+                    # A refund goes back to the coldkey that paid the fee.
+                    payee_coldkey=fee.payer_coldkey,
                     amount_alpha_rao=fee.amount_alpha_rao,
                     block_hash=fee.block_hash,
                     extrinsic_index=fee.extrinsic_index,
@@ -696,7 +707,11 @@ async def claim_view(
         held_at=claim.held_at,
         hold_expires_at=claim.hold_expires_at,
         claimed_at=allocated.recorded_at if allocated else None,
-        deadline_at=slot.deadline_at if allocated and holds_slot else None,
+        # Only a live delivery or rework deadline: a decided, withdrawn or
+        # missed claim has none left to meet.
+        deadline_at=slot.deadline_at
+        if allocated and holds_slot and slot_status in DEADLINE_STATUSES
+        else None,
         simulated_receipt=(
             BountyFeeReceipt(
                 block_hash=simulated_fee_block_hash(claim.claim_id),

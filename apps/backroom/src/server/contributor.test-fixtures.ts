@@ -11,9 +11,11 @@ export const contributorFixture = {
 }
 export const claVersionFixture = { version: 1, sha256: 'ab'.repeat(32), published_at: '2026-10-13T00:00:00Z', effective_at: '2026-10-14T00:00:00Z' }
 export const claStatusFixture = { netuid: 118, mode: 'off', current: claVersionFixture, signature: null, is_current: false }
+const claSeedRevision = { revision: 0, parent_revision: 0, mode: 'off', actor: 'migration', reason: 'default off', created_at: '2026-10-13T00:00:00Z' }
 export const claControlFixture = {
-  current: { revision: 0, parent_revision: 0, mode: 'off', actor: 'migration', reason: 'default off', created_at: '2026-10-13T00:00:00Z' },
-  history: [], effective_version: claVersionFixture, active_hotkeys: 2, signed_active_hotkeys: 1, unsigned_active_hotkeys: 1,
+  // Platform lists the current revision first in its history.
+  current: claSeedRevision,
+  history: [claSeedRevision], effective_version: claVersionFixture, active_hotkeys: 2, signed_active_hotkeys: 1, unsigned_active_hotkeys: 1,
   active_hotkeys_basis: 'non_retired_submissions', unsigned_shadow_uploads: 3,
   history_total: 1, history_limit: 25, history_offset: 0, history_has_more: false,
   minimum_enforced_notice_seconds: 86400, earliest_enforced_effective_at: null,

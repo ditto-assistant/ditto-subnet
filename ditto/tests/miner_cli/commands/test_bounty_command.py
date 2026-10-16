@@ -348,6 +348,31 @@ def test_status_list_and_show(capsys):
     client.list_bounties.assert_called_with(repo=REPO, issue=ISSUE, limit=1)
 
 
+def test_issue_numbers_above_the_protocol_limit_are_refused_locally(capsys):
+    client = api()
+    assert run(["show", f"{REPO}#2147483648"], client) == 1
+    assert "above the largest issue number" in capsys.readouterr().err
+    client.list_bounties.assert_not_called()
+    assert run(["show", f"{REPO}#2147483647"], client) == 0
+
+
+def test_list_reads_every_page_of_the_board(capsys):
+    client = api()
+    summary = detail().summary
+    later = summary.model_copy(update={"issue": ISSUE + 1, "title": "Later bounty"})
+    client.list_bounties.side_effect = lambda *, limit, offset: BountyBoardPage(
+        items=[summary] * 100 if offset == 0 else [later],
+        total=101,
+        limit=limit,
+        offset=offset,
+    )
+    assert run(["list"], client) == 0
+    out = capsys.readouterr().out
+    assert out.count(f"{REPO}#{ISSUE}  ") == 100
+    assert f"{REPO}#{ISSUE + 1}  " in out and "Later bounty" in out
+    assert [c.kwargs["offset"] for c in client.list_bounties.call_args_list] == [0, 100]
+
+
 @pytest.mark.parametrize(
     "target", ["ditto-assistant/ditto-subnet", "Ditto-Assistant/ditto-subnet#1", "#1"]
 )
@@ -356,6 +381,28 @@ def test_targets_must_be_canonical_issue_references(capsys, target):
     assert run(["claim", target, "--github-login", "alice-dev"], client) == 1
     assert "not an issue reference" in capsys.readouterr().err
     client.hold_bounty_claim.assert_not_called()
+
+
+def test_a_failed_local_save_never_loses_the_claim(home, capsys):
+    client = api()
+    with (
+        patch("builtins.input", return_value=PHRASE),
+        patch.object(bounty, "_save", side_effect=[home, OSError("disk full")]),
+    ):
+        assert run(claim_args(), client) == 0
+    err = capsys.readouterr().err
+    held = client.hold_bounty_claim.return_value
+    assert f"(claim {held.claim_id})" in err and "disk full" in err
+    # The fee is still confirmed.
+    client.confirm_bounty_claim.assert_called_once()
+
+
+@pytest.mark.parametrize("state", ["refund_owed", "hold_expired"])
+def test_confirm_exits_non_zero_unless_the_fee_claimed_the_slot(state):
+    client = api()
+    client.get_bounty_claim.return_value = claim_view(state)
+    assert run(["confirm", str(uuid4())], client) == 1
+    assert run(["status", str(uuid4())], client) == 0
 
 
 def test_claim_requires_a_github_login():

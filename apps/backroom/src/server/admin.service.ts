@@ -4205,41 +4205,63 @@ function claPolicyBusy(error: PlatformAdminError) {
 type ClaControl = z.infer<typeof claControlSchema>
 type ClaSettingsRevision = z.infer<typeof claSettingsRevisionSchema>
 
+/** Read CLA settings revision `target` with the current policy.
+ *
+ * History is newest-first and starts at the current revision, so the target's
+ * offset is exact while no other revision commits between reads. When one
+ * does, the next page is anchored to the newer current revision.
+ */
+async function readClaRevision(target: number): Promise<{ policy: ClaControl; row: ClaSettingsRevision | null }> {
+  let policy = await fetchClaPolicy()
+  for (let anchor = 0; anchor < 3; anchor += 1) {
+    const found = [policy.current, ...policy.history].find((item) => item.revision === target)
+    if (found || policy.current.revision < target) return { policy, row: found ?? null }
+    const page = await fetchClaPolicy({ historyLimit: 1, historyOffset: policy.current.revision - target })
+    const row = [page.current, ...page.history].find((item) => item.revision === target)
+    if (row) return { policy, row }
+    if (page.current.revision === policy.current.revision) break
+    policy = page
+  }
+  return { policy, row: null }
+}
+
 export async function updateClaPolicy(actor: string, rawInput: unknown) {
   const input = claPolicyWriteInputSchema.parse(rawInput)
   type Body = PlatformOperations['set_policy_api_v1_admin_cla_settings_post']['requestBody']['content']['application/json']
   const body = { expected_revision: input.expectedRevision, mode: input.mode, reason: input.reason, confirmation: input.confirmation } satisfies Body
   // The revision guard makes this write recognisable: only one revision can
   // follow expectedRevision, so its actor, mode and reason say whose it is.
+  const target = input.expectedRevision + 1
+  const isThisWrite = (row: ClaSettingsRevision) => row.actor === actor.trim() && row.mode === input.mode && row.reason === input.reason
   let observed: ClaControl | null = null
   const outcome = await platformAdminWrite<ClaSettingsRevision>('/api/v1/admin/cla/settings', { actor, body }, {
     parse: (payload) => claSettingsRevisionSchema.safeParse(payload).data ?? null,
     readBack: async () => {
-      observed = await fetchClaPolicy()
-      const target = input.expectedRevision + 1
-      if (observed.current.revision < target) return { state: 'absent' }
-      // Revisions are contiguous and history is newest-first, so the target's
-      // offset is exact however many revisions followed it.
-      const page = [observed.current, ...observed.history].some((item) => item.revision === target)
-        ? observed
-        : await fetchClaPolicy({ historyLimit: 1, historyOffset: observed.current.revision - target })
-      const row = [observed.current, ...page.history].find((item) => item.revision === target)
-      if (!row) return { state: 'absent' }
-      if (row.actor === actor.trim() && row.mode === input.mode && row.reason === input.reason) return { state: 'applied', value: row }
-      return { state: 'superseded', detail: `Revision ${target} was already written by ${row.actor}` }
+      const read = await readClaRevision(target)
+      observed = read.policy
+      if (!read.row) return { state: 'absent' }
+      if (isThisWrite(read.row)) return { state: 'applied', value: read.row }
+      return { state: 'superseded', detail: `Revision ${target} was already written by ${read.row.actor}` }
     },
     refusedBeforeWrite: claPolicyBusy,
     retryHint: 'retry with the same expectedRevision.',
   })
-  const applied: ClaSettingsRevision | null = outcome.state === 'committed' ? outcome.value : null
-  const status = applied
-    ? `CLA policy revision ${applied.revision} was committed`
-    : `The CLA policy write may have committed (${outcome.state === 'unknown' ? outcome.reason : ''})`
+  let applied: ClaSettingsRevision | null = outcome.state === 'committed' ? outcome.value : null
+  const uncertain = `The CLA policy write may have committed (${outcome.state === 'unknown' ? outcome.reason : ''})`
   let policy: ClaControl | null = observed
   if (applied || !policy) {
     try {
-      policy = await fetchClaPolicy()
+      if (applied) {
+        policy = await fetchClaPolicy()
+      } else {
+        // The read-back failed before it saw the policy. A later read that
+        // finds this write still reports it as a commit.
+        const read = await readClaRevision(target)
+        policy = read.policy
+        if (read.row && isThisWrite(read.row)) applied = read.row
+      }
     } catch {
+      const status = applied ? `CLA policy revision ${applied.revision} was committed` : uncertain
       return { applied, policy: null, refresh_error: `${status}, but reading the refreshed policy failed; call get_cla_policy.` }
     }
   }
@@ -4248,7 +4270,7 @@ export async function updateClaPolicy(actor: string, rawInput: unknown) {
     policy,
     refresh_error: applied
       ? null
-      : `${status}. Retry with the same input: once revision ${input.expectedRevision + 1} is visible, a retry returns it instead of failing.`,
+      : `${uncertain}. Retry with the same input: once revision ${target} is visible, a retry returns it instead of failing.`,
   }
 }
 

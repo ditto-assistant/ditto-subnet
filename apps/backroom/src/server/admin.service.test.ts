@@ -6152,6 +6152,31 @@ describe('verified contributors and CLA rollout', () => {
       expect(fetchMock.mock.calls[2][0]).toContain('history_limit=1&history_offset=30')
     })
 
+    it('re-anchors the history page when another revision commits between reads', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const later = (revision: number) => ({ ...claShadowRevisionFixture, revision, parent_revision: revision - 1, actor: 'someone-else@omniaura.ai' })
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(31), history: [later(31)], history_total: 32 }))
+        // Revision 32 commits before the page read, so offset 30 lands on 2.
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(32), history: [later(2)], history_total: 33 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(32), history: [claShadowRevisionFixture], history_total: 33 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(32) }))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock.mock.calls[2][0]).toContain('history_limit=1&history_offset=30')
+      expect(fetchMock.mock.calls[3][0]).toContain('history_limit=1&history_offset=31')
+    })
+
+    it('reports a commit the fallback read finds after the read-back failed', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(envelope('upstream exploded', 503))
+        .mockResolvedValueOnce(control(claShadowRevisionFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    })
+
     it('fails as not applied when another operator wrote the next revision', async () => {
       process.env.DITTO_ADMIN_API_TOKEN = 'secret'
       vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))

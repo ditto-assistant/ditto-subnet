@@ -219,6 +219,8 @@ class BountyDeadlineSweeper:
 
     async def start(self) -> None:
         if self._task is None:
+            # A fresh stop signal, so a closed sweeper can start again.
+            self._stop = asyncio.Event()
             self._task = asyncio.create_task(
                 self._run(), name="bounty-deadline-sweeper"
             )
@@ -230,13 +232,22 @@ class BountyDeadlineSweeper:
             await task
 
     async def sweep(self, *, now: datetime | None = None) -> int:
-        """Apply due deadlines, one bounty per transaction; returns the count."""
+        """Apply due deadlines, one bounty per transaction; returns the count.
+
+        One bounty's failure is logged and never blocks the rest of the sweep.
+        """
         at = now or datetime.now(UTC)
         async with self._session_maker() as session:
             bounty_ids = await due_bounties(session, now=at)
+        settled = 0
         for bounty_id in bounty_ids:
-            await settle_deadlines(self._session_maker, bounty_id, now=at)
-        return len(bounty_ids)
+            try:
+                await settle_deadlines(self._session_maker, bounty_id, now=at)
+            except Exception:
+                logger.exception("bounty %s deadlines failed to settle", bounty_id)
+                continue
+            settled += 1
+        return settled
 
     async def _run(self) -> None:
         while not self._stop.is_set():

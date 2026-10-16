@@ -181,11 +181,15 @@ def _as_utc(timestamp: datetime) -> datetime:
     return timestamp.replace(tzinfo=UTC) if timestamp.tzinfo is None else timestamp
 
 
+def _payment_recovery_expired(block_timestamp: datetime) -> bool:
+    return _as_utc(block_timestamp) + UPLOAD_ADMISSION_TTL <= datetime.now(UTC)
+
+
 def _ensure_payment_recovery_fresh(block_timestamp: datetime) -> None:
-    timestamp = _as_utc(block_timestamp)
-    if timestamp + UPLOAD_ADMISSION_TTL <= datetime.now(UTC):
+    if _payment_recovery_expired(block_timestamp):
         raise PaymentRecoveryExpired(
-            f"payment at {timestamp.isoformat()} is outside the 24-hour window"
+            f"payment at {_as_utc(block_timestamp).isoformat()} is outside the "
+            "24-hour window"
         )
 
 
@@ -220,9 +224,10 @@ async def _cla_check_message(
         return cla.message
     # Mirror the multipart commit, which settles the proof itself before its
     # CLA gate: an exact retry returns the original artifact, while another
-    # upload's proof or another hotkey's credit is a 3207 replay that signing
-    # cannot fix. The proof check below reports those, so consent is never
-    # the answer for such a proof.
+    # upload's proof or another hotkey's credit is a 3207 replay, and an
+    # expired credit is a payment-recovery-expired refusal; signing cannot fix
+    # either. The proof check below reports those, so consent is never the
+    # answer for such a proof.
     if await get_agent_for_payment_proof(
         session,
         block_hash=body.payment_block_hash,
@@ -234,7 +239,11 @@ async def _cla_check_message(
         block_hash=body.payment_block_hash,
         extrinsic_index=body.payment_extrinsic_index,
     )
-    if credit and (credit.agent_id is not None or credit.miner_hotkey != body.hotkey):
+    if credit and (
+        credit.agent_id is not None
+        or credit.miner_hotkey != body.hotkey
+        or _payment_recovery_expired(credit.timestamp)
+    ):
         return None
     return cla.message
 
@@ -644,8 +653,9 @@ async def upload_agent(
     # cause a refusal (consent, the proof, the admission). Every such refusal
     # goes through the exact-retry check so the loser reports the original.
     # Refusals about the proof itself come before consent: signing the CLA
-    # cannot make another upload's proof or another hotkey's credit usable, so
-    # the caller must learn that first (the 3207 replay contract).
+    # cannot make another upload's proof, another hotkey's credit or an expired
+    # credit usable, so the caller must learn that first (the 3207 replay
+    # contract).
     payment_record = await get_evaluation_payment_for_proof(
         session,
         block_hash=payment_block_hash,
@@ -659,13 +669,16 @@ async def upload_agent(
         )
     if payment_record and payment_record.miner_hotkey != hotkey:
         raise PaymentReplayedError("payment credit belongs to a different hotkey")
+    if payment_record:
+        try:
+            _ensure_payment_recovery_fresh(payment_record.timestamp)
+        except PaymentRecoveryExpired as exc:
+            return await _refuse_unless_exact_retry(session, exc, retry_identity)
     cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
     if not cla.allowed:
         return await _refuse_unless_exact_retry(
             session, ClaConsentRequired(cla.message), retry_identity
         )
-    if payment_record:
-        _ensure_payment_recovery_fresh(payment_record.timestamp)
     using_credit = bool(payment_record)
     credit_owner_coldkey = payment_record.miner_coldkey if payment_record else None
     admission = (

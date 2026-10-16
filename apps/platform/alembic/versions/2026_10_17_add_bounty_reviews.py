@@ -144,6 +144,8 @@ def upgrade() -> None:
         sa.Column("submitted_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("review_due_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("nonce"),
+        # The target of a review's composite reference to its submission.
+        sa.UniqueConstraint("claim_id", "submission_id"),
         sa.ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
         sa.ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
         sa.CheckConstraint(
@@ -177,8 +179,10 @@ def upgrade() -> None:
         sa.Column("rework_deadline_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("reviewer_actor", sa.Text(), nullable=False),
         sa.Column("decided_at", sa.DateTime(timezone=True), nullable=False),
+        # A review decides a submission of its own claim.
         sa.ForeignKeyConstraint(
-            ["submission_id"], ["bounty_submissions.submission_id"]
+            ["claim_id", "submission_id"],
+            ["bounty_submissions.claim_id", "bounty_submissions.submission_id"],
         ),
         sa.ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
         sa.CheckConstraint(
@@ -208,6 +212,10 @@ def upgrade() -> None:
         "bounty_reviewer_assignments",
         ["bounty_id", "assignment_id"],
     )
+    # The target of an appeal's reference to an event of its own claim.
+    op.create_unique_constraint(
+        op.f("uq_bounty_events_event_id"), "bounty_events", ["event_id", "claim_id"]
+    )
     op.create_table(
         "bounty_appeals",
         sa.Column("appeal_id", sa.UUID(), primary_key=True),
@@ -225,7 +233,11 @@ def upgrade() -> None:
         # One appeal per decision.
         sa.UniqueConstraint("subject_event_id"),
         sa.ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
-        sa.ForeignKeyConstraint(["subject_event_id"], ["bounty_events.event_id"]),
+        # The appealed decision must be an event of the appeal's own claim.
+        sa.ForeignKeyConstraint(
+            ["subject_event_id", "claim_id"],
+            ["bounty_events.event_id", "bounty_events.claim_id"],
+        ),
         sa.ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
         sa.CheckConstraint(
             "length(reason_digest) = 64 AND key_kind IN ('hotkey','coldkey')",
@@ -239,7 +251,12 @@ def upgrade() -> None:
         sa.Column("reason", sa.Text(), nullable=False),
         sa.Column("actor", sa.Text(), nullable=False),
         sa.Column("decided_at", sa.DateTime(timezone=True), nullable=False),
+        # Upholding restores a delivery deadline; it is part of the decision.
+        sa.Column("restored_deadline_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["appeal_id"], ["bounty_appeals.appeal_id"]),
+        sa.CheckConstraint(
+            "upheld = (restored_deadline_at IS NOT NULL)", name="restored_deadline"
+        ),
     )
     op.create_table(
         "bounty_slot_actions",
@@ -305,19 +322,22 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    if (
-        bind.execute(
-            sa.text("SELECT EXISTS (SELECT 1 FROM bounty_submissions)")
-        ).scalar()
-        or bind.execute(
-            sa.text(
-                "SELECT EXISTS (SELECT 1 FROM bounty_slots WHERE status IN "
-                "('submitted','rework','accepted','rejected','expired','withdrawn',"
-                "'cancelled'))"
-            )
-        ).scalar()
+    # Refuse while anything this downgrade would drop, or a restored check
+    # would reject, is recorded.
+    for recorded in (
+        *(f"SELECT 1 FROM {table}" for table in APPEND_ONLY),
+        f"SELECT 1 FROM bounty_events WHERE kind NOT IN ({_quoted(P2_EVENT_KINDS)})",
+        "SELECT 1 FROM bounty_obligations "
+        f"WHERE reason NOT IN ({_quoted(P2_REFUND_REASONS)})",
+        "SELECT 1 FROM bounty_action_nonces WHERE action <> 'claim'",
+        "SELECT 1 FROM bounty_slots WHERE review_due_at IS NOT NULL "
+        "OR status IN ('submitted','rework','accepted','rejected','expired',"
+        "'withdrawn','cancelled')",
     ):
-        raise RuntimeError("refusing to drop recorded bounty submissions and reviews")
+        if bind.execute(sa.text(f"SELECT EXISTS ({recorded})")).scalar():
+            raise RuntimeError(
+                "refusing to drop recorded bounty submissions, reviews or slot actions"
+            )
     _replace_check(
         "bounty_events",
         "ck_bounty_events_kind",
@@ -351,6 +371,9 @@ def downgrade() -> None:
         "bounty_withdrawals",
     ):
         op.drop_table(table)
+    op.drop_constraint(
+        op.f("uq_bounty_events_event_id"), "bounty_events", type_="unique"
+    )
     _replace_check(
         "bounty_slots", "ck_bounty_slots_claim", _slot_claim_check(with_review=False)
     )

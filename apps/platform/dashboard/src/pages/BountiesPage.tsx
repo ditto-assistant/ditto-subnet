@@ -90,6 +90,7 @@ const OBLIGATION_LABEL: Record<BountyObligationView["kind"], string> = {
 const OBLIGATION_STATE: Record<BountyObligationView["state"], string> = {
   retained: "Retained by the treasury",
   awaiting_approval: "Awaiting approval",
+  over_policy_limit: "Above the approval limit; awaits a policy change",
   approved: "Approved, not sent",
   dispatched: "Sent, awaiting confirmation",
   uncertain: "Outcome unknown, being reconciled",
@@ -120,7 +121,9 @@ export function claimOutcome(view: BountyClaimView): string {
 }
 
 function selectedFromUrl(): string | null {
-  const id = new URLSearchParams(location.search).get("bounty");
+  // spaQuery also reads a hash-route bookmark (#/bounties?bounty=...); ids are
+  // matched in their canonical lowercase form.
+  const id = spaQuery().get("bounty")?.toLowerCase() ?? null;
   return id !== null && UUID.test(id) ? id : null;
 }
 
@@ -224,7 +227,19 @@ function BountyBoard(props: { onOpen: (id: string) => void }): JSX.Element {
         {(page) => (
           <Show
             when={page().items.length > 0}
-            fallback={<p class="bounty-state">No bounties are published yet.</p>}
+            fallback={
+              <Show
+                when={page().offset > 0}
+                fallback={<p class="bounty-state">No bounties are published yet.</p>}
+              >
+                <p class="bounty-state">
+                  No bounties on this page.{" "}
+                  <button type="button" onClick={() => setOffset(0)}>
+                    First page
+                  </button>
+                </p>
+              </Show>
+            }
           >
             <div class="bounty-table-scroll">
               <table class="bounty-table bounty-board">
@@ -634,7 +649,10 @@ function ClaimToggle(props: { claimId: string; label: string }): JSX.Element {
 }
 
 function ClaimRecord(props: { claimId: string }): JSX.Element {
-  const claim = useEndpoint<BountyClaimView>(() => `/bounties/claims/${props.claimId}`);
+  // An open record follows the claim as it moves on.
+  const claim = useEndpoint<BountyClaimView>(() => `/bounties/claims/${props.claimId}`, {
+    pollMs: REFRESH_MS,
+  });
   const data = () => (claim.error() ? undefined : claim.data());
   return (
     <>
@@ -773,7 +791,12 @@ function ObligationRow(props: { owed: BountyObligationView }): JSX.Element {
       {owed().simulated ? " (simulated)" : ""} · {OBLIGATION_STATE[owed().state]}
       <Show when={owed().state === "awaiting_approval"}>
         {" "}
-        ({owed().approvals} of {owed().approvals_required} approvals)
+        <Show
+          when={owed().approvals_required !== null}
+          fallback={<>(no payout policy is set yet)</>}
+        >
+          ({owed().approvals} of {owed().approvals_required} approvals)
+        </Show>
       </Show>
       <small class="bounty-mono" title={owed().payee_coldkey}>
         to {shortKey(owed().payee_coldkey)}

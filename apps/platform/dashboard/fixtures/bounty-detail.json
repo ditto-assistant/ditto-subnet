@@ -68,7 +68,7 @@
       "status": "accepted",
       "status_changed_at": "2026-10-16T01:30:26.104290Z",
       "hold_expires_at": null,
-      "deadline_at": "2026-10-21T01:30:26.065462Z",
+      "deadline_at": null,
       "review_due_at": null,
       "review_overdue": false,
       "claimant": {
@@ -86,7 +86,7 @@
       "status": "rejected",
       "status_changed_at": "2026-10-16T01:30:26.186723Z",
       "hold_expires_at": null,
-      "deadline_at": "2026-10-21T01:30:26.151441Z",
+      "deadline_at": null,
       "review_due_at": null,
       "review_overdue": false,
       "claimant": {

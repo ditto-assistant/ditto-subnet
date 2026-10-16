@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -17,6 +17,9 @@ from sqlalchemy import func, select, text
 
 from ditto.api_server import create_api_server
 from ditto.api_server.dependencies import get_payment_verifier, get_storage_client
+from ditto.api_server.middleware.error_envelope import (
+    ERROR_CODE_PAYMENT_RECOVERY_EXPIRED,
+)
 from ditto.api_server.payment_verifier import VerifiedPayment
 from ditto.api_server.storage import (
     create_storage_client,
@@ -221,6 +224,36 @@ async def test_artifact_binds_exact_receipt_and_retries_do_not_require_new_conse
         )
         assert foreign.status_code == 402, foreign.text
         assert foreign.json()["error_code"] == 3207
+        # An expired credit of this hotkey is a refusal signing cannot fix too.
+        expired_block = "0x" + "34" * 32
+        async with session_maker() as session, session.begin():
+            session.add(
+                EvaluationPayment(
+                    block_hash=expired_block,
+                    extrinsic_index=0,
+                    agent_id=None,
+                    credit_for_agent_id=agent_id,
+                    miner_hotkey=alice.ss58_address,
+                    miner_coldkey=owner,
+                    amount_rao=40_000_000,
+                    dest_address=app.state.config.upload_payment_address,
+                    timestamp=datetime.now(UTC) - timedelta(hours=25),
+                )
+            )
+        expired_check = await client.post(
+            "/api/v1/upload/check",
+            json={**recovery, "payment_block_hash": expired_block},
+        )
+        assert expired_check.status_code == 402, expired_check.text
+        assert expired_check.json()["error_code"] == ERROR_CODE_PAYMENT_RECOVERY_EXPIRED
+        expired_data, expired_files = _build_form(
+            keypair=alice, block_hash=expired_block, name="credit-agent"
+        )
+        expired = await client.post(
+            "/api/v1/upload/agent", data=expired_data, files=expired_files
+        )
+        assert expired.status_code == 402, expired.text
+        assert expired.json()["error_code"] == ERROR_CODE_PAYMENT_RECOVERY_EXPIRED
         renamed_data, renamed_files = _build_form(keypair=alice, block_hash=block_hash)
         renamed_data["name"] = "different-name"
         renamed = await client.post(

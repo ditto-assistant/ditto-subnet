@@ -208,7 +208,8 @@ the pool. Each refund and award is an **obligation**. Paying one needs as many
 distinct approvers as the payout policy sets for its amount. Each approval
 binds the obligation, its payee, its amount, the policy revision and the
 approval round, and whoever decided the award or accepted the work can't
-approve it. An award can't be approved or dispatched while the claim hotkey's
+approve it. An amount above the policy's two-approver limit can't be approved
+until a new policy revision raises the limit. An award can't be approved or dispatched while the claim hotkey's
 finalized owner is not the payee of record; a fee refund returns to the
 coldkey that paid it and is never held. An approved round is dispatched once
 and reconciled against its receipt; a failed or expired transfer needs fresh

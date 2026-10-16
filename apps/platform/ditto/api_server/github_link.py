@@ -28,6 +28,9 @@ TOKEN_REVOCATION_DEADLINE_SECONDS = 15
 _SIGN_IN_TOKEN_ERRORS = frozenset({"bad_verification_code", "unverified_user_email"})
 # One public identity lookup, connection to body, before a bounty claim.
 PUBLIC_IDENTITY_DEADLINE_SECONDS = 30
+# Backroom and the dashboard read account ids as JavaScript numbers, so a
+# larger id could be stored but never read back exactly.
+MAX_GITHUB_USER_ID = 2**53 - 1
 
 
 @dataclass(frozen=True)
@@ -197,7 +200,7 @@ class GithubLinkClient:
                     user_id, login = user.get("id"), user.get("login")
                     if (
                         type(user_id) is not int
-                        or not 0 < user_id <= 9223372036854775807
+                        or not 0 < user_id <= MAX_GITHUB_USER_ID
                     ):
                         # A malformed body, like an invalid login below.
                         raise GithubProviderUnavailable(
@@ -301,9 +304,10 @@ class GithubLinkClient:
                 raise GithubLinkRejected(
                     "GitHub account was not found; re-link before claiming"
                 )
-            # Only a redirect that names a new location says the account
-            # moved; any other 3xx is a provider fault, like an error status.
-            if response.has_redirect_location:
+            # Only GitHub's permanent rename redirect says the account moved.
+            # A temporary redirect (302, 307) means retry the same URL later,
+            # so it and any other 3xx are provider faults, like an error.
+            if response.status_code in (301, 308) and response.has_redirect_location:
                 raise GithubLinkRejected(
                     "GitHub login has moved; re-link before claiming"
                 )
@@ -311,7 +315,7 @@ class GithubLinkClient:
             response.raise_for_status()
             user = response.json()
             user_id, current_login = user.get("id"), user.get("login")
-            if type(user_id) is not int or not 0 < user_id <= 9223372036854775807:
+            if type(user_id) is not int or not 0 < user_id <= MAX_GITHUB_USER_ID:
                 raise ValueError("invalid account id")
             return GithubIdentity(
                 user_id, TypeAdapter(GithubLogin).validate_python(current_login)

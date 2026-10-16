@@ -40,7 +40,7 @@ export const bountyClaimInputSchema = z.object({ claimId: uuid })
 export const bountyQueueInputSchema = z.object({
   queue: z.enum(['reviews', 'settlement']),
   overdueOnly: z.boolean().default(false),
-  state: z.enum(['awaiting_approval', 'approved', 'dispatched', 'uncertain', 'confirmed', 'failed']).optional(),
+  state: z.enum(['awaiting_approval', 'over_policy_limit', 'approved', 'dispatched', 'uncertain', 'confirmed', 'failed']).optional(),
 })
 export const bountyPreviewInputSchema = z.object({
   repo,
@@ -92,6 +92,9 @@ export const bountyAwardInputSchema = z.object({
   reason,
   confirmation,
 })
+export const bountyPayoutPolicyReadInputSchema = z.object({
+  revision: z.number().int().min(1).max(2_147_483_647).optional(),
+})
 export const bountyPayoutPolicyInputSchema = z.object({
   expectedRevision: z.number().int().min(0),
   singleApproverMaxAlphaRao: alphaRao,
@@ -112,13 +115,14 @@ export const bountyDispatchInputSchema = z.object({
   claimId: uuid,
   obligationId: uuid,
   round: z.number().int().min(1).max(1000),
-  rehearsalOutcome: z.enum(['confirmed', 'failed', 'unknown']).default('confirmed'),
+  // Required: an omitted outcome must never become a confirmed transfer.
+  rehearsalOutcome: z.enum(['confirmed', 'failed', 'unknown']),
   confirmation,
 })
 export const bountyReconcileInputSchema = z.object({
   claimId: uuid,
   transferId: uuid,
-  rehearsalOutcome: z.enum(['confirmed', 'failed', 'expired', 'unknown']).default('confirmed'),
+  rehearsalOutcome: z.enum(['confirmed', 'failed', 'expired', 'unknown']),
   confirmation,
 })
 export const bountyFactInputSchema = z.object({
@@ -234,6 +238,7 @@ export const bountyCatalogInputs = {
     restoreDays: z.number().int().optional(), confirmation: z.string(),
   }),
   award: z.object({ claimId: catalogId, amountAlphaRao: z.number().int(), attribution: z.string(), reason: z.string(), confirmation: z.string() }),
+  policyRead: z.object({ revision: z.number().int().optional() }),
   policy: z.object({
     expectedRevision: z.number().int(), singleApproverMaxAlphaRao: z.number().int(), dualApproverMaxAlphaRao: z.number().int(),
     reason: z.string(), confirmation: z.string(),
@@ -244,11 +249,11 @@ export const bountyCatalogInputs = {
   }),
   dispatch: z.object({
     claimId: catalogId, obligationId: catalogId, round: z.number().int(),
-    rehearsalOutcome: z.enum(['confirmed', 'failed', 'unknown']).optional(), confirmation: z.string(),
+    rehearsalOutcome: z.enum(['confirmed', 'failed', 'unknown']), confirmation: z.string(),
   }),
   reconcile: z.object({
     claimId: catalogId, transferId: catalogId,
-    rehearsalOutcome: z.enum(['confirmed', 'failed', 'expired', 'unknown']).optional(), confirmation: z.string(),
+    rehearsalOutcome: z.enum(['confirmed', 'failed', 'expired', 'unknown']), confirmation: z.string(),
   }),
   fact: z.object({ claimId: catalogId, kind: z.enum(['merged', 'deployed', 'adopted']), reference: z.string(), confirmation: z.string() }),
 }

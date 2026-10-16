@@ -86,6 +86,23 @@ describe("bounty board", () => {
     expect(await screen.findByText("No bounties are published yet.")).toBeInTheDocument();
   });
 
+  it("offers the first page when a later page comes back empty", async () => {
+    vi.mocked(getJSON).mockImplementation(((path: string) => {
+      const offset = Number(new URLSearchParams(path.split("?")[1]).get("offset"));
+      return Promise.resolve(
+        offset === 0
+          ? { items: board.items, total: 120, limit: 50, offset }
+          : { items: [], total: 120, limit: 50, offset },
+      );
+    }) as typeof getJSON);
+    render(() => <BountiesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+    expect(await screen.findByText(/No bounties on this page/)).toBeInTheDocument();
+    expect(screen.queryByText("No bounties are published yet.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "First page" }));
+    expect(await screen.findByRole("table", { name: "Published bounties" })).toBeInTheDocument();
+  });
+
   it("pages a long board", async () => {
     const item = board.items[0]!;
     vi.mocked(getJSON).mockImplementation(((path: string) =>
@@ -124,6 +141,19 @@ describe("bounty detail", () => {
     history.replaceState(null, "", "/bounties");
     window.dispatchEvent(new PopStateEvent("popstate"));
     await screen.findByRole("table", { name: "Published bounties" });
+  });
+
+  it("opens an uppercase or hash-route deep link", async () => {
+    for (const url of [
+      `/bounties?bounty=${bountyId.toUpperCase()}`,
+      `/#/bounties?bounty=${bountyId}`,
+    ]) {
+      history.replaceState(null, "", url);
+      render(() => <BountiesPage />);
+      await screen.findByRole("heading", { name: "Terms" });
+      expect(vi.mocked(getJSON)).toHaveBeenCalledWith(`/public/bounties/${bountyId}`);
+      cleanup();
+    }
   });
 
   it("never requests a malformed bounty id", async () => {
@@ -191,6 +221,29 @@ describe("bounty detail", () => {
     expect(body).toHaveTextContent("Award 40 α (simulated) · Awaiting approval (1 of 2 approvals)");
     expect(body).toHaveTextContent("Credit: Alice built the board");
     expect(body).toHaveTextContent("Merged");
+  });
+
+  it("names an award above the approval limit and a missing payout policy", async () => {
+    const alice = claimOf("alice-dev");
+    const edited = structuredClone(claims);
+    const owed = edited[alice.claim_id]!.obligations;
+    owed.find((o) => o.kind === "award")!.state = "over_policy_limit";
+    owed.find((o) => o.kind === "award")!.approvals_required = null;
+    const refund = owed.find((o) => o.kind === "fee_refund")!;
+    refund.state = "awaiting_approval";
+    refund.approvals_required = null;
+    vi.mocked(getJSON).mockImplementation(((path: string) =>
+      path === `/bounties/claims/${alice.claim_id}`
+        ? Promise.resolve(edited[alice.claim_id])
+        : serve(path)) as typeof getJSON);
+    await openBounty();
+    const row = slotRow(alice.position);
+    fireEvent.click(within(row).getByRole("button", { name: "Claim record" }));
+    const body = (await within(row).findByText("Payments")).closest(
+      ".bounty-claim-body",
+    ) as HTMLElement;
+    expect(body).toHaveTextContent("Above the approval limit; awaits a policy change");
+    expect(body).toHaveTextContent("(no payout policy is set yet)");
   });
 
   it("shows a rejected claim's pending appeal without its statement", async () => {

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import exists, select
 
 from ditto.api_models.bounty import (
     BountyAdminAppealView,
@@ -58,6 +58,7 @@ from ditto.db.models import (
     BountySlotAction,
     BountySubmission,
     BountyTransfer,
+    BountyTransferReconciliation,
 )
 
 if TYPE_CHECKING:
@@ -66,6 +67,7 @@ if TYPE_CHECKING:
 # Obligation states an operator still has to act on.
 OPEN_SETTLEMENT_STATES = (
     "awaiting_approval",
+    "over_policy_limit",
     "approved",
     "dispatched",
     "uncertain",
@@ -258,6 +260,38 @@ async def _audit(
                     obligation_id=owed.obligation_id,
                 )
             )
+        for reconciliation, transfer, owed in (
+            await session.execute(
+                select(BountyTransferReconciliation, BountyTransfer, BountyObligation)
+                .join(
+                    BountyTransfer,
+                    BountyTransfer.transfer_id
+                    == BountyTransferReconciliation.transfer_id,
+                )
+                .join(
+                    BountyObligation,
+                    BountyObligation.obligation_id == BountyTransfer.obligation_id,
+                )
+                .where(BountyObligation.claim_id.in_(claim_ids))
+            )
+        ).all():
+            requested = (
+                f" (asked {reconciliation.requested})"
+                if reconciliation.requested
+                else ""
+            )
+            entries.append(
+                _entry(
+                    "transfer_reconciled",
+                    reconciliation.actor,
+                    None,
+                    f"transfer {transfer.transfer_id} round {transfer.round}: "
+                    f"{reconciliation.state}{requested}",
+                    reconciliation.recorded_at,
+                    claim_id=owed.claim_id,
+                    obligation_id=owed.obligation_id,
+                )
+            )
         for fact in await session.scalars(
             select(BountyDeliveryFact).where(BountyDeliveryFact.claim_id.in_(claim_ids))
         ):
@@ -419,14 +453,22 @@ async def settlement_queue(
     """Obligations that still need an operator, oldest first."""
     wanted = (state,) if state else OPEN_SETTLEMENT_STATES
     policy = await current_policy(session)
-    rows = (
-        await session.execute(
-            select(BountyObligation, Bounty)
-            .join(Bounty, Bounty.bounty_id == BountyObligation.bounty_id)
-            .where(BountyObligation.kind != "fee_retained")
-            .order_by(BountyObligation.created_at, BountyObligation.obligation_id)
+    query = (
+        select(BountyObligation, Bounty)
+        .join(Bounty, Bounty.bounty_id == BountyObligation.bounty_id)
+        .where(BountyObligation.kind != "fee_retained")
+        .order_by(BountyObligation.created_at, BountyObligation.obligation_id)
+    )
+    if "confirmed" not in wanted:
+        # Paid money is final and needs no operator: leave it out in SQL, so
+        # the queue's cost follows what is open, not every obligation ever.
+        query = query.where(
+            ~exists().where(
+                BountyTransfer.obligation_id == BountyObligation.obligation_id,
+                BountyTransfer.state == "confirmed",
+            )
         )
-    ).all()
+    rows = (await session.execute(query)).all()
     items: list[BountySettlementItem] = []
     for obligation, owner in rows:
         current = await obligation_state(session, obligation, policy)

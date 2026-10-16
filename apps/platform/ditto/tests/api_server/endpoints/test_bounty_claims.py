@@ -481,6 +481,25 @@ async def test_exact_hold_boundary(world, monkeypatch):
     assert late["refunds"][0]["reason"] == "hold_expired"
 
 
+async def test_the_hold_starts_after_slow_verification(world, monkeypatch):
+    await world.start(ALICE)
+    clock = [datetime.now(UTC)]
+    monkeypatch.setattr(bounty_claims, "utcnow", lambda: clock[0])
+    owner = world.app.state.chain.get_coldkey_for_hotkey.side_effect
+
+    def slow_owner(hotkey, *args):
+        clock[0] += timedelta(minutes=20)
+        return owner(hotkey, *args)
+
+    world.app.state.chain.get_coldkey_for_hotkey.side_effect = slow_owner
+    claim = (await world.hold(ALICE)).json()
+    assert claim["state"] == "held"
+    # The full hold runs from after the chain call, not from the request.
+    assert datetime.fromisoformat(claim["hold_expires_at"]) == clock[0] + timedelta(
+        minutes=30
+    )
+
+
 async def test_a_slot_lost_without_lapse_is_refunded(world):
     await world.start(ALICE)
     claim = (await world.hold(ALICE)).json()
@@ -531,6 +550,23 @@ async def test_an_identity_change_before_payment_refunds_and_releases(world, cha
     detail = await world.refresh()
     assert detail["slots"][0]["status"] == "open"
     assert detail["events"][-2]["kind"] == "hold_released"
+
+
+@pytest.mark.parametrize("namespace", ["github-link", "cla-policy"])
+async def test_confirmation_waits_for_an_identity_write_in_flight(world, namespace):
+    await world.start(ALICE)
+    claim = (await world.hold(ALICE)).json()
+    async with world.maker() as writer, writer.begin():
+        # An unlink, revocation or CLA publication holds its lock exclusively.
+        await writer.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:ns, 0))"),
+            {"ns": namespace},
+        )
+        confirming = asyncio.create_task(world.confirm(claim))
+        await asyncio.sleep(0.5)
+        assert not confirming.done()
+    confirmed = (await confirming).json()
+    assert confirmed["state"] == "claimed"
 
 
 async def test_receipts_are_bound_to_their_claim_and_charged_once(world):

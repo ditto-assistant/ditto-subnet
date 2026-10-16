@@ -122,6 +122,9 @@ BountyObligationReason = Literal[
 BountyObligationState = Literal[
     "retained",
     "awaiting_approval",
+    # Above the payout policy's dual-approver limit: nobody can approve it
+    # until a new policy revision raises the limit.
+    "over_policy_limit",
     "approved",
     "dispatched",
     "uncertain",
@@ -646,7 +649,8 @@ class BountyObligationView(WireModel):
     # The approval round in force and its approvals; retained fees need none.
     round: int
     approvals: int
-    approvals_required: int
+    # None while no payout policy is configured or the amount is over its limit.
+    approvals_required: int | None
     attribution: str | None
     simulated: bool
     created_at: datetime
@@ -797,6 +801,7 @@ BountyAuditKind = Literal[
     "award_recorded",
     "obligation_approved",
     "transfer_dispatched",
+    "transfer_reconciled",
     "fact_recorded",
 ]
 

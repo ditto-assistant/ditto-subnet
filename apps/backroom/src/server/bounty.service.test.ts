@@ -120,9 +120,16 @@ const cases: Case[] = [
     path: `/api/v1/admin/bounties/claims/${CLAIM}/review`,
     body: { claim_id: CLAIM, submission_id: SUBMISSION, decision: 'reject', reason, rework_days: null, attribution: null },
     committed: claim(),
-    applied: [Response.json(claim({ submissions: [{ submission_id: SUBMISSION, decision: 'reject', decision_reason: reason }] }))],
+    applied: [
+      Response.json(claim({ submissions: [{ submission_id: SUBMISSION, decision: 'reject', decision_reason: reason }] })),
+      Response.json(operator({ audit: [audit('review_decided', { claim_id: CLAIM, detail: `reject submission ${SUBMISSION}` })] })),
+    ],
     absent: [Response.json(claim())],
-    superseded: [Response.json(claim({ submissions: [{ submission_id: SUBMISSION, decision: 'accept', decision_reason: 'other' }] }))],
+    // The same decision and reason, recorded by another operator.
+    superseded: [
+      Response.json(claim({ submissions: [{ submission_id: SUBMISSION, decision: 'reject', decision_reason: reason }] })),
+      Response.json(operator({ audit: [audit('review_decided', { claim_id: CLAIM, actor: 'other@example.com', detail: `reject submission ${SUBMISSION}` })] })),
+    ],
   },
   {
     name: 'reassign_bounty_reviewer',
@@ -160,9 +167,16 @@ const cases: Case[] = [
     path: `/api/v1/admin/bounties/claims/${CLAIM}/award`,
     body: { amount_alpha_rao: 40, attribution: 'Fixture credit', reason },
     committed: claim(),
-    applied: [Response.json(claim({ obligations: [obligation()] }))],
+    applied: [
+      Response.json(claim({ obligations: [obligation()] })),
+      Response.json(operator({ audit: [audit('award_recorded', { obligation_id: OBLIGATION })] })),
+    ],
     absent: [Response.json(claim())],
-    superseded: [Response.json(claim({ obligations: [obligation({ amount_alpha_rao: 41 })] }))],
+    // The same amount and credit, but another reason: another award.
+    superseded: [
+      Response.json(claim({ obligations: [obligation()] })),
+      Response.json(operator({ audit: [audit('award_recorded', { obligation_id: OBLIGATION, reason: 'another award reason' })] })),
+    ],
   },
   {
     name: 'set_bounty_payout_policy',
@@ -193,7 +207,9 @@ const cases: Case[] = [
   },
   {
     name: 'dispatch_bounty_obligation',
-    run: () => dispatchBountyObligation(ACTOR, { claimId: CLAIM, obligationId: OBLIGATION, round: 1, confirmation: `DISPATCH BOUNTY OBLIGATION ${OBLIGATION} ROUND 1` }),
+    run: () => dispatchBountyObligation(ACTOR, {
+      claimId: CLAIM, obligationId: OBLIGATION, round: 1, rehearsalOutcome: 'confirmed', confirmation: `DISPATCH BOUNTY OBLIGATION ${OBLIGATION} ROUND 1`,
+    }),
     path: `/api/v1/admin/bounties/obligations/${OBLIGATION}/dispatch`,
     body: { round: 1, rehearsal_outcome: 'confirmed' },
     committed: obligation({ transfers: [transfer('confirmed')] }),
@@ -202,12 +218,25 @@ const cases: Case[] = [
   },
   {
     name: 'reconcile_bounty_transfer',
-    run: () => reconcileBountyTransfer(ACTOR, { claimId: CLAIM, transferId: TRANSFER, confirmation: `RECONCILE BOUNTY TRANSFER ${TRANSFER}` }),
+    run: () => reconcileBountyTransfer(ACTOR, {
+      claimId: CLAIM, transferId: TRANSFER, rehearsalOutcome: 'confirmed', confirmation: `RECONCILE BOUNTY TRANSFER ${TRANSFER}`,
+    }),
     path: `/api/v1/admin/bounties/transfers/${TRANSFER}/reconcile`,
     body: { rehearsal_outcome: 'confirmed' },
     committed: obligation({ transfers: [transfer('confirmed')] }),
-    applied: [Response.json(claim({ obligations: [obligation({ transfers: [transfer('confirmed')] })] }))],
-    absent: [Response.json(claim({ obligations: [obligation({ transfers: [transfer('uncertain')] })] }))],
+    applied: [
+      Response.json(claim({ obligations: [obligation({ transfers: [transfer('confirmed')] })] })),
+      Response.json(operator({ audit: [audit('transfer_reconciled', { reason: null, detail: `transfer ${TRANSFER} round 1: confirmed (asked confirmed)` })] })),
+    ],
+    absent: [
+      Response.json(claim({ obligations: [obligation({ transfers: [transfer('uncertain')] })] })),
+      Response.json(operator()),
+    ],
+    // Already reconciled as failed by someone else: not this write.
+    superseded: [
+      Response.json(claim({ obligations: [obligation({ transfers: [transfer('failed')] })] })),
+      Response.json(operator({ audit: [audit('transfer_reconciled', { actor: 'other@example.com', reason: null, detail: `transfer ${TRANSFER} round 1: failed (asked failed)` })] })),
+    ],
   },
   {
     name: 'record_bounty_fact',
@@ -215,7 +244,8 @@ const cases: Case[] = [
     path: `/api/v1/admin/bounties/claims/${CLAIM}/facts`,
     body: { kind: 'merged', reference: 'a'.repeat(40) },
     committed: claim(),
-    applied: [Response.json(claim({ facts: [{ kind: 'merged', reference: 'a'.repeat(40) }] }))],
+    // The exact fact is found whatever else the claim records.
+    applied: [Response.json(claim({ facts: [{ kind: 'deployed', reference: 'v1' }, { kind: 'merged', reference: 'a'.repeat(40) }] }))],
     absent: [Response.json(claim())],
     superseded: [Response.json(claim({ facts: [{ kind: 'merged', reference: 'b'.repeat(40) }] }))],
   },
@@ -254,10 +284,82 @@ describe('bounty writes decide every outcome', () => {
   })
 })
 
+describe('bounty write inputs', () => {
+  it.each([
+    ['dispatch', () => dispatchBountyObligation(ACTOR, { claimId: CLAIM, obligationId: OBLIGATION, round: 1, confirmation: 'x' })],
+    ['reconcile', () => reconcileBountyTransfer(ACTOR, { claimId: CLAIM, transferId: TRANSFER, confirmation: 'x' })],
+  ])('%s refuses an omitted rehearsal outcome before any request', async (_name, run) => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(run()).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reads the audit newest first whatever order Platform lists it in', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(outage())
+      .mockResolvedValueOnce(Response.json(operator({
+        audit: [
+          audit('claims_paused', { recorded_at: '2026-10-16T02:00:00Z' }),
+          audit('claims_resumed', { recorded_at: '2026-10-16T01:00:00Z' }),
+        ],
+      })))
+    vi.stubGlobal('fetch', fetchMock)
+    const value = await setBountyClaimsPaused(ACTOR, { bountyId: BOUNTY, paused: true, reason, confirmation: `PAUSE BOUNTY CLAIMS ${REPO}#2942` })
+    expect(value).toMatchObject({ bounty_id: BOUNTY })
+  })
+})
+
+describe('bounty read-backs find this write, not the latest state', () => {
+  const pause = () => setBountyClaimsPaused(ACTOR, { bountyId: BOUNTY, paused: true, reason, confirmation: `PAUSE BOUNTY CLAIMS ${REPO}#2942` })
+
+  it('reports a pause hidden by later controls as unknown, never as not applied', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator({
+      audit: [
+        audit('claims_paused', { recorded_at: '2026-10-16T01:00:00Z' }),
+        audit('claims_resumed', { actor: 'other@example.com', recorded_at: '2026-10-16T02:00:00Z' }),
+        audit('claims_paused', { actor: 'other@example.com', recorded_at: '2026-10-16T03:00:00Z' }),
+      ],
+    }))))
+    await expect(pause()).rejects.toThrow('may have committed')
+  })
+
+  it('never takes an earlier inconclusive reconciliation for this one', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage())
+      .mockResolvedValueOnce(Response.json(claim({ obligations: [obligation({ transfers: [transfer('confirmed')] })] })))
+      .mockResolvedValueOnce(Response.json(operator({
+        audit: [
+          audit('transfer_reconciled', { reason: null, detail: `transfer ${TRANSFER} round 1: uncertain (asked unknown)`, recorded_at: '2026-10-16T01:00:00Z' }),
+          audit('transfer_reconciled', { actor: 'other@example.com', reason: null, detail: `transfer ${TRANSFER} round 1: confirmed (asked confirmed)`, recorded_at: '2026-10-16T02:00:00Z' }),
+        ],
+      }))))
+    await expect(reconcileBountyTransfer(ACTOR, {
+      claimId: CLAIM, transferId: TRANSFER, rehearsalOutcome: 'unknown', confirmation: `RECONCILE BOUNTY TRANSFER ${TRANSFER}`,
+    })).rejects.toBeInstanceOf(NothingAppliedError)
+  })
+
+  it('reads the payout policy revision this write targets, whatever followed it', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(outage())
+      .mockResolvedValueOnce(Response.json({ revision: 1, single_approver_max_alpha_rao: 5, dual_approver_max_alpha_rao: 50, actor: ACTOR, reason }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(setBountyPayoutPolicy(ACTOR, {
+      expectedRevision: 0, singleApproverMaxAlphaRao: 5, dualApproverMaxAlphaRao: 50, reason, confirmation: 'SET BOUNTY PAYOUT POLICY 1',
+    })).resolves.toMatchObject({ revision: 1, actor: ACTOR })
+    expect(sent(fetchMock, 1).url.endsWith('/api/v1/admin/bounties/payout-policy?revision=1')).toBe(true)
+  })
+})
+
 describe('bounty reads', () => {
   it('reads an unset payout policy as null, not a failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('no bounty payout policy is configured', 404)))
     await expect(fetchBountyPayoutPolicy()).resolves.toBeNull()
+  })
+
+  it('reads one exact payout policy revision on request', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(envelope('bounty payout policy revision 7 not found', 404))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchBountyPayoutPolicy({ revision: 7 })).resolves.toBeNull()
+    expect(sent(fetchMock).url.endsWith('/api/v1/admin/bounties/payout-policy?revision=7')).toBe(true)
   })
 
   it.each([

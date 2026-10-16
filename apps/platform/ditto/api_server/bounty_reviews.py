@@ -225,16 +225,29 @@ async def _nonce_retry(
     model: type[BountySubmission] | type[BountyWithdrawal] | type[BountyAppeal],
     same: Callable[[object], bool],
     claim_id: UUID,
+    signed: tuple[str, int],
+    netuid: int,
+    repo: str | None = None,
     now: datetime,
 ) -> BountyClaimView | None:
-    """The original outcome for an exact retry; 409 for any other nonce reuse."""
+    """The original outcome for an exact retry; 409 for any other nonce reuse.
+
+    An exact retry repeats every signed field. The ones the record does not
+    keep (hotkey, netuid and, for a submission, the repo) must match the claim
+    and deployment the original was verified against.
+    """
     async with maker() as session:
         if await session.get(BountyActionNonce, nonce) is None:
             return None
         record = await session.scalar(select(model).where(model.nonce == nonce))
         if record is None or not same(record):
             raise HTTPException(409, "bounty action nonce already used")
-        return await claim_view(session, await _claim(session, claim_id), now=now)
+        claim = await _claim(session, claim_id)
+        bounty = await session.get(Bounty, claim.bounty_id)
+        assert bounty is not None
+        if signed != (claim.hotkey, netuid) or repo not in (None, bounty.repo):
+            raise HTTPException(409, "bounty action nonce already used")
+        return await claim_view(session, claim, now=now)
 
 
 def _proof_fields(record: object) -> tuple[object, ...]:
@@ -299,6 +312,9 @@ async def submit_work(
             model=BountySubmission,
             same=same,
             claim_id=body.claim_id,
+            signed=(body.hotkey, body.netuid),
+            netuid=netuid,
+            repo=body.repo,
             now=now,
         )
 
@@ -399,6 +415,8 @@ async def withdraw_claim(
             model=BountyWithdrawal,
             same=same,
             claim_id=body.claim_id,
+            signed=(body.hotkey, body.netuid),
+            netuid=netuid,
             now=now,
         )
 
@@ -513,10 +531,27 @@ async def review_submission(
             raise HTTPException(403, "only the bounty's assigned reviewer may decide")
         decided = await session.get(BountyReview, body.submission_id)
         if decided is not None:
-            if (decided.claim_id, decided.decision, decided.reason) == (
+            # An exact retry repeats every recorded field; the rework deadline
+            # it implies is counted from the original decision.
+            retry_deadline = (
+                decided.decided_at + timedelta(days=body.rework_days)
+                if body.rework_days is not None
+                else None
+            )
+            if (
+                decided.claim_id,
+                decided.reviewer_actor,
+                decided.decision,
+                decided.reason,
+                decided.attribution,
+                decided.rework_deadline_at,
+            ) == (
                 claim.claim_id,
+                actor,
                 body.decision,
                 body.reason,
+                body.attribution,
+                retry_deadline,
             ):
                 return await claim_view(session, claim, now=now)
             raise HTTPException(409, "this submission was already decided")
@@ -642,6 +677,7 @@ async def file_appeal(
     clock: Callable[[], datetime] | None = None,
 ) -> BountyClaimView:
     """Appeal one rejection or missed deadline of the claimant's own claim."""
+    _check_reason(body.reason)
     now = _now(clock)
     digest = bounty_reason_digest(body.reason)
 
@@ -665,6 +701,8 @@ async def file_appeal(
             model=BountyAppeal,
             same=same,
             claim_id=body.claim_id,
+            signed=(body.hotkey, body.netuid),
+            netuid=netuid,
             now=now,
         )
 
@@ -777,7 +815,19 @@ async def decide_appeal(
             )
         decided = await session.get(BountyAppealDecision, appeal_id)
         if decided is not None:
-            if (decided.upheld, decided.reason) == (body.upheld, body.reason):
+            # An exact retry is the same operator's same decision; the deadline
+            # it restores is counted from the original decision.
+            restores = (
+                decided.decided_at + timedelta(days=body.restore_days)
+                if body.restore_days is not None
+                else None
+            )
+            if (
+                decided.actor,
+                decided.upheld,
+                decided.reason,
+                decided.restored_deadline_at,
+            ) == (actor, body.upheld, body.reason, restores):
                 return await claim_view(session, claim, now=now)
             raise HTTPException(409, "this appeal was already decided")
         subject = await session.get(BountyEvent, appeal.subject_event_id)
@@ -792,6 +842,11 @@ async def decide_appeal(
         slot = await _slot_of(session, claim)
         if slot.claim_id != claim.claim_id or slot.status != APPEALABLE[subject.kind]:
             raise HTTPException(409, "the slot has moved on; the appeal cannot apply")
+        restores = (
+            now + timedelta(days=body.restore_days)
+            if body.restore_days is not None
+            else None
+        )
         session.add(
             BountyAppealDecision(
                 appeal_id=appeal_id,
@@ -799,13 +854,13 @@ async def decide_appeal(
                 reason=body.reason,
                 actor=actor,
                 decided_at=now,
+                restored_deadline_at=restores,
             )
         )
         await session.flush()
-        if body.upheld:
-            assert body.restore_days is not None
+        if restores is not None:
             slot.status, slot.status_changed_at = "claimed", now
-            slot.deadline_at = now + timedelta(days=body.restore_days)
+            slot.deadline_at = restores
             slot.review_due_at = None
         kind = "appeal_upheld" if body.upheld else "appeal_denied"
         _event(session, slot, claim, kind, now, appeal_id=appeal_id)

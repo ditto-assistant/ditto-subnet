@@ -69,6 +69,7 @@ export type BountyRefundReason = Exclude<
 export type BountyObligationState =
   | "retained"
   | "awaiting_approval"
+  | "over_policy_limit"
   | "approved"
   | "dispatched"
   | "uncertain"
@@ -233,7 +234,8 @@ export interface BountyObligationView {
   state: BountyObligationState;
   round: number;
   approvals: number;
-  approvals_required: number;
+  // Null while no payout policy is configured or the amount is over its limit.
+  approvals_required: number | null;
   attribution: string | null;
   simulated: boolean;
   created_at: string;

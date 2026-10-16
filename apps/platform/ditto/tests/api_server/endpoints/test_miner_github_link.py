@@ -470,6 +470,22 @@ async def test_token_responses_are_classified_by_cause(
     assert len(deletes) == (1 if "access_token" in reply else 0)
 
 
+@pytest.mark.parametrize("user_id", [0, 2**53 - 1, 2**53])
+async def test_sign_in_accepts_only_ids_every_client_reads_exactly(
+    app, session_maker, user_id
+):
+    provider = setup(app, session_maker)
+    provider.user_id = user_id
+    if 0 < user_id < 2**53:
+        identity = await app.state.github_link.exchange(
+            code="fixture", verifier="fixture"
+        )
+        assert identity.user_id == user_id
+        return
+    with pytest.raises(GithubProviderUnavailable, match="invalid account id"):
+        await app.state.github_link.exchange(code="fixture", verifier="fixture")
+
+
 @pytest.mark.parametrize("verification", ["scope", "identity", "success"])
 @pytest.mark.parametrize("cleanup", ["status", "transport"])
 async def test_cleanup_preserves_original_rejection_and_blocks_success(
@@ -761,7 +777,7 @@ async def test_browser_binding_consent_and_session_binding_are_required(
     ).status_code == 400
 
 
-@pytest.mark.parametrize("status", [301, 302, 307, 308, 404])
+@pytest.mark.parametrize("status", [301, 308, 404])
 async def test_live_identity_unavailable_or_redirected_requires_relink(
     app, session_maker, status
 ):
@@ -799,9 +815,12 @@ def _raise(exc):
         lambda: httpx.Response(429),
         lambda: httpx.Response(401, json={"message": SECRET}),
         lambda: httpx.Response(304),
+        lambda: httpx.Response(302, headers={"Location": "https://api.github.com/"}),
+        lambda: httpx.Response(307, headers={"Location": "https://api.github.com/"}),
         lambda: httpx.Response(200, content=b"<html>not json</html>"),
         lambda: httpx.Response(200, json=["not", "an", "object"]),
         lambda: httpx.Response(200, json={"id": 0, "login": "miner-fixture"}),
+        lambda: httpx.Response(200, json={"id": 2**53, "login": "miner-fixture"}),
         lambda: httpx.Response(200, json={"id": "100", "login": "miner-fixture"}),
         lambda: httpx.Response(200, json={"id": 100, "login": "bad/login"}),
         lambda: _raise(httpx.ConnectError(f"fixture network {SECRET}")),
@@ -814,9 +833,12 @@ def _raise(exc):
         "429",
         "credentials-401",
         "bare-304",
+        "temporary-302",
+        "temporary-307",
         "not-json",
         "not-an-object",
         "invalid-id",
+        "unsafe-id",
         "string-id",
         "invalid-login",
         "network",

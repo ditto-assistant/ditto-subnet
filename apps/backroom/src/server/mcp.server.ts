@@ -899,7 +899,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_bounty: 'Operator view of one bounty: claims, appeals, full private audit.',
   get_bounty_claim: 'Read one bounty claim: submissions, obligations, facts.',
   get_bounty_queue: 'Review queue (overdue first) or settlement queue with approvers.',
-  get_bounty_payout_policy: 'Read approval thresholds in force; null when unset.',
+  get_bounty_payout_policy: 'Read approval thresholds in force, or one exact revision; null when unset.',
   preview_bounty_revision: 'Digest, exact phrase and refusals for a revision; writes nothing.',
   publish_bounty_revision: 'Publish a previewed bounty revision. Write; see help.',
   set_bounty_claims_paused: 'Pause or resume new holds. Write; see help.',
@@ -1771,15 +1771,15 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_bounty_queue', {
     title: 'Get bounty work queue',
-    description: 'queue=reviews lists submissions awaiting a decision, the most overdue first, with the reviewer in force; overdueOnly narrows it. queue=settlement lists obligations still needing an operator (awaiting_approval, approved, dispatched, uncertain, failed) with the operators who approved the current round; state narrows it, and state=confirmed shows paid ones. Requires backroom:read.',
+    description: 'queue=reviews lists submissions awaiting a decision, the most overdue first, with the reviewer in force; overdueOnly narrows it. queue=settlement lists obligations still needing an operator (awaiting_approval, over_policy_limit, approved, dispatched, uncertain, failed) with the operators who approved the current round; state narrows it, and state=confirmed shows paid ones. Requires backroom:read.',
     inputSchema: bountyQueueInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchBountyQueue(input)))
 
   registerTool('get_bounty_payout_policy', {
     title: 'Get bounty payout policy',
-    description: 'Read the payout policy revision in force: amounts up to single_approver_max_alpha_rao need one approver, up to dual_approver_max_alpha_rao two distinct approvers, and nobody may approve more. Returns null before the first revision, when no obligation can be approved. Requires backroom:read.',
-    inputSchema: {}, annotations: toolAnnotations('read'),
-  }, async () => result(await fetchBountyPayoutPolicy()))
+    description: 'Read the payout policy revision in force: amounts up to single_approver_max_alpha_rao need one approver, up to dual_approver_max_alpha_rao two distinct approvers, and nobody may approve more. Returns null before the first revision, when no obligation can be approved. Pass revision to read that exact revision instead, or null when it does not exist. Requires backroom:read.',
+    inputSchema: bountyCatalogInputs.policyRead, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBountyPayoutPolicy(input)))
 
   registerTool('preview_bounty_revision', {
     title: 'Preview bounty revision',
@@ -1843,13 +1843,13 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('dispatch_bounty_obligation', {
     title: 'Dispatch bounty obligation',
-    description: 'Dispatch an approved round once (DISPATCH BOUNTY OBLIGATION {obligationId} ROUND {r}). The dispatch is recorded before sending; a held award is refused. A failed or expired transfer needs fresh approvals for the next round; an unknown outcome is uncertain and must be reconciled first. v1 is simulated: rehearsalOutcome may request failed or unknown; no funds move. Requires backroom:write.',
+    description: 'Dispatch an approved round once (DISPATCH BOUNTY OBLIGATION {obligationId} ROUND {r}). The dispatch is recorded before sending; a held award is refused. A failed or expired transfer needs fresh approvals for the next round; an unknown outcome is uncertain and must be reconciled first. v1 is simulated: rehearsalOutcome names the outcome (confirmed, failed or unknown) and is required; no funds move. Requires backroom:write.',
     inputSchema: bountyCatalogInputs.dispatch, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => dispatchBountyObligation(props.session.email, input)))
 
   registerTool('reconcile_bounty_transfer', {
     title: 'Reconcile bounty transfer',
-    description: 'Settle a dispatched or uncertain transfer from what the executor (chain) shows (RECONCILE BOUNTY TRANSFER {transferId}). Never resend an uncertain transfer; reconcile it. Requires backroom:write.',
+    description: 'Settle a dispatched or uncertain transfer from what the executor (chain) shows (RECONCILE BOUNTY TRANSFER {transferId}). Never resend an uncertain transfer; reconcile it. rehearsalOutcome is required, and each reconciliation is audited with its operator. Requires backroom:write.',
     inputSchema: bountyCatalogInputs.reconcile, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => reconcileBountyTransfer(props.session.email, input)))
 

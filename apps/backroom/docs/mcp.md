@@ -545,7 +545,9 @@ rehearsal funding only: fees and transfers are simulated, and no funds move.
 - `get_bounty_queue`: `queue=reviews` lists submissions awaiting a decision,
   most overdue first; `queue=settlement` lists obligations still needing an
   operator, with who approved the current round.
-- `get_bounty_payout_policy`: the approval thresholds in force, or `null`.
+- `get_bounty_payout_policy`: the approval thresholds in force, or `null`. Pass
+  `revision` to read that exact revision; a write's read-back uses it to find
+  its own revision however many followed it.
 - `preview_bounty_revision`: the exact digest, the confirmation phrase and every
   refusal for proposed terms. It is a POST but writes nothing.
 
@@ -574,7 +576,11 @@ whose transfer is recorded: reconcile it. Money moves only through approved,
 dispatched transfers; awards, refunds and facts record facts and move nothing.
 An award's approval and dispatch are refused with `payout held` while the claim
 hotkey's finalized owner is not the payee of record; the refusal names both
-coldkeys. Fee refunds return to the coldkey that paid and are never held.
+coldkeys. Fee refunds return to the coldkey that paid and are never held. An
+amount above the payout policy's limit reads `over_policy_limit` until a policy
+revision raises it. Dispatch and reconcile require an explicit
+`rehearsalOutcome` in rehearsal, and every reconciliation is recorded in the
+audit (`transfer_reconciled`) with its operator.
 
 The catalog publishes compact input schemas (ids as `format: uuid`, terms as an
 object) for its byte budget; each service function parses its input strictly.

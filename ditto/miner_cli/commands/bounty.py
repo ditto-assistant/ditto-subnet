@@ -30,11 +30,13 @@ from uuid import UUID, uuid4
 
 from ditto.api_models.bounty import (
     BountyAppealRequest,
+    BountyBoardPage,
     BountyClaimRequest,
     BountyClaimView,
     BountyConfirmRequest,
     BountyDetail,
     BountySubmitRequest,
+    BountySummary,
     BountyWithdrawRequest,
     bounty_appeal_message,
     bounty_claim_message,
@@ -169,7 +171,10 @@ def _issue_ref(target: str) -> tuple[str, int]:
             f"{target!r} is not an issue reference: use owner/repo#issue in "
             "lowercase, for example ditto-assistant/ditto-subnet#2942"
         )
-    return match["repo"], int(match["issue"])
+    issue = int(match["issue"])
+    if issue > 2_147_483_647:
+        raise MinerCliError(f"issue #{issue} is above the largest issue number")
+    return match["repo"], issue
 
 
 def _find(client: ApiClient, target: str) -> BountyDetail:
@@ -182,6 +187,18 @@ def _find(client: ApiClient, target: str) -> BountyDetail:
             raise MinerCliError(f"no bounty is published for {repo}#{issue}") from None
         bounty_id = page.items[0].bounty_id
     return client.get_bounty(bounty_id)
+
+
+def _whole_board(client: ApiClient) -> BountyBoardPage:
+    """Every published bounty, read 100 at a time."""
+    items: list[BountySummary] = []
+    while True:
+        page = client.list_bounties(limit=100, offset=len(items))
+        items.extend(page.items)
+        if not page.items or len(items) >= page.total:
+            return BountyBoardPage(
+                items=items, total=page.total, limit=len(items), offset=0
+            )
 
 
 def _retrying[T](send: Callable[[], T]) -> T:
@@ -364,18 +381,26 @@ def _claim(client: ApiClient, args: argparse.Namespace, network_name: str) -> in
         ),
     )
     held = _retrying(lambda: client.hold_bounty_claim(body))
-    _save(
-        cache / "claims" / f"{held.claim_id}.json",
-        {
-            "claim": held.model_dump(mode="json"),
-            "request": body.model_dump(mode="json"),
-        },
-    )
+    # Name the claim before anything else can fail, so it is never lost.
     print(
         f"Holding round {held.round} slot {held.position} until "
         f"{held.hold_expires_at.isoformat()} (claim {held.claim_id})",
         file=sys.stderr,
     )
+    try:
+        _save(
+            cache / "claims" / f"{held.claim_id}.json",
+            {
+                "claim": held.model_dump(mode="json"),
+                "request": body.model_dump(mode="json"),
+            },
+        )
+    except OSError as exc:
+        print(
+            f"warning: could not save claim {held.claim_id} locally ({exc}); "
+            f"finish later with `ditto bounty confirm {held.claim_id}`",
+            file=sys.stderr,
+        )
     result = _confirm_fee(client, held)
     if args.json:
         _print_json(result)
@@ -398,7 +423,7 @@ def run(args: argparse.Namespace) -> int:
         with ApiClient(base_url=network.api_url) as client:
             command = args.bounty_command
             if command == "list":
-                page = client.list_bounties(limit=100)
+                page = _whole_board(client)
                 if args.json:
                     _print_json(page)
                     return 0
@@ -456,7 +481,9 @@ def run(args: argparse.Namespace) -> int:
                 _print_json(view)
             else:
                 _print_claim(view)
-            return 0
+            # A confirm succeeds only when the fee claimed the slot; a lapsed
+            # hold or a refund is reported, and the exit code says so.
+            return 0 if command == "status" or view.state == "claimed" else 1
     except (MinerCliError, ValueError, EOFError, OSError) as exc:
         print(str(exc) or "bounty command cancelled", file=sys.stderr)
         return 1

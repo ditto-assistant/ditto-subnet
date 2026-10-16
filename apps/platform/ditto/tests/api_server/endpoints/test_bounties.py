@@ -158,6 +158,9 @@ async def test_later_revision_keeps_existing_slots_and_round(
     assert after["summary"]["entry_fee_alpha_rao"] == 3_000_000_000
     assert after["summary"]["published_at"] == before["summary"]["published_at"]
     assert after["summary"]["updated_at"] == after["revisions"][1]["published_at"]
+    # The board summarizes from the current revision and the first one's date.
+    board = (await client.get("/api/v1/public/bounties?limit=10")).json()
+    assert board["items"] == [after["summary"]]
     assert [e["kind"] for e in after["events"]] == [
         "revision_published",
         "round_opened",

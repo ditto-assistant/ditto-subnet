@@ -109,6 +109,8 @@ def upgrade() -> None:
         sa.Column("status_changed_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("bounty_id", "round", "position"),
+        # The target of references that must stay within the slot's bounty.
+        sa.UniqueConstraint("slot_id", "bounty_id"),
         sa.ForeignKeyConstraint(
             ["bounty_id", "round"], ["bounty_rounds.bounty_id", "bounty_rounds.round"]
         ),
@@ -130,7 +132,17 @@ def upgrade() -> None:
         sa.Column("slot_id", sa.UUID(), nullable=True),
         sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
-        sa.ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
+        # Every reference stays within the event's own bounty.
+        sa.ForeignKeyConstraint(
+            ["bounty_id", "revision"],
+            ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["bounty_id", "round"], ["bounty_rounds.bounty_id", "bounty_rounds.round"]
+        ),
+        sa.ForeignKeyConstraint(
+            ["slot_id", "bounty_id"], ["bounty_slots.slot_id", "bounty_slots.bounty_id"]
+        ),
         sa.CheckConstraint(f"kind IN ({_quoted(EVENT_KINDS)})", name="kind"),
     )
     op.create_index(

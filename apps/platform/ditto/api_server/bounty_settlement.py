@@ -30,6 +30,7 @@ funds, and rehearsals may ask it for a failed or unknown outcome.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -83,6 +84,7 @@ from ditto.db.models import (
     BountySlot,
     BountySubmission,
     BountyTransfer,
+    BountyTransferReconciliation,
 )
 from ditto.db.queries.contributor_identity import lock_identity_writes
 
@@ -91,6 +93,7 @@ if TYPE_CHECKING:
 
     from ditto.chain import ChainClient
 
+logger = logging.getLogger(__name__)
 _POLICY_LOCK = "bounty-payout-policy"
 # Final outcomes whose entry fee is retained when the slot is reopened.
 RETAINED_OUTCOMES = ("rejected", "expired", "withdrawn")
@@ -214,6 +217,11 @@ async def record_fee_disposition(
         )
     )
     if existing is not None:
+        if existing.kind != kind:
+            # A fee has one final disposition; a different one is a conflict,
+            # not a retry the caller can proceed past.
+            outcome = "refunded" if existing.kind == "fee_refund" else "retained"
+            raise HTTPException(409, f"this entry fee was already {outcome}")
         return existing
     obligation = BountyObligation(
         obligation_id=uuid4(),
@@ -221,7 +229,8 @@ async def record_fee_disposition(
         claim_id=claim.claim_id,
         kind=kind,
         reason=reason,
-        payee_coldkey=claim.payee_coldkey,
+        # A fee goes back to, or is retained from, the coldkey that paid it.
+        payee_coldkey=payment.payer_coldkey,
         amount_alpha_rao=payment.amount_alpha_rao,
         block_hash=payment.block_hash,
         extrinsic_index=payment.extrinsic_index,
@@ -351,7 +360,17 @@ def policy_view(policy: BountyPayoutPolicy) -> BountyPayoutPolicyView:
     )
 
 
-async def read_payout_policy(session: AsyncSession) -> BountyPayoutPolicyView:
+async def read_payout_policy(
+    session: AsyncSession, *, revision: int | None = None
+) -> BountyPayoutPolicyView:
+    """The current policy, or one exact revision so a writer can find its own."""
+    if revision is not None:
+        exact = await session.get(BountyPayoutPolicy, revision)
+        if exact is None:
+            raise HTTPException(
+                404, f"bounty payout policy revision {revision} not found"
+            )
+        return policy_view(exact)
     policy = await current_policy(session)
     if policy is None:
         raise HTTPException(404, "no bounty payout policy is configured")
@@ -576,6 +595,8 @@ async def _record_outcome(
     transfer_id: UUID,
     outcome: TransferOutcome,
     now: datetime,
+    reconciled_by: str | None = None,
+    requested: str | None = None,
 ) -> BountyObligationView:
     async with maker() as session, session.begin():
         transfer = await session.get(BountyTransfer, transfer_id)
@@ -606,7 +627,19 @@ async def _record_outcome(
                 "uncertain": "transfer_uncertain",
             }[outcome.state]
             _event(session, claim, kind, now, obligation_id=obligation.obligation_id)
-            await session.flush()
+        if reconciled_by is not None:
+            # Every reconciliation is recorded with its operator, including a
+            # check that leaves the transfer uncertain.
+            session.add(
+                BountyTransferReconciliation(
+                    transfer_id=transfer_id,
+                    actor=reconciled_by,
+                    requested=requested,
+                    state=transfer.state,
+                    recorded_at=now,
+                )
+            )
+        await session.flush()
         return await obligation_view(session, obligation, await current_policy(session))
 
 
@@ -669,6 +702,9 @@ async def dispatch_obligation(
             transfer_id, obligation, rehearsal=body.rehearsal_outcome
         )
     except Exception:
+        # Whatever failed, the transfer may have been sent: record it uncertain
+        # for reconciliation, and keep the failure for diagnosis.
+        logger.exception("bounty transfer %s execute failed; uncertain", transfer_id)
         outcome = TransferOutcome("uncertain")
     return await _record_outcome(
         maker, transfer_id=transfer_id, outcome=outcome, now=_now(clock)
@@ -681,6 +717,7 @@ async def reconcile_transfer(
     executor: BountyTransferExecutor,
     transfer_id: UUID,
     body: BountyReconcileRequest,
+    actor: str,
     clock: Callable[[], datetime] | None = None,
 ) -> BountyObligationView:
     """Settle a dispatched or uncertain transfer from what the chain shows."""
@@ -702,9 +739,15 @@ async def reconcile_transfer(
             transfer_id, obligation, rehearsal=body.rehearsal_outcome
         )
     except Exception:
+        logger.exception("bounty transfer %s lookup failed; uncertain", transfer_id)
         outcome = TransferOutcome("uncertain")
     return await _record_outcome(
-        maker, transfer_id=transfer_id, outcome=outcome, now=_now(clock)
+        maker,
+        transfer_id=transfer_id,
+        outcome=outcome,
+        now=_now(clock),
+        reconciled_by=actor,
+        requested=body.rehearsal_outcome if executor.simulated else None,
     )
 
 

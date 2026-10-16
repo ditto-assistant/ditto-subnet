@@ -7,6 +7,8 @@ engine, the reviews and the public reads share.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -24,11 +26,13 @@ from ditto.api_models.bounty import (
 from ditto.api_server import bounty_claims
 from ditto.api_server.bounty_deadlines import BountyDeadlineSweeper
 from ditto.db.models import (
+    Bounty,
     BountyEvent,
     BountyObligation,
     BountySlot,
     BountySlotAction,
 )
+from ditto.tests.api_server.endpoints.test_bounties import publish as publish_bounty
 from ditto.tests.api_server.endpoints.test_bounty_claims import (
     _ADMIN_TOKEN,
     _HEADERS,
@@ -234,6 +238,16 @@ async def test_a_submission_records_the_exact_commit_and_starts_review(world):
     assert again.status_code == 200 and again.json() == view
     reused = await submit(world, ALICE, claim, sha="cd" * 20, nonce=UUID(body["nonce"]))
     assert reused.status_code == 409 and "nonce" in reused.text
+    # The same nonce and proof with any other signed field is not a retry.
+    for field, value in (
+        ("repo", "other-org/other-repo"),
+        ("hotkey", BOB.hotkey.ss58_address),
+        ("netuid", 119),
+    ):
+        altered = await world.client.post(
+            f"{CLAIMS}/{claim['claim_id']}/submissions", json={**body, field: value}
+        )
+        assert altered.status_code == 409 and "nonce" in altered.text, field
     detail = await world.refresh()
     slot = slot_of(detail, claim)
     assert (
@@ -328,6 +342,46 @@ async def test_the_sweeper_records_deadlines_once(world, monkeypatch):
     assert detail["summary"]["reviews_overdue"] == 1
 
 
+async def test_a_closed_sweeper_can_start_again(world):
+    sweeper = BountyDeadlineSweeper(session_maker=world.maker, interval_seconds=60)
+    await sweeper.start()
+    await sweeper.aclose()
+    await sweeper.start()
+    # A fresh stop signal: the restarted loop is running, not already stopped.
+    await asyncio.sleep(0)
+    assert sweeper._task is not None and not sweeper._task.done()
+    await sweeper.aclose()
+    assert sweeper._task is None
+
+
+async def test_one_failing_bounty_never_blocks_the_sweep(world, monkeypatch):
+    from ditto.api_server import bounty_deadlines
+
+    await world.start(ALICE)
+    late = await claimed(world, ALICE)
+    broken = uuid4()
+    real_due, real_settle = (
+        bounty_deadlines.due_bounties,
+        bounty_deadlines.settle_deadlines,
+    )
+
+    async def a_broken_bounty_first(session, *, now):
+        return [broken, *await real_due(session, now=now)]
+
+    async def settle(maker, bounty_id, *, now):
+        if bounty_id == broken:
+            raise RuntimeError("fixture: this bounty cannot settle")
+        await real_settle(maker, bounty_id, now=now)
+
+    monkeypatch.setattr(bounty_deadlines, "due_bounties", a_broken_bounty_first)
+    monkeypatch.setattr(bounty_deadlines, "settle_deadlines", settle)
+    sweeper = BountyDeadlineSweeper(session_maker=world.maker)
+    later = datetime.now(UTC) + timedelta(days=6)
+    assert await sweeper.sweep(now=later) == 1
+    assert slot_of(await world.refresh(), late)["status"] == "expired"
+    assert [e["kind"] for e in await events(world)].count("deadline_missed") == 1
+
+
 async def test_review_decisions_by_the_assigned_reviewer(world):
     await world.start(ALICE, BOB, CAROL)
     accepted = await claimed(world, ALICE)
@@ -347,13 +401,23 @@ async def test_review_decisions_by_the_assigned_reviewer(world):
     assert view["submissions"][-1]["decision_reason"] == "fixture accept decision"
     again = await review(world, accepted, "accept", attribution="Fixture credit to Bob")
     assert again.status_code == 200 and again.json() == view
+    # A decided claim has no delivery deadline left to meet.
+    assert view["deadline_at"] is None
+    assert slot_of(await world.refresh(), accepted)["deadline_at"] is None
     changed = await review(world, accepted, "reject")
     assert changed.status_code == 409
+    # A changed credit is a different decision, not a retry.
+    recredited = await review(
+        world, accepted, "accept", attribution="Fixture credit to Carol"
+    )
+    assert recredited.status_code == 409 and "already decided" in recredited.text
     # The deciding operator stays private.
     assert REVIEWER not in str(await world.refresh())
 
     rejected = (await submit(world, BOB, await claimed(world, BOB))).json()
-    assert (await review(world, rejected, "reject")).json()["slot_status"] == "rejected"
+    decided = (await review(world, rejected, "reject")).json()
+    assert (decided["slot_status"], decided["deadline_at"]) == ("rejected", None)
+    assert slot_of(await world.refresh(), rejected)["deadline_at"] is None
     # Malformed decisions are refused before anything is written.
     third = (await submit(world, CAROL, await claimed(world, CAROL))).json()
     for decision, extra in (
@@ -373,12 +437,20 @@ async def test_rework_has_a_recorded_deadline_and_a_new_commit(world, monkeypatc
     deadline = rework["submissions"][-1]["rework_deadline_at"]
     decided = datetime.fromisoformat(rework["submissions"][-1]["decided_at"])
     assert datetime.fromisoformat(deadline) - decided == timedelta(days=3)
+    # A later exact retry still matches; a different rework window does not.
+    travel(monkeypatch, timedelta(hours=1))
+    retried = await review(world, claim, "changes_requested")
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["submissions"] == rework["submissions"]
+    longer = await review(world, claim, "changes_requested", rework_days=5)
+    assert longer.status_code == 409 and "already decided" in longer.text
     second = await submit(world, ALICE, rework, sha="cd" * 20)
     assert second.status_code == 200, second.text
     assert [s["head_sha"] for s in second.json()["submissions"]] == [SHA, "cd" * 20]
     # Another round of changes, then the rework deadline passes unanswered.
     again = (await review(world, second.json(), "changes_requested")).json()
-    travel(monkeypatch, timedelta(days=3, minutes=1))
+    # Past the second rework deadline (decided an hour in, above).
+    travel(monkeypatch, timedelta(days=3, hours=1, minutes=1))
     late = await submit(world, ALICE, again, sha="ef" * 20)
     assert late.status_code == 409 and "expired" in late.text
     missed = [e for e in await events(world) if e["kind"] == "deadline_missed"]
@@ -392,6 +464,14 @@ async def test_withdrawal_retains_the_fee_and_is_final(world):
     claim = await claimed(world, ALICE)
     gone = await withdraw(world, ALICE, claim)
     assert gone.status_code == 200 and gone.json()["slot_status"] == "withdrawn"
+    body = json.loads(gone.request.content)
+    for field, value in (("hotkey", BOB.hotkey.ss58_address), ("netuid", 119)):
+        altered = await world.client.post(
+            f"{CLAIMS}/{claim['claim_id']}/withdraw", json={**body, field: value}
+        )
+        assert altered.status_code == 409 and "nonce" in altered.text, field
+    exact = await world.client.post(f"{CLAIMS}/{claim['claim_id']}/withdraw", json=body)
+    assert exact.status_code == 200 and exact.json() == gone.json()
     assert gone.json()["refunds"] == []
     again = await withdraw(world, ALICE, claim)
     assert again.status_code == 409 and "withdrawn" in again.text
@@ -445,6 +525,15 @@ async def test_appeals_are_decided_by_someone_else(world):
     upheld = await world.client.post(route, headers=_HEADERS, json=body)
     assert upheld.status_code == 200, upheld.text
     restored = upheld.json()
+    again = await world.client.post(route, headers=_HEADERS, json=body)
+    assert again.status_code == 200 and again.json() == restored
+    # The excluded reviewer, or a different restored deadline, is not a retry.
+    for headers, changed in (
+        (AS_REVIEWER, body),
+        (_HEADERS, {**body, "restore_days": 3}),
+    ):
+        refused = await world.client.post(route, headers=headers, json=changed)
+        assert refused.status_code == 409 and "already decided" in refused.text
     assert restored["slot_status"] == "claimed" and restored["appeals"][0]["upheld"]
     detail = await world.refresh()
     restored_slot = slot_of(detail, claim)
@@ -462,6 +551,9 @@ async def test_a_missed_deadline_can_be_appealed_and_denied(world, monkeypatch):
     travel(monkeypatch, timedelta(days=5, minutes=1))
     assert (await submit(world, ALICE, claim)).status_code == 409
     missed = next(e for e in await events(world) if e["kind"] == "deadline_missed")
+    # A signed but blank statement is no appeal.
+    blank = await appeal(world, ALICE, claim, missed["event_id"], " " * 12)
+    assert blank.status_code == 400 and "must not be blank" in blank.text
     filed = (await appeal(world, ALICE, claim, missed["event_id"], "Outage.")).json()
     appeal_id = filed["appeals"][0]["appeal_id"]
     route = f"{ADMIN}/appeals/{appeal_id}/decision"
@@ -585,6 +677,13 @@ async def test_reassignment_moves_review_authority_and_extends_overdue(
     assert new.status_code == 200, new.text
     kinds = [e["kind"] for e in await events(world)]
     assert kinds.count("review_overdue") == 1 and "reviewer_reassigned" in kinds
+    # Moving the review back never lets another reviewer claim the decision.
+    back = await world.client.post(
+        route, headers=_HEADERS, json={**body, "reviewer_actor": REVIEWER}
+    )
+    assert back.status_code == 200, back.text
+    repeated = await review(world, claim, "accept")
+    assert repeated.status_code == 409 and "already decided" in repeated.text
 
 
 async def test_review_history_is_append_only(world):
@@ -630,6 +729,85 @@ async def test_review_history_is_append_only(world):
             )
             == 1
         )
+
+
+async def test_history_references_stay_within_their_bounty_and_claim(world):
+    """The database refuses an event naming another bounty's revision, round,
+    slot or claim, a slot held by another bounty's claim, and an appeal of
+    another claim's decision."""
+    await world.start(ALICE, BOB)
+    alice = (await submit(world, ALICE, await claimed(world, ALICE))).json()
+    bob = (await submit(world, BOB, await claimed(world, BOB))).json()
+    await review(world, bob, "reject")
+    published = await publish_bounty(world.client, issue=ISSUE + 1, terms={})
+    assert published.status_code == 200, published.text
+    async with world.maker() as session:
+        other = await session.scalar(
+            select(Bounty.bounty_id).where(Bounty.issue_number == ISSUE + 1)
+        )
+        open_slot = await session.scalar(
+            select(BountySlot.slot_id).where(BountySlot.bounty_id == other).limit(1)
+        )
+        rejection = await session.scalar(
+            select(BountyEvent.event_id).where(
+                BountyEvent.claim_id == UUID(bob["claim_id"]),
+                BountyEvent.kind == "rejected",
+            )
+        )
+    event = text(
+        "INSERT INTO bounty_events (bounty_id, kind, revision, round, slot_id, "
+        "claim_id, recorded_at) VALUES (:bounty, 'submitted', :revision, :round, "
+        ":slot, :claim, now())"
+    )
+    nothing = {"bounty": other, "revision": None, "round": None, "slot": None}
+    cases = [
+        (
+            event,
+            {**nothing, "revision": 2, "claim": None},
+            "fk_bounty_events_bounty_id_bounty_revisions",
+        ),
+        (
+            event,
+            {**nothing, "round": 2, "claim": None},
+            "fk_bounty_events_bounty_id_bounty_rounds",
+        ),
+        (
+            event,
+            {**nothing, "slot": UUID(alice["slot_id"]), "claim": None},
+            "fk_bounty_events_slot_id_bounty_slots",
+        ),
+        (
+            event,
+            {**nothing, "claim": UUID(alice["claim_id"])},
+            "fk_bounty_events_claim_id_bounty_claims",
+        ),
+        (
+            text(
+                "UPDATE bounty_slots SET status = 'held', claim_id = :claim "
+                "WHERE slot_id = :slot"
+            ),
+            {"slot": open_slot, "claim": UUID(alice["claim_id"])},
+            "fk_bounty_slots_claim_id_bounty_claims",
+        ),
+        (
+            text(
+                "WITH nonce AS (INSERT INTO bounty_action_nonces (nonce, action, "
+                "recorded_at) VALUES (gen_random_uuid(), 'appeal', now()) "
+                "RETURNING nonce) INSERT INTO bounty_appeals (appeal_id, claim_id, "
+                "subject_event_id, reason, reason_digest, nonce, issued_at, "
+                "key_kind, signer, signature, filed_at) SELECT gen_random_uuid(), "
+                ":claim, :event, 'fixture', repeat('a', 64), nonce, now(), "
+                "'hotkey', 'signer', 'signature', now() FROM nonce"
+            ),
+            {"claim": UUID(alice["claim_id"]), "event": rejection},
+            "fk_bounty_appeals_subject_event_id_bounty_events",
+        ),
+    ]
+    for statement, values, constraint in cases:
+        async with world.maker() as session:
+            with pytest.raises(DBAPIError, match=constraint):
+                await session.execute(statement, values)
+            await session.rollback()
 
 
 async def test_review_routes_declare_their_errors(app):

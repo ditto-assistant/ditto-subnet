@@ -6,6 +6,7 @@ and CLA flows. Money is simulated end to end; nothing here moves funds.
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -292,6 +293,18 @@ async def test_payout_policy_revisions(world):
     assert stale.status_code == 409 and "revision is 1" in stale.text
     read = await world.client.get(f"{ADMIN}/payout-policy", headers=_HEADERS)
     assert read.json() == first.json()
+    # A writer finds its own revision exactly, however many followed it.
+    second = await policy(world, expected=1, single=1)
+    assert second.status_code == 200 and second.json()["revision"] == 2
+    for revision, expected in ((1, first.json()), (2, second.json())):
+        exact = await world.client.get(
+            f"{ADMIN}/payout-policy?revision={revision}", headers=_HEADERS
+        )
+        assert exact.json() == expected
+    unknown = await world.client.get(
+        f"{ADMIN}/payout-policy?revision=3", headers=_HEADERS
+    )
+    assert unknown.status_code == 404 and "revision 3" in unknown.text
 
 
 async def test_approvals_bind_payee_amount_policy_and_distinct_operators(world):
@@ -342,10 +355,25 @@ async def test_approvals_bind_payee_amount_policy_and_distinct_operators(world):
 async def test_amounts_beyond_the_policy_cannot_be_approved(world):
     await world.start(ALICE)
     claim = await accepted(world, ALICE)
+    # Before any policy, a refund awaits approval with no known requirement.
+    unset = obligation(await claim_of(world, claim), "fee_refund")
+    assert (unset["state"], unset["approvals_required"]) == ("awaiting_approval", None)
     await policy(world, single=SINGLE, dual=SINGLE)
     prize = obligation((await award(world, claim, SINGLE + 1)).json(), "award")
+    # Nobody can approve it, and the view says so.
+    assert (prize["state"], prize["approvals_required"]) == ("over_policy_limit", None)
     refused = await approve(world, prize)
     assert refused.status_code == 409 and "lets anyone approve" in refused.text
+    queue = (
+        await world.client.get(f"{ADMIN}/queue/settlement", headers=_HEADERS)
+    ).json()
+    assert "over_policy_limit" in {i["obligation"]["state"] for i in queue["items"]}
+    # A policy revision that raises the limit makes it approvable.
+    assert (
+        await policy(world, expected=1, single=SINGLE, dual=DUAL)
+    ).status_code == 200
+    raised = obligation(await claim_of(world, claim), "award")
+    assert (raised["state"], raised["approvals_required"]) == ("awaiting_approval", 2)
 
 
 async def test_an_approved_obligation_is_dispatched_once(world):
@@ -391,6 +419,28 @@ async def test_a_failed_transfer_needs_fresh_approval(world):
     assert [t["state"] for t in paid["transfers"]] == ["failed", "confirmed"]
 
 
+async def test_an_executor_failure_is_logged_and_left_to_reconcile(
+    world, caplog, monkeypatch
+):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    await policy(world)
+    refund = obligation(claim, "fee_refund")
+    await approve(world, refund)
+    monkeypatch.setattr(
+        world.app.state.bounty_transfer_executor,
+        "execute",
+        AsyncMock(side_effect=RuntimeError("executor fixture fault")),
+    )
+    with caplog.at_level(logging.ERROR, logger="ditto.api_server.bounty_settlement"):
+        sent = (await dispatch(world, refund)).json()
+    # It may have been sent, so it is reconciled, never sent again.
+    assert sent["state"] == "uncertain"
+    [record] = [r for r in caplog.records if "execute failed" in r.getMessage()]
+    assert sent["transfers"][0]["transfer_id"] in record.getMessage()
+    assert "executor fixture fault" in str(record.exc_info[1])
+
+
 async def test_an_uncertain_transfer_is_reconciled_before_anything_else(world):
     await world.start(ALICE)
     claim = await accepted(world, ALICE)
@@ -410,6 +460,24 @@ async def test_an_uncertain_transfer_is_reconciled_before_anything_else(world):
     assert settled["transfers"][0]["settled_at"] is not None
     twice = await reconcile(world, transfer_id)
     assert twice.status_code == 409 and "already confirmed" in twice.text
+    # Each reconciliation, the inconclusive one too, names its operator.
+    bounty_id = world.detail["summary"]["bounty_id"]
+    view = (await world.client.get(f"{ADMIN}/{bounty_id}", headers=_HEADERS)).json()
+    reconciled = [
+        (e["actor"], e["detail"])
+        for e in view["audit"]
+        if e["kind"] == "transfer_reconciled"
+    ]
+    assert reconciled == [
+        (
+            "operator-fixture@example.com",
+            f"transfer {transfer_id} round 1: uncertain (asked unknown)",
+        ),
+        (
+            "operator-fixture@example.com",
+            f"transfer {transfer_id} round 1: confirmed (asked confirmed)",
+        ),
+    ]
 
 
 async def test_an_expired_transfer_reconciles_to_a_new_round(world):
@@ -453,19 +521,121 @@ async def test_delivery_facts_are_public_records_of_accepted_work(world):
     assert "operator-fixture" not in (await claim_of(world, claim)).__repr__()
 
 
+async def test_fee_obligations_and_reviews_belong_to_their_own_claim(world):
+    """The database refuses a fee owed against another claim's payment, to
+    anyone but its payer, and a review of another claim's submission."""
+    await world.start(ALICE, BOB)
+    alice = (await submit(world, ALICE, await claimed(world, ALICE))).json()
+    bob = await claimed(world, BOB)
+    async with world.maker() as session:
+        payment = (
+            await session.execute(
+                text(
+                    "SELECT block_hash, extrinsic_index, payer_coldkey, "
+                    "amount_alpha_rao FROM bounty_fee_payments WHERE claim_id = :claim"
+                ),
+                {"claim": alice["claim_id"]},
+            )
+        ).one()
+    insert = text(
+        "INSERT INTO bounty_obligations (obligation_id, bounty_id, claim_id, kind, "
+        "reason, payee_coldkey, amount_alpha_rao, block_hash, extrinsic_index, "
+        "simulated, created_at) VALUES (gen_random_uuid(), :bounty, :claim, "
+        "'fee_refund', 'cancelled', :payee, :amount, :block, :index, true, now())"
+    )
+    for claim_id, payee in (
+        (bob["claim_id"], payment.payer_coldkey),
+        (alice["claim_id"], BOB.coldkey.ss58_address),
+    ):
+        async with world.maker() as session:
+            with pytest.raises(
+                DBAPIError, match="fk_bounty_obligations_claim_id_bounty_fee_payments"
+            ):
+                await session.execute(
+                    insert,
+                    {
+                        "bounty": alice["bounty_id"],
+                        "claim": claim_id,
+                        "payee": payee,
+                        "amount": payment.amount_alpha_rao,
+                        "block": payment.block_hash,
+                        "index": payment.extrinsic_index,
+                    },
+                )
+            await session.rollback()
+    async with world.maker() as session:
+        with pytest.raises(
+            DBAPIError, match="fk_bounty_reviews_claim_id_bounty_submissions"
+        ):
+            await session.execute(
+                text(
+                    "INSERT INTO bounty_reviews (submission_id, claim_id, decision, "
+                    "reason, reviewer_actor, decided_at) VALUES (:submission, :claim, "
+                    "'reject', 'fixture review of another claim', 'reviewer', now())"
+                ),
+                {
+                    "submission": alice["submissions"][-1]["submission_id"],
+                    "claim": bob["claim_id"],
+                },
+            )
+        await session.rollback()
+
+
+async def test_a_fee_has_exactly_one_disposition(world):
+    from fastapi import HTTPException
+
+    from ditto.api_server.bounty_claims import utcnow
+    from ditto.api_server.bounty_settlement import record_fee_disposition
+    from ditto.db.models import BountyClaim, BountySlot
+
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    async with world.maker() as session, session.begin():
+        row = await session.get(BountyClaim, UUID(claim["claim_id"]))
+        slot = await session.get(BountySlot, UUID(claim["slot_id"]))
+        again = await record_fee_disposition(
+            session,
+            claim=row,
+            slot=slot,
+            kind="fee_refund",
+            reason="accepted",
+            now=utcnow(),
+        )
+        assert again.kind == "fee_refund"
+        # A refunded fee can't also be retained; the caller must not proceed.
+        with pytest.raises(HTTPException) as conflict:
+            await record_fee_disposition(
+                session,
+                claim=row,
+                slot=slot,
+                kind="fee_retained",
+                reason="rejected",
+                now=utcnow(),
+            )
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail == "this entry fee was already refunded"
+    assert obligation(await claim_of(world, claim), "fee_refund")["payee_coldkey"] == (
+        ALICE.coldkey.ss58_address
+    )
+
+
 async def test_settlement_history_is_append_only(world):
     await world.start(ALICE)
     claim = await accepted(world, ALICE)
     await policy(world)
     refund = obligation(claim, "fee_refund")
     await approve(world, refund)
-    await dispatch(world, refund)
+    unknown = (await dispatch(world, refund, "unknown")).json()
+    await reconcile(world, unknown["transfers"][0]["transfer_id"])
     history = "bounty history is append-only"
     for statement in (
         "UPDATE bounty_payout_policies SET single_approver_max_alpha_rao = 1",
         "DELETE FROM bounty_obligation_approvals",
         "TRUNCATE bounty_delivery_facts",
-        "TRUNCATE bounty_transfers",
+        # CASCADE reaches the reconciliation history, whose trigger refuses.
+        "TRUNCATE bounty_transfers CASCADE",
+        "UPDATE bounty_transfer_reconciliations SET actor = 'someone else'",
+        "DELETE FROM bounty_transfer_reconciliations",
         "UPDATE bounty_obligations SET amount_alpha_rao = 1",
     ):
         async with world.maker() as session:

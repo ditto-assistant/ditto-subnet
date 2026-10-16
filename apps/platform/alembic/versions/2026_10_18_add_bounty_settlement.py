@@ -70,7 +70,9 @@ APPEND_ONLY = (
     "bounty_payout_policies",
     "bounty_obligation_approvals",
     "bounty_delivery_facts",
+    "bounty_transfer_reconciliations",
 )
+RECONCILE_OUTCOMES = ("confirmed", "failed", "expired", "unknown")
 
 
 def _quoted(values: tuple[str, ...]) -> str:
@@ -201,6 +203,32 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text(f"state IN ({_quoted(LIVE_TRANSFER_STATES)})"),
     )
+    # Who reconciled a transfer, what they asked for, and what it showed.
+    op.create_table(
+        "bounty_transfer_reconciliations",
+        sa.Column(
+            "reconciliation_id",
+            sa.BigInteger(),
+            sa.Identity(always=True),
+            primary_key=True,
+        ),
+        sa.Column("transfer_id", sa.UUID(), nullable=False),
+        sa.Column("actor", sa.Text(), nullable=False),
+        sa.Column("requested", sa.Text(), nullable=True),
+        sa.Column("state", sa.Text(), nullable=False),
+        sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["transfer_id"], ["bounty_transfers.transfer_id"]),
+        sa.CheckConstraint(
+            f"state IN ({_quoted(TRANSFER_STATES)})"
+            f" AND (requested IS NULL OR requested IN ({_quoted(RECONCILE_OUTCOMES)}))",
+            name="reconciliation",
+        ),
+    )
+    op.create_index(
+        "bounty_transfer_reconciliations_transfer_idx",
+        "bounty_transfer_reconciliations",
+        ["transfer_id"],
+    )
     op.create_table(
         "bounty_delivery_facts",
         sa.Column(
@@ -271,14 +299,19 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    for table, condition in (
-        ("bounty_obligations", "kind <> 'fee_refund'"),
-        ("bounty_payout_policies", "TRUE"),
-        ("bounty_delivery_facts", "TRUE"),
+    # Refuse while anything this downgrade would drop, or a restored check
+    # would reject, is recorded.
+    for recorded in (
+        "SELECT 1 FROM bounty_delivery_facts",
+        "SELECT 1 FROM bounty_transfer_reconciliations",
+        "SELECT 1 FROM bounty_transfers",
+        "SELECT 1 FROM bounty_obligation_approvals",
+        "SELECT 1 FROM bounty_payout_policies",
+        f"SELECT 1 FROM bounty_events WHERE kind NOT IN ({_quoted(P3_EVENT_KINDS)})",
+        "SELECT 1 FROM bounty_obligations WHERE kind <> 'fee_refund' "
+        f"OR reason NOT IN ({_quoted(P3_REASONS)})",
     ):
-        if bind.execute(
-            sa.text(f"SELECT EXISTS (SELECT 1 FROM {table} WHERE {condition})")
-        ).scalar():
+        if bind.execute(sa.text(f"SELECT EXISTS ({recorded})")).scalar():
             raise RuntimeError("refusing to drop recorded bounty settlement")
     _replace_check(
         "bounty_events",
@@ -293,6 +326,7 @@ def downgrade() -> None:
     op.drop_column("bounty_events", "obligation_id")
     for table in (
         "bounty_delivery_facts",
+        "bounty_transfer_reconciliations",
         "bounty_transfers",
         "bounty_obligation_approvals",
         "bounty_payout_policies",

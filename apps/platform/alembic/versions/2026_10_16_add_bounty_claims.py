@@ -124,11 +124,15 @@ def upgrade() -> None:
         sa.Column("held_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("hold_expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("nonce"),
+        # The target of references that must stay within the claim's bounty.
+        sa.UniqueConstraint("claim_id", "bounty_id"),
         sa.ForeignKeyConstraint(
             ["bounty_id", "revision"],
             ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
         ),
-        sa.ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
+        sa.ForeignKeyConstraint(
+            ["slot_id", "bounty_id"], ["bounty_slots.slot_id", "bounty_slots.bounty_id"]
+        ),
         sa.ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
         sa.ForeignKeyConstraint(["github_link_id"], ["miner_github_links.link_id"]),
         sa.ForeignKeyConstraint(["cla_signature_id"], ["cla_signatures.signature_id"]),
@@ -152,8 +156,8 @@ def upgrade() -> None:
         op.f("fk_bounty_slots_claim_id_bounty_claims"),
         "bounty_slots",
         "bounty_claims",
-        ["claim_id"],
-        ["claim_id"],
+        ["claim_id", "bounty_id"],
+        ["claim_id", "bounty_id"],
     )
     op.create_check_constraint(
         op.f("ck_bounty_slots_claim"),
@@ -176,6 +180,10 @@ def upgrade() -> None:
         sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("block_hash", "extrinsic_index"),
         sa.ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        # The target of an obligation's composite reference to its payment.
+        sa.UniqueConstraint(
+            "claim_id", "block_hash", "extrinsic_index", "payer_coldkey"
+        ),
         sa.CheckConstraint(
             "amount_alpha_rao > 0 AND extrinsic_index >= 0 AND block_number >= 0"
             " AND outcome IN ('allocated','refund_owed')",
@@ -206,9 +214,15 @@ def upgrade() -> None:
         sa.UniqueConstraint("block_hash", "extrinsic_index", "kind"),
         sa.ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         sa.ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        # A fee obligation is the payment of its own claim, owed to its payer.
         sa.ForeignKeyConstraint(
-            ["block_hash", "extrinsic_index"],
-            ["bounty_fee_payments.block_hash", "bounty_fee_payments.extrinsic_index"],
+            ["claim_id", "block_hash", "extrinsic_index", "payee_coldkey"],
+            [
+                "bounty_fee_payments.claim_id",
+                "bounty_fee_payments.block_hash",
+                "bounty_fee_payments.extrinsic_index",
+                "bounty_fee_payments.payer_coldkey",
+            ],
         ),
         sa.CheckConstraint(
             "kind IN ('fee_refund') AND amount_alpha_rao > 0"
@@ -222,8 +236,8 @@ def upgrade() -> None:
         op.f("fk_bounty_events_claim_id_bounty_claims"),
         "bounty_events",
         "bounty_claims",
-        ["claim_id"],
-        ["claim_id"],
+        ["claim_id", "bounty_id"],
+        ["claim_id", "bounty_id"],
     )
     op.drop_constraint(op.f("ck_bounty_events_kind"), "bounty_events", type_="check")
     op.create_check_constraint(
@@ -244,8 +258,20 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    if bind.execute(sa.text("SELECT EXISTS (SELECT 1 FROM bounty_claims)")).scalar():
-        raise RuntimeError("refusing to drop recorded bounty claims and payments")
+    # Refuse while anything this downgrade would drop, or the restored event
+    # check would reject, is recorded.
+    for recorded in (
+        "SELECT 1 FROM bounty_claims",
+        "SELECT 1 FROM bounty_claim_controls",
+        "SELECT 1 FROM bounty_action_nonces",
+        "SELECT 1 FROM bounty_fee_payments",
+        "SELECT 1 FROM bounty_obligations",
+        f"SELECT 1 FROM bounty_events WHERE kind NOT IN ({_quoted(P1_EVENT_KINDS)})",
+    ):
+        if bind.execute(sa.text(f"SELECT EXISTS ({recorded})")).scalar():
+            raise RuntimeError(
+                "refusing to drop recorded bounty claims, payments or controls"
+            )
     op.drop_constraint(op.f("ck_bounty_events_kind"), "bounty_events", type_="check")
     op.create_check_constraint(
         op.f("ck_bounty_events_kind"),

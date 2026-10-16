@@ -739,7 +739,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Payout Policy */
+        /**
+         * Payout Policy
+         * @description The approval thresholds in force, or one exact revision of them.
+         */
         get: operations["payout_policy_api_v1_admin_bounties_payout_policy_get"];
         put?: never;
         /**
@@ -15883,7 +15886,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "revision_published" | "claims_paused" | "claims_resumed" | "reviewer_assigned" | "review_decided" | "appeal_decided" | "slot_cancelled" | "slot_reopened" | "award_recorded" | "obligation_approved" | "transfer_dispatched" | "fact_recorded";
+            kind: "revision_published" | "claims_paused" | "claims_resumed" | "reviewer_assigned" | "review_decided" | "appeal_decided" | "slot_cancelled" | "slot_reopened" | "award_recorded" | "obligation_approved" | "transfer_dispatched" | "transfer_reconciled" | "fact_recorded";
             /** Obligation Id */
             obligation_id: string | null;
             /** Reason */
@@ -16153,7 +16156,7 @@ export interface components {
             /** Approvals */
             approvals: number;
             /** Approvals Required */
-            approvals_required: number;
+            approvals_required: number | null;
             /** Attribution */
             attribution: string | null;
             /**
@@ -16186,7 +16189,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "retained" | "awaiting_approval" | "approved" | "dispatched" | "uncertain" | "confirmed" | "failed";
+            state: "retained" | "awaiting_approval" | "over_policy_limit" | "approved" | "dispatched" | "uncertain" | "confirmed" | "failed";
             /** Transfers */
             transfers: components["schemas"]["BountyTransferView"][];
         };
@@ -16405,7 +16408,7 @@ export interface components {
             /** Award Alpha Rao */
             award_alpha_rao: number;
             /** Award State */
-            award_state: ("retained" | "awaiting_approval" | "approved" | "dispatched" | "uncertain" | "confirmed" | "failed") | null;
+            award_state: ("retained" | "awaiting_approval" | "over_policy_limit" | "approved" | "dispatched" | "uncertain" | "confirmed" | "failed") | null;
             /**
              * Claim Id
              * Format: uuid
@@ -41559,7 +41562,9 @@ export interface operations {
     };
     payout_policy_api_v1_admin_bounties_payout_policy_get: {
         parameters: {
-            query?: never;
+            query?: {
+                revision?: number | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -41794,7 +41799,7 @@ export interface operations {
     settlement_queue_api_v1_admin_bounties_queue_settlement_get: {
         parameters: {
             query?: {
-                state?: ("retained" | "awaiting_approval" | "approved" | "dispatched" | "uncertain" | "confirmed" | "failed") | null;
+                state?: ("retained" | "awaiting_approval" | "over_policy_limit" | "approved" | "dispatched" | "uncertain" | "confirmed" | "failed") | null;
             };
             header?: {
                 authorization?: string | null;

@@ -10,7 +10,10 @@ transfers, so no write can leave the two disagreeing:
   and until the first arrives the obligation reads ``failed``;
 - otherwise the round is ``approved`` once the payout policy's required number
   of distinct operators approved it under the revision in force, and
-  ``awaiting_approval`` before that.
+  ``awaiting_approval`` before that;
+- an amount above the policy's dual-approver limit is ``over_policy_limit``:
+  nobody can approve it until a policy revision raises the limit. With no
+  policy configured yet, the round awaits approval with no known requirement.
 """
 
 from __future__ import annotations
@@ -61,7 +64,7 @@ class ObligationState:
     state: str
     round: int
     approvals: int
-    required: int
+    required: int | None
     transfers: list[BountyTransfer]
 
 
@@ -85,20 +88,22 @@ async def obligation_state(
             latest.state,
             latest.round,
             await _approvals(session, obligation, latest.round, policy),
-            required_approvals(obligation.amount_alpha_rao, policy) or 0,
+            required_approvals(obligation.amount_alpha_rao, policy),
             transfers,
         )
     round_number = latest.round + 1 if latest is not None else 1
     approvals = await _approvals(session, obligation, round_number, policy)
     required = required_approvals(obligation.amount_alpha_rao, policy)
-    if required is not None and approvals >= required:
+    if policy is not None and required is None:
+        state = "over_policy_limit"
+    elif required is not None and approvals >= required:
         state = "approved"
     elif latest is not None and approvals == 0:
         # A failed or expired transfer needs fresh approvals before any retry.
         state = "failed"
     else:
         state = "awaiting_approval"
-    return ObligationState(state, round_number, approvals, required or 0, transfers)
+    return ObligationState(state, round_number, approvals, required, transfers)
 
 
 async def _approvals(

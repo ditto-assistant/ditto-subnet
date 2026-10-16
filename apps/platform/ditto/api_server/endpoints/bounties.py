@@ -368,9 +368,12 @@ async def award(
     responses=_errors(401, 404, 503),
 )
 async def payout_policy(
-    _admin: AdminDep, session: SessionDep
+    _admin: AdminDep,
+    session: SessionDep,
+    revision: Annotated[int | None, Query(ge=1, le=2_147_483_647)] = None,
 ) -> BountyPayoutPolicyView:
-    return await bounty_settlement.read_payout_policy(session)
+    """The approval thresholds in force, or one exact revision of them."""
+    return await bounty_settlement.read_payout_policy(session, revision=revision)
 
 
 @admin_router.post(
@@ -446,7 +449,7 @@ async def reconcile(
     body: BountyReconcileRequest,
     request: Request,
     _admin: AdminDep,
-    _actor: ActorDep,
+    actor: ActorDep,
 ) -> BountyObligationView:
     """Settle a dispatched or uncertain transfer before anything else."""
     state = request.app.state
@@ -455,6 +458,7 @@ async def reconcile(
         executor=state.bounty_transfer_executor,
         transfer_id=transfer_id,
         body=body,
+        actor=actor,
     )
 
 

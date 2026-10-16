@@ -1636,7 +1636,9 @@ CREATE TABLE public.bounty_appeal_decisions (
     upheld boolean NOT NULL,
     reason text NOT NULL,
     actor text NOT NULL,
-    decided_at timestamp with time zone NOT NULL
+    decided_at timestamp with time zone NOT NULL,
+    restored_deadline_at timestamp with time zone,
+    CONSTRAINT ck_bounty_appeal_decisions_restored_deadline CHECK ((upheld = (restored_deadline_at IS NOT NULL)))
 );
 
 
@@ -2021,6 +2023,35 @@ CREATE TABLE public.bounty_submissions (
     submitted_at timestamp with time zone NOT NULL,
     review_due_at timestamp with time zone NOT NULL,
     CONSTRAINT ck_bounty_submissions_submission CHECK (((pr_number > 0) AND (head_sha ~ '^[0-9a-f]{40}$'::text) AND (key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text])) AND (review_due_at > submitted_at)))
+);
+
+
+--
+-- Name: bounty_transfer_reconciliations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_transfer_reconciliations (
+    reconciliation_id bigint NOT NULL,
+    transfer_id uuid NOT NULL,
+    actor text NOT NULL,
+    requested text,
+    state text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_transfer_reconciliations_reconciliation CHECK (((state = ANY (ARRAY['dispatched'::text, 'confirmed'::text, 'failed'::text, 'expired'::text, 'uncertain'::text])) AND ((requested IS NULL) OR (requested = ANY (ARRAY['confirmed'::text, 'failed'::text, 'expired'::text, 'unknown'::text])))))
+);
+
+
+--
+-- Name: bounty_transfer_reconciliations_reconciliation_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_transfer_reconciliations ALTER COLUMN reconciliation_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_transfer_reconciliations_reconciliation_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -8301,6 +8332,14 @@ ALTER TABLE ONLY public.bounty_submissions
 
 
 --
+-- Name: bounty_transfer_reconciliations pk_bounty_transfer_reconciliations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_transfer_reconciliations
+    ADD CONSTRAINT pk_bounty_transfer_reconciliations PRIMARY KEY (reconciliation_id);
+
+
+--
 -- Name: bounty_transfers pk_bounty_transfers; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9629,6 +9668,14 @@ ALTER TABLE ONLY public.bounty_appeals
 
 
 --
+-- Name: bounty_claims uq_bounty_claims_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT uq_bounty_claims_claim_id UNIQUE (claim_id, bounty_id);
+
+
+--
 -- Name: bounty_claims uq_bounty_claims_nonce; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9642,6 +9689,22 @@ ALTER TABLE ONLY public.bounty_claims
 
 ALTER TABLE ONLY public.bounty_delivery_facts
     ADD CONSTRAINT uq_bounty_delivery_facts_claim_id UNIQUE (claim_id, kind);
+
+
+--
+-- Name: bounty_events uq_bounty_events_event_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT uq_bounty_events_event_id UNIQUE (event_id, claim_id);
+
+
+--
+-- Name: bounty_fee_payments uq_bounty_fee_payments_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_fee_payments
+    ADD CONSTRAINT uq_bounty_fee_payments_claim_id UNIQUE (claim_id, block_hash, extrinsic_index, payer_coldkey);
 
 
 --
@@ -9666,6 +9729,22 @@ ALTER TABLE ONLY public.bounty_obligations
 
 ALTER TABLE ONLY public.bounty_slots
     ADD CONSTRAINT uq_bounty_slots_bounty_id UNIQUE (bounty_id, round, "position");
+
+
+--
+-- Name: bounty_slots uq_bounty_slots_slot_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT uq_bounty_slots_slot_id UNIQUE (slot_id, bounty_id);
+
+
+--
+-- Name: bounty_submissions uq_bounty_submissions_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_submissions
+    ADD CONSTRAINT uq_bounty_submissions_claim_id UNIQUE (claim_id, submission_id);
 
 
 --
@@ -10150,6 +10229,13 @@ CREATE INDEX bounty_reviewer_assignments_bounty_idx ON public.bounty_reviewer_as
 --
 
 CREATE INDEX bounty_submissions_claim_idx ON public.bounty_submissions USING btree (claim_id);
+
+
+--
+-- Name: bounty_transfer_reconciliations_transfer_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_transfer_reconciliations_transfer_idx ON public.bounty_transfer_reconciliations USING btree (transfer_id);
 
 
 --
@@ -11560,6 +11646,20 @@ CREATE TRIGGER bounty_submissions_no_truncate BEFORE TRUNCATE ON public.bounty_s
 
 
 --
+-- Name: bounty_transfer_reconciliations bounty_transfer_reconciliations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_transfer_reconciliations_immutable BEFORE DELETE OR UPDATE ON public.bounty_transfer_reconciliations FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_transfer_reconciliations bounty_transfer_reconciliations_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_transfer_reconciliations_no_truncate BEFORE TRUNCATE ON public.bounty_transfer_reconciliations FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
 -- Name: bounty_transfers bounty_transfers_no_truncate; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -12728,7 +12828,7 @@ ALTER TABLE ONLY public.bounty_appeals
 --
 
 ALTER TABLE ONLY public.bounty_appeals
-    ADD CONSTRAINT fk_bounty_appeals_subject_event_id_bounty_events FOREIGN KEY (subject_event_id) REFERENCES public.bounty_events(event_id);
+    ADD CONSTRAINT fk_bounty_appeals_subject_event_id_bounty_events FOREIGN KEY (subject_event_id, claim_id) REFERENCES public.bounty_events(event_id, claim_id);
 
 
 --
@@ -12776,7 +12876,7 @@ ALTER TABLE ONLY public.bounty_claims
 --
 
 ALTER TABLE ONLY public.bounty_claims
-    ADD CONSTRAINT fk_bounty_claims_slot_id_bounty_slots FOREIGN KEY (slot_id) REFERENCES public.bounty_slots(slot_id);
+    ADD CONSTRAINT fk_bounty_claims_slot_id_bounty_slots FOREIGN KEY (slot_id, bounty_id) REFERENCES public.bounty_slots(slot_id, bounty_id);
 
 
 --
@@ -12804,11 +12904,27 @@ ALTER TABLE ONLY public.bounty_events
 
 
 --
+-- Name: bounty_events fk_bounty_events_bounty_id_bounty_revisions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_bounty_id_bounty_revisions FOREIGN KEY (bounty_id, revision) REFERENCES public.bounty_revisions(bounty_id, revision);
+
+
+--
+-- Name: bounty_events fk_bounty_events_bounty_id_bounty_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_bounty_id_bounty_rounds FOREIGN KEY (bounty_id, round) REFERENCES public.bounty_rounds(bounty_id, round);
+
+
+--
 -- Name: bounty_events fk_bounty_events_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.bounty_events
-    ADD CONSTRAINT fk_bounty_events_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+    ADD CONSTRAINT fk_bounty_events_claim_id_bounty_claims FOREIGN KEY (claim_id, bounty_id) REFERENCES public.bounty_claims(claim_id, bounty_id);
 
 
 --
@@ -12824,7 +12940,7 @@ ALTER TABLE ONLY public.bounty_events
 --
 
 ALTER TABLE ONLY public.bounty_events
-    ADD CONSTRAINT fk_bounty_events_slot_id_bounty_slots FOREIGN KEY (slot_id) REFERENCES public.bounty_slots(slot_id);
+    ADD CONSTRAINT fk_bounty_events_slot_id_bounty_slots FOREIGN KEY (slot_id, bounty_id) REFERENCES public.bounty_slots(slot_id, bounty_id);
 
 
 --
@@ -12860,14 +12976,6 @@ ALTER TABLE ONLY public.bounty_obligation_approvals
 
 
 --
--- Name: bounty_obligations fk_bounty_obligations_block_hash_bounty_fee_payments; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.bounty_obligations
-    ADD CONSTRAINT fk_bounty_obligations_block_hash_bounty_fee_payments FOREIGN KEY (block_hash, extrinsic_index) REFERENCES public.bounty_fee_payments(block_hash, extrinsic_index);
-
-
---
 -- Name: bounty_obligations fk_bounty_obligations_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12881,6 +12989,14 @@ ALTER TABLE ONLY public.bounty_obligations
 
 ALTER TABLE ONLY public.bounty_obligations
     ADD CONSTRAINT fk_bounty_obligations_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_obligations fk_bounty_obligations_claim_id_bounty_fee_payments; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_obligations
+    ADD CONSTRAINT fk_bounty_obligations_claim_id_bounty_fee_payments FOREIGN KEY (claim_id, block_hash, extrinsic_index, payee_coldkey) REFERENCES public.bounty_fee_payments(claim_id, block_hash, extrinsic_index, payer_coldkey);
 
 
 --
@@ -12908,11 +13024,11 @@ ALTER TABLE ONLY public.bounty_reviews
 
 
 --
--- Name: bounty_reviews fk_bounty_reviews_submission_id_bounty_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: bounty_reviews fk_bounty_reviews_claim_id_bounty_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.bounty_reviews
-    ADD CONSTRAINT fk_bounty_reviews_submission_id_bounty_submissions FOREIGN KEY (submission_id) REFERENCES public.bounty_submissions(submission_id);
+    ADD CONSTRAINT fk_bounty_reviews_claim_id_bounty_submissions FOREIGN KEY (claim_id, submission_id) REFERENCES public.bounty_submissions(claim_id, submission_id);
 
 
 --
@@ -12960,7 +13076,7 @@ ALTER TABLE ONLY public.bounty_slots
 --
 
 ALTER TABLE ONLY public.bounty_slots
-    ADD CONSTRAINT fk_bounty_slots_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+    ADD CONSTRAINT fk_bounty_slots_claim_id_bounty_claims FOREIGN KEY (claim_id, bounty_id) REFERENCES public.bounty_claims(claim_id, bounty_id);
 
 
 --
@@ -12977,6 +13093,14 @@ ALTER TABLE ONLY public.bounty_submissions
 
 ALTER TABLE ONLY public.bounty_submissions
     ADD CONSTRAINT fk_bounty_submissions_nonce_bounty_action_nonces FOREIGN KEY (nonce) REFERENCES public.bounty_action_nonces(nonce);
+
+
+--
+-- Name: bounty_transfer_reconciliations fk_bounty_transfer_reconciliations_transfer_id_bounty_transfers; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_transfer_reconciliations
+    ADD CONSTRAINT fk_bounty_transfer_reconciliations_transfer_id_bounty_transfers FOREIGN KEY (transfer_id) REFERENCES public.bounty_transfers(transfer_id);
 
 
 --

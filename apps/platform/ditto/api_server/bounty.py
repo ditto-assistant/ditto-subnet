@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from ditto.api_models.bounty import (
     CLOSED_SLOT_STATUSES,
@@ -35,7 +36,11 @@ from ditto.api_models.bounty import (
     bounty_spec_digest,
 )
 from ditto.api_server import bounty_claims
-from ditto.api_server.bounty_deadlines import effective_slot_status, review_overdue
+from ditto.api_server.bounty_deadlines import (
+    DEADLINE_STATUSES,
+    effective_slot_status,
+    review_overdue,
+)
 from ditto.db.models import (
     Bounty,
     BountyClaim,
@@ -301,10 +306,26 @@ def _slot_counts(statuses: Counter[str]) -> BountySlotCounts:
     )
 
 
+# The only revision columns a summary reads; the board loads nothing else.
+_SUMMARY_COLUMNS = (
+    BountyRevision.bounty_id,
+    BountyRevision.revision,
+    BountyRevision.title,
+    BountyRevision.spec_digest,
+    BountyRevision.entry_fee_alpha_rao,
+    BountyRevision.reward_pool_alpha_rao,
+    BountyRevision.delivery_days,
+    BountyRevision.review_days,
+    BountyRevision.reviewer_login,
+    BountyRevision.funding_mode,
+    BountyRevision.published_at,
+)
+
+
 def _summary(
     bounty: Bounty,
     *,
-    first: BountyRevision,
+    published_at: datetime,
     current: BountyRevision,
     current_round: int,
     paused: bool,
@@ -330,7 +351,7 @@ def _summary(
         slots=_slot_counts(statuses),
         reviews_overdue=overdue,
         awarded_alpha_rao=awarded,
-        published_at=first.published_at,
+        published_at=published_at,
         updated_at=current.published_at,
     )
 
@@ -367,13 +388,28 @@ async def board(
         )
     )
     ids = [bounty.bounty_id for bounty in bounties]
-    revisions: dict[UUID, list[BountyRevision]] = {}
-    for row in await session.scalars(
-        select(BountyRevision)
-        .where(BountyRevision.bounty_id.in_(ids))
-        .order_by(BountyRevision.bounty_id, BountyRevision.revision)
-    ):
-        revisions.setdefault(row.bounty_id, []).append(row)
+    # Each bounty's current revision, and when its first was published.
+    current: dict[UUID, BountyRevision] = {
+        row.bounty_id: row
+        for row in await session.scalars(
+            select(BountyRevision)
+            .options(load_only(*_SUMMARY_COLUMNS))
+            .where(BountyRevision.bounty_id.in_(ids))
+            .order_by(BountyRevision.bounty_id, BountyRevision.revision.desc())
+            .distinct(BountyRevision.bounty_id)
+        )
+    }
+    first_published: dict[UUID, datetime] = dict(
+        (
+            await session.execute(
+                select(BountyRevision.bounty_id, func.min(BountyRevision.published_at))
+                .where(BountyRevision.bounty_id.in_(ids))
+                .group_by(BountyRevision.bounty_id)
+            )
+        )
+        .tuples()
+        .all()
+    )
     rounds: dict[UUID, int] = {
         bounty_id: int(latest)
         for bounty_id, latest in (
@@ -402,8 +438,8 @@ async def board(
     items = [
         _summary(
             bounty,
-            first=revisions[bounty.bounty_id][0],
-            current=revisions[bounty.bounty_id][-1],
+            published_at=first_published[bounty.bounty_id],
+            current=current[bounty.bounty_id],
             current_round=int(rounds.get(bounty.bounty_id, 0)),
             paused=paused.get(bounty.bounty_id, False),
             statuses=statuses.get(bounty.bounty_id, Counter()),
@@ -469,7 +505,7 @@ def _slot_view(
         hold_expires_at=claimant.hold_expires_at
         if status == "held" and claimant
         else None,
-        deadline_at=slot.deadline_at if claimant else None,
+        deadline_at=slot.deadline_at if status in DEADLINE_STATUSES else None,
         review_due_at=slot.review_due_at if status == "submitted" else None,
         review_overdue=review_overdue(slot, now=now),
         claimant=(
@@ -524,7 +560,7 @@ async def detail(session: AsyncSession, bounty_id: UUID) -> BountyDetail:
     return BountyDetail(
         summary=_summary(
             bounty,
-            first=revisions[0],
+            published_at=revisions[0].published_at,
             current=revisions[-1],
             current_round=rounds[-1].round if rounds else 0,
             paused=(await _paused(session, [bounty_id])).get(bounty_id, False),

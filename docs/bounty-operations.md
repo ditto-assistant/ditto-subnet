@@ -53,12 +53,17 @@ Live funding needs separate operator authorization (#2944).
 2. **Approve.** `approve_bounty_obligation` binds the exact payee, amount,
    policy revision and round. The award's decider and the accepting reviewer
    can't approve. An award is refused with `payout held` while the claim
-   hotkey's finalized owner is not the payee of record.
+   hotkey's finalized owner is not the payee of record. An amount above the
+   payout policy's two-approver limit reads `over_policy_limit`: nobody can
+   approve it until a new policy revision raises the limit.
 3. **Dispatch.** `dispatch_bounty_obligation` sends an approved round once. The
-   dispatch is recorded before anything is sent.
+   dispatch is recorded before anything is sent. In rehearsal, name the
+   simulated outcome with `rehearsalOutcome`; it is required.
 4. **Reconcile.** A transfer whose outcome is unknown is `uncertain`. Settle it
    with `reconcile_bounty_transfer` from what the chain shows. Never dispatch it
-   again. A failed or expired transfer needs fresh approvals for the next round.
+   again. Every reconciliation, an inconclusive one too, is recorded in the
+   audit with its operator. A failed or expired transfer needs fresh approvals
+   for the next round.
 5. **Facts.** `record_bounty_fact` records a merge, deployment or adoption.
    None of them gates payment.
 
