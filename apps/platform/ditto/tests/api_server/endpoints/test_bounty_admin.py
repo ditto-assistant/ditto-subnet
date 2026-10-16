@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 
+from ditto.tests.api_server.endpoints.test_bounties import publish as publish_bounty
 from ditto.tests.api_server.endpoints.test_bounty_claims import (
     _ADMIN_TOKEN,
     _HEADERS,
@@ -246,6 +247,7 @@ async def test_the_settlement_queue_shows_what_needs_an_operator(world):
         "/queue/reviews",
         "/queue/settlement",
         "/00000000-0000-4000-8000-000000000000",
+        f"?repo={REPO}&issue={ISSUE}",
     ],
 )
 async def test_operator_reads_need_the_admin_token(world, path):
@@ -257,6 +259,23 @@ async def test_unknown_bounties_are_404(world):
     await world.start(ALICE)
     missing = await world.client.get(f"{ADMIN}/{uuid4()}", headers=_ADMIN_TOKEN)
     assert missing.status_code == 404
+
+
+async def test_the_operator_view_is_found_by_issue_and_never_cached(world):
+    await world.start(ALICE)
+    lookup = f"{ADMIN}?repo={REPO}&issue={ISSUE + 1}"
+    missing = await world.client.get(lookup, headers=_ADMIN_TOKEN)
+    assert missing.status_code == 404
+    published = await publish_bounty(world.client, issue=ISSUE + 1)
+    assert published.status_code == 200, published.text
+    found = await world.client.get(lookup, headers=_ADMIN_TOKEN)
+    assert found.status_code == 200, found.text
+    # Unlike the public board, the read-back of a publication is never cached.
+    assert found.headers["cache-control"] == "no-store"
+    bounty_id = found.json()["detail"]["summary"]["bounty_id"]
+    assert found.json()["detail"]["summary"]["issue"] == ISSUE + 1
+    by_id = await world.client.get(f"{ADMIN}/{bounty_id}", headers=_ADMIN_TOKEN)
+    assert found.json() == by_id.json()
 
 
 async def test_operator_routes_declare_their_errors(app):

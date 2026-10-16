@@ -308,6 +308,20 @@ async def _audit(
     return sorted(entries, key=lambda entry: entry.recorded_at)
 
 
+async def operator_view_for_issue(
+    session: AsyncSession, *, repo: str, issue: int
+) -> BountyOperatorView:
+    """The operator view of the bounty for ``repo#issue``, read fresh."""
+    bounty_id = await session.scalar(
+        select(Bounty.bounty_id).where(
+            Bounty.repo == repo, Bounty.issue_number == issue
+        )
+    )
+    if bounty_id is None:
+        raise HTTPException(404, "bounty not found")
+    return await operator_view(session, bounty_id)
+
+
 async def operator_view(session: AsyncSession, bounty_id: UUID) -> BountyOperatorView:
     detail = await bounty.detail(session, bounty_id)
     now = bounty_claims.utcnow()

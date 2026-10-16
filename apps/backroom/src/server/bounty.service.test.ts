@@ -97,13 +97,11 @@ const cases: Case[] = [
     body: { repo: REPO, issue: 2942, expected_revision: 1, reviewer_actor: 'reviewer@example.com', reason },
     committed: { revision: 2, spec_digest: DIGEST },
     applied: [
-      Response.json({ items: [{ bounty_id: BOUNTY }], total: 1 }),
       Response.json(operator({ revisions: [{ revision: 2, spec_digest: DIGEST, reviewer_actor: 'reviewer@example.com', actor: ACTOR, reason }] })),
     ],
-    absent: [Response.json({ items: [], total: 0 })],
+    absent: [envelope('bounty not found', 404)],
     // The same terms, operator and reason, binding another reviewer.
     superseded: [
-      Response.json({ items: [{ bounty_id: BOUNTY }], total: 1 }),
       Response.json(operator({ revisions: [{ revision: 2, spec_digest: DIGEST, reviewer_actor: 'other-reviewer@example.com', actor: ACTOR, reason }] })),
     ],
   },
@@ -498,6 +496,32 @@ describe('bounty reads', () => {
     vi.stubGlobal('fetch', fetchMock)
     await fetchBountyQueue(input)
     expect(sent(fetchMock).url.endsWith(path)).toBe(true)
+  })
+
+  it('keeps queue filters on a runtime without URLSearchParams.size', async () => {
+    const size = vi.spyOn(URLSearchParams.prototype, 'size', 'get').mockReturnValue(undefined as never)
+    try {
+      const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ items: [], total: 0 }))
+      vi.stubGlobal('fetch', fetchMock)
+      await fetchBountyQueue({ queue: 'reviews', overdueOnly: true })
+      expect(sent(fetchMock).url.endsWith('/queue/reviews?overdue_only=true')).toBe(true)
+    } finally {
+      size.mockRestore()
+    }
+  })
+
+  it('reads a publication back through the uncached admin route, by issue', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(outage())
+      .mockResolvedValueOnce(Response.json(operator({ revisions: [{ revision: 2, spec_digest: DIGEST, reviewer_actor: 'reviewer@example.com', actor: ACTOR, reason }] })))
+    vi.stubGlobal('fetch', fetchMock)
+    await publishBountyRevision(ACTOR, {
+      repo: REPO, issue: 2942, expectedRevision: 1, terms: TERMS, reviewerActor: 'reviewer@example.com', reason,
+      confirmation: `PUBLISH BOUNTY ${REPO}#2942 REVISION 2 ${DIGEST}`,
+    })
+    const readBack = sent(fetchMock, 1).url
+    expect(readBack).toContain('/api/v1/admin/bounties?repo=')
+    expect(readBack).not.toContain('/public/')
   })
 
   it('refuses a cancel without a kind and a reopen with one before any request', async () => {

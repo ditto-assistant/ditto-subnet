@@ -484,6 +484,23 @@ async def fact(
 
 # Operator reads. Static paths are declared before the bounty-id path.
 @admin_router.get(
+    "", response_model=BountyOperatorView, responses=_errors(401, 404, 503)
+)
+async def operator_view_for_issue(
+    _admin: AdminDep,
+    session: SessionDep,
+    repo: Annotated[str, Query(pattern=REPO_PATTERN)],
+    issue: Annotated[int, Query(ge=1, le=2147483647)],
+) -> BountyOperatorView:
+    """The operator view of ``repo#issue``'s bounty, never from a cache.
+
+    The public board can serve a copy from before a publication, so a
+    read-back that must see the write it just made looks the bounty up here.
+    """
+    return await bounty_admin.operator_view_for_issue(session, repo=repo, issue=issue)
+
+
+@admin_router.get(
     "/queue/reviews", response_model=BountyReviewQueue, responses=_errors(401, 503)
 )
 async def review_queue(

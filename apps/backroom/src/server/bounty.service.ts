@@ -81,7 +81,9 @@ export async function fetchBountyQueue(rawInput: unknown) {
   if (input.overdueOnly) query.set('overdue_only', 'true')
   if (input.state) query.set('state', input.state)
   const path = `${ADMIN}/queue/${input.queue === 'reviews' ? 'reviews' : 'settlement'}`
-  return bountyQueueSchema.parse(await platformAdminRequest(query.size ? `${path}?${query}` : path))
+  // toString, not size: an empty query is the same on every runtime.
+  const filters = query.toString()
+  return bountyQueueSchema.parse(await platformAdminRequest(filters ? `${path}?${filters}` : path))
 }
 
 export async function fetchBountyPayoutPolicy(rawInput: unknown = {}) {
@@ -108,9 +110,19 @@ export async function previewBountyRevision(actor: string, rawInput: unknown) {
   )
 }
 
-async function bountyIdFor(repo: string, issue: number) {
-  const board = await fetchBountyBoard({ repo, issue, limit: 1 })
-  return board.items[0]?.bounty_id
+/** The operator view of `repo#issue`, or null before its first publication.
+ *
+ * Read through the admin route, never the public board: Platform caches the
+ * board, so a copy from before a publication would hide the write it made.
+ */
+async function bountyByIssue(repo: string, issue: number) {
+  const query = new URLSearchParams({ repo, issue: String(issue) })
+  try {
+    return bountyOperatorSchema.parse(await platformAdminRequest(`${ADMIN}?${query}`))
+  } catch (error) {
+    if (error instanceof PlatformAdminError && error.status === 404) return null
+    throw error
+  }
 }
 
 export async function publishBountyRevision(actor: string, rawInput: unknown) {
@@ -124,9 +136,8 @@ export async function publishBountyRevision(actor: string, rawInput: unknown) {
   }, {
     parse: parsed(bountyRevisionSchema),
     readBack: async (): Promise<ReadBack<z.infer<typeof bountyRevisionSchema>>> => {
-      const bountyId = await bountyIdFor(input.repo, input.issue)
-      if (!bountyId) return { state: 'absent' }
-      const row = (await fetchBounty({ bountyId })).revisions.find((item) => item.revision === target)
+      const view = await bountyByIssue(input.repo, input.issue)
+      const row = view?.revisions.find((item) => item.revision === target)
       if (!row) return { state: 'absent' }
       // Every field this write sets, the reviewer it binds included.
       if (
