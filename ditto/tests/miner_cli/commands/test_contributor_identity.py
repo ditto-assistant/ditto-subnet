@@ -602,7 +602,14 @@ def test_expected_github_id_must_be_a_positive_number():
         parser.parse_args(["link-github", "--expect-github-id", "42"]).expect_github_id
         == 42
     )
-    for value in ("0", "-1", "octocat"):
+    assert (
+        parser.parse_args(
+            ["link-github", "--expect-github-id", str(2**53 - 1)]
+        ).expect_github_id
+        == 2**53 - 1
+    )
+    # Above 2^53 - 1 Platform cannot link the account, so refuse it up front.
+    for value in ("0", "-1", "octocat", str(2**53)):
         with pytest.raises(SystemExit):
             parser.parse_args(["link-github", "--expect-github-id", value])
 

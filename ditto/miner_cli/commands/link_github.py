@@ -107,7 +107,8 @@ def _github_user_id(value: str) -> int:
         number = int(value)
     except ValueError:
         number = 0
-    if not 1 <= number <= 9223372036854775807:
+    # Platform links only ids every client reads exactly (up to 2^53 - 1).
+    if not 1 <= number <= 2**53 - 1:
         raise argparse.ArgumentTypeError("expected a positive numeric GitHub user id")
     return number
 

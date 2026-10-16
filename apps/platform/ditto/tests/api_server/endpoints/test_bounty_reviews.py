@@ -551,6 +551,34 @@ async def test_appeals_are_decided_by_someone_else(world):
     assert (await submit(world, ALICE, restored, sha="cd" * 20)).status_code == 200
 
 
+async def test_an_appeal_without_a_recorded_review_is_refused(world):
+    await world.start(ALICE)
+    claim = (await submit(world, ALICE, await claimed(world, ALICE))).json()
+    await review(world, claim, "reject")
+    rejection = next(e for e in await events(world) if e["kind"] == "rejected")
+    filed = await appeal(world, ALICE, claim, rejection["event_id"], "Fixture appeal.")
+    [entry] = filed.json()["appeals"]
+    # A review row that is somehow missing leaves the reviewer unknown.
+    async with world.maker() as session, session.begin():
+        await session.execute(
+            text("ALTER TABLE bounty_reviews DISABLE TRIGGER bounty_reviews_immutable")
+        )
+        await session.execute(text("DELETE FROM bounty_reviews"))
+        await session.execute(
+            text("ALTER TABLE bounty_reviews ENABLE TRIGGER bounty_reviews_immutable")
+        )
+    refused = await world.client.post(
+        f"{ADMIN}/appeals/{entry['appeal_id']}/decision",
+        headers=_HEADERS,
+        json={
+            "upheld": False,
+            "reason": "fixture appeal review",
+            "confirmation": f"DENY BOUNTY APPEAL {entry['appeal_id']}",
+        },
+    )
+    assert refused.status_code == 409 and "no recorded review" in refused.text
+
+
 async def test_a_missed_deadline_can_be_appealed_and_denied(world, monkeypatch):
     await world.start(ALICE)
     claim = await claimed(world, ALICE)

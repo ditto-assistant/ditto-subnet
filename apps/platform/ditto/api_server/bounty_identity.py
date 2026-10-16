@@ -131,7 +131,9 @@ async def require_verified_bounty_contributor(
         or now - evidence.verified_at > _MAX_EVIDENCE_AGE
     ):
         raise BountyIdentityRejected("prepare fresh GitHub evidence for this claim")
-    await lock_identity_writes(session, namespace="github-link")
+    # Claims only read the link, so they share the lock; link writers take it
+    # exclusively and wait for them.
+    await lock_identity_writes(session, namespace="github-link", shared=True)
     link = await active_github_link(session, hotkey=hotkey)
     if link is None or (
         link.link_id,

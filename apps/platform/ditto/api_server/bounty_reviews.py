@@ -483,6 +483,8 @@ async def current_reviewer(session: AsyncSession, bounty_id: UUID) -> str:
         .limit(1)
     )
     assert revision is not None
+    # assignment_id is a BIGINT IDENTITY on an append-only table, so the
+    # highest is the latest assignment, even when two share an assigned_at.
     assignment = await session.scalar(
         select(BountyReviewerAssignment)
         .where(BountyReviewerAssignment.bounty_id == bounty_id)
@@ -834,7 +836,12 @@ async def decide_appeal(
         assert subject is not None
         if subject.kind == "rejected":
             review = await session.get(BountyReview, subject.submission_id)
-            if review is not None and review.reviewer_actor == actor:
+            # Without the review, the reviewer exclusion cannot be checked.
+            if review is None:
+                raise HTTPException(
+                    409, "the rejected submission has no recorded review"
+                )
+            if review.reviewer_actor == actor:
                 raise HTTPException(
                     403, "an appeal is decided by someone other than its reviewer"
                 )

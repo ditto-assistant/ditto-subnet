@@ -572,6 +572,18 @@ async def test_confirmation_waits_for_an_identity_write_in_flight(world, namespa
     assert confirmed["state"] == "claimed"
 
 
+async def test_claims_share_the_link_lock_with_other_readers(world):
+    await world.start(ALICE)
+    async with world.maker() as reader, reader.begin():
+        # Another claim's identity check holds the link lock shared.
+        await reader.execute(
+            text("SELECT pg_advisory_xact_lock_shared(hashtextextended(:ns, 0))"),
+            {"ns": "github-link"},
+        )
+        held = await asyncio.wait_for(world.hold(ALICE), timeout=10)
+    assert held.status_code == 200, held.text
+
+
 async def test_receipts_are_bound_to_their_claim_and_charged_once(world):
     await world.start(ALICE, BOB)
     alice = (await world.hold(ALICE)).json()
