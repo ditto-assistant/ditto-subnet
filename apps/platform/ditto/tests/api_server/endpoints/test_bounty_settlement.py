@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from ditto.api_models.bounty import simulated_transfer_block_hash
+from ditto.api_server import bounty_claims, bounty_settlement
 from ditto.api_server.bounty_obligations import required_approvals
 from ditto.api_server.bounty_settlement import TransferOutcome
 from ditto.chain import ChainConnectionError
@@ -467,6 +468,27 @@ async def test_an_unrecordable_executor_outcome_is_left_uncertain(
     assert sent.status_code == 200, sent.text
     assert sent.json()["state"] == "uncertain"
     assert "unrecordable" in caplog.text
+
+
+async def test_a_late_outcome_never_moves_a_settled_transfer(world, caplog):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    await policy(world)
+    refund = obligation(claim, "fee_refund")
+    await approve(world, refund)
+    failed = (await dispatch(world, refund, "failed")).json()
+    transfer_id = UUID(failed["transfers"][0]["transfer_id"])
+    late = TransferOutcome("confirmed", "0x" + "ab" * 32, 7, 0)
+    with caplog.at_level(logging.ERROR, logger="ditto.api_server.bounty_settlement"):
+        kept = await bounty_settlement._record_outcome(
+            world.maker,
+            transfer_id=transfer_id,
+            outcome=late,
+            now=bounty_claims.utcnow(),
+        )
+    # Final outcomes stay final; the contradiction is surfaced for an operator.
+    assert [t["state"] for t in kept.model_dump(mode="json")["transfers"]] == ["failed"]
+    assert "now reports" in caplog.text
 
 
 async def test_only_an_executor_of_the_same_funding_mode_reconciles(world, monkeypatch):

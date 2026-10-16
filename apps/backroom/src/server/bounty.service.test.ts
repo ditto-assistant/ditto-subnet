@@ -369,6 +369,15 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(reconcile('confirmed')).resolves.toMatchObject({ obligation_id: OBLIGATION })
   })
 
+  it('reports a dispatch as unknown when its transfer has no audit entry yet', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage())
+      .mockResolvedValueOnce(Response.json(claim({ obligations: [obligation({ transfers: [transfer('uncertain')] })] })))
+      .mockResolvedValueOnce(Response.json(operator())))
+    await expect(dispatchBountyObligation(ACTOR, {
+      claimId: CLAIM, obligationId: OBLIGATION, round: 1, rehearsalOutcome: 'confirmed', confirmation: `DISPATCH BOUNTY OBLIGATION ${OBLIGATION} ROUND 1`,
+    })).rejects.toThrow('may have committed')
+  })
+
   it('reports a pause tied in time with another control as unknown', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator({
       audit: [

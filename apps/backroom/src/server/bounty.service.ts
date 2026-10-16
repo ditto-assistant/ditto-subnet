@@ -404,8 +404,10 @@ export async function dispatchBountyObligation(actor: string, rawInput: unknown)
       // operator sent it, which the audit records.
       const dispatched = latest(await fetchBounty({ bountyId: claim.bounty_id }), ['transfer_dispatched'], (entry) =>
         entry.obligation_id === input.obligationId && entry.detail.startsWith(`round ${input.round} via `))
-      if (dispatched?.actor === actor.trim()) return { state: 'applied', value: owed }
-      return { state: 'superseded', detail: `Round ${input.round} was already dispatched by ${dispatched?.actor ?? 'another operator'}` }
+      // Without the audit entry, who dispatched it is unknown.
+      if (!dispatched) return { state: 'absent' }
+      if (dispatched.actor === actor.trim()) return { state: 'applied', value: owed }
+      return { state: 'superseded', detail: `Round ${input.round} was already dispatched by ${dispatched.actor}` }
     },
     retryHint: 'read the claim first: a recorded transfer must be reconciled, never sent again.',
   })

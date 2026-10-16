@@ -110,6 +110,16 @@ class TransferOutcome:
 
 
 class BountyTransferExecutor(Protocol):
+    """Sends a transfer and later reports what became of it.
+
+    A settled outcome is final: the schema refuses to change a transfer once
+    it is ``confirmed``, ``failed`` or ``expired``, so a retry round can
+    never coexist with a late success. An executor therefore reports
+    ``failed`` or ``expired`` only when the transfer can no longer land (for
+    example, its extrinsic's mortality has passed), and ``uncertain`` until
+    then, from ``execute`` and ``lookup`` alike.
+    """
+
     name: str
     simulated: bool
 
@@ -630,9 +640,17 @@ async def _record_outcome(
         )
         assert transfer is not None
         # Another request may have settled it first; never move it twice.
-        if transfer.state in ("dispatched", "uncertain") and (
-            outcome.state != transfer.state
-        ):
+        settled = transfer.state not in ("dispatched", "uncertain")
+        if settled and outcome.state not in (transfer.state, "uncertain"):
+            # An executor contradicting a final outcome broke its contract;
+            # the record stays, but an operator must look at the chain.
+            logger.error(
+                "bounty transfer %s is %s, but its executor now reports %r",
+                transfer_id,
+                transfer.state,
+                outcome,
+            )
+        if not settled and outcome.state != transfer.state:
             transfer.state = outcome.state
             if outcome.state != "uncertain":
                 transfer.settled_at = now
