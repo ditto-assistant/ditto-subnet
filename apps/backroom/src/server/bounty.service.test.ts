@@ -373,6 +373,23 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(reconcile('confirmed')).resolves.toMatchObject({ obligation_id: OBLIGATION })
   })
 
+  it('reports a rework decision as unknown when its times do not parse', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage())
+      .mockResolvedValueOnce(Response.json(claim({
+        submissions: [{
+          submission_id: SUBMISSION, decision: 'changes_requested', decision_reason: reason,
+          decided_at: 'not-a-time', rework_deadline_at: 'not-a-time',
+        }],
+      })))
+      .mockResolvedValueOnce(Response.json(operator({
+        audit: [audit('review_decided', { claim_id: CLAIM, detail: `changes_requested submission ${SUBMISSION}` })],
+      }))))
+    await expect(reviewBountySubmission(ACTOR, {
+      claimId: CLAIM, submissionId: SUBMISSION, decision: 'changes_requested', reworkDays: 3, reason,
+      confirmation: `REQUEST CHANGES BOUNTY CLAIM ${REPO}#2942 ${CLAIM}`,
+    })).rejects.toThrow('may have committed')
+  })
+
   it('reports a review as unknown when its decision has no audit entry yet', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage())
       .mockResolvedValueOnce(Response.json(claim({ submissions: [{ submission_id: SUBMISSION, decision: 'reject', decision_reason: reason }] })))

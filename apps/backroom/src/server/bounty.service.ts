@@ -211,8 +211,9 @@ export async function reviewBountySubmission(actor: string, rawInput: unknown) {
       const reworkMs = typeof submission.decided_at === 'string' && typeof submission.rework_deadline_at === 'string'
         ? Date.parse(submission.rework_deadline_at) - Date.parse(submission.decided_at)
         : null
-      // The requested decision without its audit entry cannot be attributed.
-      if (submission.decision === input.decision && !decided) return { state: 'absent' }
+      // The requested decision without its audit entry, or with times that do
+      // not parse, cannot be compared, so the outcome stays unknown.
+      if (submission.decision === input.decision && (!decided || Number.isNaN(reworkMs))) return { state: 'absent' }
       if (
         decided?.actor === actor.trim() && decided.reason === input.reason &&
         submission.decision === input.decision && submission.decision_reason === input.reason &&
