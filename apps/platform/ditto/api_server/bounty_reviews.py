@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
 
 from ditto.api_models.bounty import (
@@ -559,9 +559,16 @@ async def review_submission(
             raise HTTPException(409, "this submission was already decided")
         await apply_deadlines(session, claim.bounty_id, now=now)
         slot = await _slot_of(session, claim)
+        # The submission under review is the one without a decision: rework
+        # is allowed only after the previous one was decided.
         latest = await session.scalar(
             select(BountySubmission)
-            .where(BountySubmission.claim_id == claim.claim_id)
+            .where(
+                BountySubmission.claim_id == claim.claim_id,
+                ~exists().where(
+                    BountyReview.submission_id == BountySubmission.submission_id
+                ),
+            )
             .order_by(BountySubmission.submitted_at.desc())
             .limit(1)
         )

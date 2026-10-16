@@ -525,6 +525,11 @@ async def test_only_an_executor_of_the_same_funding_mode_reconciles(world, monke
     refused = await reconcile(world, transfer_id, "confirmed")
     assert refused.status_code == 409 and "funding mode" in refused.text
     monkeypatch.undo()
+    # Nor can another executor of the same mode speak for this transfer.
+    monkeypatch.setattr(world.app.state.bounty_transfer_executor, "name", "other")
+    other = await reconcile(world, transfer_id, "confirmed")
+    assert other.status_code == 409 and "sent by executor 'simulated'" in other.text
+    monkeypatch.undo()
     # Nothing was recorded, so the right executor still settles it.
     settled = (await reconcile(world, transfer_id, "confirmed")).json()
     assert [t["state"] for t in settled["transfers"]] == ["confirmed"]

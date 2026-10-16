@@ -201,20 +201,25 @@ _BOARD_PAGE = 100
 def _whole_board(client: ApiClient) -> BountyBoardPage:
     """Every published bounty, read 100 at a time, as one page."""
     items: list[BountySummary] = []
+    total: int | None = None
     while True:
         page = client.list_bounties(limit=_BOARD_PAGE, offset=len(items))
-        items.extend(page.items)
-        if not page.items and len(items) < page.total:
+        # The first page fixes the board's size, so a board that keeps growing
+        # still ends; later additions show on the next list.
+        if total is None:
+            total = page.total
+        items.extend(page.items[: max(0, total - len(items))])
+        if not page.items and len(items) < total:
             raise MinerCliError(
-                f"the bounty board ended early: {len(items)} of {page.total} "
+                f"the bounty board ended early: {len(items)} of {total} "
                 "bounties were read; retry"
             )
-        if len(items) >= page.total:
+        if len(items) >= total:
             # The page holds the whole board: its limit covers every item and
             # is never below the size each read asked for.
             return BountyBoardPage(
                 items=items,
-                total=page.total,
+                total=total,
                 limit=max(len(items), _BOARD_PAGE),
                 offset=0,
             )

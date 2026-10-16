@@ -481,6 +481,23 @@ async def test_rework_has_a_recorded_deadline_and_a_new_commit(world, monkeypatc
     ]
 
 
+async def test_a_resubmission_at_the_same_instant_is_the_one_under_review(
+    world, monkeypatch
+):
+    await world.start(ALICE)
+    frozen = datetime.now(UTC)
+    monkeypatch.setattr(bounty_claims, "utcnow", lambda: frozen)
+    claim = (await submit(world, ALICE, await claimed(world, ALICE))).json()
+    assert (await review(world, claim, "changes_requested")).status_code == 200
+    again = (await submit(world, ALICE, claim, sha="cd" * 20)).json()
+    first, second = again["submissions"]
+    assert first["submitted_at"] == second["submitted_at"]
+    # The undecided submission is under review, whatever the clock says.
+    decided = await review(world, again, "accept")
+    assert decided.status_code == 200, decided.text
+    assert decided.json()["submissions"][-1]["decision"] == "accept"
+
+
 async def test_withdrawal_retains_the_fee_and_is_final(world):
     await world.start(ALICE)
     claim = await claimed(world, ALICE)

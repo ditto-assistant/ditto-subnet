@@ -376,6 +376,19 @@ def test_list_reads_every_page_of_the_board(capsys):
     assert (len(whole["items"]), whole["total"], whole["limit"]) == (101, 101, 101)
 
 
+def test_a_board_that_keeps_growing_still_lists_to_its_first_total(capsys):
+    client = api()
+    summary = detail().summary
+    # Every read reports a hundred more bounties than the last.
+    client.list_bounties.side_effect = lambda *, limit, offset: BountyBoardPage(
+        items=[summary] * limit, total=offset + 200, limit=limit, offset=offset
+    )
+    assert run(["list", "--json"], client) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert (len(listed["items"]), listed["total"]) == (200, 200)
+    assert client.list_bounties.call_count == 2
+
+
 def test_a_board_that_ends_before_its_total_is_an_error(capsys):
     client = api()
     summary = detail().summary
