@@ -189,15 +189,23 @@ def _find(client: ApiClient, target: str) -> BountyDetail:
     return client.get_bounty(bounty_id)
 
 
+_BOARD_PAGE = 100
+
+
 def _whole_board(client: ApiClient) -> BountyBoardPage:
-    """Every published bounty, read 100 at a time."""
+    """Every published bounty, read 100 at a time, as one page."""
     items: list[BountySummary] = []
     while True:
-        page = client.list_bounties(limit=100, offset=len(items))
+        page = client.list_bounties(limit=_BOARD_PAGE, offset=len(items))
         items.extend(page.items)
         if not page.items or len(items) >= page.total:
+            # The page holds the whole board: its limit covers every item and
+            # is never below the size each read asked for.
             return BountyBoardPage(
-                items=items, total=page.total, limit=len(items), offset=0
+                items=items,
+                total=page.total,
+                limit=max(len(items), _BOARD_PAGE),
+                offset=0,
             )
 
 

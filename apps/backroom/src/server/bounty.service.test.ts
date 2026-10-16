@@ -372,6 +372,31 @@ describe('bounty read-backs find this write, not the latest state', () => {
   })
 })
 
+describe('bounty inputs are canonical before any request', () => {
+  it('reads back a review sent with uppercase ids against the lowercase record', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(outage())
+      .mockResolvedValueOnce(Response.json(claim({ submissions: [{ submission_id: SUBMISSION, decision: 'reject', decision_reason: reason }] })))
+      .mockResolvedValueOnce(Response.json(operator({ audit: [audit('review_decided', { claim_id: CLAIM, detail: `reject submission ${SUBMISSION}` })] })))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(reviewBountySubmission(ACTOR, {
+      claimId: CLAIM.toUpperCase(), submissionId: SUBMISSION.toUpperCase(), decision: 'reject', reason,
+      confirmation: `REJECT BOUNTY CLAIM ${REPO}#2942 ${CLAIM}`,
+    })).resolves.toMatchObject({ claim_id: CLAIM })
+    expect(sent(fetchMock).url).toContain(`/claims/${CLAIM}/review`)
+    expect(sent(fetchMock).body).toMatchObject({ claim_id: CLAIM, submission_id: SUBMISSION })
+  })
+
+  it.each([
+    [{ queue: 'reviews', state: 'uncertain' }],
+    [{ queue: 'settlement', overdueOnly: true }],
+  ])('refuses a filter queue %o cannot apply', async (input) => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchBountyQueue(input)).rejects.toThrow('filters only the')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('bounty reads', () => {
   it('reads an unset payout policy as null, not a failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('no bounty payout policy is configured', 404)))

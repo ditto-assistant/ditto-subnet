@@ -71,9 +71,12 @@ export async function fetchBountyClaim(rawInput: unknown) {
 
 export async function fetchBountyQueue(rawInput: unknown) {
   const input = bountyQueueInputSchema.parse(rawInput)
+  // A filter the chosen queue cannot apply is refused, never silently dropped.
+  if (input.queue === 'reviews' && input.state) throw new Error('state filters only the settlement queue')
+  if (input.queue === 'settlement' && input.overdueOnly) throw new Error('overdueOnly filters only the reviews queue')
   const query = new URLSearchParams()
-  if (input.queue === 'reviews' && input.overdueOnly) query.set('overdue_only', 'true')
-  if (input.queue === 'settlement' && input.state) query.set('state', input.state)
+  if (input.overdueOnly) query.set('overdue_only', 'true')
+  if (input.state) query.set('state', input.state)
   const path = `${ADMIN}/queue/${input.queue === 'reviews' ? 'reviews' : 'settlement'}`
   return bountyQueueSchema.parse(await platformAdminRequest(query.size ? `${path}?${query}` : path))
 }

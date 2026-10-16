@@ -2,7 +2,9 @@ import { z } from 'zod'
 
 // Build bounties (#2942). Responses validate the fields Backroom's logic reads
 // and pass every other Platform field through unchanged.
-const uuid = z.string().uuid()
+// Platform writes ids in lowercase; canonical input lets every request and
+// read-back compare ids exactly, whatever case an operator typed.
+const uuid = z.string().uuid().transform((value) => value.toLowerCase())
 const digest = z.string().regex(/^[0-9a-f]{64}$/)
 const address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{47,48}$/)
 const repo = z.string().regex(/^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9._-]{1,100}$/)

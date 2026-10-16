@@ -371,6 +371,19 @@ def test_list_reads_every_page_of_the_board(capsys):
     assert out.count(f"{REPO}#{ISSUE}  ") == 100
     assert f"{REPO}#{ISSUE + 1}  " in out and "Later bounty" in out
     assert [c.kwargs["offset"] for c in client.list_bounties.call_args_list] == [0, 100]
+    assert run(["list", "--json"], client) == 0
+    whole = json.loads(capsys.readouterr().out)
+    assert (len(whole["items"]), whole["total"], whole["limit"]) == (101, 101, 101)
+
+
+def test_an_empty_board_lists_as_an_empty_page(capsys):
+    client = api()
+    client.list_bounties.side_effect = lambda *, limit, offset: BountyBoardPage(
+        items=[], total=0, limit=limit, offset=offset
+    )
+    assert run(["list", "--json"], client) == 0
+    empty = json.loads(capsys.readouterr().out)
+    assert (empty["items"], empty["total"], empty["limit"]) == ([], 0, 100)
 
 
 @pytest.mark.parametrize(
