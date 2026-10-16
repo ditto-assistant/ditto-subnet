@@ -899,6 +899,41 @@ class ProvenanceNormaliserTest(unittest.TestCase):
             self.assertEqual(verdict["model_emitted"], want_emitted, name)
             self.assertEqual(verdict["answer_in_prompt"], want_in_prompt, name)
 
+    def test_v14_replay_accepts_a_typographic_hyphen_identifier(self) -> None:
+        """#2734: the v14 grader folds the model's U+2011 before crediting
+        VK-48HJXP6A63, so the replay accepts the claim the same way the
+        scorer's v14 claim vocabulary does. V13 keeps its finding."""
+        question = "What Signal handle do I have for Melanie?"
+        for served in ("VK-48HJXP6A63", "VK\u201148HJXP6A63"):
+            for version, want_emitted in ((13, False), (14, True)):
+                case = {
+                    "bench_version": version,
+                    "answer_kind": "value",
+                    "expected_answer": "VK-48HJXP6A63",
+                    "question": question,
+                }
+                ledger = GATES.ClaimSpanLedger()
+                ledger.record_call([question], ["Your handle is VK\u201148HJXP6A63."])
+                verdict = GATES.evaluate_claim(
+                    served, GATES.claim_alternatives(case), ledger, GATES.value_tokens(question)
+                )
+                if version == 13 and served != "VK-48HJXP6A63":
+                    # V13 does not fold, so the U+2011 slot is no claim span.
+                    self.assertFalse(verdict["applicable"], served)
+                    continue
+                self.assertTrue(verdict["applicable"], (served, version))
+                self.assertEqual(verdict["model_emitted"], want_emitted, (served, version))
+        # A value the model never wrote is still not model-emitted at v14.
+        ledger = GATES.ClaimSpanLedger()
+        ledger.record_call([question], ["I could not find that handle."])
+        case = {"bench_version": 14, "answer_kind": "value", "expected_answer": "VK-48HJXP6A63"}
+        verdict = GATES.evaluate_claim("VK-48HJXP6A63", GATES.claim_alternatives(case), ledger)
+        self.assertFalse(verdict["model_emitted"])
+        self.assertEqual(
+            GATES.claim_alternatives({"bench_version": 13, "expected_answer": "VK-48HJXP6A63"}),
+            ["VK-48HJXP6A63"],
+        )
+
     def test_slot_not_in_prose_accepts_unit_alternatives_and_rejects_substitution(
         self,
     ) -> None:

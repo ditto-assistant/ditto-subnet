@@ -356,7 +356,20 @@ def claim_alternatives(case: dict[str, Any]) -> list[str]:
             if index < len(accept):
                 for alt in _as_list(accept[index]):
                     add(alt)
+    if int(case.get("bench_version") or 0) >= 14:
+        # v14 (#2734): the U+2010 variant of every hyphenated form, which is
+        # what NFKC makes of the model's U+2011 in a completion.
+        out.extend(form.replace("-", _HYPHEN_V14) for form in list(out) if "-" in form)
     return out
+
+
+_HYPHEN_V14 = "\u2010"
+
+
+def _typographic_twin(form: str) -> str:
+    """The ASCII spelling of a v14 U+2010 claim variant (the form itself
+    otherwise), so a form and its variant count as one accepted form."""
+    return form.replace(_HYPHEN_V14, "-")
 
 
 def served_claim_tokens(
@@ -377,6 +390,29 @@ def served_claim_tokens(
     if not claim:
         return set(), False
     return claim, True
+
+
+def _alternatives_emitted(
+    served_text: str, alternatives: Iterable[str], completions: set[str]
+) -> bool:
+    """Every alternative present in the served span was emitted by the model,
+    as itself or (v14) as its typographic twin: ``scoregates`` accepts any
+    accepted form of a claim unit. Without twins this is exactly
+    ``text_provenance`` over the served claim tokens."""
+    forms = list(alternatives)
+    served = value_tokens(served_text)
+    for alternative in forms:
+        alt_tokens = value_tokens(alternative)
+        if not alt_tokens or not alt_tokens <= served:
+            continue
+        twin = _typographic_twin(alternative)
+        if not any(
+            (tokens := value_tokens(form)) and tokens <= completions
+            for form in forms
+            if _typographic_twin(form) == twin
+        ):
+            return False
+    return True
 
 
 def text_provenance(claim: set[str], completions: set[str]) -> bool:
@@ -452,7 +488,7 @@ def evaluate_claim(
     return {
         "applicable": True,
         "claim_tokens": len(claim),
-        "model_emitted": text_provenance(claim, ledger.completion),
+        "model_emitted": _alternatives_emitted(served, alternatives, ledger.completion),
         "answer_in_prompt": causal_dependence(claim, residual),
     }
 

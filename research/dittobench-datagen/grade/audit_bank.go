@@ -116,7 +116,7 @@ func GradingPolicyFloor(v int) int {
 // grading policy, ascending. The audit floor (BenchVersionV9) and everything
 // above it must own an audit bank.
 func GradingPolicyFloors() []int {
-	floors := []int{protocol.BenchVersionV2, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV12, protocol.BenchVersionV13}
+	floors := []int{protocol.BenchVersionV2, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV12, protocol.BenchVersionV13, protocol.BenchVersionV14}
 	sort.Ints(floors)
 	return floors
 }

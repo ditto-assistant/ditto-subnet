@@ -48,6 +48,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"github.com/ditto-assistant/dittobench-datagen/datagen"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
+	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
@@ -2037,7 +2038,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			// fished from the wrong tool's result) zeros the usage half too.
 			// Under v7 the composition is multiplicative and a decoy zeroes the
 			// whole case (ComposeResultUsageForVersion).
-			cs = scorer.ComposeResultUsageForVersion(req.BenchVersion, cs, resp.FinalText,
+			// From v14 the reply is read under the graders' hyphen fold
+			// (#2734), so a needle copied with U+2011 still counts as used.
+			cs = scorer.ComposeResultUsageForVersion(req.BenchVersion, cs, grade.FoldReplyHyphens(req.BenchVersion, resp).FinalText,
 				fixture.NeedleValue(), fixture.DecoyValue())
 		} else {
 			cs = scorer.FinishTool(cs)

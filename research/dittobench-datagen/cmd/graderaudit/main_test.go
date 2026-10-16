@@ -246,7 +246,7 @@ func TestReleaseGateCoversEverySupportedVersionAndPolicyFloor(t *testing.T) {
 			t.Fatalf("supported bench_version %d not covered by the release gate", v)
 		}
 	}
-	if covered[protocol.BenchVersionV9] != robustnessBankVersion || covered[protocol.BenchVersionV12] != robustnessBankV12 || covered[protocol.BenchVersionV13] != grade.AuditBankV13().Version {
+	if covered[protocol.BenchVersionV9] != robustnessBankVersion || covered[protocol.BenchVersionV12] != robustnessBankV12 || covered[protocol.BenchVersionV13] != grade.AuditBankV13().Version || covered[protocol.BenchVersionV14] != grade.AuditBankV14().Version {
 		t.Fatalf("bank resolution drifted: %+v", covered)
 	}
 	// Every grading policy floor from the audit floor up owns exactly one bank.
@@ -278,6 +278,64 @@ func TestReleaseGateCoversEverySupportedVersionAndPolicyFloor(t *testing.T) {
 	}
 	if err := run([]string{"-release-gate", "-bench-version", "9", "-seeds", "1"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "no other mode flags") {
 		t.Fatalf("release gate accepted other modes: %v", err)
+	}
+}
+
+// TestSyntheticRobustnessV14BankIsClean runs the v14 bank under the v14
+// policy: every limit respected, every hard negative (including the #2734
+// gerund-negation and scheduled-removal negatives) at 0, every reviewed
+// positive at its floor.
+func TestSyntheticRobustnessV14BankIsClean(t *testing.T) {
+	bank := grade.AuditBankV14()
+	report, err := syntheticRobustnessAudit(protocol.BenchVersionV14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.BankVersion != bank.Version || report.BenchVersion != protocol.BenchVersionV14 {
+		t.Fatalf("wrong bank: %+v", report)
+	}
+	if !report.CoverageOK || !report.WithinLimits || report.NegativeFailures != 0 || report.ReviewedPositiveFailures != 0 || report.PositiveFailures != 0 {
+		t.Fatalf("v14 bank not clean: failed=%v report=%+v", report.FailedChecks, report)
+	}
+	// The report's check counts are the bank sizes, so they cannot show a
+	// skipped entry. Grade every entry here and count what actually ran.
+	if len(bank.Negatives) == 0 || len(bank.Positives) == 0 {
+		t.Fatalf("v14 bank is empty: negatives=%d positives=%d", len(bank.Negatives), len(bank.Positives))
+	}
+	negatives, positives := 0, 0
+	for _, n := range bank.Negatives {
+		mc := n.Case
+		mc.BenchVersion = protocol.BenchVersionV14
+		if got := grade.Memory(mc, n.Response).Score; got != 0 {
+			t.Errorf("negative %s scored %v at v14", n.Name, got)
+		}
+		negatives++
+	}
+	for _, p := range bank.Positives {
+		mc := p.Case
+		mc.BenchVersion = protocol.BenchVersionV14
+		want := p.MinScore
+		if want <= 0 {
+			want = 1
+		}
+		if got := grade.Memory(mc, p.Response).Score; got < want {
+			t.Errorf("positive %s scored %v at v14, want >= %v", p.Name, got, want)
+		}
+		positives++
+	}
+	if negatives != len(bank.Negatives) || positives != len(bank.Positives) ||
+		report.NegativeChecks != negatives || report.ReviewedPositives != positives {
+		t.Fatalf("v14 bank checks skipped: graded negatives=%d positives=%d, bank %d/%d, report %d/%d",
+			negatives, positives, len(bank.Negatives), len(bank.Positives), report.NegativeChecks, report.ReviewedPositives)
+	}
+	for _, name := range []string{"gerund-negation-avoid", "gerund-negation-decided-against", "gerund-negation-stopped", "gerund-negation-not-possible", "set-removal-scheduled-day"} {
+		found := false
+		for _, n := range bank.Negatives {
+			found = found || n.Name == name
+		}
+		if !found {
+			t.Errorf("v14 bank lost negative %s", name)
+		}
 	}
 }
 
