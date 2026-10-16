@@ -1,0 +1,47 @@
+# Candidate egress proxy for native-v2 hosted attempts. Its allowlist is empty:
+# every request is refused. Operator start only, around one approved attempt.
+[Unit]
+Description=Native Coding candidate egress proxy (empty allowlist, refuses every request)
+
+[Service]
+Type=exec
+DynamicUser=yes
+ExecStart=/usr/bin/python3 -I -B /usr/local/lib/ditto-coding-hosted/egress-proxy.py {{ coding_hosted_prerequisites_host_address }} {{ coding_hosted_prerequisites_proxy_port }}
+Restart=no
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_INET
+SocketBindDeny=any
+SocketBindAllow=ipv4:tcp:{{ coding_hosted_prerequisites_proxy_port }}
+IPAddressDeny=any
+IPAddressAllow={{ coding_hosted_prerequisites_host_address }}/32
+TasksMax=128
+MemoryMax=128M
+LimitNOFILE=256
+StandardOutput=null
+StandardError=null
+# No Install section: never started at boot, by a timer or automatically.
