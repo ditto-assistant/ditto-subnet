@@ -361,6 +361,16 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(reconcile('confirmed')).resolves.toMatchObject({ obligation_id: OBLIGATION })
   })
 
+  it('reports a pause tied in time with another control as unknown', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator({
+      audit: [
+        audit('claims_paused', { recorded_at: '2026-10-16T01:00:00Z' }),
+        audit('claims_resumed', { actor: 'other@example.com', recorded_at: '2026-10-16T01:00:00Z' }),
+      ],
+    }))))
+    await expect(pause()).rejects.toThrow('may have committed')
+  })
+
   it('reads the payout policy revision this write targets, whatever followed it', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(outage())
       .mockResolvedValueOnce(Response.json({ revision: 1, single_approver_max_alpha_rao: 5, dual_approver_max_alpha_rao: 50, actor: ACTOR, reason }))

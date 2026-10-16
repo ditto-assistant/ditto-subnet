@@ -153,7 +153,12 @@ export async function setBountyClaimsPaused(actor: string, rawInput: unknown) {
     parse: parsed(bountySummarySchema),
     readBack: async () => {
       const view = await fetchBounty({ bountyId: input.bountyId })
-      const control = latest(view, ['claims_paused', 'claims_resumed'])
+      const controls = ['claims_paused', 'claims_resumed']
+      const control = latest(view, controls)
+      // Two controls recorded at the same instant leave no latest one, so
+      // neither can be read as this write's outcome.
+      if (control && view.audit.some((entry) => entry !== control && controls.includes(entry.kind) &&
+        Date.parse(entry.recorded_at) === Date.parse(control.recorded_at))) return { state: 'absent' }
       // Controls carry no id, so an entry with this operator's reason may be
       // this write or an earlier identical one.
       const own = latest(view, [kind], (entry) => entry.actor === actor.trim() && entry.reason === input.reason)
