@@ -385,16 +385,20 @@ func (d *Deps) activateInferenceGrant(ctx context.Context, q *postgres.Queries,
 	return &grant, bearer, nil
 }
 
+// nonceExpiryMargin matches VALIDATOR_NONCE_EXPIRY_MARGIN. It covers clock
+// skew of one default janitor sweep between the process that stored the nonce
+// and the process that deletes it.
+const nonceExpiryMargin = 60 * time.Second
+
 // nonceExpiresAt keeps a consumed nonce until the signed request is no longer
 // acceptable. A future requestedAt stays valid until requestedAt+maxAge, so
-// now+maxAge would drop the guard while the signature still verifies. The
-// margin matches VALIDATOR_NONCE_EXPIRY_MARGIN in the platform janitor.
+// now+maxAge would drop the guard while the signature still verifies.
 func nonceExpiresAt(now, requestedAt time.Time, maxAge time.Duration) time.Time {
 	anchor := now
 	if requestedAt.After(now) {
 		anchor = requestedAt
 	}
-	return anchor.Add(maxAge).Add(60 * time.Second)
+	return anchor.Add(maxAge).Add(nonceExpiryMargin)
 }
 
 func absDuration(d time.Duration) time.Duration {

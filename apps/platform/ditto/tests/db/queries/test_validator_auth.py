@@ -37,6 +37,12 @@ def test_past_request_is_retained_from_receipt() -> None:
     assert expires_at == now + max_age + VALIDATOR_NONCE_EXPIRY_MARGIN
 
 
+def test_non_positive_max_age_is_rejected() -> None:
+    now = datetime(2026, 10, 14, 12, tzinfo=UTC)
+    with pytest.raises(ValueError, match="positive"):
+        nonce_expires_at(now=now, requested_at=now, max_age=timedelta(0))
+
+
 def test_naive_nonce_time_is_rejected() -> None:
     now = datetime(2026, 10, 14, 12, tzinfo=UTC)
     with pytest.raises(ValueError, match="timezone-aware"):

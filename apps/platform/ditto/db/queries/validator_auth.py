@@ -20,8 +20,10 @@ class ValidatorRequestReplayError(Exception):
 
 
 VALIDATOR_NONCE_JANITOR_LOCK_KEY = "ditto:validator-nonce-janitor:v1"
-# The janitor sweeps once a minute. Keep the row through the sweep that can
-# land on the signature's last legal instant.
+# Clock skew between the replica that accepted the request and the replica
+# whose janitor deletes the row. One default sweep. The interval is
+# configurable, and ``expires_at < now`` already keeps a row whose expiry
+# equals the sweep time, so this margin is not safe to drop to zero.
 VALIDATOR_NONCE_EXPIRY_MARGIN = timedelta(seconds=60)
 
 
@@ -32,7 +34,8 @@ def nonce_expires_at(
 
     A future ``requested_at`` stays valid until ``requested_at + max_age``.
     Storing ``now + max_age`` drops the guard while that signature still
-    verifies. The margin covers one janitor sweep on that boundary.
+    verifies. The margin covers clock skew of one default janitor sweep
+    between the writer and the deleter.
     """
     if now.tzinfo is None or requested_at.tzinfo is None:
         raise ValueError("nonce times must be timezone-aware")
