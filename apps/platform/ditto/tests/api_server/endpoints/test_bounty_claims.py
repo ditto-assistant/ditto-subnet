@@ -438,6 +438,10 @@ async def test_a_lapsed_hold_reads_open_and_its_late_fee_is_refunded(
     assert detail["slots"][0]["status"] == "open"
     assert detail["slots"][0]["claimant"] is None
     assert detail["slots"][0]["status_changed_at"] == claim["hold_expires_at"]
+    # The claim's state is derived, so the lapsed, unpaid hold reads expired
+    # without any write to the claim.
+    lapsed = (await world.client.get(f"{CLAIMS}/{claim['claim_id']}")).json()
+    assert (lapsed["state"], lapsed["slot_status"]) == ("hold_expired", "open")
     late = await world.confirm(claim)
     assert late.status_code == 200, late.text
     refund = late.json()
