@@ -61,6 +61,27 @@ def test_the_recorded_round_reports_every_fee_and_award():
 State = dict[str, dict[str, Any]]
 
 
+@pytest.mark.parametrize("retained_first", [True, False])
+def test_conflicting_dispositions_report_the_same_fee_in_any_order(retained_first):
+    claims = copy.deepcopy(CLAIMS)
+    retained = next(
+        o
+        for o in by_login(claims, "dave-dev")["obligations"]
+        if o["kind"] == "fee_retained"
+    )
+    alice = by_login(claims, "alice-dev")
+    extra = {**copy.deepcopy(retained), "claim_id": alice["claim_id"]}
+    alice["obligations"] = (
+        [extra, *alice["obligations"]]
+        if retained_first
+        else [*alice["obligations"], extra]
+    )
+    made = report(DETAIL, claims)
+    fees = {c.github_login: c.fee for c in made.claims}
+    assert fees["alice-dev"] == "refunded"
+    assert "one_disposition_per_paid_fee" in {c.name for c in made.checks if not c.ok}
+
+
 def alice_refund(state: State) -> dict[str, Any]:
     return next(
         o

@@ -138,10 +138,22 @@ const NOT_CONNECTED = new Set([
   'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
 ])
 
+type Coded = { code?: unknown; errors?: unknown } | null | undefined
+
+/** Every error code on a failure: its own, and those of an AggregateError's
+ * parts, which is how a connection attempt to several addresses fails. */
+function codesOf(error: Coded): unknown[] {
+  const parts = Array.isArray(error?.errors) ? (error.errors as Coded[]) : []
+  return [error?.code, ...parts.map((part) => part?.code)]
+}
+
 function connectionError(path: string, error: unknown) {
   const detail = error instanceof Error ? error.message : String(error)
-  const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code
-  return typeof code === 'string' && NOT_CONNECTED.has(code)
+  const failure = error as (Coded & { cause?: Coded }) | null
+  const codes = [...codesOf(failure?.cause), ...codesOf(failure)].filter((code) => typeof code === 'string')
+  // Never delivered only when every attempt failed before connecting.
+  const code = codes.length > 0 && codes.every((item) => NOT_CONNECTED.has(item as string)) ? codes[0] : undefined
+  return typeof code === 'string'
     ? new PlatformAdminError('unreachable', `The platform API could not be reached for ${path} (${code}): ${detail}`)
     : new PlatformAdminError('transport', `The platform API connection failed during ${path}: ${detail}`)
 }

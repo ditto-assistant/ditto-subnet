@@ -180,6 +180,20 @@ describe('platformAdminRequest', () => {
     expect((error as PlatformAdminError).status).toBeNull()
   })
 
+  it.each([
+    [['ECONNREFUSED', 'EHOSTUNREACH'], 'unreachable'],
+    [['ECONNREFUSED', 'ECONNRESET'], 'transport'],
+  ])('classifies an aggregate connection failure %o as %s', async (codes, failure) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    const cause = Object.assign(new AggregateError(codes.map((code) => Object.assign(new Error(code), { code }))), {})
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause })))
+
+    const error = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', body: { mode: 'shadow' } })
+      .catch((caught: unknown) => caught)
+
+    expect((error as PlatformAdminError).failure).toBe(failure)
+  })
+
   it('reports a GET that ends in a 3xx as a failed read, not a redirect', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(null, { status: 304 })))

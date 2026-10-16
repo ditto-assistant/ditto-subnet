@@ -657,6 +657,8 @@ function ClaimToggle(props: { claimId: string; label: string }): JSX.Element {
 
 function ClaimRecord(props: { claimId: string }): JSX.Element {
   // An open record follows the claim as it moves on.
+  // A claim is read at /api/v1/bounties/claims/{id}, beside the claim writes,
+  // and is never publicly cached, unlike the /public board and detail reads.
   const claim = useEndpoint<BountyClaimView>(() => `/bounties/claims/${props.claimId}`, {
     pollMs: REFRESH_MS,
   });

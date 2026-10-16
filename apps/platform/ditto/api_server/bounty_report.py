@@ -54,9 +54,13 @@ def _fee(claim: BountyClaimView) -> BountyReportFee:
     found = _dispositions(claim)
     if not found:
         return "undecided"
-    if found[0].kind == "fee_retained":
-        return "retained"
-    return "refunded" if found[0].state == "confirmed" else "refund_owed"
+    # One disposition per fee is an invariant the checks report. Should data
+    # ever break it, money that moved outranks money owed, which outranks a
+    # retention, whatever order the obligations are listed in.
+    refunds = [o for o in found if o.kind == "fee_refund"]
+    if any(o.state == "confirmed" for o in refunds):
+        return "refunded"
+    return "refund_owed" if refunds else "retained"
 
 
 def _award(claim: BountyClaimView) -> BountyObligationView | None:
