@@ -106,7 +106,8 @@ describe('platformAdminWrite decides every outcome once', () => {
     ])('stays unknown when the read-back is %s', async (seen, reason) => {
       vi.stubGlobal('fetch', uncertain[failure]())
       const outcome = await write(readBacks[seen])
-      expect(outcome).toEqual({ state: 'unknown', reason: expect.stringContaining(reason) })
+      // The Platform failure behind the uncertainty stays attached.
+      expect(outcome).toEqual({ state: 'unknown', reason: expect.stringContaining(reason), cause: expect.any(PlatformAdminError) })
     })
   })
 

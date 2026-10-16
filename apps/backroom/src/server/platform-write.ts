@@ -18,7 +18,8 @@ export type ReadBack<T> =
 /** A write that committed, or one whose outcome Backroom cannot decide. */
 export type WriteOutcome<T> =
   | { state: 'committed'; value: T }
-  | { state: 'unknown'; reason: string }
+  /** `cause` is the Platform failure behind the uncertainty, when there was one. */
+  | { state: 'unknown'; reason: string; cause?: PlatformAdminError }
 
 /** The write definitely applied nothing; the message says what to do next. */
 export class NothingAppliedError extends Error {
@@ -132,6 +133,7 @@ async function settle<T>(
       seen === undefined
         ? `${failure.message}; reading the target back also failed`
         : `${failure.message}; it is not visible yet and may still commit`,
+    cause: failure,
   }
 }
 

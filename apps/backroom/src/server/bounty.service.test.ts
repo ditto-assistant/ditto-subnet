@@ -15,6 +15,7 @@ import {
   setBountyClaimsPaused,
   setBountyPayoutPolicy,
 } from './bounty.service'
+import { PlatformAdminError } from './ditto.server'
 import { NothingAppliedError } from './platform-write'
 
 const ACTOR = 'operator@example.com'
@@ -284,7 +285,10 @@ describe('bounty writes decide every outcome', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockImplementation(
       (() => { const queue = [...c.absent]; return async () => queue.shift() ?? Response.json({}) })(),
     ))
-    await expect(c.run()).rejects.toThrow('may have committed')
+    const error = await c.run().catch((caught: unknown) => caught)
+    expect((error as Error).message).toContain('may have committed')
+    // The Platform failure stays readable as the cause.
+    expect(((error as Error).cause as PlatformAdminError).failure).toBe('server')
   })
 
   it.each(cases.filter((c) => c.superseded))('$name reports nothing applied when another write holds the target', async (c) => {
@@ -376,6 +380,16 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(dispatchBountyObligation(ACTOR, {
       claimId: CLAIM, obligationId: OBLIGATION, round: 1, rehearsalOutcome: 'confirmed', confirmation: `DISPATCH BOUNTY OBLIGATION ${OBLIGATION} ROUND 1`,
     })).rejects.toThrow('may have committed')
+  })
+
+  it('never takes an audit entry without a readable time as the latest', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator({
+      audit: [
+        audit('claims_resumed', { actor: 'other@example.com', recorded_at: 'not-a-time' }),
+        audit('claims_paused', { recorded_at: '2026-10-16T01:00:00Z' }),
+      ],
+    }))))
+    await expect(pause()).resolves.toMatchObject({ bounty_id: BOUNTY })
   })
 
   it('reports a pause tied in time with another control as unknown', async () => {

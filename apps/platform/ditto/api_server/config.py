@@ -1488,17 +1488,20 @@ def check_config(config: ApiServerConfig) -> None:
 
 
 def parse_github_link_config_from_env() -> GithubLinkConfig:
-    try:
-        timeout = float(
-            os.environ.get("GITHUB_LINK_TIMEOUT_SECONDS", "").strip() or "10"
-        )
-    except ValueError as error:
-        raise ApiServerConfigError(
-            "GITHUB_LINK_TIMEOUT_SECONDS must be numeric"
-        ) from error
+    enabled = os.environ.get("GITHUB_LINK_ENABLED", "false").strip().lower() in _TRUTHY
+    # A disabled feature's unused timeout never blocks startup.
+    timeout = 10.0
+    if enabled:
+        try:
+            timeout = float(
+                os.environ.get("GITHUB_LINK_TIMEOUT_SECONDS", "").strip() or "10"
+            )
+        except ValueError as error:
+            raise ApiServerConfigError(
+                "GITHUB_LINK_TIMEOUT_SECONDS must be numeric"
+            ) from error
     return GithubLinkConfig(
-        enabled=os.environ.get("GITHUB_LINK_ENABLED", "false").strip().lower()
-        in _TRUTHY,
+        enabled=enabled,
         client_id=os.environ.get("GITHUB_LINK_CLIENT_ID", "").strip() or None,
         client_secret=os.environ.get("GITHUB_LINK_CLIENT_SECRET", "").strip() or None,
         redirect_url=os.environ.get("GITHUB_LINK_REDIRECT_URL", "").strip(),

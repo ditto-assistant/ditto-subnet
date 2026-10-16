@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Protocol
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 
 from ditto.api_models.bounty import (
     BountyApprovalRequest,
@@ -502,18 +502,20 @@ async def _conflicted(
     """Whether the actor decided this money: the award or the acceptance."""
     if obligation.actor == actor:
         return True
-    reviewer = await session.scalar(
-        select(BountyReview.reviewer_actor)
-        .join(
-            BountySubmission,
-            BountySubmission.submission_id == BountyReview.submission_id,
-        )
-        .where(
-            BountySubmission.claim_id == obligation.claim_id,
-            BountyReview.decision == "accept",
+    # Any acceptance this actor recorded for the claim, not just the first.
+    return bool(
+        await session.scalar(
+            select(
+                exists()
+                .where(BountySubmission.submission_id == BountyReview.submission_id)
+                .where(
+                    BountySubmission.claim_id == obligation.claim_id,
+                    BountyReview.decision == "accept",
+                    BountyReview.reviewer_actor == actor,
+                )
+            )
         )
     )
-    return reviewer == actor
 
 
 async def approve_obligation(

@@ -44,7 +44,10 @@ const ADMIN = '/api/v1/admin/bounties'
 
 function settled<T>(outcome: WriteOutcome<T>, what: string): T {
   if (outcome.state === 'committed') return outcome.value
-  throw new Error(`${what} may have committed (${outcome.reason}). Retry with the same input: an applied write is returned, not repeated.`)
+  // The Platform failure stays the cause, so its kind is still readable.
+  throw new Error(`${what} may have committed (${outcome.reason}). Retry with the same input: an applied write is returned, not repeated.`, {
+    cause: outcome.cause,
+  })
 }
 
 function parsed<T>(schema: z.ZodType<T>) {
@@ -138,7 +141,9 @@ export async function publishBountyRevision(actor: string, rawInput: unknown) {
 /** The latest audit entry of the given kinds. Ordered here by recorded_at, so
  * a read-back never depends on the order Platform lists them in. */
 function latest(view: Operator, kinds: string[], matches: (entry: Operator['audit'][number]) => boolean = () => true) {
+  // An entry without a readable time cannot be ordered, so it is never latest.
   return [...view.audit]
+    .filter((entry) => !Number.isNaN(Date.parse(entry.recorded_at)))
     .sort((a, b) => Date.parse(b.recorded_at) - Date.parse(a.recorded_at))
     .find((entry) => kinds.includes(entry.kind) && matches(entry))
 }

@@ -4163,6 +4163,7 @@ export async function revokeMinerGithubLink(actor: string, rawInput: unknown) {
   throw new Error(
     `The GitHub link revocation may have committed (${outcome.reason}). Retry revoke_miner_github_link with the ` +
       'same input: an already applied revocation is returned, not repeated.',
+    { cause: outcome.cause },
   )
 }
 
@@ -4302,6 +4303,7 @@ export async function publishClaVersion(actor: string, rawInput: unknown) {
   throw new Error(
     `The CLA version ${input.version} publish may have committed (${outcome.reason}). Retry publish_cla_version with ` +
       'the same input: an already committed publication is returned, not duplicated.',
+    { cause: outcome.cause },
   )
 }
 
