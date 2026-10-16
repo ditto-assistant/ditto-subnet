@@ -698,7 +698,7 @@ async def test_claim_history_is_append_only(world):
         "UPDATE bounty_action_nonces SET action = 'claim'",
         "UPDATE bounty_fee_payments SET outcome = 'refund_owed'",
         "DELETE FROM bounty_fee_payments",
-        "TRUNCATE bounty_obligations",
+        "TRUNCATE bounty_obligations CASCADE",
         "TRUNCATE bounty_claim_controls",
     ):
         async with world.maker() as session:

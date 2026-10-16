@@ -41,6 +41,7 @@ from ditto.db.models import (
     BountyClaim,
     BountyClaimControl,
     BountyEvent,
+    BountyObligation,
     BountyRevision,
     BountyRound,
     BountySlot,
@@ -309,6 +310,7 @@ def _summary(
     paused: bool,
     statuses: Counter[str],
     overdue: int,
+    awarded: int,
 ) -> BountySummary:
     return BountySummary(
         bounty_id=bounty.bounty_id,
@@ -327,6 +329,7 @@ def _summary(
         claims_paused=paused,
         slots=_slot_counts(statuses),
         reviews_overdue=overdue,
+        awarded_alpha_rao=awarded,
         published_at=first.published_at,
         updated_at=current.published_at,
     )
@@ -395,6 +398,7 @@ async def board(
         statuses.setdefault(slot.bounty_id, Counter())[status] += 1
         overdue[slot.bounty_id] += review_overdue(slot, now=now)
     paused = await _paused(session, ids)
+    awarded = await _awarded(session, ids)
     items = [
         _summary(
             bounty,
@@ -404,10 +408,21 @@ async def board(
             paused=paused.get(bounty.bounty_id, False),
             statuses=statuses.get(bounty.bounty_id, Counter()),
             overdue=overdue[bounty.bounty_id],
+            awarded=awarded.get(bounty.bounty_id, 0),
         )
         for bounty in bounties
     ]
     return BountyBoardPage(items=items, total=total, limit=limit, offset=offset)
+
+
+async def _awarded(session: AsyncSession, ids: list[UUID]) -> dict[UUID, int]:
+    """Each bounty's recorded awards, which never exceed its reward pool."""
+    rows = await session.execute(
+        select(BountyObligation.bounty_id, func.sum(BountyObligation.amount_alpha_rao))
+        .where(BountyObligation.bounty_id.in_(ids), BountyObligation.kind == "award")
+        .group_by(BountyObligation.bounty_id)
+    )
+    return {bounty_id: int(total) for bounty_id, total in rows.all()}
 
 
 async def _paused(session: AsyncSession, ids: list[UUID]) -> dict[UUID, bool]:
@@ -515,6 +530,7 @@ async def detail(session: AsyncSession, bounty_id: UUID) -> BountyDetail:
             paused=(await _paused(session, [bounty_id])).get(bounty_id, False),
             statuses=Counter(view.status for view in views),
             overdue=sum(view.review_overdue for view in views),
+            awarded=(await _awarded(session, [bounty_id])).get(bounty_id, 0),
         ),
         revisions=[revision_view(row) for row in revisions],
         rounds=[

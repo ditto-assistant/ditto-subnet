@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 import ditto
 from ditto.api_server.bounty_claims import SimulatedBountyFeeVerifier
 from ditto.api_server.bounty_deadlines import BountyDeadlineSweeper
+from ditto.api_server.bounty_settlement import SimulatedTransferExecutor
 from ditto.api_server.burn_settings import BurnSettingsResolver
 from ditto.api_server.coding_artifact_capabilities import (
     CodingArtifactCapabilityMinter,
@@ -673,6 +674,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # v1 bounties run in rehearsal funding only: fees are simulated, no funds
     # move. A live verifier is a separately approved change (#2944).
     app.state.bounty_fee_verifier = SimulatedBountyFeeVerifier()
+    app.state.bounty_transfer_executor = SimulatedTransferExecutor()
 
     # Starlette inserts each middleware at position 0, so the LAST
     # add_middleware call ends up outermost on the wire. RequestIDMiddleware

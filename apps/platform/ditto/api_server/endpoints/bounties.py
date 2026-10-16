@@ -12,6 +12,8 @@ from ditto.api_models.bounty import (
     REPO_PATTERN,
     BountyAppealDecisionRequest,
     BountyAppealRequest,
+    BountyApprovalRequest,
+    BountyAwardRequest,
     BountyBoardPage,
     BountyCancelRequest,
     BountyClaimRequest,
@@ -19,10 +21,16 @@ from ditto.api_models.bounty import (
     BountyClaimView,
     BountyConfirmRequest,
     BountyDetail,
+    BountyDispatchRequest,
+    BountyFactRequest,
+    BountyObligationView,
+    BountyPayoutPolicyRequest,
+    BountyPayoutPolicyView,
     BountyPublishPreview,
     BountyPublishPreviewRequest,
     BountyPublishRequest,
     BountyReassignRequest,
+    BountyReconcileRequest,
     BountyReopenRequest,
     BountyReviewRequest,
     BountyRevisionView,
@@ -31,7 +39,7 @@ from ditto.api_models.bounty import (
     BountyWithdrawRequest,
 )
 from ditto.api_models.http_errors import HttpErrorEnvelope
-from ditto.api_server import bounty, bounty_claims, bounty_reviews
+from ditto.api_server import bounty, bounty_claims, bounty_reviews, bounty_settlement
 from ditto.api_server.contributor_identity import admin_actor
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -323,4 +331,136 @@ async def decide_appeal(
     """Uphold or deny an appeal; its reviewer may not decide it."""
     return await bounty_reviews.decide_appeal(
         request.app.state.session_maker, appeal_id=appeal_id, body=body, actor=actor
+    )
+
+
+@admin_router.post(
+    "/claims/{claim_id}/award",
+    response_model=BountyClaimView,
+    responses=_errors(400, 401, 404, 409, 503),
+)
+async def award(
+    claim_id: UUID,
+    body: BountyAwardRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+) -> BountyClaimView:
+    """Award accepted work from the reward pool, with public credit."""
+    return await bounty_settlement.award_claim(
+        request.app.state.session_maker, claim_id=claim_id, body=body, actor=actor
+    )
+
+
+@admin_router.get(
+    "/payout-policy",
+    response_model=BountyPayoutPolicyView,
+    responses=_errors(401, 404, 503),
+)
+async def payout_policy(
+    _admin: AdminDep, session: SessionDep
+) -> BountyPayoutPolicyView:
+    return await bounty_settlement.read_payout_policy(session)
+
+
+@admin_router.post(
+    "/payout-policy",
+    response_model=BountyPayoutPolicyView,
+    responses=_errors(400, 401, 409, 503),
+)
+async def set_payout_policy(
+    body: BountyPayoutPolicyRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+) -> BountyPayoutPolicyView:
+    """Append a revision of the approval thresholds; approvals bind it."""
+    return await bounty_settlement.set_payout_policy(
+        request.app.state.session_maker, body=body, actor=actor
+    )
+
+
+@admin_router.post(
+    "/obligations/{obligation_id}/approve",
+    response_model=BountyObligationView,
+    responses=_errors(401, 403, 404, 409, 503),
+)
+async def approve(
+    obligation_id: UUID,
+    body: BountyApprovalRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+) -> BountyObligationView:
+    """Approve the exact payee, amount and policy of one obligation round."""
+    return await bounty_settlement.approve_obligation(
+        request.app.state.session_maker,
+        chain=request.app.state.chain,
+        obligation_id=obligation_id,
+        body=body,
+        actor=actor,
+    )
+
+
+@admin_router.post(
+    "/obligations/{obligation_id}/dispatch",
+    response_model=BountyObligationView,
+    responses=_errors(400, 401, 404, 409, 503),
+)
+async def dispatch(
+    obligation_id: UUID,
+    body: BountyDispatchRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+) -> BountyObligationView:
+    """Dispatch an approved round once through the transfer executor."""
+    state = request.app.state
+    return await bounty_settlement.dispatch_obligation(
+        state.session_maker,
+        chain=state.chain,
+        executor=state.bounty_transfer_executor,
+        obligation_id=obligation_id,
+        body=body,
+        actor=actor,
+    )
+
+
+@admin_router.post(
+    "/transfers/{transfer_id}/reconcile",
+    response_model=BountyObligationView,
+    responses=_errors(400, 401, 404, 409, 503),
+)
+async def reconcile(
+    transfer_id: UUID,
+    body: BountyReconcileRequest,
+    request: Request,
+    _admin: AdminDep,
+    _actor: ActorDep,
+) -> BountyObligationView:
+    """Settle a dispatched or uncertain transfer before anything else."""
+    state = request.app.state
+    return await bounty_settlement.reconcile_transfer(
+        state.session_maker,
+        executor=state.bounty_transfer_executor,
+        transfer_id=transfer_id,
+        body=body,
+    )
+
+
+@admin_router.post(
+    "/claims/{claim_id}/facts",
+    response_model=BountyClaimView,
+    responses=_errors(400, 401, 404, 409, 503),
+)
+async def fact(
+    claim_id: UUID,
+    body: BountyFactRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+) -> BountyClaimView:
+    """Record a public merge, deployment or adoption fact for accepted work."""
+    return await bounty_settlement.record_fact(
+        request.app.state.session_maker, claim_id=claim_id, body=body, actor=actor
     )

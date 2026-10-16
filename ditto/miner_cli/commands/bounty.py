@@ -209,12 +209,28 @@ def _print_claim(view: BountyClaimView) -> None:
         print(f"Hold expires at {view.hold_expires_at.isoformat()}")
     if view.deadline_at is not None:
         print(f"Delivery deadline: {view.deadline_at.isoformat()}")
+    settled = {o.obligation_id for o in view.obligations}
     for refund in view.refunds:
+        if refund.obligation_id in settled:
+            continue
         simulated = " (simulated)" if refund.simulated else ""
         print(
             f"Refund owed{simulated}: {alpha(refund.amount_alpha_rao)} to "
             f"{refund.payee_coldkey} ({refund.reason})"
         )
+    for owed in view.obligations:
+        simulated = " (simulated)" if owed.simulated else ""
+        label = {
+            "award": "Award",
+            "fee_refund": "Refund owed",
+            "fee_retained": "Fee retained",
+        }[owed.kind]
+        print(
+            f"{label}{simulated}: {alpha(owed.amount_alpha_rao)} to "
+            f"{owed.payee_coldkey} ({owed.reason}; {owed.state.replace('_', ' ')})"
+        )
+    for fact in view.facts:
+        print(f"{fact.kind.capitalize()}: {fact.reference}")
 
 
 def _confirm_fee(client: ApiClient, view: BountyClaimView) -> BountyClaimView:

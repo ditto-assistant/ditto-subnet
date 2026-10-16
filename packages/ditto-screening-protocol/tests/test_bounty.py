@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from ditto_screening_protocol.bounty import (
     MAX_ALPHA_RAO,
     SPEC_V1_FIELDS,
+    BountyAwardRequest,
     BountyClaimRequest,
     BountyFeeReceipt,
     BountyPublishRequest,
@@ -17,11 +18,17 @@ from ditto_screening_protocol.bounty import (
     BountyTerms,
     bounty_appeal_decision_confirmation,
     bounty_appeal_message,
+    bounty_approval_confirmation,
+    bounty_award_confirmation,
     bounty_claim_message,
+    bounty_dispatch_confirmation,
+    bounty_fact_confirmation,
     bounty_pause_confirmation,
+    bounty_payout_policy_confirmation,
     bounty_publish_confirmation,
     bounty_reason_digest,
     bounty_reassign_confirmation,
+    bounty_reconcile_confirmation,
     bounty_review_confirmation,
     bounty_slot_confirmation,
     bounty_spec_digest,
@@ -29,6 +36,7 @@ from ditto_screening_protocol.bounty import (
     bounty_team_digest,
     bounty_withdraw_message,
     simulated_fee_block_hash,
+    simulated_transfer_block_hash,
 )
 
 COLDKEY = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
@@ -428,3 +436,53 @@ def test_operator_confirmations_name_their_target():
     assert bounty_reassign_confirmation(repo=repo, issue=issue) == (
         f"REASSIGN BOUNTY REVIEWER {repo}#{issue}"
     )
+
+
+def test_settlement_confirmations_and_simulated_transfers():
+    assert bounty_award_confirmation(claim_id=CLAIM, amount_alpha_rao=5) == (
+        f"AWARD BOUNTY CLAIM {CLAIM} 5 ALPHA RAO"
+    )
+    assert (
+        bounty_approval_confirmation(
+            obligation_id=CLAIM, round_number=2, amount_alpha_rao=7, payee=COLDKEY
+        )
+        == f"APPROVE BOUNTY OBLIGATION {CLAIM} ROUND 2 7 ALPHA RAO TO {COLDKEY}"
+    )
+    assert bounty_dispatch_confirmation(obligation_id=CLAIM, round_number=1) == (
+        f"DISPATCH BOUNTY OBLIGATION {CLAIM} ROUND 1"
+    )
+    assert bounty_reconcile_confirmation(transfer_id=CLAIM) == (
+        f"RECONCILE BOUNTY TRANSFER {CLAIM}"
+    )
+    assert bounty_payout_policy_confirmation(revision=3) == "SET BOUNTY PAYOUT POLICY 3"
+    assert bounty_fact_confirmation(claim_id=CLAIM, kind="merged") == (
+        f"RECORD BOUNTY MERGED {CLAIM}"
+    )
+    expected = hashlib.sha256(
+        f"ditto-bounty-simulated-transfer:v1:{CLAIM}".encode()
+    ).hexdigest()
+    assert simulated_transfer_block_hash(CLAIM) == "0x" + expected
+    # A transfer receipt is never mistaken for a fee receipt.
+    assert simulated_transfer_block_hash(CLAIM) != simulated_fee_block_hash(CLAIM)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"amount_alpha_rao": 0},
+        {"amount_alpha_rao": "5"},
+        {"attribution": ""},
+        {"attribution": "x" * 2001},
+        {"reason": "short"},
+    ],
+)
+def test_award_requests_are_exact(change):
+    valid = {
+        "amount_alpha_rao": 5,
+        "attribution": "Fixture credit",
+        "reason": "fixture award decision",
+        "confirmation": "x",
+    }
+    BountyAwardRequest.model_validate(valid)
+    with pytest.raises(ValidationError):
+        BountyAwardRequest.model_validate({**valid, **change})

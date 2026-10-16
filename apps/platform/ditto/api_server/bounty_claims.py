@@ -34,6 +34,7 @@ from ditto.api_models.bounty import (
     BountyClaimsPauseRequest,
     BountyClaimView,
     BountyConfirmRequest,
+    BountyFactView,
     BountyFeeReceipt,
     BountyRefundView,
     BountySubmissionView,
@@ -54,6 +55,7 @@ from ditto.api_server.bounty_identity import (
     prepare_bounty_identity,
     require_verified_bounty_contributor,
 )
+from ditto.api_server.bounty_obligations import current_policy, obligation_view
 from ditto.api_server.cla import ClaConsentRequired
 from ditto.api_server.contributor_identity import (
     ContributorProofRejected,
@@ -69,6 +71,7 @@ from ditto.db.models import (
     BountyAppealDecision,
     BountyClaim,
     BountyClaimControl,
+    BountyDeliveryFact,
     BountyEvent,
     BountyFeePayment,
     BountyObligation,
@@ -605,11 +608,20 @@ async def claim_view(
             .order_by(BountyFeePayment.recorded_at, BountyFeePayment.block_hash)
         )
     )
-    refunds = list(
+    obligations = list(
         await session.scalars(
             select(BountyObligation)
             .where(BountyObligation.claim_id == claim.claim_id)
             .order_by(BountyObligation.created_at, BountyObligation.obligation_id)
+        )
+    )
+    refunds = [o for o in obligations if o.kind == "fee_refund"]
+    policy = await current_policy(session) if obligations else None
+    facts = list(
+        await session.scalars(
+            select(BountyDeliveryFact)
+            .where(BountyDeliveryFact.claim_id == claim.claim_id)
+            .order_by(BountyDeliveryFact.fact_id)
         )
     )
     submissions = (
@@ -748,6 +760,18 @@ async def claim_view(
                 decided_at=decision.decided_at if decision else None,
             )
             for appeal, decision in appeals
+        ],
+        obligations=[
+            await obligation_view(session, obligation, policy)
+            for obligation in obligations
+        ],
+        facts=[
+            BountyFactView(
+                kind=fact.kind,  # type: ignore[arg-type]
+                reference=fact.reference,
+                recorded_at=fact.recorded_at,
+            )
+            for fact in facts
         ],
     )
 

@@ -632,6 +632,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/bounties/claims/{claim_id}/award": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Award
+         * @description Award accepted work from the reward pool, with public credit.
+         */
+        post: operations["award_api_v1_admin_bounties_claims__claim_id__award_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/bounties/claims/{claim_id}/facts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fact
+         * @description Record a public merge, deployment or adoption fact for accepted work.
+         */
+        post: operations["fact_api_v1_admin_bounties_claims__claim_id__facts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/bounties/claims/{claim_id}/review": {
         parameters: {
             query?: never;
@@ -646,6 +686,67 @@ export interface paths {
          * @description The assigned reviewer's decision on one exact submission.
          */
         post: operations["review_api_v1_admin_bounties_claims__claim_id__review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/bounties/obligations/{obligation_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve
+         * @description Approve the exact payee, amount and policy of one obligation round.
+         */
+        post: operations["approve_api_v1_admin_bounties_obligations__obligation_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/bounties/obligations/{obligation_id}/dispatch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispatch
+         * @description Dispatch an approved round once through the transfer executor.
+         */
+        post: operations["dispatch_api_v1_admin_bounties_obligations__obligation_id__dispatch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/bounties/payout-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Payout Policy */
+        get: operations["payout_policy_api_v1_admin_bounties_payout_policy_get"];
+        put?: never;
+        /**
+         * Set Payout Policy
+         * @description Append a revision of the approval thresholds; approvals bind it.
+         */
+        post: operations["set_payout_policy_api_v1_admin_bounties_payout_policy_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -723,6 +824,26 @@ export interface paths {
          * @description Reopen a closed slot for a new claim.
          */
         post: operations["reopen_api_v1_admin_bounties_slots__slot_id__reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/bounties/transfers/{transfer_id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile
+         * @description Settle a dispatched or uncertain transfer before anything else.
+         */
+        post: operations["reconcile_api_v1_admin_bounties_transfers__transfer_id__reconcile_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -15621,6 +15742,33 @@ export interface components {
             /** Upheld */
             upheld: boolean | null;
         };
+        /**
+         * BountyApprovalRequest
+         * @description An approval binds the exact obligation, payee, amount and policy.
+         */
+        BountyApprovalRequest: {
+            /** Amount Alpha Rao */
+            amount_alpha_rao: number;
+            /** Confirmation */
+            confirmation: string;
+            /** Payee Coldkey */
+            payee_coldkey: string;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Round */
+            round: number;
+        };
+        /** BountyAwardRequest */
+        BountyAwardRequest: {
+            /** Amount Alpha Rao */
+            amount_alpha_rao: number;
+            /** Attribution */
+            attribution: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
         /** BountyBoardPage */
         BountyBoardPage: {
             /** Items */
@@ -15694,6 +15842,8 @@ export interface components {
             claimed_at: string | null;
             /** Deadline At */
             deadline_at: string | null;
+            /** Facts */
+            facts: components["schemas"]["BountyFactView"][];
             /** Fee Alpha Rao */
             fee_alpha_rao: number;
             /** Fee Escrow Coldkey */
@@ -15721,6 +15871,8 @@ export interface components {
             hotkey: string;
             /** Issue */
             issue: number;
+            /** Obligations */
+            obligations: components["schemas"]["BountyObligationView"][];
             /** Payee Coldkey */
             payee_coldkey: string;
             /** Position */
@@ -15781,6 +15933,19 @@ export interface components {
             slots: components["schemas"]["BountySlotView"][];
             summary: components["schemas"]["BountySummary"];
         };
+        /** BountyDispatchRequest */
+        BountyDispatchRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Rehearsal Outcome
+             * @default confirmed
+             * @enum {string}
+             */
+            rehearsal_outcome: "confirmed" | "failed" | "unknown";
+            /** Round */
+            round: number;
+        };
         /** BountyEventView */
         BountyEventView: {
             /** Claim Id */
@@ -15791,7 +15956,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "revision_published" | "round_opened" | "slot_held" | "hold_expired" | "hold_released" | "slot_claimed" | "fee_refund_owed" | "claims_paused" | "claims_resumed" | "submitted" | "withdrawn" | "deadline_missed" | "review_overdue" | "rework_requested" | "accepted" | "rejected" | "reviewer_reassigned" | "appeal_filed" | "appeal_upheld" | "appeal_denied" | "slot_cancelled" | "slot_reopened";
+            kind: "revision_published" | "round_opened" | "slot_held" | "hold_expired" | "hold_released" | "slot_claimed" | "fee_refund_owed" | "claims_paused" | "claims_resumed" | "submitted" | "withdrawn" | "deadline_missed" | "review_overdue" | "rework_requested" | "accepted" | "rejected" | "reviewer_reassigned" | "appeal_filed" | "appeal_upheld" | "appeal_denied" | "slot_cancelled" | "slot_reopened" | "fee_retained" | "award_recorded" | "obligation_approved" | "transfer_dispatched" | "transfer_confirmed" | "transfer_failed" | "transfer_uncertain" | "fact_recorded";
             /**
              * Recorded At
              * Format: date-time
@@ -15804,6 +15969,33 @@ export interface components {
             /** Slot Id */
             slot_id: string | null;
         };
+        /** BountyFactRequest */
+        BountyFactRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "merged" | "deployed" | "adopted";
+            /** Reference */
+            reference: string;
+        };
+        /** BountyFactView */
+        BountyFactView: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "merged" | "deployed" | "adopted";
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Reference */
+            reference: string;
+        };
         /**
          * BountyFeeReceipt
          * @description A finalized fee transfer: its block and extrinsic index.
@@ -15815,6 +16007,81 @@ export interface components {
             block_number: number;
             /** Extrinsic Index */
             extrinsic_index: number;
+        };
+        /** BountyObligationView */
+        BountyObligationView: {
+            /** Amount Alpha Rao */
+            amount_alpha_rao: number;
+            /** Approvals */
+            approvals: number;
+            /** Approvals Required */
+            approvals_required: number;
+            /** Attribution */
+            attribution: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "fee_refund" | "fee_retained" | "award";
+            /**
+             * Obligation Id
+             * Format: uuid
+             */
+            obligation_id: string;
+            /** Payee Coldkey */
+            payee_coldkey: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "hold_expired" | "slot_lost" | "identity_changed" | "duplicate_payment" | "cancelled" | "system_fault" | "accepted" | "rejected" | "expired" | "withdrawn" | "accepted_work";
+            /** Round */
+            round: number;
+            /** Simulated */
+            simulated: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "retained" | "awaiting_approval" | "approved" | "dispatched" | "uncertain" | "confirmed" | "failed";
+            /** Transfers */
+            transfers: components["schemas"]["BountyTransferView"][];
+        };
+        /** BountyPayoutPolicyRequest */
+        BountyPayoutPolicyRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /** Dual Approver Max Alpha Rao */
+            dual_approver_max_alpha_rao: number;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /** Single Approver Max Alpha Rao */
+            single_approver_max_alpha_rao: number;
+        };
+        /** BountyPayoutPolicyView */
+        BountyPayoutPolicyView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Dual Approver Max Alpha Rao */
+            dual_approver_max_alpha_rao: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Single Approver Max Alpha Rao */
+            single_approver_max_alpha_rao: number;
         };
         /** BountyPublishPreview */
         BountyPublishPreview: {
@@ -15862,6 +16129,17 @@ export interface components {
             /** Reviewer Actor */
             reviewer_actor: string;
         };
+        /** BountyReconcileRequest */
+        BountyReconcileRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Rehearsal Outcome
+             * @default confirmed
+             * @enum {string}
+             */
+            rehearsal_outcome: "confirmed" | "failed" | "expired" | "unknown";
+        };
         /** BountyRefundView */
         BountyRefundView: {
             /** Amount Alpha Rao */
@@ -15882,7 +16160,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "hold_expired" | "slot_lost" | "identity_changed" | "duplicate_payment" | "cancelled" | "system_fault";
+            reason: "hold_expired" | "slot_lost" | "identity_changed" | "duplicate_payment" | "cancelled" | "system_fault" | "accepted";
             receipt: components["schemas"]["BountyFeeReceipt"];
             /** Simulated */
             simulated: boolean;
@@ -16073,6 +16351,8 @@ export interface components {
         };
         /** BountySummary */
         BountySummary: {
+            /** Awarded Alpha Rao */
+            awarded_alpha_rao: number;
             /**
              * Bounty Id
              * Format: uuid
@@ -16174,6 +16454,31 @@ export interface components {
             scope: string;
             /** Title */
             title: string;
+        };
+        /** BountyTransferView */
+        BountyTransferView: {
+            /**
+             * Dispatched At
+             * Format: date-time
+             */
+            dispatched_at: string;
+            receipt: components["schemas"]["BountyFeeReceipt"] | null;
+            /** Round */
+            round: number;
+            /** Settled At */
+            settled_at: string | null;
+            /** Simulated */
+            simulated: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "dispatched" | "confirmed" | "failed" | "expired" | "uncertain";
+            /**
+             * Transfer Id
+             * Format: uuid
+             */
+            transfer_id: string;
         };
         /** BountyWithdrawRequest */
         BountyWithdrawRequest: {
@@ -40498,6 +40803,172 @@ export interface operations {
             };
         };
     };
+    award_api_v1_admin_bounties_claims__claim_id__award_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
+            };
+            path: {
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BountyAwardRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyClaimView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    fact_api_v1_admin_bounties_claims__claim_id__facts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
+            };
+            path: {
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BountyFactRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyClaimView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
     review_api_v1_admin_bounties_claims__claim_id__review_post: {
         parameters: {
             query?: never;
@@ -40554,6 +41025,302 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    approve_api_v1_admin_bounties_obligations__obligation_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
+            };
+            path: {
+                obligation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BountyApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyObligationView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    dispatch_api_v1_admin_bounties_obligations__obligation_id__dispatch_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
+            };
+            path: {
+                obligation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BountyDispatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyObligationView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    payout_policy_api_v1_admin_bounties_payout_policy_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyPayoutPolicyView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    set_payout_policy_api_v1_admin_bounties_payout_policy_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BountyPayoutPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyPayoutPolicyView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -40823,6 +41590,89 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BountySummary"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    reconcile_api_v1_admin_bounties_transfers__transfer_id__reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
+            };
+            path: {
+                transfer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BountyReconcileRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyObligationView"];
                 };
             };
             /** @description Bad Request */
