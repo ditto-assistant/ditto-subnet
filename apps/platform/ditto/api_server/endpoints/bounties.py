@@ -23,7 +23,9 @@ from ditto.api_models.bounty import (
     BountyDetail,
     BountyDispatchRequest,
     BountyFactRequest,
+    BountyObligationState,
     BountyObligationView,
+    BountyOperatorView,
     BountyPayoutPolicyRequest,
     BountyPayoutPolicyView,
     BountyPublishPreview,
@@ -32,14 +34,22 @@ from ditto.api_models.bounty import (
     BountyReassignRequest,
     BountyReconcileRequest,
     BountyReopenRequest,
+    BountyReviewQueue,
     BountyReviewRequest,
     BountyRevisionView,
+    BountySettlementQueue,
     BountySubmitRequest,
     BountySummary,
     BountyWithdrawRequest,
 )
 from ditto.api_models.http_errors import HttpErrorEnvelope
-from ditto.api_server import bounty, bounty_claims, bounty_reviews, bounty_settlement
+from ditto.api_server import (
+    bounty,
+    bounty_admin,
+    bounty_claims,
+    bounty_reviews,
+    bounty_settlement,
+)
 from ditto.api_server.contributor_identity import admin_actor
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -464,3 +474,42 @@ async def fact(
     return await bounty_settlement.record_fact(
         request.app.state.session_maker, claim_id=claim_id, body=body, actor=actor
     )
+
+
+# Operator reads. Static paths are declared before the bounty-id path.
+@admin_router.get(
+    "/queue/reviews", response_model=BountyReviewQueue, responses=_errors(401, 503)
+)
+async def review_queue(
+    _admin: AdminDep,
+    session: SessionDep,
+    overdue_only: Annotated[bool, Query()] = False,
+) -> BountyReviewQueue:
+    """Submissions awaiting a decision, the most overdue first."""
+    return await bounty_admin.review_queue(session, overdue_only=overdue_only)
+
+
+@admin_router.get(
+    "/queue/settlement",
+    response_model=BountySettlementQueue,
+    responses=_errors(401, 503),
+)
+async def settlement_queue(
+    _admin: AdminDep,
+    session: SessionDep,
+    state: Annotated[BountyObligationState | None, Query()] = None,
+) -> BountySettlementQueue:
+    """Obligations that still need an operator, with their approvers."""
+    return await bounty_admin.settlement_queue(session, state=state)
+
+
+@admin_router.get(
+    "/{bounty_id}",
+    response_model=BountyOperatorView,
+    responses=_errors(401, 404, 503),
+)
+async def operator_view(
+    bounty_id: UUID, _admin: AdminDep, session: SessionDep
+) -> BountyOperatorView:
+    """The public detail plus every private actor, reason and statement."""
+    return await bounty_admin.operator_view(session, bounty_id)

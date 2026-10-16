@@ -128,7 +128,9 @@ BountyObligationState = Literal[
     "confirmed",
     "failed",
 ]
-BountyTransferState = Literal["dispatched", "confirmed", "failed", "expired", "uncertain"]
+BountyTransferState = Literal[
+    "dispatched", "confirmed", "failed", "expired", "uncertain"
+]
 BountyFactKind = Literal["merged", "deployed", "adopted"]
 # Rehearsal only: what the simulated executor reports. Live transfers have none.
 BountyRehearsalOutcome = Literal["confirmed", "failed", "unknown"]
@@ -780,3 +782,101 @@ class BountyDetail(WireModel):
     rounds: list[BountyRoundView]
     slots: list[BountySlotView]
     events: list[BountyEventView]
+
+
+# Operator views: private actors, reasons and appeal statements. Admin only.
+BountyAuditKind = Literal[
+    "revision_published",
+    "claims_paused",
+    "claims_resumed",
+    "reviewer_assigned",
+    "review_decided",
+    "appeal_decided",
+    "slot_cancelled",
+    "slot_reopened",
+    "award_recorded",
+    "obligation_approved",
+    "transfer_dispatched",
+    "fact_recorded",
+]
+
+
+class BountyAuditEntry(WireModel):
+    """One private operator record: who did what, when, and why."""
+
+    kind: BountyAuditKind
+    actor: str
+    reason: str | None
+    detail: str
+    recorded_at: datetime
+    claim_id: UUID | None
+    slot_id: UUID | None
+    obligation_id: UUID | None
+
+
+class BountyAdminRevisionView(WireModel):
+    revision: int
+    spec_digest: Digest
+    reviewer_actor: str
+    actor: str
+    reason: str
+    published_at: datetime
+
+
+class BountyAdminAppealView(WireModel):
+    appeal_id: UUID
+    claim_id: UUID
+    subject_event_id: int
+    # The appellant's statement; public views show only its digest.
+    statement: str
+    reason_digest: Digest
+    filed_at: datetime
+    upheld: bool | None
+    decided_by: str | None
+    decision_reason: str | None
+    decided_at: datetime | None
+
+
+class BountyOperatorView(WireModel):
+    detail: BountyDetail
+    reviewer_actor: str
+    revisions: list[BountyAdminRevisionView]
+    claims: list[BountyClaimView]
+    appeals: list[BountyAdminAppealView]
+    audit: list[BountyAuditEntry]
+
+
+class BountyReviewQueueItem(WireModel):
+    bounty_id: UUID
+    repo: str
+    issue: int
+    title: str
+    claim_id: UUID
+    slot_id: UUID
+    round: int
+    position: int
+    hotkey: str
+    github_login: str
+    submission: BountySubmissionView
+    overdue: bool
+    reviewer_actor: str
+
+
+class BountyReviewQueue(WireModel):
+    items: list[BountyReviewQueueItem]
+    total: int
+
+
+class BountySettlementItem(WireModel):
+    bounty_id: UUID
+    repo: str
+    issue: int
+    claim_id: UUID
+    obligation: BountyObligationView
+    # Operators who approved the obligation's current round.
+    approvers: list[str]
+
+
+class BountySettlementQueue(WireModel):
+    items: list[BountySettlementItem]
+    total: int

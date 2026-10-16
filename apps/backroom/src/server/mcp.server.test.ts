@@ -469,6 +469,24 @@ describe('Backroom MCP tools', () => {
         'get_cla_policy',
         'set_cla_policy',
         'publish_cla_version',
+        'get_bounty_board',
+        'get_bounty',
+        'get_bounty_claim',
+        'get_bounty_queue',
+        'get_bounty_payout_policy',
+        'preview_bounty_revision',
+        'publish_bounty_revision',
+        'set_bounty_claims_paused',
+        'review_bounty_submission',
+        'reassign_bounty_reviewer',
+        'control_bounty_slot',
+        'decide_bounty_appeal',
+        'award_bounty_claim',
+        'set_bounty_payout_policy',
+        'approve_bounty_obligation',
+        'dispatch_bounty_obligation',
+        'reconcile_bounty_transfer',
+        'record_bounty_fact',
         'get_owner_attestations',
         'get_submission_cooldown',
         'get_treasury_settings',
@@ -679,7 +697,11 @@ describe('Backroom MCP tools', () => {
     // instead of `{}` (about 1.5 KB), which takes the catalog past 180,000.
     // Eight contributor tools now include audited exact-link recovery. Keep
     // UUID schemas compact and allow this addition; prose budgets stay fixed.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(186_000)
+    // The eighteen build-bounty operator tools (#2942) publish compact catalog
+    // schemas (ids as format uuid, terms as an object; services parse
+    // strictly) and one-line summaries with procedures in tool help: measured
+    // 197,867 bytes together. Keep the same ~0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(198_400)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
