@@ -319,6 +319,8 @@ async def hold_claim(
     try:
         async with maker() as session, session.begin():
             await locked_bounty(session, bounty_id)
+            # The lock may have waited; the hold starts once it is held.
+            now = (clock or utcnow)()
             revision = await _current_revision(session, bounty_id)
             _check_terms(revision, body)
             if await claims_paused(session, bounty_id):
@@ -498,10 +500,12 @@ async def confirm_claim(
         owner_coldkey = None
     except ChainError:
         raise HTTPException(503, "finalized ownership unavailable; retry") from None
-    now = (clock or utcnow)()
-    await settle_deadlines(maker, claim.bounty_id, now=now)
+    await settle_deadlines(maker, claim.bounty_id, now=(clock or utcnow)())
     async with maker() as session, session.begin():
         await locked_bounty(session, claim.bounty_id)
+        # Read after the lock: a wait that crosses the hold's end must lapse
+        # it, and a delivery deadline starts when the fee is recorded.
+        now = (clock or utcnow)()
         await apply_deadlines(session, claim.bounty_id, now=now)
         claim = await session.get(BountyClaim, claim_id)
         assert claim is not None

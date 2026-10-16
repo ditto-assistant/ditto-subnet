@@ -491,6 +491,28 @@ async def test_a_late_outcome_never_moves_a_settled_transfer(world, caplog):
     assert "now reports" in caplog.text
 
 
+async def test_a_rehearsal_dispatch_needs_its_outcome(world):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    await policy(world)
+    refund = obligation(claim, "fee_refund")
+    await approve(world, refund)
+    omitted = await world.client.post(
+        f"{ADMIN}/obligations/{refund['obligation_id']}/dispatch",
+        headers=_HEADERS,
+        json={
+            "round": refund["round"],
+            "confirmation": (
+                f"DISPATCH BOUNTY OBLIGATION {refund['obligation_id']} "
+                f"ROUND {refund['round']}"
+            ),
+        },
+    )
+    # Never a confirmation nobody reported: nothing is recorded.
+    assert omitted.status_code == 400 and "rehearsal_outcome" in omitted.text
+    assert obligation(await claim_of(world, claim), "fee_refund")["transfers"] == []
+
+
 async def test_only_an_executor_of_the_same_funding_mode_reconciles(world, monkeypatch):
     await world.start(ALICE)
     claim = await accepted(world, ALICE)

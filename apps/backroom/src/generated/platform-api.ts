@@ -16080,12 +16080,8 @@ export interface components {
         BountyDispatchRequest: {
             /** Confirmation */
             confirmation: string;
-            /**
-             * Rehearsal Outcome
-             * @default confirmed
-             * @enum {string}
-             */
-            rehearsal_outcome: "confirmed" | "failed" | "unknown";
+            /** Rehearsal Outcome */
+            rehearsal_outcome?: ("confirmed" | "failed" | "unknown") | null;
             /** Round */
             round: number;
         };
@@ -16291,12 +16287,8 @@ export interface components {
         BountyReconcileRequest: {
             /** Confirmation */
             confirmation: string;
-            /**
-             * Rehearsal Outcome
-             * @default confirmed
-             * @enum {string}
-             */
-            rehearsal_outcome: "confirmed" | "failed" | "expired" | "unknown";
+            /** Rehearsal Outcome */
+            rehearsal_outcome?: ("confirmed" | "failed" | "expired" | "unknown") | null;
         };
         /** BountyRefundView */
         BountyRefundView: {

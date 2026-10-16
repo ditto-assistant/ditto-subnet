@@ -186,7 +186,13 @@ def _find(client: ApiClient, target: str) -> BountyDetail:
         if not page.items:
             raise MinerCliError(f"no bounty is published for {repo}#{issue}") from None
         bounty_id = page.items[0].bounty_id
-    return client.get_bounty(bounty_id)
+    detail = client.get_bounty(bounty_id)
+    # Platform publishes a bounty with its first revision; refuse cleanly if not.
+    if not detail.revisions:
+        raise MinerCliError(
+            f"{detail.summary.repo}#{detail.summary.issue} has no published revision"
+        )
+    return detail
 
 
 _BOARD_PAGE = 100

@@ -850,11 +850,14 @@ async def decide_appeal(
             # changes; it is recorded at that deadline. A first delivery
             # deadline has no reviewer to exclude.
             setter = await session.scalar(
-                select(BountyReview.reviewer_actor).where(
+                select(BountyReview.reviewer_actor)
+                .where(
                     BountyReview.claim_id == claim.claim_id,
                     BountyReview.decision == "changes_requested",
                     BountyReview.rework_deadline_at == subject.recorded_at,
                 )
+                .order_by(BountyReview.decided_at.desc())
+                .limit(1)
             )
             if setter == actor:
                 raise HTTPException(

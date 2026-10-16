@@ -614,12 +614,14 @@ class BountyApprovalRequest(WireModel):
 class BountyDispatchRequest(WireModel):
     round: Annotated[int, Field(strict=True, ge=1, le=1000)]
     confirmation: Annotated[str, Field(min_length=1, max_length=400)]
-    rehearsal_outcome: BountyRehearsalOutcome = "confirmed"
+    # A rehearsal executor needs the outcome to rehearse, never a default; a
+    # live executor takes none (or "confirmed").
+    rehearsal_outcome: BountyRehearsalOutcome | None = None
 
 
 class BountyReconcileRequest(WireModel):
     confirmation: Annotated[str, Field(min_length=1, max_length=400)]
-    rehearsal_outcome: BountyReconcileOutcome = "confirmed"
+    rehearsal_outcome: BountyReconcileOutcome | None = None
 
 
 class BountyFactRequest(WireModel):

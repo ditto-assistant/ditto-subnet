@@ -602,6 +602,14 @@ async def approve_obligation(
         return await obligation_view(session, obligation, policy)
 
 
+def _check_outcome(executor: BountyTransferExecutor, outcome: str | None) -> None:
+    """A rehearsal is told its outcome; a live transfer reports its own."""
+    if executor.simulated and outcome is None:
+        raise HTTPException(400, "a rehearsal transfer needs a rehearsal_outcome")
+    if not executor.simulated and outcome not in (None, "confirmed"):
+        raise HTTPException(400, "only a rehearsal executor takes a rehearsal outcome")
+
+
 def _recordable(outcome: TransferOutcome, transfer_id: UUID) -> TransferOutcome:
     """The executor's outcome if a transfer can record it, else ``uncertain``.
 
@@ -695,8 +703,7 @@ async def dispatch_obligation(
     clock: Callable[[], datetime] | None = None,
 ) -> BountyObligationView:
     """Dispatch an approved round once; record the outcome, or uncertainty."""
-    if not executor.simulated and body.rehearsal_outcome != "confirmed":
-        raise HTTPException(400, "only a rehearsal executor takes a rehearsal outcome")
+    _check_outcome(executor, body.rehearsal_outcome)
     now = _now(clock)
     owner = await _award_owner(maker, chain, obligation_id)
     async with maker() as session, session.begin():
@@ -740,7 +747,7 @@ async def dispatch_obligation(
     # transfer to reconcile, never one to send twice.
     try:
         outcome = await executor.execute(
-            transfer_id, obligation, rehearsal=body.rehearsal_outcome
+            transfer_id, obligation, rehearsal=body.rehearsal_outcome or "confirmed"
         )
     except Exception:
         # Whatever failed, the transfer may have been sent: record it uncertain
@@ -762,8 +769,7 @@ async def reconcile_transfer(
     clock: Callable[[], datetime] | None = None,
 ) -> BountyObligationView:
     """Settle a dispatched or uncertain transfer from what the chain shows."""
-    if not executor.simulated and body.rehearsal_outcome != "confirmed":
-        raise HTTPException(400, "only a rehearsal executor takes a rehearsal outcome")
+    _check_outcome(executor, body.rehearsal_outcome)
     async with maker() as session, session.begin():
         transfer = await session.get(BountyTransfer, transfer_id)
         if transfer is None:
@@ -783,7 +789,7 @@ async def reconcile_transfer(
         session.expunge(obligation)
     try:
         outcome = await executor.lookup(
-            transfer_id, obligation, rehearsal=body.rehearsal_outcome
+            transfer_id, obligation, rehearsal=body.rehearsal_outcome or "confirmed"
         )
     except Exception:
         logger.exception("bounty transfer %s lookup failed; uncertain", transfer_id)

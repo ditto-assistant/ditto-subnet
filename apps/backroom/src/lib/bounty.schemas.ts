@@ -241,7 +241,7 @@ export const bountyCatalogInputs = {
     bountyId: catalogId, appealId: catalogId, upheld: z.boolean(), reason: z.string(),
     restoreDays: z.number().int().optional(), confirmation: z.string(),
   }),
-  award: z.object({ claimId: catalogId, amountAlphaRao: z.number().int(), attribution: z.string(), reason: z.string(), confirmation: z.string() }),
+  award: z.object({ claimId: catalogId, amountAlphaRao: z.number().int().min(1), attribution: z.string(), reason: z.string(), confirmation: z.string() }),
   policyRead: z.object({ revision: z.number().int().optional() }),
   policy: z.object({
     expectedRevision: z.number().int(), singleApproverMaxAlphaRao: z.number().int(), dualApproverMaxAlphaRao: z.number().int(),
@@ -249,7 +249,7 @@ export const bountyCatalogInputs = {
   }),
   approve: z.object({
     bountyId: catalogId, obligationId: catalogId, round: z.number().int(), payeeColdkey: z.string(),
-    amountAlphaRao: z.number().int(), policyRevision: z.number().int(), confirmation: z.string(),
+    amountAlphaRao: z.number().int().min(1), policyRevision: z.number().int(), confirmation: z.string(),
   }),
   dispatch: z.object({
     claimId: catalogId, obligationId: catalogId, round: z.number().int(),

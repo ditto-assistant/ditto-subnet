@@ -386,6 +386,13 @@ def test_a_board_that_ends_before_its_total_is_an_error(capsys):
     assert "ended early: 1 of 3" in capsys.readouterr().err
 
 
+def test_a_bounty_without_a_revision_is_refused(capsys):
+    client = api()
+    client.get_bounty.return_value = detail().model_copy(update={"revisions": []})
+    assert run(["show", f"{REPO}#{ISSUE}"], client) == 1
+    assert "no published revision" in capsys.readouterr().err
+
+
 def test_an_empty_board_lists_as_an_empty_page(capsys):
     client = api()
     client.list_bounties.side_effect = lambda *, limit, offset: BountyBoardPage(

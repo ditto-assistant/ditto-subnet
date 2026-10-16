@@ -504,6 +504,24 @@ async def test_the_hold_starts_after_slow_verification(world, monkeypatch):
     )
 
 
+async def test_a_lock_wait_past_the_hold_lapses_it(world, monkeypatch):
+    await world.start(ALICE)
+    clock = [datetime.now(UTC)]
+    monkeypatch.setattr(bounty_claims, "utcnow", lambda: clock[0])
+    claim = (await world.hold(ALICE)).json()
+    locked = bounty_claims.locked_bounty
+
+    async def slow_lock(session, bounty_id):
+        held = await locked(session, bounty_id)
+        clock[0] += timedelta(minutes=31)  # another transaction held the row
+        return held
+
+    monkeypatch.setattr(bounty_claims, "locked_bounty", slow_lock)
+    late = (await world.confirm(claim)).json()
+    assert late["state"] == "refund_owed"
+    assert late["refunds"][0]["reason"] == "hold_expired"
+
+
 async def test_a_slot_lost_without_lapse_is_refunded(world):
     await world.start(ALICE)
     claim = (await world.hold(ALICE)).json()
