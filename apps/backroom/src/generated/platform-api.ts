@@ -773,6 +773,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/bounties/queue/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Review Queue
+         * @description Submissions awaiting a decision, the most overdue first.
+         */
+        get: operations["review_queue_api_v1_admin_bounties_queue_reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/bounties/queue/settlement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Settlement Queue
+         * @description Obligations that still need an operator, with their approvers.
+         */
+        get: operations["settlement_queue_api_v1_admin_bounties_queue_settlement_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/bounties/revisions": {
         parameters: {
             query?: never;
@@ -844,6 +884,26 @@ export interface paths {
          * @description Settle a dispatched or uncertain transfer before anything else.
          */
         post: operations["reconcile_api_v1_admin_bounties_transfers__transfer_id__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/bounties/{bounty_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Operator View
+         * @description The public detail plus every private actor, reason and statement.
+         */
+        get: operations["operator_view_api_v1_admin_bounties__bounty_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -15683,6 +15743,56 @@ export interface components {
             /** Signature Timestamp */
             signature_timestamp: number;
         };
+        /** BountyAdminAppealView */
+        BountyAdminAppealView: {
+            /**
+             * Appeal Id
+             * Format: uuid
+             */
+            appeal_id: string;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** Decision Reason */
+            decision_reason: string | null;
+            /**
+             * Filed At
+             * Format: date-time
+             */
+            filed_at: string;
+            /** Reason Digest */
+            reason_digest: string;
+            /** Statement */
+            statement: string;
+            /** Subject Event Id */
+            subject_event_id: number;
+            /** Upheld */
+            upheld: boolean | null;
+        };
+        /** BountyAdminRevisionView */
+        BountyAdminRevisionView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /** Reason */
+            reason: string;
+            /** Reviewer Actor */
+            reviewer_actor: string;
+            /** Revision */
+            revision: number;
+            /** Spec Digest */
+            spec_digest: string;
+        };
         /** BountyAppealDecisionRequest */
         BountyAppealDecisionRequest: {
             /** Confirmation */
@@ -15757,6 +15867,34 @@ export interface components {
             policy_revision: number;
             /** Round */
             round: number;
+        };
+        /**
+         * BountyAuditEntry
+         * @description One private operator record: who did what, when, and why.
+         */
+        BountyAuditEntry: {
+            /** Actor */
+            actor: string;
+            /** Claim Id */
+            claim_id: string | null;
+            /** Detail */
+            detail: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "revision_published" | "claims_paused" | "claims_resumed" | "reviewer_assigned" | "review_decided" | "appeal_decided" | "slot_cancelled" | "slot_reopened" | "award_recorded" | "obligation_approved" | "transfer_dispatched" | "fact_recorded";
+            /** Obligation Id */
+            obligation_id: string | null;
+            /** Reason */
+            reason: string | null;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Slot Id */
+            slot_id: string | null;
         };
         /** BountyAwardRequest */
         BountyAwardRequest: {
@@ -16052,6 +16190,20 @@ export interface components {
             /** Transfers */
             transfers: components["schemas"]["BountyTransferView"][];
         };
+        /** BountyOperatorView */
+        BountyOperatorView: {
+            /** Appeals */
+            appeals: components["schemas"]["BountyAdminAppealView"][];
+            /** Audit */
+            audit: components["schemas"]["BountyAuditEntry"][];
+            /** Claims */
+            claims: components["schemas"]["BountyClaimView"][];
+            detail: components["schemas"]["BountyDetail"];
+            /** Reviewer Actor */
+            reviewer_actor: string;
+            /** Revisions */
+            revisions: components["schemas"]["BountyAdminRevisionView"][];
+        };
         /** BountyPayoutPolicyRequest */
         BountyPayoutPolicyRequest: {
             /** Confirmation */
@@ -16172,6 +16324,50 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** BountyReviewQueue */
+        BountyReviewQueue: {
+            /** Items */
+            items: components["schemas"]["BountyReviewQueueItem"][];
+            /** Total */
+            total: number;
+        };
+        /** BountyReviewQueueItem */
+        BountyReviewQueueItem: {
+            /**
+             * Bounty Id
+             * Format: uuid
+             */
+            bounty_id: string;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Github Login */
+            github_login: string;
+            /** Hotkey */
+            hotkey: string;
+            /** Issue */
+            issue: number;
+            /** Overdue */
+            overdue: boolean;
+            /** Position */
+            position: number;
+            /** Repo */
+            repo: string;
+            /** Reviewer Actor */
+            reviewer_actor: string;
+            /** Round */
+            round: number;
+            /**
+             * Slot Id
+             * Format: uuid
+             */
+            slot_id: string;
+            submission: components["schemas"]["BountySubmissionView"];
+            /** Title */
+            title: string;
+        };
         /** BountyReviewRequest */
         BountyReviewRequest: {
             /** Attribution */
@@ -16222,6 +16418,33 @@ export interface components {
             opened_revision: number;
             /** Round */
             round: number;
+        };
+        /** BountySettlementItem */
+        BountySettlementItem: {
+            /** Approvers */
+            approvers: string[];
+            /**
+             * Bounty Id
+             * Format: uuid
+             */
+            bounty_id: string;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Issue */
+            issue: number;
+            obligation: components["schemas"]["BountyObligationView"];
+            /** Repo */
+            repo: string;
+        };
+        /** BountySettlementQueue */
+        BountySettlementQueue: {
+            /** Items */
+            items: components["schemas"]["BountySettlementItem"][];
+            /** Total */
+            total: number;
         };
         /**
          * BountySlotClaimant
@@ -41410,6 +41633,108 @@ export interface operations {
             };
         };
     };
+    review_queue_api_v1_admin_bounties_queue_reviews_get: {
+        parameters: {
+            query?: {
+                overdue_only?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyReviewQueue"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    settlement_queue_api_v1_admin_bounties_queue_settlement_get: {
+        parameters: {
+            query?: {
+                state?: ("retained" | "awaiting_approval" | "approved" | "dispatched" | "uncertain" | "confirmed" | "failed") | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountySettlementQueue"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
     publish_api_v1_admin_bounties_revisions_post: {
         parameters: {
             query?: never;
@@ -41704,6 +42029,66 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    operator_view_api_v1_admin_bounties__bounty_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                bounty_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyOperatorView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
