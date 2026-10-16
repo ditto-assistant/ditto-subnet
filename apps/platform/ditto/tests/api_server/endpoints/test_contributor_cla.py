@@ -1116,6 +1116,26 @@ async def test_off_gate_reads_only_the_policy_and_offers_nothing_to_bind(
     assert shadow.signature_id == UUID(receipt.json()["signature_id"])
 
 
+async def test_enforce_without_an_effective_agreement_refuses_uploads(
+    app, session_maker, monkeypatch
+):
+    # No agreement takes effect, so there is nothing to have signed: enforce
+    # refuses and points the submitter at the operator.
+    setup(app, session_maker)
+    enforce = AsyncMock(return_value=SimpleNamespace(mode="enforce"))
+    monkeypatch.setattr("ditto.api_server.cla.current_cla_settings", enforce)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    async with session_maker() as session:
+        assert await current_cla_version(session) is None
+        gate = await evaluate_cla_gate(session, netuid=118, hotkey=alice.ss58_address)
+    assert (gate.allowed, gate.signature_id, gate.required_version) == (
+        False,
+        None,
+        None,
+    )
+    assert "contact the operator" in gate.message
+
+
 async def test_policy_history_pages_from_the_current_revision(
     app, client, session_maker
 ):

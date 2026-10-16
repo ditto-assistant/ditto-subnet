@@ -400,6 +400,12 @@ async def set_payout_policy(
         raise HTTPException(
             400, "the dual-approver limit cannot be below the single-approver limit"
         )
+    # The phrase names the revision this request writes, so a fresh write and
+    # an exact retry of it are both checked against the same one.
+    _confirm(
+        body.confirmation,
+        bounty_payout_policy_confirmation(revision=body.expected_revision + 1),
+    )
     now = _now(clock)
     async with maker() as session, session.begin():
         await lock_identity_writes(session, namespace=_POLICY_LOCK)
@@ -427,9 +433,6 @@ async def set_payout_policy(
             raise HTTPException(
                 409, f"the payout policy changed; its revision is {current}"
             )
-        _confirm(
-            body.confirmation, bounty_payout_policy_confirmation(revision=current + 1)
-        )
         row = BountyPayoutPolicy(
             revision=current + 1,
             single_approver_max_alpha_rao=body.single_approver_max_alpha_rao,

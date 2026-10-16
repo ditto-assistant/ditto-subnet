@@ -433,8 +433,9 @@ async def hold_claim(
         # A concurrent request with this nonce committed first.
         if unique_violation(exc) != "pk_bounty_action_nonces":
             raise
+        # Read the winner at the time it is shown: its hold may have lapsed.
         async with maker() as session:
-            retry = await _retry_of(session, body, now=now)
+            retry = await _retry_of(session, body, now=(clock or utcnow)())
         if retry is None:
             raise
         return retry

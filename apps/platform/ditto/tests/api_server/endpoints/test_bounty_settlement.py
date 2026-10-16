@@ -327,6 +327,20 @@ async def test_payout_policy_revisions(world):
     assert first.status_code == 200 and first.json()["revision"] == 1
     # An exact retry returns it; a stale writer is refused.
     assert (await policy(world)).json() == first.json()
+    # A retry is exact only with the phrase the write was confirmed by.
+    for phrase in ("SET BOUNTY PAYOUT POLICY", "SET BOUNTY PAYOUT POLICY 2"):
+        retried = await world.client.post(
+            f"{ADMIN}/payout-policy",
+            headers=_HEADERS,
+            json={
+                "expected_revision": 0,
+                "single_approver_max_alpha_rao": SINGLE,
+                "dual_approver_max_alpha_rao": DUAL,
+                "reason": "fixture payout thresholds",
+                "confirmation": phrase,
+            },
+        )
+        assert retried.status_code == 409 and "confirmation" in retried.text
     stale = await policy(world, single=1)
     assert stale.status_code == 409 and "revision is 1" in stale.text
     read = await world.client.get(f"{ADMIN}/payout-policy", headers=_HEADERS)

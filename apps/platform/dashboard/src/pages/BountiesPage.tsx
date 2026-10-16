@@ -112,11 +112,18 @@ const DECISION_LABEL = {
   reject: "Rejected",
 } as const;
 
+/** Whether every fee refund the claim is owed has been confirmed. */
+function feeRefunded(view: BountyClaimView): boolean {
+  const refunds = view.obligations.filter((obligation) => obligation.kind === "fee_refund");
+  return refunds.length > 0 && refunds.every((obligation) => obligation.state === "confirmed");
+}
+
 /** A claim's own outcome: its hold, or the status of the work it paid for. */
 export function claimOutcome(view: BountyClaimView): string {
   if (view.state === "held") return "Held for payment";
   if (view.state === "hold_expired") return "Hold ended unpaid";
-  if (view.state === "refund_owed") return "Fee refund owed";
+  // A claim keeps this state once refunded; its refund's transfer settles it.
+  if (view.state === "refund_owed") return feeRefunded(view) ? "Fee refunded" : "Fee refund owed";
   // A status a newer API added still reads as itself, never blank.
   return (STATUS_LABEL as Record<string, string | undefined>)[view.slot_status] ?? view.slot_status;
 }
@@ -716,10 +723,7 @@ function ClaimBody(props: { view: BountyClaimView }): JSX.Element {
               ? `paid ${athDate(view().claimed_at)}`
               : view().receipts.length > 0
                 ? // Refunded only once its transfer is confirmed; owed until then.
-                  view().obligations.some(
-                    (obligation) =>
-                      obligation.kind === "fee_refund" && obligation.state === "confirmed",
-                  )
+                  feeRefunded(view())
                   ? "received but not applied to a slot; refunded in full"
                   : "received but not applied to a slot; owed back in full"
                 : "not paid"}

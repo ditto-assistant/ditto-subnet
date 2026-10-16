@@ -278,6 +278,8 @@ describe("bounty detail", () => {
     ) as HTMLElement;
     expect(body).toHaveTextContent(`received but not applied to a slot; ${label}`);
     expect(body).not.toHaveTextContent("not paid");
+    // The outcome agrees with the payment it reports.
+    expect(body).toHaveTextContent(state === "confirmed" ? "Fee refunded" : "Fee refund owed");
   });
 
   it("names an award above the approval limit and a missing payout policy", async () => {

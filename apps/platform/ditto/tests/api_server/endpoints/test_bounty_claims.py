@@ -20,6 +20,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from ditto.api_models.bounty import (
+    BountyClaimRequest,
     BountyFeeReceipt,
     bounty_claim_message,
     bounty_team_digest,
@@ -297,6 +298,42 @@ async def test_concurrent_identical_holds_record_one_claim(world):
     assert {r.status_code for r in results} == {200}
     assert len({r.json()["claim_id"] for r in results}) == 1
     assert (await world.counts())["bounty_claims"] == 1
+
+
+async def test_a_hold_that_loses_its_nonce_race_reads_the_winner_now(
+    world, monkeypatch
+):
+    await world.start(ALICE)
+    body = world.body(ALICE)
+    first = await world.client.post(CLAIMS, json=body)
+    assert first.status_code == 200, first.text
+    base, late, lookups = datetime.now(UTC), False, 0
+    real_retry, real_violation = bounty_claims._retry_of, bounty_claims.unique_violation
+
+    async def racing_retry(session, request, *, now):
+        # The first lookup runs before the winner commits, so finds nothing.
+        nonlocal lookups
+        lookups += 1
+        return None if lookups == 1 else await real_retry(session, request, now=now)
+
+    def violation(exc):
+        # The winner's hold lapses while this request handles the conflict.
+        nonlocal late
+        late = True
+        return real_violation(exc)
+
+    monkeypatch.setattr(bounty_claims, "_retry_of", racing_retry)
+    monkeypatch.setattr(bounty_claims, "unique_violation", violation)
+    view = await bounty_claims.hold_claim(
+        world.maker,
+        chain=world.app.state.chain,
+        github=world.app.state.github_link,
+        body=BountyClaimRequest.model_validate(body),
+        netuid=118,
+        clock=lambda: base + (timedelta(minutes=31) if late else timedelta()),
+    )
+    assert (lookups, view.claim_id) == (2, UUID(first.json()["claim_id"]))
+    assert view.state == "hold_expired"
 
 
 async def test_three_slots_and_the_last_one_has_one_winner(world):
