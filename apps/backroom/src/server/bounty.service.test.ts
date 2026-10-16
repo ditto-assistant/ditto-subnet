@@ -101,9 +101,10 @@ const cases: Case[] = [
       Response.json(operator({ revisions: [{ revision: 2, spec_digest: DIGEST, reviewer_actor: 'reviewer@example.com', actor: ACTOR, reason }] })),
     ],
     absent: [Response.json({ items: [], total: 0 })],
+    // The same terms, operator and reason, binding another reviewer.
     superseded: [
       Response.json({ items: [{ bounty_id: BOUNTY }], total: 1 }),
-      Response.json(operator({ revisions: [{ revision: 2, spec_digest: 'cd'.repeat(32), reviewer_actor: 'r', actor: 'other@example.com', reason: 'other publication' }] })),
+      Response.json(operator({ revisions: [{ revision: 2, spec_digest: DIGEST, reviewer_actor: 'other-reviewer@example.com', actor: ACTOR, reason }] })),
     ],
   },
   {

@@ -914,10 +914,11 @@ async def test_history_references_stay_within_their_bounty_and_claim(world):
                 BountyEvent.kind == "rejected",
             )
         )
+    # A slot cancellation may name no claim, so only the key under test refuses.
     event = text(
         "INSERT INTO bounty_events (bounty_id, kind, revision, round, slot_id, "
-        "claim_id, recorded_at) VALUES (:bounty, 'submitted', :revision, :round, "
-        ":slot, :claim, now())"
+        "claim_id, recorded_at) VALUES (:bounty, 'slot_cancelled', :revision, "
+        ":round, :slot, :claim, now())"
     )
     nothing = {"bounty": other, "revision": None, "round": None, "slot": None}
     cases = [
@@ -974,9 +975,10 @@ async def test_history_references_stay_within_their_bounty_and_claim(world):
     filed = await appeal(world, BOB, bob, rejection, "Fixture appeal.")
     assert filed.status_code == 200, filed.text
     refund = next(o for o in accepted["obligations"] if o["kind"] == "fee_refund")
+    # A kind that may name no claim, so only the reference under test refuses.
     linked = text(
         "INSERT INTO bounty_events (bounty_id, kind, claim_id, submission_id, "
-        "appeal_id, obligation_id, recorded_at) VALUES (:bounty, 'submitted', "
+        "appeal_id, obligation_id, recorded_at) VALUES (:bounty, 'slot_cancelled', "
         ":claim, :submission, :appeal, :obligation, now())"
     )
     none = {"submission": None, "appeal": None, "obligation": None}
@@ -1022,6 +1024,25 @@ async def test_history_references_stay_within_their_bounty_and_claim(world):
         async with world.maker() as session:
             with pytest.raises(DBAPIError, match=constraint):
                 await session.execute(linked, {"bounty": alice["bounty_id"], **values})
+            await session.rollback()
+
+
+async def test_an_event_about_a_claim_names_it(world):
+    await world.start(ALICE)
+    insert = text(
+        "INSERT INTO bounty_events (bounty_id, kind, recorded_at) "
+        "VALUES (:bounty, :kind, now())"
+    )
+    bounty = world.detail["summary"]["bounty_id"]
+    # Bounty-wide events, and cancelling or reopening an open slot, name none.
+    async with world.maker() as session:
+        for kind in ("claims_paused", "reviewer_reassigned", "slot_cancelled"):
+            await session.execute(insert, {"bounty": bounty, "kind": kind})
+        await session.rollback()
+    for kind in ("slot_held", "submitted", "deadline_missed", "award_recorded"):
+        async with world.maker() as session:
+            with pytest.raises(DBAPIError, match="ck_bounty_events_claim_scope"):
+                await session.execute(insert, {"bounty": bounty, "kind": kind})
             await session.rollback()
 
 

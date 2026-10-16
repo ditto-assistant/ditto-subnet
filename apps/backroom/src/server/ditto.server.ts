@@ -145,11 +145,12 @@ function connectionError(path: string, error: unknown) {
   const direct = error as Coded
   const cause = (error as { cause?: Coded } | null)?.cause
   // A connection tried at several addresses fails as an AggregateError whose
-  // parts carry the codes, thrown directly or as the cause.
+  // parts carry the codes, thrown directly or as the cause. A single failure
+  // carries its code on the cause, or on the rejection itself.
   const parts = Array.isArray(direct?.errors)
     ? (direct.errors as Coded[])
     : Array.isArray(cause?.errors) ? (cause.errors as Coded[]) : []
-  const codes = parts.length > 0 ? parts.map((part) => part?.code) : [cause?.code]
+  const codes = parts.length > 0 ? parts.map((part) => part?.code) : [cause?.code ?? direct?.code]
   // Never delivered only when every attempt is known to have failed before
   // connecting; a part with no code, or another code, may have been sent.
   const code = codes.every((item) => typeof item === 'string' && NOT_CONNECTED.has(item)) ? codes[0] : undefined

@@ -128,7 +128,11 @@ export async function publishBountyRevision(actor: string, rawInput: unknown) {
       if (!bountyId) return { state: 'absent' }
       const row = (await fetchBounty({ bountyId })).revisions.find((item) => item.revision === target)
       if (!row) return { state: 'absent' }
-      if (row.spec_digest === digest && row.actor === actor.trim() && row.reason === input.reason) {
+      // Every field this write sets, the reviewer it binds included.
+      if (
+        row.spec_digest === digest && row.actor === actor.trim() && row.reason === input.reason &&
+        row.reviewer_actor === input.reviewerActor.trim()
+      ) {
         return { state: 'applied', value: row }
       }
       return { state: 'superseded', detail: `Revision ${target} was already published by ${row.actor}` }

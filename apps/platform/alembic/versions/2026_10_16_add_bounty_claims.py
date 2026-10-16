@@ -27,6 +27,8 @@ EVENT_KINDS = (
     "claims_paused",
     "claims_resumed",
 )
+# Bounty-wide events; every other event is about one claim and names it.
+CLAIMLESS_EVENT_KINDS = (*P1_EVENT_KINDS, "claims_paused", "claims_resumed")
 REFUND_REASONS = ("hold_expired", "slot_lost", "identity_changed", "duplicate_payment")
 APPEND_ONLY = (
     "bounty_claim_controls",
@@ -211,7 +213,8 @@ def upgrade() -> None:
         sa.Column("extrinsic_index", sa.Integer(), nullable=False),
         sa.Column("simulated", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.UniqueConstraint("block_hash", "extrinsic_index", "kind"),
+        # One obligation per receipt: its refund, or its fee's one disposition.
+        sa.UniqueConstraint("block_hash", "extrinsic_index"),
         # The target of an event's reference to an obligation of its claim.
         sa.UniqueConstraint("claim_id", "obligation_id"),
         sa.ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
@@ -247,6 +250,12 @@ def upgrade() -> None:
         "bounty_events",
         f"kind IN ({_quoted(EVENT_KINDS)})",
     )
+    # A NULL claim would skip the composite key, so a claim's event needs one.
+    op.create_check_constraint(
+        op.f("ck_bounty_events_claim_scope"),
+        "bounty_events",
+        f"claim_id IS NOT NULL OR kind IN ({_quoted(CLAIMLESS_EVENT_KINDS)})",
+    )
     for table in APPEND_ONLY:
         op.execute(
             f"CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON {table} "
@@ -279,6 +288,9 @@ def downgrade() -> None:
         op.f("ck_bounty_events_kind"),
         "bounty_events",
         f"kind IN ({_quoted(P1_EVENT_KINDS)})",
+    )
+    op.drop_constraint(
+        op.f("ck_bounty_events_claim_scope"), "bounty_events", type_="check"
     )
     op.drop_constraint(
         op.f("fk_bounty_events_claim_id_bounty_claims"),

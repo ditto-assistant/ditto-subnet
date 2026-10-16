@@ -12005,6 +12005,17 @@ BOUNTY_EVENT_KINDS = (
     "transfer_uncertain",
     "fact_recorded",
 )
+# Bounty-wide events. Every other event is about one claim and names it; an
+# open slot is cancelled or reopened without one.
+BOUNTY_CLAIMLESS_EVENT_KINDS = (
+    "revision_published",
+    "round_opened",
+    "claims_paused",
+    "claims_resumed",
+    "reviewer_reassigned",
+    "slot_cancelled",
+    "slot_reopened",
+)
 # Slots a claim occupies or once occupied; an open slot has no claim.
 BOUNTY_CLAIMED_SLOT_STATUSES = (
     "held",
@@ -12244,6 +12255,12 @@ class BountyEvent(Base):
             "obligation_id IS NULL OR claim_id IS NOT NULL", name="obligation_ref"
         ),
         CheckConstraint(
+            "claim_id IS NOT NULL OR kind IN ("
+            + ",".join(f"'{k}'" for k in BOUNTY_CLAIMLESS_EVENT_KINDS)
+            + ")",
+            name="claim_scope",
+        ),
+        CheckConstraint(
             "kind IN (" + ",".join(f"'{k}'" for k in BOUNTY_EVENT_KINDS) + ")",
             name="kind",
         ),
@@ -12423,7 +12440,8 @@ class BountyObligation(Base):
     actor: Mapped[str | None] = mapped_column(Text, nullable=True)
     decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     __table_args__ = (
-        UniqueConstraint("block_hash", "extrinsic_index", "kind"),
+        # One obligation per receipt: its refund, or its fee's one disposition.
+        UniqueConstraint("block_hash", "extrinsic_index"),
         # The target of an event's reference to an obligation of its claim.
         UniqueConstraint("claim_id", "obligation_id"),
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),

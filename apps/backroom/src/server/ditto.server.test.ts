@@ -195,6 +195,19 @@ describe('platformAdminRequest', () => {
     expect((error as PlatformAdminError).failure).toBe(failure)
   })
 
+  it.each([
+    ['ECONNREFUSED', 'unreachable'],
+    ['ECONNRESET', 'transport'],
+  ])('classifies a directly coded %s rejection as %s', async (code, failure) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(Object.assign(new Error(code), { code })))
+
+    const error = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', body: { mode: 'shadow' } })
+      .catch((caught: unknown) => caught)
+
+    expect((error as PlatformAdminError).failure).toBe(failure)
+  })
+
   it('classifies an AggregateError thrown directly by its parts', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
     const parts = ['ECONNREFUSED', 'EHOSTUNREACH'].map((code) => Object.assign(new Error(code), { code }))

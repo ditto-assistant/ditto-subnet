@@ -28,6 +28,20 @@ P2_EVENT_KINDS = (
     "claims_paused",
     "claims_resumed",
 )
+P2_CLAIMLESS_EVENT_KINDS = (
+    "revision_published",
+    "round_opened",
+    "claims_paused",
+    "claims_resumed",
+)
+# A reassignment is bounty-wide, and an open slot is cancelled or reopened
+# without a claim.
+CLAIMLESS_EVENT_KINDS = (
+    *P2_CLAIMLESS_EVENT_KINDS,
+    "reviewer_reassigned",
+    "slot_cancelled",
+    "slot_reopened",
+)
 EVENT_KINDS = (
     *P2_EVENT_KINDS,
     "submitted",
@@ -333,6 +347,11 @@ def upgrade() -> None:
     _replace_check(
         "bounty_events", "ck_bounty_events_kind", f"kind IN ({_quoted(EVENT_KINDS)})"
     )
+    _replace_check(
+        "bounty_events",
+        "ck_bounty_events_claim_scope",
+        f"claim_id IS NOT NULL OR kind IN ({_quoted(CLAIMLESS_EVENT_KINDS)})",
+    )
     for table in APPEND_ONLY:
         op.execute(
             f"CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON {table} "
@@ -366,6 +385,11 @@ def downgrade() -> None:
         "bounty_events",
         "ck_bounty_events_kind",
         f"kind IN ({_quoted(P2_EVENT_KINDS)})",
+    )
+    _replace_check(
+        "bounty_events",
+        "ck_bounty_events_claim_scope",
+        f"claim_id IS NOT NULL OR kind IN ({_quoted(P2_CLAIMLESS_EVENT_KINDS)})",
     )
     op.drop_constraint(
         op.f("ck_bounty_events_review_refs"), "bounty_events", type_="check"

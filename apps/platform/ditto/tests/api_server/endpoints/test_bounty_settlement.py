@@ -799,9 +799,24 @@ async def test_a_fee_has_exactly_one_disposition(world):
             )
     assert conflict.value.status_code == 409
     assert conflict.value.detail == "this entry fee was already refunded"
-    assert obligation(await claim_of(world, claim), "fee_refund")["payee_coldkey"] == (
-        ALICE.coldkey.ss58_address
-    )
+    refund = obligation(await claim_of(world, claim), "fee_refund")
+    assert refund["payee_coldkey"] == ALICE.coldkey.ss58_address
+    # The database holds one obligation per receipt, whatever its kind.
+    async with world.maker() as session:
+        with pytest.raises(DBAPIError, match="uq_bounty_obligations_block_hash"):
+            await session.execute(
+                text(
+                    "INSERT INTO bounty_obligations (obligation_id, bounty_id, "
+                    "claim_id, kind, reason, payee_coldkey, amount_alpha_rao, "
+                    "block_hash, extrinsic_index, simulated, created_at) "
+                    "SELECT gen_random_uuid(), bounty_id, claim_id, 'fee_retained', "
+                    "'rejected', payee_coldkey, amount_alpha_rao, block_hash, "
+                    "extrinsic_index, simulated, now() FROM bounty_obligations "
+                    "WHERE obligation_id = :refund"
+                ),
+                {"refund": refund["obligation_id"]},
+            )
+        await session.rollback()
 
 
 async def test_settlement_history_is_append_only(world):
