@@ -113,6 +113,17 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
+    page: "bounties",
+    label: "Bounties",
+    desc: () => "Paid build work & claims",
+    icon: () => (
+      <svg class="ic" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="8" />
+        <path d="M12 8v8M9.5 10.5c0-1 1.1-1.8 2.5-1.8s2.5.8 2.5 1.8-1.1 1.5-2.5 1.5-2.5.6-2.5 1.6 1.1 1.7 2.5 1.7 2.5-.7 2.5-1.7" />
+      </svg>
+    ),
+  },
+  {
     page: "activity",
     label: "Admin activity",
     desc: () => "Backroom action history",

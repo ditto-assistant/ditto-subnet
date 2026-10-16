@@ -46,8 +46,9 @@ the public `ditto-screening-protocol` package in `ditto-screener`.
 - [Validate SN118](docs/VALIDATOR.md): deploy, verify, and operate the complete validator stack.
 - [Maintenance treasury](docs/maintenance-treasury.md): the proposed funding,
   custody, and accounting contract for SN118 maintenance bounties.
-- [Bounty claims](docs/bounty-claims.md): the proposed hotkey-signed claim,
-  reservation, handoff, and appeal contract for treasury bounties.
+- [Build bounties](docs/bounty-guide.md): claim a paid slot, deliver, and get
+  reviewed and paid; [the claim contract](docs/bounty-claims.md) has the
+  signed messages and rules.
 
 ## Development quickstart
 ```sh

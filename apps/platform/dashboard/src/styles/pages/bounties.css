@@ -1,0 +1,189 @@
+.bounties-page {
+  max-width: 1120px;
+}
+.bounty-intro {
+  margin-bottom: 28px;
+}
+.bounty-intro h2 {
+  font-size: 28px;
+  margin-bottom: 12px;
+}
+.bounties-page p {
+  max-width: 72ch;
+  line-height: 1.6;
+}
+.bounties-page section {
+  border-top: 1px solid var(--border);
+  padding: 28px 0;
+}
+.bounties-page h3 {
+  font-size: 19px;
+  margin-bottom: 16px;
+}
+.bounties-page h4 {
+  font-size: 14px;
+  margin: 20px 0 8px;
+}
+.bounty-notice,
+.bounty-state {
+  padding: 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+.bounty-state button,
+.bounty-pager button,
+.bounty-back {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.bounty-back {
+  margin-bottom: 20px;
+}
+.bounty-ref {
+  color: var(--text-dim);
+}
+.bounty-badge {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin: 4px 6px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.bounty-badge.rehearsal,
+.bounty-badge.warn {
+  color: var(--text);
+  font-weight: 600;
+}
+.bounty-table-scroll {
+  overflow-x: auto;
+  margin-bottom: 24px;
+}
+.bounty-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.bounty-table caption {
+  text-align: left;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.bounty-table th,
+.bounty-table td {
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.bounty-table thead th {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.bounty-table td small {
+  display: block;
+  color: var(--text-dim);
+  margin-top: 5px;
+}
+.bounty-open,
+.bounty-claim-toggle {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.bounty-claim-toggle {
+  font-weight: 500;
+  font-size: 13px;
+  margin-top: 6px;
+}
+.bounty-flags {
+  display: block;
+}
+.bounty-pager {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.bounty-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px 28px;
+  margin: 0 0 20px;
+}
+.bounty-facts dt {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.bounty-facts dd {
+  margin: 4px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.bounty-facts.keys {
+  grid-template-columns: 1fr;
+}
+.bounty-mono {
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.bounty-text p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.bounty-events,
+.bounty-earlier,
+.bounty-revisions,
+.bounty-submissions,
+.bounty-obligations {
+  padding-left: 0;
+  list-style: none;
+}
+.bounty-events li {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 4px 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.bounty-events small {
+  grid-column: 2;
+  color: var(--text-dim);
+}
+.bounty-claim-body {
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+}
+.bounty-claim-body li {
+  margin-bottom: 12px;
+}
+.bounty-claim-body small,
+.bounty-reason {
+  display: block;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+@media (max-width: 600px) {
+  .bounty-events li {
+    grid-template-columns: 1fr;
+  }
+  .bounty-events small {
+    grid-column: 1;
+  }
+  .bounty-table th,
+  .bounty-table td {
+    min-width: 120px;
+  }
+}
