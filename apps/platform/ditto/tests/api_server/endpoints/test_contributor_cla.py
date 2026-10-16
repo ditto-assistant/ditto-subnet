@@ -1116,6 +1116,27 @@ async def test_off_gate_reads_only_the_policy_and_offers_nothing_to_bind(
     assert shadow.signature_id == UUID(receipt.json()["signature_id"])
 
 
+async def test_a_policy_lock_timeout_is_busy_whichever_driver_raised_it(
+    session_maker, monkeypatch
+):
+    from fastapi import HTTPException
+
+    from ditto.api_server.endpoints import contributor_cla
+
+    class PsycopgLockTimeout(Exception):
+        pgcode = "55P03"
+
+    async def timed_out(*_args, **_kwargs):
+        raise DBAPIError("SELECT pg_advisory_xact_lock", {}, PsycopgLockTimeout())
+
+    monkeypatch.setattr(contributor_cla, "lock_identity_writes", timed_out)
+    async with session_maker() as session, session.begin():
+        with pytest.raises(HTTPException) as busy:
+            await contributor_cla.lock_cla_policy_for_write(session)
+    assert busy.value.status_code == 503
+    assert busy.value.detail == contributor_cla.CLA_POLICY_BUSY_MESSAGE
+
+
 async def test_the_policy_write_timeout_bounds_only_its_lock(session_maker):
     from ditto.api_server.endpoints import contributor_cla
 

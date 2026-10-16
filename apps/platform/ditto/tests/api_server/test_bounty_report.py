@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,17 @@ def test_awards_recorded_at_the_same_instant_count_against_each_other(amount, ok
     # Alice's 40 alpha and this award share an instant against a 100 alpha pool.
     check = next(c for c in made.checks if c.name == "awards_within_pool")
     assert check.ok is ok
+
+
+def test_the_median_review_time_rounds_to_the_nearest_second():
+    claims = copy.deepcopy(CLAIMS)
+    decided = [s for c in claims.values() for s in c["submissions"] if s["decided_at"]]
+    assert len(decided) == 2
+    # Reviews of 1.4 and 2.4 seconds: a median of 1.9 reads 2, not 1.
+    for submission, seconds in zip(decided, (1.4, 2.4), strict=True):
+        submitted = datetime.fromisoformat(submission["submitted_at"])
+        submission["decided_at"] = (submitted + timedelta(seconds=seconds)).isoformat()
+    assert report(DETAIL, claims).median_review_seconds == 2
 
 
 State = dict[str, dict[str, Any]]

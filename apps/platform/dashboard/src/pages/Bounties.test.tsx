@@ -257,6 +257,27 @@ describe("bounty detail", () => {
     expect(within(slotRow(alice.position)).getByText("Payments")).toBeInTheDocument();
   });
 
+  it("counts a deadline down again when the bounty refreshes", async () => {
+    // A real fetch parses a new object every poll, as the detail polls.
+    vi.mocked(getJSON).mockImplementation(((path: string) =>
+      serve(path).then((payload) => structuredClone(payload))) as typeof getJSON);
+    const carol = claimOf("carol-dev");
+    const slot = detail.slots.find((candidate) => candidate.slot_id === carol.slot_id)!;
+    const due = Date.parse(slot.deadline_at!);
+    const now = vi.spyOn(Date, "now").mockReturnValue(due - 5 * 3_600_000);
+    try {
+      await openBounty();
+      expect(slotRow(carol.position)).toHaveTextContent("Delivery due in 5h");
+      now.mockReturnValue(due - 2 * 3_600_000);
+      refreshAllEndpoints();
+      await vi.waitFor(() =>
+        expect(slotRow(carol.position)).toHaveTextContent("Delivery due in 2h"),
+      );
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it.each([
     ["confirmed", "refunded in full"],
     ["awaiting_approval", "owed back in full"],

@@ -48,6 +48,7 @@ from ditto.api_server.middleware.public_cache import (
 from ditto.api_server.no_store import no_store
 from ditto.chain import ChainError
 from ditto.db.integrity import unique_violation
+from ditto.db.migration_lock import sqlstate
 from ditto.db.models import (
     Agent,
     AgentStatus,
@@ -121,7 +122,8 @@ async def lock_cla_policy_for_write(session: AsyncSession) -> None:
     try:
         await lock_identity_writes(session, namespace="cla-policy")
     except DBAPIError as exc:
-        if getattr(getattr(exc.orig, "__cause__", None), "sqlstate", None) == ("55P03"):
+        # The shared reader, so either driver's spelling of lock_timeout maps.
+        if sqlstate(exc) == "55P03":
             raise HTTPException(503, CLA_POLICY_BUSY_MESSAGE) from None
         raise
     # Only this wait is bounded: the write that follows in this transaction

@@ -201,7 +201,7 @@ def bounty_report(
     awards = [o for o in obligations if o.kind == "award"]
     submissions = [s for claim in claims for s in claim.submissions]
     review_seconds = [
-        int((s.decided_at - s.submitted_at).total_seconds())
+        (s.decided_at - s.submitted_at).total_seconds()
         for s in submissions
         if s.decided_at is not None
     ]
@@ -231,7 +231,8 @@ def bounty_report(
         decisions=dict(
             Counter(s.decision for s in submissions if s.decision is not None)
         ),
-        median_review_seconds=int(median(review_seconds)) if review_seconds else None,
+        # Exact durations, rounded once to the nearest second.
+        median_review_seconds=round(median(review_seconds)) if review_seconds else None,
         reviews_overdue=summary.reviews_overdue,
         appeals_filed=len(appeals),
         appeals_upheld=sum(decided),
