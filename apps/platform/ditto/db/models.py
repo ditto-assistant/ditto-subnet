@@ -11989,6 +11989,14 @@ BOUNTY_EVENT_KINDS = (
     "appeal_denied",
     "slot_cancelled",
     "slot_reopened",
+    "fee_retained",
+    "award_recorded",
+    "obligation_approved",
+    "transfer_dispatched",
+    "transfer_confirmed",
+    "transfer_failed",
+    "transfer_uncertain",
+    "fact_recorded",
 )
 # Slots a claim occupies or once occupied; an open slot has no claim.
 BOUNTY_CLAIMED_SLOT_STATUSES = (
@@ -12009,6 +12017,15 @@ BOUNTY_REFUND_REASONS = (
     "cancelled",
     "system_fault",
 )
+BOUNTY_OBLIGATION_REASONS = (
+    *BOUNTY_REFUND_REASONS,
+    "accepted",
+    "rejected",
+    "expired",
+    "withdrawn",
+    "accepted_work",
+)
+BOUNTY_TRANSFER_STATES = ("dispatched", "confirmed", "failed", "expired", "uncertain")
 BOUNTY_NONCE_ACTIONS = ("claim", "submit", "withdraw", "appeal")
 
 
@@ -12166,12 +12183,16 @@ class BountyEvent(Base):
         SaUUID(as_uuid=True), nullable=True
     )
     appeal_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    obligation_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
     __table_args__ = (
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
         ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
         ForeignKeyConstraint(["submission_id"], ["bounty_submissions.submission_id"]),
         ForeignKeyConstraint(["appeal_id"], ["bounty_appeals.appeal_id"]),
+        ForeignKeyConstraint(["obligation_id"], ["bounty_obligations.obligation_id"]),
         CheckConstraint(
             "kind IN (" + ",".join(f"'{k}'" for k in BOUNTY_EVENT_KINDS) + ")",
             name="kind",
@@ -12310,9 +12331,11 @@ class BountyFeePayment(Base):
 
 
 class BountyObligation(Base):
-    """Money Platform owes because of a bounty decision. Append-only.
+    """Money a bounty decision commits Platform to. Append-only.
 
-    v1 records fee refunds; recording an obligation never moves funds.
+    A fee refund or a retained fee follows one receipt; an award pays for
+    accepted work. Recording an obligation never moves funds: only approved
+    transfers do.
     """
 
     __tablename__ = "bounty_obligations"
@@ -12323,12 +12346,20 @@ class BountyObligation(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     payee_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
     amount_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extrinsic_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     simulated: Mapped[bool] = mapped_column(Boolean, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
+    # Awards only: the accepted submission, public credit, and (privately) who
+    # decided it.
+    submission_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    attribution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     __table_args__ = (
         UniqueConstraint("block_hash", "extrinsic_index", "kind"),
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
@@ -12337,13 +12368,27 @@ class BountyObligation(Base):
             ["block_hash", "extrinsic_index"],
             ["bounty_fee_payments.block_hash", "bounty_fee_payments.extrinsic_index"],
         ),
+        ForeignKeyConstraint(["submission_id"], ["bounty_submissions.submission_id"]),
         CheckConstraint(
-            "kind IN ('fee_refund') AND amount_alpha_rao > 0 AND reason IN ("
-            + ",".join(f"'{r}'" for r in BOUNTY_REFUND_REASONS)
-            + ")",
+            "kind IN ('fee_refund','fee_retained','award') AND amount_alpha_rao > 0"
+            " AND reason IN ("
+            + ",".join(f"'{r}'" for r in BOUNTY_OBLIGATION_REASONS)
+            + ")"
+            " AND (kind = 'award') = (block_hash IS NULL)"
+            " AND (block_hash IS NULL) = (extrinsic_index IS NULL)"
+            " AND (kind = 'award') = (submission_id IS NOT NULL)"
+            " AND (kind = 'award') = (actor IS NOT NULL)"
+            " AND (kind = 'award') = (decision_reason IS NOT NULL)"
+            " AND (kind = 'award' OR attribution IS NULL)",
             name="obligation",
         ),
         Index("bounty_obligations_claim_idx", "claim_id"),
+        Index(
+            "bounty_obligations_award_idx",
+            "claim_id",
+            unique=True,
+            postgresql_where=text("kind = 'award'"),
+        ),
     )
 
 
@@ -12531,5 +12576,121 @@ class BountySlotAction(Base):
             " AND (action <> 'reopen'"
             " OR prior_status IN ('expired','withdrawn','rejected','cancelled'))",
             name="slot_action",
+        ),
+    )
+
+
+class BountyPayoutPolicy(Base):
+    """Approval thresholds in alpha rao, as revisions. Append-only; latest wins."""
+
+    __tablename__ = "bounty_payout_policies"
+    revision: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=False
+    )
+    single_approver_max_alpha_rao: Mapped[int] = mapped_column(
+        BigInteger, nullable=False
+    )
+    dual_approver_max_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "revision > 0 AND single_approver_max_alpha_rao >= 0"
+            " AND dual_approver_max_alpha_rao >= single_approver_max_alpha_rao",
+            name="policy",
+        ),
+    )
+
+
+class BountyObligationApproval(Base):
+    """One operator's approval of one obligation round. Append-only.
+
+    It binds the payee, the amount and the payout policy revision in force.
+    """
+
+    __tablename__ = "bounty_obligation_approvals"
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    obligation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    round: Mapped[int] = mapped_column(Integer, nullable=False)
+    payee_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    amount_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("obligation_id", "round", "actor", "policy_revision"),
+        ForeignKeyConstraint(["obligation_id"], ["bounty_obligations.obligation_id"]),
+        ForeignKeyConstraint(["policy_revision"], ["bounty_payout_policies.revision"]),
+        CheckConstraint("round > 0 AND amount_alpha_rao > 0", name="approval"),
+    )
+
+
+class BountyTransfer(Base):
+    """One dispatch of an approved obligation. Only its outcome moves forward."""
+
+    __tablename__ = "bounty_transfers"
+    transfer_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    obligation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    round: Mapped[int] = mapped_column(Integer, nullable=False)
+    executor: Mapped[str] = mapped_column(Text, nullable=False)
+    simulated: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    block_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    extrinsic_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    dispatched_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    __table_args__ = (
+        UniqueConstraint("obligation_id", "round"),
+        ForeignKeyConstraint(["obligation_id"], ["bounty_obligations.obligation_id"]),
+        CheckConstraint(
+            "state IN ("
+            + ",".join(f"'{s}'" for s in BOUNTY_TRANSFER_STATES)
+            + ") AND round > 0"
+            " AND (state = 'confirmed') = (block_hash IS NOT NULL)"
+            " AND (block_hash IS NULL) = (extrinsic_index IS NULL)"
+            " AND (block_hash IS NULL) = (block_number IS NULL)"
+            " AND (state IN ('dispatched','uncertain')) = (settled_at IS NULL)",
+            name="transfer",
+        ),
+        Index(
+            "bounty_transfers_live_idx",
+            "obligation_id",
+            unique=True,
+            postgresql_where=text("state IN ('dispatched','uncertain','confirmed')"),
+        ),
+    )
+
+
+class BountyDeliveryFact(Base):
+    """A public merge, deployment or adoption fact. Never a payment condition."""
+
+    __tablename__ = "bounty_delivery_facts"
+    fact_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    reference: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("claim_id", "kind"),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        CheckConstraint(
+            "kind IN ('merged','deployed','adopted') AND length(reference) > 0",
+            name="fact",
         ),
     )

@@ -15,7 +15,9 @@ from ditto.api_models.bounty import (
     BountyBoardPage,
     BountyClaimView,
     BountyDetail,
+    BountyFactView,
     BountyFeeReceipt,
+    BountyObligationView,
     BountyRefundView,
     BountyRevisionView,
     BountySlotCounts,
@@ -76,6 +78,7 @@ def detail(**summary_over) -> BountyDetail:
             open=3, held=0, claimed=0, submitted=0, rework=0, closed=0
         ),
         reviews_overdue=0,
+        awarded_alpha_rao=0,
         published_at=NOW,
         updated_at=NOW,
     )
@@ -125,6 +128,8 @@ def claim_view(state: str = "held", **over) -> BountyClaimView:
         "refunds": [],
         "submissions": [],
         "appeals": [],
+        "obligations": [],
+        "facts": [],
     }
     base.update(over)
     return BountyClaimView(**base)
@@ -477,3 +482,40 @@ def test_actions_refuse_another_wallets_claim_and_a_foreign_coldkey(capsys):
     )
     assert "payee of record" in capsys.readouterr().err
     client.withdraw_bounty_claim.assert_not_called()
+
+
+def test_status_shows_awards_refunds_and_their_settlement(capsys):
+    client = api()
+    view = claim_view("claimed")
+    obligations = [
+        BountyObligationView(
+            obligation_id=uuid4(),
+            kind=kind,
+            reason=reason,
+            payee_coldkey=COLDKEY.ss58_address,
+            amount_alpha_rao=amount,
+            state=state,
+            round=1,
+            approvals=0,
+            approvals_required=1,
+            attribution=None,
+            simulated=True,
+            created_at=NOW,
+            transfers=[],
+        )
+        for kind, reason, amount, state in (
+            ("fee_refund", "accepted", TERMS.entry_fee_alpha_rao, "confirmed"),
+            ("award", "accepted_work", 40_000_000_000, "awaiting_approval"),
+        )
+    ]
+    client.get_bounty_claim.return_value = view.model_copy(
+        update={
+            "obligations": obligations,
+            "facts": [BountyFactView(kind="merged", reference=SHA, recorded_at=NOW)],
+        }
+    )
+    assert run(["status", str(view.claim_id)], client) == 0
+    out = capsys.readouterr().out
+    assert "Refund owed (simulated): 2.5 alpha" in out and "confirmed" in out
+    assert "Award (simulated): 40 alpha" in out and "awaiting approval" in out
+    assert f"Merged: {SHA}" in out

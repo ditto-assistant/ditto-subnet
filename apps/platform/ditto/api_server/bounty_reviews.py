@@ -57,6 +57,10 @@ from ditto.api_models.bounty import (
 from ditto.api_server import bounty_claims
 from ditto.api_server.bounty_claims import claim_view, locked_bounty
 from ditto.api_server.bounty_deadlines import apply_deadlines, settle_deadlines
+from ditto.api_server.bounty_settlement import (
+    RETAINED_OUTCOMES,
+    record_fee_disposition,
+)
 from ditto.api_server.contributor_identity import (
     ContributorProofRejected,
     check_contributor_proof,
@@ -69,8 +73,6 @@ from ditto.db.models import (
     BountyAppealDecision,
     BountyClaim,
     BountyEvent,
-    BountyFeePayment,
-    BountyObligation,
     BountyReview,
     BountyReviewerAssignment,
     BountyRevision,
@@ -557,6 +559,15 @@ async def review_submission(
         slot.status_changed_at, slot.review_due_at = now, None
         if body.decision == "accept":
             slot.status, kind = "accepted", "accepted"
+            # Accepted work has its entry fee refunded in full.
+            await record_fee_disposition(
+                session,
+                claim=claim,
+                slot=slot,
+                kind="fee_refund",
+                reason="accepted",
+                now=now,
+            )
         elif body.decision == "reject":
             slot.status, kind = "rejected", "rejected"
         else:
@@ -835,29 +846,6 @@ async def cancel_slot(
         if slot.status not in CANCELLABLE:
             raise HTTPException(409, f"a {slot.status} slot cannot be cancelled")
         claim = await session.get(BountyClaim, slot.claim_id) if slot.claim_id else None
-        if claim is not None:
-            payment = await session.scalar(
-                select(BountyFeePayment).where(
-                    BountyFeePayment.claim_id == claim.claim_id,
-                    BountyFeePayment.outcome == "allocated",
-                )
-            )
-            assert payment is not None  # claimed and later statuses were paid
-            session.add(
-                BountyObligation(
-                    obligation_id=uuid4(),
-                    bounty_id=claim.bounty_id,
-                    claim_id=claim.claim_id,
-                    kind="fee_refund",
-                    reason="cancelled" if body.kind == "team" else "system_fault",
-                    payee_coldkey=claim.payee_coldkey,
-                    amount_alpha_rao=payment.amount_alpha_rao,
-                    block_hash=payment.block_hash,
-                    extrinsic_index=payment.extrinsic_index,
-                    simulated=payment.simulated,
-                    created_at=now,
-                )
-            )
         session.add(
             BountySlotAction(
                 slot_id=slot.slot_id,
@@ -873,7 +861,16 @@ async def cancel_slot(
         slot.status, slot.status_changed_at = "cancelled", now
         _event(session, slot, claim, "slot_cancelled", now)
         if claim is not None:
-            _event(session, slot, claim, "fee_refund_owed", now)
+            # Claimed and later statuses were paid: refund that fee in full.
+            refund = await record_fee_disposition(
+                session,
+                claim=claim,
+                slot=slot,
+                kind="fee_refund",
+                reason="cancelled" if body.kind == "team" else "system_fault",
+                now=now,
+            )
+            assert refund is not None
         return slot.bounty_id
 
 
@@ -933,6 +930,16 @@ async def reopen_slot(
                 recorded_at=now,
             )
         )
+        if claim is not None and slot.status in RETAINED_OUTCOMES:
+            # Reopening makes the outcome final: the fee is retained.
+            await record_fee_disposition(
+                session,
+                claim=claim,
+                slot=slot,
+                kind="fee_retained",
+                reason=slot.status,
+                now=now,
+            )
         _event(session, slot, claim, "slot_reopened", now)
         slot.status, slot.claim_id, slot.status_changed_at = "open", None, now
         slot.deadline_at = slot.review_due_at = None

@@ -84,6 +84,14 @@ BountyEventKind = Literal[
     "appeal_denied",
     "slot_cancelled",
     "slot_reopened",
+    "fee_retained",
+    "award_recorded",
+    "obligation_approved",
+    "transfer_dispatched",
+    "transfer_confirmed",
+    "transfer_failed",
+    "transfer_uncertain",
+    "fact_recorded",
 ]
 # A claim's own outcome. Once claimed, the slot's status carries the work.
 BountyClaimState = Literal["held", "hold_expired", "claimed", "refund_owed"]
@@ -94,7 +102,37 @@ BountyRefundReason = Literal[
     "duplicate_payment",
     "cancelled",
     "system_fault",
+    "accepted",
 ]
+# Every obligation Platform records, and why. Recording one never moves funds.
+BountyObligationKind = Literal["fee_refund", "fee_retained", "award"]
+BountyObligationReason = Literal[
+    "hold_expired",
+    "slot_lost",
+    "identity_changed",
+    "duplicate_payment",
+    "cancelled",
+    "system_fault",
+    "accepted",
+    "rejected",
+    "expired",
+    "withdrawn",
+    "accepted_work",
+]
+BountyObligationState = Literal[
+    "retained",
+    "awaiting_approval",
+    "approved",
+    "dispatched",
+    "uncertain",
+    "confirmed",
+    "failed",
+]
+BountyTransferState = Literal["dispatched", "confirmed", "failed", "expired", "uncertain"]
+BountyFactKind = Literal["merged", "deployed", "adopted"]
+# Rehearsal only: what the simulated executor reports. Live transfers have none.
+BountyRehearsalOutcome = Literal["confirmed", "failed", "unknown"]
+BountyReconcileOutcome = Literal["confirmed", "failed", "expired", "unknown"]
 BountyReviewDecision = Literal["accept", "changes_requested", "reject"]
 BountyCancelKind = Literal["team", "system_fault"]
 GitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
@@ -312,6 +350,46 @@ def bounty_appeal_decision_confirmation(*, appeal_id: UUID, upheld: bool) -> str
     return f"{'UPHOLD' if upheld else 'DENY'} BOUNTY APPEAL {appeal_id}"
 
 
+def bounty_award_confirmation(*, claim_id: UUID, amount_alpha_rao: int) -> str:
+    return f"AWARD BOUNTY CLAIM {claim_id} {amount_alpha_rao} ALPHA RAO"
+
+
+def bounty_payout_policy_confirmation(*, revision: int) -> str:
+    return f"SET BOUNTY PAYOUT POLICY {revision}"
+
+
+def bounty_approval_confirmation(
+    *, obligation_id: UUID, round_number: int, amount_alpha_rao: int, payee: str
+) -> str:
+    return (
+        f"APPROVE BOUNTY OBLIGATION {obligation_id} ROUND {round_number} "
+        f"{amount_alpha_rao} ALPHA RAO TO {payee}"
+    )
+
+
+def bounty_dispatch_confirmation(*, obligation_id: UUID, round_number: int) -> str:
+    return f"DISPATCH BOUNTY OBLIGATION {obligation_id} ROUND {round_number}"
+
+
+def bounty_reconcile_confirmation(*, transfer_id: UUID) -> str:
+    return f"RECONCILE BOUNTY TRANSFER {transfer_id}"
+
+
+def bounty_fact_confirmation(*, claim_id: UUID, kind: str) -> str:
+    return f"RECORD BOUNTY {kind.upper()} {claim_id}"
+
+
+SIMULATED_TRANSFER_DOMAIN = "ditto-bounty-simulated-transfer:v1"
+
+
+def simulated_transfer_block_hash(transfer_id: UUID) -> str:
+    """The rehearsal receipt of one simulated transfer; no funds move."""
+    digest = hashlib.sha256(
+        f"{SIMULATED_TRANSFER_DOMAIN}:{transfer_id}".encode()
+    ).hexdigest()
+    return f"0x{digest}"
+
+
 def simulated_fee_block_hash(claim_id: UUID) -> str:
     """The one rehearsal receipt that pays a claim's fee; no funds move."""
     digest = hashlib.sha256(f"{SIMULATED_FEE_DOMAIN}:{claim_id}".encode()).hexdigest()
@@ -492,6 +570,93 @@ class BountyAppealView(WireModel):
     decided_at: datetime | None
 
 
+class BountyAwardRequest(WireModel):
+    amount_alpha_rao: Annotated[int, Field(strict=True, ge=1, le=MAX_ALPHA_RAO)]
+    # Public credit, including derived ideas.
+    attribution: Annotated[str, Field(min_length=1, max_length=2000)]
+    reason: Annotated[str, Field(min_length=8)]
+    confirmation: Annotated[str, Field(min_length=1, max_length=400)]
+
+
+class BountyPayoutPolicyRequest(WireModel):
+    expected_revision: Annotated[int, Field(strict=True, ge=0, le=2147483646)]
+    # One approver up to this amount; two distinct approvers up to the next.
+    single_approver_max_alpha_rao: AlphaRao
+    dual_approver_max_alpha_rao: AlphaRao
+    reason: Annotated[str, Field(min_length=8)]
+    confirmation: Annotated[str, Field(min_length=1, max_length=400)]
+
+
+class BountyPayoutPolicyView(WireModel):
+    revision: int
+    single_approver_max_alpha_rao: int
+    dual_approver_max_alpha_rao: int
+    actor: str
+    reason: str
+    created_at: datetime
+
+
+class BountyApprovalRequest(WireModel):
+    """An approval binds the exact obligation, payee, amount and policy."""
+
+    round: Annotated[int, Field(strict=True, ge=1, le=1000)]
+    payee_coldkey: Address
+    amount_alpha_rao: AlphaRao
+    policy_revision: Annotated[int, Field(strict=True, ge=1, le=2147483647)]
+    confirmation: Annotated[str, Field(min_length=1, max_length=400)]
+
+
+class BountyDispatchRequest(WireModel):
+    round: Annotated[int, Field(strict=True, ge=1, le=1000)]
+    confirmation: Annotated[str, Field(min_length=1, max_length=400)]
+    rehearsal_outcome: BountyRehearsalOutcome = "confirmed"
+
+
+class BountyReconcileRequest(WireModel):
+    confirmation: Annotated[str, Field(min_length=1, max_length=400)]
+    rehearsal_outcome: BountyReconcileOutcome = "confirmed"
+
+
+class BountyFactRequest(WireModel):
+    kind: BountyFactKind
+    # A commit, release or adoption reference anyone can check.
+    reference: Annotated[str, Field(min_length=1, max_length=500)]
+    confirmation: Annotated[str, Field(min_length=1, max_length=400)]
+
+
+class BountyTransferView(WireModel):
+    transfer_id: UUID
+    round: int
+    state: BountyTransferState
+    receipt: BountyFeeReceipt | None
+    simulated: bool
+    dispatched_at: datetime
+    settled_at: datetime | None
+
+
+class BountyObligationView(WireModel):
+    obligation_id: UUID
+    kind: BountyObligationKind
+    reason: BountyObligationReason
+    payee_coldkey: str
+    amount_alpha_rao: int
+    state: BountyObligationState
+    # The approval round in force and its approvals; retained fees need none.
+    round: int
+    approvals: int
+    approvals_required: int
+    attribution: str | None
+    simulated: bool
+    created_at: datetime
+    transfers: list[BountyTransferView]
+
+
+class BountyFactView(WireModel):
+    kind: BountyFactKind
+    reference: str
+    recorded_at: datetime
+
+
 class BountyRefundView(WireModel):
     obligation_id: UUID
     reason: BountyRefundReason
@@ -531,6 +696,8 @@ class BountyClaimView(WireModel):
     refunds: list[BountyRefundView]
     submissions: list[BountySubmissionView]
     appeals: list[BountyAppealView]
+    obligations: list[BountyObligationView]
+    facts: list[BountyFactView]
 
 
 class BountySlotClaimant(WireModel):
@@ -594,6 +761,8 @@ class BountySummary(WireModel):
     claims_paused: bool
     slots: BountySlotCounts
     reviews_overdue: int
+    # Awards recorded against the reward pool; they never exceed it.
+    awarded_alpha_rao: int
     published_at: datetime
     updated_at: datetime
 
