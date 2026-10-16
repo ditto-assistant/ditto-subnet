@@ -962,12 +962,10 @@ async def test_exchange_failure_is_terminal_and_redacts_unexpected_details(
     async with session_maker() as session:
         attempt = await session.get(MinerGithubLinkAttempt, UUID(body["attempt_id"]))
         assert attempt.status == "failed" and attempt.error == expected
-        # A finished attempt keeps no verifier or binding material.
-        assert (
-            attempt.code_verifier,
-            attempt.browser_binding_hash,
-            attempt.accept_token_hash,
-        ) == (None, None, None)
+        # The verifier is spent before the exchange and no accept token was
+        # issued; only the browser binding stays, so a replay reads as used.
+        assert (attempt.code_verifier, attempt.accept_token_hash) == (None, None)
+        assert attempt.browser_binding_hash is not None
 
 
 async def test_expired_status_poll_does_not_lock_or_mutate_the_attempt(
@@ -1619,7 +1617,9 @@ async def test_bounty_guard_refuses_false_logins_and_never_selects_payee(
     assert type(gone.value.__cause__) is GithubLinkRejected
 
 
-async def test_a_cancelled_consent_keeps_no_secrets(app, client, session_maker):
+async def test_a_cancelled_consent_keeps_no_verifier_or_accept_token(
+    app, client, session_maker
+):
     setup(app, session_maker)
     alice = bittensor.Keypair.create_from_uri("//Alice")
     token = await _sign_in(client, alice)
@@ -1637,11 +1637,10 @@ async def test_a_cancelled_consent_keeps_no_secrets(app, client, session_maker):
     async with session_maker() as session:
         attempt = await session.get(MinerGithubLinkAttempt, UUID(started["attempt_id"]))
         assert attempt.status == "failed"
-        assert (
-            attempt.code_verifier,
-            attempt.browser_binding_hash,
-            attempt.accept_token_hash,
-        ) == (None, None, None)
+        # No verifier or accept token survives the decision; the browser
+        # binding stays so a replay is told the sign-in was used.
+        assert (attempt.code_verifier, attempt.accept_token_hash) == (None, None)
+        assert attempt.browser_binding_hash is not None
 
 
 @pytest.mark.parametrize("failure", ["origin", "binding", "token", "decision"])

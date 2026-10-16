@@ -129,13 +129,6 @@ def _cookie(attempt_id: UUID) -> str:
     return "ditto_github_" + attempt_id.hex
 
 
-def _retire_secrets(attempt: MinerGithubLinkAttempt) -> None:
-    """A finished attempt keeps no verifier or binding material."""
-    attempt.code_verifier = None
-    attempt.accept_token_hash = None
-    attempt.browser_binding_hash = None
-
-
 def _expire(attempt: MinerGithubLinkAttempt) -> None:
     if attempt.expires_at <= datetime.now(UTC) and attempt.status not in (
         "linked",
@@ -143,7 +136,9 @@ def _expire(attempt: MinerGithubLinkAttempt) -> None:
         "expired",
     ):
         attempt.status = "expired"
-        _retire_secrets(attempt)
+        attempt.code_verifier = None
+        attempt.accept_token_hash = None
+        attempt.browser_binding_hash = None
 
 
 def _has_binding(request: Request, attempt: MinerGithubLinkAttempt) -> bool:
@@ -441,7 +436,6 @@ async def callback(
         if failure is not None or identity is None:
             failure = failure or "GitHub identity verification failed; start again"
             attempt.status, attempt.error = "failed", failure
-            _retire_secrets(attempt)
             return _page(
                 "GitHub sign-in failed",
                 f"<p>{html.escape(failure)}</p>",
@@ -523,8 +517,6 @@ async def accept(
         attempt.error = (
             None if decision == "accept" else "GitHub account holder cancelled the link"
         )
-        if decision != "accept":
-            _retire_secrets(attempt)
     return _page(
         "GitHub link approved" if decision == "accept" else "GitHub link cancelled",
         "<p>Return to the CLI. An approved link is recorded only after you sign "
