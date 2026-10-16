@@ -457,6 +457,43 @@ func TestSandboxRuntimeRequiresDedicatedRootlessCapabilityEgress(t *testing.T) {
 	}
 }
 
+func TestHostedSandboxRuntimeRequiresNoSwapAndNoPull(t *testing.T) {
+	hosted := func() *sandbox.LocalDocker {
+		docker := sandbox.NewLocalDocker()
+		docker.RequireRootless = true
+		docker.RequireIsolatedDaemon = true
+		docker.Harden = true
+		docker.EgressNetwork = "required"
+		docker.EgressProxy = "http://proxy.internal:8080"
+		docker.MemoryLimit = "2147483648"
+		docker.MemorySwapLimit = "2147483648"
+		docker.PullNever = true
+		return docker
+	}
+	if _, err := NewHostedSandboxRuntime(hosted()); err != nil {
+		t.Fatal(err)
+	}
+	for name, configure := range map[string]func(*sandbox.LocalDocker){
+		"pull allowed":    func(value *sandbox.LocalDocker) { value.PullNever = false },
+		"swap unset":      func(value *sandbox.LocalDocker) { value.MemorySwapLimit = "" },
+		"swap above":      func(value *sandbox.LocalDocker) { value.MemorySwapLimit = "4294967296" },
+		"unlimited swap":  func(value *sandbox.LocalDocker) { value.MemorySwapLimit = "-1" },
+		"memory unset":    func(value *sandbox.LocalDocker) { value.MemoryLimit, value.MemorySwapLimit = "", "" },
+		"shared baseline": func(value *sandbox.LocalDocker) { value.MemorySwapLimit, value.PullNever = "", false },
+	} {
+		t.Run(name, func(t *testing.T) {
+			docker := hosted()
+			configure(docker)
+			if _, err := NewHostedSandboxRuntime(docker); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+	if _, err := NewHostedSandboxRuntime(nil); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("nil docker: err=%v", err)
+	}
+}
+
 func TestHarnessPrivateStateRejectsSerialization(t *testing.T) {
 	factory, _, _, now := newHarnessFixture(t)
 	harness, err := factory.Acquire(t.Context(), fixtureHarnessBinding(now))

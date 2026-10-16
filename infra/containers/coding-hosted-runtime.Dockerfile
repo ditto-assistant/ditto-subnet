@@ -9,6 +9,10 @@ RUN --mount=type=cache,id=ditto-native-runtime-go-build,target=/root/.cache/go-b
     CGO_ENABLED=1 GOTOOLCHAIN=local go build -p 2 -mod=readonly -trimpath -buildvcs=false \
     -ldflags="-s -w -linkmode external -extldflags '-static'" \
     -o /out/dittobench-coding-hosted-worker ./cmd/dittobench-coding-hosted-worker
+# One-shot rootless-netns router listener helper; pure Go, no cgo or libc.
+RUN --mount=type=cache,id=ditto-native-runtime-go-build,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOTOOLCHAIN=local go build -p 2 -mod=readonly -trimpath -buildvcs=false \
+    -ldflags="-s -w" -o /out/dittobench-coding-router-listener ./cmd/dittobench-coding-router-listener
 
 FROM ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa AS uv
 FROM python:3.13.14-slim@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f AS base
@@ -28,6 +32,7 @@ COPY apps/platform/ ./
 COPY packages/ditto-screening-protocol/ /opt/ditto-coding-hosted/${SOURCE_REVISION}/packages/ditto-screening-protocol/
 RUN --mount=type=cache,target=/root/.cache/uv UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never uv sync --frozen --no-dev --python /usr/bin/python3.13
 COPY --from=go-build --chmod=0555 /out/dittobench-coding-hosted-worker /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker
+COPY --from=go-build --chmod=0555 /out/dittobench-coding-router-listener /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-router-listener
 RUN mkdir /out && /usr/bin/python3.13 -I /runtime-bundle.py pack \
     --revision "$SOURCE_REVISION" --archive /out/runtime.tar
 
@@ -51,6 +56,24 @@ RUN --network=none setpriv --reuid=10001 --regid=10001 --clear-groups env -i PAT
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
     -c 'import subprocess,sys; p=subprocess.run([sys.argv[1]],capture_output=True); assert p.returncode == 2 and not p.stdout and p.stderr == b"requires --private-shadow-once --config <protected-file>\n"' \
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker
+# The listener helper refuses anything but its exact worker invocation, silently.
+RUN --network=none setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
+    /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
+    -c 'import subprocess,sys; p=subprocess.run([sys.argv[1]],capture_output=True); assert p.returncode == 64 and not p.stdout and not p.stderr' \
+    /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-router-listener
+# The v3 receipt pins the helper too: changed helper bytes refuse the worker.
+RUN --network=none cp /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-router-listener /tmp/router-listener && \
+    printf X >> /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-router-listener && \
+    if setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
+      /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
+      -c 'import sys; from pathlib import Path; from ditto.api_server.coding_hosted_runtime_io import protected_helper; protected_helper(Path(sys.argv[1]))' \
+      /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker 2>/dev/null; then exit 1; fi && \
+    cat /tmp/router-listener > /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-router-listener && \
+    rm /tmp/router-listener && \
+    setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
+      /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
+      -c 'import sys; from pathlib import Path; from ditto.api_server.coding_hosted_installed_worker import require_installed_worker; require_installed_worker(Path(sys.argv[1]), router_listener=True)' \
+      /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker
 RUN --network=none printf X >> /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker && \
     if setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
       /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \

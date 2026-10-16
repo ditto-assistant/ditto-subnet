@@ -3,6 +3,9 @@ on:
   pull_request:
     paths:
       - infra/containers/coding-hosted-runtime.Dockerfile
+      # The bundle builds, pins and smoke-tests the router listener helper.
+      - services/dittobench-api/cmd/dittobench-coding-router-listener/**
+      - services/dittobench-api/internal/rootlessnetns/**
       - infra/scripts/build-coding-hosted-runtime.py
       - infra/ansible/roles/coding_hosted_runtime/**
       - infra/ansible/playbooks/gcp-coding-hosted-runtime.yml
