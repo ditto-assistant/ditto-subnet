@@ -1104,9 +1104,29 @@ V14 counts those cases in the memory over-call denominator and exempts only
 reads and no-call baselines remain unpenalized. Unrelated and mixed actions
 count once per case. Legacy lifecycle-write cases stay excluded at all versions.
 
-The generated surface, question-family identifiers, envelope, grader policy,
-v13 gate postures, LongMem instrument, and public harness wire version (9) carry
-forward. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
+V14 also folds the typographic hyphens U+2010 and U+2011 in the reply text
+(answer slot and `final_text`) to the ASCII hyphen before grading, on the
+memory axis and on the text-graded tool cases (restraint, effect reads)
+(#2734). The pinned model writes U+2011 inside most identifiers and compounds
+it copies from an ASCII record, so V13 misses `VK‑48HJXP6A63` for
+`VK-48HJXP6A63`. The fold is a new grading-policy floor with its own audit
+bank (`v14-1`: the v13-1 bank plus hyphen positives and negatives); it also
+catches a forbidden or distractor value written with those hyphens. V13 keeps
+the unfolded match.
+
+The rest of the v14 scorer reads the reply the same way. The claim-span
+provenance gate keeps the published `NormalizeSpan` unchanged; that normaliser
+keeps the ASCII `-` (so `VK-48HJXP6A63` tokenizes with a signed `-48`) while
+NFKC turns a completion's U+2011 into U+2010, a separator. So from v14
+`ClaimAlternatives` adds the U+2010 variant of every hyphenated claim form, and
+an honest completion that wrote U+2011 is not flagged
+`served_text_not_model_emitted`. The twin post-pass compares asserted answers
+and the result-usage check reads the reply after the same fold, so a hyphen
+variant cannot make two credited answers compare unequal.
+
+The generated surface, question-family identifiers, envelope, the rest of the
+grader policy, v13 gate postures, LongMem instrument, and public harness wire
+version (9) carry forward. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
 version. It introduces no deferred private surface research or screening-policy
 activation. `CurrentBenchVersion` stays at its existing value (8).
 
