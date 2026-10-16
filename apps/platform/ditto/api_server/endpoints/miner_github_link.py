@@ -57,6 +57,7 @@ from ditto.api_server.github_link import (
 )
 from ditto.api_server.no_store import no_store
 from ditto.chain import ChainError
+from ditto.db.integrity import unique_violation
 from ditto.db.models import (
     MinerGithubActionNonce,
     MinerGithubLink,
@@ -778,10 +779,27 @@ async def confirm(
         raise HTTPException(
             503, "finalized ownership unavailable; retry shortly"
         ) from None
-    except IntegrityError:
-        raise HTTPException(
-            409, "nonce already used or GitHub account already linked to another hotkey"
-        ) from None
+    except IntegrityError as exc:
+        # Only the conflicts this write can cause are refusals.
+        conflict = _LINK_CONFLICTS.get(unique_violation(exc) or "")
+        if conflict is None:
+            raise
+        raise HTTPException(409, conflict) from None
+
+
+_NONCE_CONSTRAINT = "pk_miner_github_action_nonces"
+# The unique constraints a confirmation's own inserts can violate, and what
+# each means to the miner.
+_LINK_CONFLICTS = {
+    _NONCE_CONSTRAINT: "nonce already used",
+    "uq_miner_github_links_nonce": "nonce already used",
+    "miner_github_links_active_github_key": (
+        "GitHub account already linked to another hotkey"
+    ),
+    "miner_github_links_active_hotkey_key": (
+        "this hotkey's GitHub link changed during confirmation; retry"
+    ),
+}
 
 
 @router.post(
@@ -837,7 +855,9 @@ async def unlink(
         raise HTTPException(
             503, "finalized ownership unavailable; retry shortly"
         ) from None
-    except IntegrityError:
+    except IntegrityError as exc:
+        if unique_violation(exc) != _NONCE_CONSTRAINT:
+            raise
         raise HTTPException(409, "nonce already used") from None
 
 

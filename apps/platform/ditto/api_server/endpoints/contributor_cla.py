@@ -47,6 +47,7 @@ from ditto.api_server.middleware.public_cache import (
 )
 from ditto.api_server.no_store import no_store
 from ditto.chain import ChainError
+from ditto.db.integrity import unique_violation
 from ditto.db.models import (
     Agent,
     AgentStatus,
@@ -327,10 +328,7 @@ async def sign_cla(
             503, "finalized ownership unavailable; retry shortly"
         ) from None
     except IntegrityError as exc:
-        # SQLAlchemy's asyncpg adapter chains the original PostgreSQL error.
-        driver_error = getattr(exc.orig, "__cause__", None)
-        constraint = getattr(driver_error, "constraint_name", None)
-        if getattr(driver_error, "sqlstate", None) != "23505" or constraint not in (
+        if unique_violation(exc) not in (
             "uq_cla_signatures_hotkey_version",
             "uq_cla_signatures_nonce",
         ):

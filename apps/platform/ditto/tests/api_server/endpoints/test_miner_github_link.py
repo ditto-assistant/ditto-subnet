@@ -18,7 +18,7 @@ import bittensor
 import httpx
 import pytest
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from ditto.api_models.contributor_identity import (
     github_link_message,
@@ -1194,14 +1194,17 @@ async def test_unique_account_relink_rename_nonce_replay_and_signed_unlink(
         json=signed_link(bob, other["attempt_id"]),
     )
     assert denied.status_code == 409, denied.text
+    assert denied.json()["message"] == "GitHub account already linked to another hotkey"
     provider.login = "renamed-fixture"
     second, _, _ = await browser_flow(client, token)
     replayed = signed_link(
         alice, second["attempt_id"], login=provider.login, nonce=UUID(proof["nonce"])
     )
-    assert (
-        await client.post("/api/v1/me/github-link/confirm", headers=auth, json=replayed)
-    ).status_code == 409
+    replay = await client.post(
+        "/api/v1/me/github-link/confirm", headers=auth, json=replayed
+    )
+    assert replay.status_code == 409
+    assert replay.json()["message"] == "nonce already used"
     refreshed = await client.post(
         "/api/v1/me/github-link/confirm",
         headers=auth,
@@ -1287,6 +1290,53 @@ async def test_unique_account_relink_rename_nonce_replay_and_signed_unlink(
             with pytest.raises(DBAPIError):
                 await session.execute(text(statement))
             await session.rollback()
+
+
+@pytest.mark.parametrize("action", ["confirm", "unlink"])
+async def test_unrelated_integrity_failures_are_not_reported_as_conflicts(
+    app, client, session_maker, monkeypatch, action
+):
+    """Only the nonce and link conflicts a write can cause become a 409."""
+    from ditto.api_server.endpoints import miner_github_link as endpoint
+
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+
+    class ForeignKeyViolation(Exception):
+        sqlstate, constraint_name = "23503", "fk_fixture"
+
+    driver = Exception("fixture")
+    driver.__cause__ = ForeignKeyViolation()
+
+    async def failing_flush(*_args, **_kwargs):
+        raise IntegrityError("INSERT", {}, driver)
+
+    monkeypatch.setattr(endpoint, "_authorize_action", failing_flush)
+    body = (
+        signed_link(alice, str(uuid4()))
+        if action == "confirm"
+        else {
+            "netuid": 118,
+            "hotkey": alice.ss58_address,
+            "link_id": str(uuid4()),
+            "nonce": str(uuid4()),
+            "issued_at": datetime.now(UTC).isoformat(),
+            "proof": {
+                "key_kind": "hotkey",
+                "signer": alice.ss58_address,
+                "signature": "ab" * 64,
+            },
+        }
+    )
+    failed = await client.post(
+        f"/api/v1/me/github-link/{action}",
+        headers={"authorization": f"Bearer {token}"},
+        json=body,
+    )
+    # A real fault, reported as one, not as a nonce or link conflict.
+    assert failed.status_code == 500, failed.text
+    assert "nonce" not in failed.text and "already linked" not in failed.text
 
 
 async def test_relink_clamps_link_history_but_not_the_action_nonce(
