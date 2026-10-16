@@ -1201,6 +1201,13 @@ export const sourceReleaseGateSchema = z.object({
   collector_cursor_hash: z.string().nullable().optional(),
   collector_runtime_code_hash: z.string().nullable().optional(),
   collector_blocked_reason: z.string().nullable().optional(),
+  collector_cursor_updated_at: z.string().nullable().optional(),
+  collector_cursor_age_seconds: z.number().nullable().optional(),
+  collector_backlog_blocks: z.number().nullable().optional(),
+  // Always set by the Platform (non-null int with a default); optional only
+  // for an older Platform that predates the field.
+  collector_stall_threshold_seconds: z.number().optional(),
+  collector_stalled: z.boolean().optional(),
   last_payout_block: z.number().nullable().optional(),
   last_payout_blocked_reason: z.string().nullable().optional(),
   last_payout_attributed: z.boolean().optional(),

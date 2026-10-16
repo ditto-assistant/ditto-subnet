@@ -32853,14 +32853,30 @@ export interface components {
              * @default false
              */
             automatic_confirmation_enabled: boolean;
+            /** Collector Backlog Blocks */
+            collector_backlog_blocks?: number | null;
             /** Collector Blocked Reason */
             collector_blocked_reason?: string | null;
+            /** Collector Cursor Age Seconds */
+            collector_cursor_age_seconds?: number | null;
             /** Collector Cursor Block */
             collector_cursor_block?: number | null;
             /** Collector Cursor Hash */
             collector_cursor_hash?: string | null;
+            /** Collector Cursor Updated At */
+            collector_cursor_updated_at?: string | null;
             /** Collector Runtime Code Hash */
             collector_runtime_code_hash?: string | null;
+            /**
+             * Collector Stall Threshold Seconds
+             * @default 900
+             */
+            collector_stall_threshold_seconds: number;
+            /**
+             * Collector Stalled
+             * @default false
+             */
+            collector_stalled: boolean;
             /** Confirmed Kings */
             confirmed_kings: number;
             /**

@@ -73,6 +73,32 @@ class SourceReleaseGateStatus(BaseModel):
     collector_cursor_hash: str | None = None
     collector_runtime_code_hash: str | None = None
     collector_blocked_reason: str | None = None
+    collector_cursor_updated_at: datetime | None = None
+    """When the durable collector cursor last advanced; null before bootstrap."""
+
+    collector_cursor_age_seconds: Annotated[int | None, Field(ge=0)] = None
+    """Seconds since the cursor last advanced. A healthy collector advances
+    every sweep, so this stays near the sweep interval. This is cursor age, not
+    chain lag: see ``collector_backlog_blocks``."""
+
+    collector_backlog_blocks: Annotated[int | None, Field(ge=0)] = None
+    """Finalized blocks the cursor trailed the chain head when the collector
+    last measured it (start of its most recent sweep that reached a provider).
+    A cursor can advance every sweep and still fall further behind (e.g. a
+    throttled archive), which only this field shows. Null when unknown: no
+    recent measurement in the serving process."""
+
+    collector_stall_threshold_seconds: Annotated[int, Field(ge=1)] = 900
+    """Cursor age past which a cursor with ``collector_blocked_reason`` is
+    stalled. Always set; mirrors ``SOURCE_EMISSION_COLLECTOR_STALL_SECONDS``."""
+
+    collector_stalled: bool = False
+    """``collector_blocked_reason`` is set and ``collector_cursor_age_seconds``
+    exceeds ``collector_stall_threshold_seconds``: the collector is stopped
+    (e.g. an unaudited runtime fingerprint), not merely between sweeps. While
+    true no new winner emission is confirmed and public source release is
+    paused. False when the cursor is current or does not exist yet."""
+
     last_payout_block: int | None = None
     last_payout_blocked_reason: str | None = None
     last_payout_attributed: bool = False

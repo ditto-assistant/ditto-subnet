@@ -26,6 +26,7 @@ from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticReport
 from ditto.api_models.source_disclosure import SourceDisclosure, release_confirmation
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.source_emission_collector import collector_staleness
 from ditto.db.models import (
     Agent,
     AgentKingship,
@@ -178,6 +179,15 @@ async def get_settings(
             .limit(65)
         )
     )
+    now = datetime.now(UTC)
+    # Same process as the collector under DITTO_ROLE=platform; any other
+    # process holds an unstarted collector and reports the backlog unknown.
+    collector = getattr(request.app.state, "source_emission_collector", None)
+    staleness = collector_staleness(
+        cursor_updated_at=cursor.updated_at if cursor else None,
+        blocked_reason=cursor.last_blocked_reason if cursor else None,
+        now=now,
+    )
     return AdminArtifactReleaseSettingsResponse(
         current=_revision(rows[0]) if rows else _default_revision(),
         history=[_revision(row) for row in rows],
@@ -194,6 +204,13 @@ async def get_settings(
             collector_cursor_hash=cursor.block_hash if cursor else None,
             collector_runtime_code_hash=cursor.runtime_code_hash if cursor else None,
             collector_blocked_reason=cursor.last_blocked_reason if cursor else None,
+            collector_cursor_updated_at=staleness.cursor_updated_at,
+            collector_cursor_age_seconds=staleness.cursor_age_seconds,
+            collector_backlog_blocks=(
+                collector.backlog_blocks(now=now) if collector is not None else None
+            ),
+            collector_stall_threshold_seconds=staleness.threshold_seconds,
+            collector_stalled=staleness.stalled,
             last_payout_block=last_payout.block if last_payout else None,
             last_payout_blocked_reason=last_payout.blocked_reason
             if last_payout
@@ -205,7 +222,7 @@ async def get_settings(
                 ReceiptDiagnosticRow(
                     report=ReceiptDiagnosticReport.model_validate(row.report),
                     received_at=row.received_at,
-                    stale=(datetime.now(UTC) - row.received_at).total_seconds() > 300,
+                    stale=(now - row.received_at).total_seconds() > 300,
                 )
                 for row in diagnostic_rows[:64]
             ],

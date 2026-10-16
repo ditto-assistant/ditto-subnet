@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -432,3 +433,115 @@ async def test_release_gate_reports_real_receipts_and_bounded_pending_rows(
     assert gate["rows"][0]["emission_block"] == 9000000
     assert "private_raw_payload" not in response.text
     assert all(row["emission_confirmed_at"] is None for row in gate["rows"][1:])
+
+
+async def test_release_gate_distinguishes_a_stalled_collector_from_a_current_one(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The admin payload must carry the signal alerting keys on (#2704).
+
+    Both #2231 and #2703 left ``collector_blocked_reason`` set for days while
+    nothing distinguished that cursor from one blocked a sweep ago.
+    """
+    from ditto.api_server.source_emission_collector import (
+        SOURCE_EMISSION_COLLECTOR_STALL_SECONDS,
+    )
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    _install(app, session_maker)
+    netuid = app.state.config.chain.netuid
+
+    async def gate() -> dict[str, Any]:
+        response = await client.get(
+            "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["release_gate"]
+
+    empty = await gate()
+    assert empty["collector_cursor_updated_at"] is None
+    assert empty["collector_cursor_age_seconds"] is None
+    assert empty["collector_backlog_blocks"] is None
+    assert empty["collector_stalled"] is False
+    assert (
+        empty["collector_stall_threshold_seconds"]
+        == SOURCE_EMISSION_COLLECTOR_STALL_SECONDS
+    )
+
+    reason = "RuntimeError: unaudited runtime fingerprint"
+    stale_at = datetime.now(UTC) - timedelta(days=13)
+    async with session_maker() as session, session.begin():
+        session.add(
+            SourceEmissionCollectorCursor(
+                netuid=netuid,
+                block=6_800_000,
+                block_hash="0x" + "ab" * 32,
+                updated_at=stale_at,
+                runtime_code_hash="0x" + "cd" * 32,
+                last_blocked_reason=reason,
+            )
+        )
+    stalled = await gate()
+    assert stalled["collector_blocked_reason"] == reason
+    assert stalled["collector_stalled"] is True
+    assert stalled["collector_cursor_age_seconds"] >= 13 * 86400
+    assert datetime.fromisoformat(stalled["collector_cursor_updated_at"]) == stale_at
+
+    # Same blocked reason, but the cursor advanced a sweep ago: current.
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(SourceEmissionCollectorCursor, netuid)
+        assert cursor is not None
+        cursor.updated_at = datetime.now(UTC) - timedelta(seconds=30)
+    current = await gate()
+    assert current["collector_blocked_reason"] == reason
+    assert current["collector_stalled"] is False
+    assert (
+        current["collector_cursor_age_seconds"]
+        < SOURCE_EMISSION_COLLECTOR_STALL_SECONDS
+    )
+
+
+async def test_release_gate_reports_backlog_against_the_finalized_head(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """#2850: a cursor that advances every sweep can still be falling behind.
+
+    The backlog comes from the collector running in this process; with no
+    recent measurement it is null (unknown), never 0.
+    """
+    from ditto.api_models.artifact_release_settings import SourceReleaseGateStatus
+    from ditto.api_server.source_emission_collector import (
+        SOURCE_EMISSION_COLLECTOR_STALL_SECONDS,
+        SourceEmissionCollector,
+    )
+
+    assert (
+        SourceReleaseGateStatus.model_fields[
+            "collector_stall_threshold_seconds"
+        ].default
+        == SOURCE_EMISSION_COLLECTOR_STALL_SECONDS
+    )
+    _install(app, session_maker)
+    collector = SourceEmissionCollector(
+        app_state=app.state, session_maker=session_maker, interval_seconds=0.0
+    )
+    app.state.source_emission_collector = collector
+
+    async def backlog() -> int | None:
+        response = await client.get(
+            "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["release_gate"]["collector_backlog_blocks"]
+
+    assert await backlog() is None
+    collector._record_backlog(finalized=6_812_400, current=6_800_000)
+    assert await backlog() == 12_400
+    collector.last_backlog_observed_at = datetime.now(UTC) - timedelta(
+        seconds=SOURCE_EMISSION_COLLECTOR_STALL_SECONDS + 60
+    )
+    assert await backlog() is None
