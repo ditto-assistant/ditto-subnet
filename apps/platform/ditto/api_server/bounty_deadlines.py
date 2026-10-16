@@ -225,11 +225,19 @@ class BountyDeadlineSweeper:
                 self._run(), name="bounty-deadline-sweeper"
             )
 
-    async def aclose(self) -> None:
+    async def aclose(self, *, grace_seconds: float = 5.0) -> None:
         self._stop.set()
         task, self._task = self._task, None
-        if task is not None:
-            await task
+        if task is None:
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=grace_seconds)
+        except TimeoutError:
+            # A sweep still blocked (say, on a row lock) is cut short: its
+            # transaction rolls back and the next start settles the same
+            # deadlines, so shutdown never waits on it.
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def sweep(self, *, now: datetime | None = None) -> int:
         """Apply due deadlines, one bounty per transaction; returns the count.
@@ -241,6 +249,9 @@ class BountyDeadlineSweeper:
             bounty_ids = await due_bounties(session, now=at)
         settled = 0
         for bounty_id in bounty_ids:
+            # Closing stops between bounties; the rest wait for the next start.
+            if self._stop.is_set():
+                break
             try:
                 await settle_deadlines(self._session_maker, bounty_id, now=at)
             except Exception:

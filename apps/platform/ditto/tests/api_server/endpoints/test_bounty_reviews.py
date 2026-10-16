@@ -354,6 +354,28 @@ async def test_a_closed_sweeper_can_start_again(world):
     assert sweeper._task is None
 
 
+async def test_closing_never_waits_on_a_blocked_sweep(world, monkeypatch):
+    from ditto.api_server import bounty_deadlines
+
+    blocked = asyncio.Event()
+
+    async def due(_session, **_kwargs):
+        return [uuid4(), uuid4()]
+
+    async def stuck(_maker, _bounty_id, **_kwargs):
+        blocked.set()
+        await asyncio.Event().wait()  # a row lock that is never released
+
+    monkeypatch.setattr(bounty_deadlines, "due_bounties", due)
+    monkeypatch.setattr(bounty_deadlines, "settle_deadlines", stuck)
+    sweeper = BountyDeadlineSweeper(session_maker=world.maker, interval_seconds=60)
+    await sweeper.start()
+    await asyncio.wait_for(blocked.wait(), timeout=5)
+    # The blocked sweep is cut short after the grace period.
+    await asyncio.wait_for(sweeper.aclose(grace_seconds=0.1), timeout=5)
+    assert sweeper._task is None
+
+
 async def test_one_failing_bounty_never_blocks_the_sweep(world, monkeypatch):
     from ditto.api_server import bounty_deadlines
 
