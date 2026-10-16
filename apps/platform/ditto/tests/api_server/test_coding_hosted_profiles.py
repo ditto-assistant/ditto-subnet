@@ -39,9 +39,9 @@ LIMITS = {
 }
 
 
-@pytest.fixture(scope="session")
-def profiles_binary(tmp_path_factory):
-    root = tmp_path_factory.mktemp("hosted-profiles")
+def build_profiles_binary(root: Path) -> Path:
+    """Build the profile helper privately; the approval test shares this builder."""
+
     root.chmod(0o700)
     path = root / "dittobench-coding-hosted-profiles"
     subprocess.run(
@@ -54,9 +54,9 @@ def profiles_binary(tmp_path_factory):
     return path
 
 
-@pytest.fixture(scope="module")
-def payload(tmp_path_factory):
-    root = tmp_path_factory.mktemp("hosted-profile-payload")
+def build_payload(root: Path) -> tuple[Path, dict]:
+    """Compile the synthetic native-authoring corpus into a verified payload."""
+
     root.chmod(0o700)
     release_path, groups = _bound_fixture(root, native_authoring=True)
     compile_private_catalog_v2(
@@ -66,6 +66,16 @@ def payload(tmp_path_factory):
         catalog_directory=root / "catalog", groups_root=groups, output=root / "payload"
     )
     return root / "payload", authority
+
+
+@pytest.fixture(scope="session")
+def profiles_binary(tmp_path_factory):
+    return build_profiles_binary(tmp_path_factory.mktemp("hosted-profiles"))
+
+
+@pytest.fixture(scope="module")
+def payload(tmp_path_factory):
+    return build_payload(tmp_path_factory.mktemp("hosted-profile-payload"))
 
 
 def driver(group: str, suite: str) -> dict:
