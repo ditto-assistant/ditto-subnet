@@ -5589,6 +5589,7 @@ class ValidatorHeartbeat(Base):
     stack_health: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     updater_status: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     weights_fold: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    host_specs: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Which pinned ledger the validator last folded (heartbeat protocol v27)."""
     benchmark_capacity: Mapped[dict | None] = mapped_column(
         _JSON_VARIANT, nullable=True

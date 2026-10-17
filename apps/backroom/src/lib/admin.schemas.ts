@@ -4533,6 +4533,16 @@ export const validatorFleetObservabilityMemberSchema = z
       })
       .nullish()
       .catch(null),
+    host_specs: z
+      .object({
+        cpu_count: z.number().int().positive(),
+        cpu_physical_cores: z.number().int().positive().nullish().default(null),
+        memory_total_mib: z.number().int().positive(),
+        disk_total_gib: z.number().int().positive(),
+        architecture: z.string(),
+      })
+      .nullish()
+      .catch(null),
     reported_at: z.string().nullish().catch(null),
     seen_at: z.string().nullish().catch(null),
     orphaned_slots: z.array(publicOrphanedSlotSchema).catch([]),
@@ -4604,6 +4614,7 @@ export const validatorFleetObservabilityMemberSchema = z
     disk_percent: member.system_metrics?.disk_percent ?? null,
     cpu_percent: member.system_metrics?.cpu_percent ?? null,
     memory_percent: member.system_metrics?.memory_percent ?? null,
+    host_specs: member.host_specs ?? null,
     reported_at: member.reported_at,
     seen_at: member.seen_at,
     stack: member.stack,

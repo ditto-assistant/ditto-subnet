@@ -421,6 +421,13 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   heartbeat-capable software; this endpoint does not pretend to enumerate every
   on-chain permit holder.
 
+  From protocol v32 each row also carries signed `host_specs` — logical and
+  physical CPUs, total RAM (MiB), total root disk (GiB), and architecture,
+  probed once per boot — so "is this host smaller than its peers?" is
+  answerable without asking the operator. The coarse percentages above say how
+  busy a host is; `host_specs` says how big it is. Older validators and a failed
+  probe publish `host_specs: null`.
+
   Slot capacity is published as two distinct numbers, because they answer two
   different questions. `configured_slots` (with `healthy_slots`) is what the
   validator *advertises*; `allowed_slots` is what the platform will actually

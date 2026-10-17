@@ -28879,7 +28879,7 @@ export interface components {
         };
         /**
          * PublicHostSpecs
-         * @description Hardware a screener announced about itself, not what it is doing.
+         * @description Hardware a screener or validator announced about itself, not what it is doing.
          */
         PublicHostSpecs: {
             /** Architecture */
@@ -31554,6 +31554,8 @@ export interface components {
             health_reasons?: string[];
             /** Healthy Slots */
             healthy_slots?: string[];
+            /** @description Fixed host hardware the validator last announced (heartbeat protocol v32+). A later failed probe keeps the last announcement; null when a v32 validator never announced or on older validators. */
+            host_specs?: components["schemas"]["PublicHostSpecs"] | null;
             /**
              * Issuance Paused
              * @description Whether Backroom's exact-validator brake currently refuses new canonical, continual-retest, and confirmation leases for this hotkey. Already-issued leases may still finish and report.
@@ -39193,6 +39195,8 @@ export interface components {
              * @description Signed independent LongMemEval/ablation slot progress under heartbeat protocol v22.
              */
             confirmation_progress?: components["schemas"]["ConfirmationProgress"][] | null;
+            /** @description Fixed host hardware (CPUs, RAM, disk, architecture) sampled once per boot, under heartbeat protocol v32. Null when the probe failed or on older validators. */
+            host_specs?: components["schemas"]["HostSpecs"] | null;
             /**
              * Protocol Version
              * @description Heartbeat protocol version.

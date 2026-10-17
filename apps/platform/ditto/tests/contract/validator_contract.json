@@ -7703,6 +7703,49 @@
         ],
         "type": "object"
       },
+      "HostSpecs": {
+        "properties": {
+          "architecture": {
+            "pattern": "^[a-zA-Z0-9_.-]{1,32}$",
+            "type": "string"
+          },
+          "cpu_count": {
+            "maximum": 1024,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "cpu_physical_cores": {
+            "anyOf": [
+              {
+                "maximum": 1024,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "disk_total_gib": {
+            "maximum": 1048576,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "memory_total_mib": {
+            "maximum": 16777216,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpu_count",
+          "memory_total_mib",
+          "disk_total_gib",
+          "architecture"
+        ],
+        "type": "object"
+      },
       "InferenceCalibrationRoute": {
         "properties": {
           "model": {
@@ -8752,6 +8795,17 @@
             },
             "maxItems": 4,
             "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "host_specs": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/HostSpecs"
           },
           {
             "type": "null"

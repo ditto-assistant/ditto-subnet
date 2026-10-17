@@ -136,7 +136,11 @@ from ditto import __version__
 # additive field and folds the frozen curve, so Platform must withhold it until
 # every recently-live weight setter reports v31+. Heartbeat signing bytes are
 # unchanged.
-HEARTBEAT_PROTOCOL_VERSION = 31
+# v32 announces ``host_specs``: logical/physical CPUs, total RAM, total root
+# disk, and architecture, probed once per boot (the screener v6 block). Like the
+# weights fold, it changes the signed bytes only when present, so a failed probe
+# signs the v23/v27 domain. Platform must accept v32 before validators adopt it.
+HEARTBEAT_PROTOCOL_VERSION = 32
 
 
 @dataclass(frozen=True)

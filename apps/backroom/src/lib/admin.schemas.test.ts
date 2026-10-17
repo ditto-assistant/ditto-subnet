@@ -122,6 +122,7 @@ import {
   queueValidatorScoreRetestsInputSchema,
   v9ContractRetestListSchema,
   publicLeaderboardSchema,
+  validatorFleetObservabilityMemberSchema,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -5212,5 +5213,15 @@ describe('burn settings payout curve ordering', () => {
     expect(
       burnSettingsWriteSchema.safeParse({ burn_share: 0, rank_shares: [0.5, 0.2, 0.13, 0.1, 0.07] }).success,
     ).toBe(true)
+  })
+})
+
+describe('validator fleet host specs parity', () => {
+  it('accepts every host_specs shape Platform publishes', () => {
+    type Generated = NonNullable<
+      PlatformComponents['schemas']['PublicValidatorHeartbeat']['host_specs']
+    >
+    type Parsed = NonNullable<ZodInput<typeof validatorFleetObservabilityMemberSchema>['host_specs']>
+    expectTypeOf<Generated>().toMatchTypeOf<Parsed>()
   })
 })

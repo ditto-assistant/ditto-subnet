@@ -203,6 +203,7 @@ from ditto.api_models.screener_policy_activation import (
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import (
+    HostSpecs,
     SystemMetrics,
     host_specs_from_heartbeat_envelope,
 )
@@ -1273,7 +1274,21 @@ def _screener_system_metrics(raw: dict | None) -> PublicSystemMetrics | None:
 
 def _public_host_specs(raw: dict | None) -> PublicHostSpecs | None:
     """Expose the announced hardware allowlist from a stored v6 envelope."""
-    specs = host_specs_from_heartbeat_envelope(raw)
+    return _public_specs(host_specs_from_heartbeat_envelope(raw))
+
+
+def _public_validator_host_specs(row: ValidatorHeartbeat) -> PublicHostSpecs | None:
+    """Expose a validator's stored v32 hardware, revalidated, or nothing."""
+    if row.protocol_version < 32 or not isinstance(row.host_specs, dict):
+        return None
+    try:
+        specs = HostSpecs.model_validate(row.host_specs)
+    except ValidationError:
+        return None
+    return _public_specs(specs)
+
+
+def _public_specs(specs: HostSpecs | None) -> PublicHostSpecs | None:
     if specs is None:
         return None
     return PublicHostSpecs(
@@ -5246,6 +5261,7 @@ def _validator_heartbeats_response(
                 ),
                 bench_serviceability=bench_serviceability,
                 system_metrics=metrics,
+                host_specs=_public_validator_host_specs(row),
                 capabilities=capabilities,
                 stack=stack,
                 stack_health=stack_health,

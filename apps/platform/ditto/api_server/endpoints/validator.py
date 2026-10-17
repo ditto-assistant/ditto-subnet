@@ -102,7 +102,9 @@ from ditto.api_models.stack_health import (
     validator_stack_health_signing_token,
 )
 from ditto.api_models.system_health import (
+    HostSpecs,
     SystemMetrics,
+    host_specs_signing_token,
     system_metrics_signing_token,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -157,7 +159,7 @@ from ditto.api_server.crn import (
     bounded_continual_seed_set,
     fold_seed_bound,
 )
-from ditto.api_server.datapipeline import DatasetGenerator
+from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
 from ditto.api_server.deferred_source_review import (
     DEFERRED_MECHANICAL_REASON,
     DEFERRED_REVIEW_KIND,
@@ -198,7 +200,7 @@ from ditto.api_server.koth import (
     top5_round_is_due,
 )
 from ditto.api_server.model_use import evaluate_model_use, model_use_policy
-from ditto.api_server.onchain_seed import derive_validator_seed
+from ditto.api_server.onchain_seed import derive_seed, derive_validator_seed
 from ditto.api_server.outlier_escalation import (
     OUTLIER_ALGORITHM_VERSION,
     OUTLIER_REVIEW_KIND,
@@ -2485,10 +2487,13 @@ def _heartbeat_signing_message(
     confirmation_progress: list[ConfirmationProgress] | None = None,
     updater_status: ValidatorUpdaterStatus | None = None,
     weights_fold: WeightsFold | None = None,
+    host_specs: HostSpecs | None = None,
 ) -> bytes:
     """Canonical heartbeat payload, mirrored by ``ditto-subnet``."""
     if weights_fold is not None and protocol_version < 27:
         raise ValueError("weights fold requires heartbeat protocol v27")
+    if host_specs is not None and protocol_version < 32:
+        raise ValueError("host specs require heartbeat protocol v32")
     if stack_health is not None and protocol_version < 9:
         raise ValueError("per-component stack health requires heartbeat protocol v9")
     if benchmark_capacity is not None and protocol_version < 10:
@@ -2512,6 +2517,24 @@ def _heartbeat_signing_message(
             active = str(active_agent_id) if active_agent_id is not None else ""
             # Mirrors the validator: the fold report changes the signed bytes
             # only when present, so a fold-less v27 heartbeat stays on v23.
+            # v32 hardware announcement. Like the fold, it changes the signed
+            # bytes only when present, so a probe failure stays on v23/v27.
+            if host_specs is not None:
+                return (
+                    "ditto-validator-heartbeat:v32:"
+                    f"{validator_hotkey}:{software_version}:{protocol_version}:"
+                    f"{code_digest}:{state}:{active}:"
+                    f"{system_metrics_signing_token(system_metrics)}:"
+                    f"{benchmark_progress_signing_token(benchmark_progress)}:"
+                    f"{validator_identity_signing_token(capabilities, stack)}:"
+                    f"{validator_stack_health_signing_token(stack_health)}:"
+                    f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+                    f"{confirmation_progress_signing_token(confirmation_progress)}:"
+                    f"{validator_updater_status_signing_token(updater_status)}:"
+                    f"{weights_fold_signing_token(weights_fold)}:"
+                    f"{host_specs_signing_token(host_specs)}:"
+                    f"{timestamp}"
+                ).encode()
             if weights_fold is not None:
                 return (
                     "ditto-validator-heartbeat:v27:"
@@ -3200,6 +3223,7 @@ async def heartbeat(
         confirmation_progress=request_body.confirmation_progress,
         updater_status=request_body.updater_status,
         weights_fold=request_body.weights_fold,
+        host_specs=request_body.host_specs,
     )
     if not _verify_signature(validator_hotkey, payload, request_body.signature):
         raise ValidatorAuthError("heartbeat signature verification failed")
@@ -3290,6 +3314,11 @@ async def heartbeat(
                 if request_body.weights_fold is not None
                 else None
             ),
+            host_specs=(
+                request_body.host_specs.model_dump(mode="json")
+                if request_body.host_specs is not None
+                else None
+            ),
             benchmark_capacity=(
                 work.benchmark_capacity.model_dump(mode="json")
                 if work.benchmark_capacity is not None
@@ -3327,6 +3356,65 @@ async def heartbeat(
     if seen_at.tzinfo is None:
         seen_at = seen_at.replace(tzinfo=UTC)
     return ValidatorHeartbeatResponse(accepted=accepted, seen_at=seen_at, leases=leases)
+
+
+async def _bind_unverified_v13_dataset(
+    session: AsyncSession,
+    *,
+    chain: ChainClient,
+    request: Request,
+    generator: DatasetGenerator,
+    agent: Agent,
+    dataset: BenchmarkDataset,
+) -> bool:
+    """Re-pin a block-less V13 dataset to the latest chain block.
+
+    Only a pin no lease has ever derived a seed from is rebound, so no issued
+    or scored ticket can disagree with the new one. The agent's compatibility
+    columns follow when they mirror the same block-less pin. Returns ``False``
+    (leaving the pin untouched) when the chain or generator is unavailable.
+    """
+    leased = await session.scalar(
+        select(ValidatorTicket.agent_id)
+        .where(
+            ValidatorTicket.agent_id == agent.agent_id,
+            ValidatorTicket.bench_version == dataset.bench_version,
+            ValidatorTicket.seed.is_not(None),
+        )
+        .limit(1)
+    )
+    if leased is not None:
+        return False
+    try:
+        block = await chain.get_latest_block()
+        seed = derive_seed(block.hash, agent.agent_id)
+        sha256 = await lease_dataset_sha(
+            request, generator, seed=seed, bench_version=dataset.bench_version
+        )
+    except (ChainError, DataPipelineError) as error:
+        logger.warning(
+            "V%d dataset for agent %s is not chain-bound and could not be rebound: %s",
+            dataset.bench_version,
+            agent.agent_id,
+            error,
+        )
+        return False
+    if agent.dataset_seed == dataset.seed and agent.dataset_seed_block_hash is None:
+        agent.dataset_seed = seed
+        agent.dataset_sha256 = sha256
+        agent.dataset_seed_block = block.number
+        agent.dataset_seed_block_hash = block.hash
+    logger.info(
+        "rebound block-less V%d dataset for agent %s to block %d",
+        dataset.bench_version,
+        agent.agent_id,
+        block.number,
+    )
+    dataset.seed = seed
+    dataset.sha256 = sha256
+    dataset.seed_block = block.number
+    dataset.seed_block_hash = block.hash
+    return True
 
 
 @router.post(
@@ -4106,6 +4194,28 @@ async def request_job(
                 if dataset is not None
                 else agent.dataset_seed_block_hash
             )
+            if (
+                ticket.bench_version >= 13
+                and ticket.seed is None
+                and seed_block_hash is None
+                and dataset is not None
+                and generator.run_size is not None
+            ):
+                # A chain blip at screening pins a local CSPRNG seed with no
+                # block. V13 cannot lease that pin, and as the queue head it
+                # 503s (rolling back) every poll on the fleet. Bind it to a
+                # block read now, which is still causally after the commit.
+                bound = await _bind_unverified_v13_dataset(
+                    session,
+                    chain=chain,
+                    request=request,
+                    generator=generator,
+                    agent=agent,
+                    dataset=dataset,
+                )
+                if bound:
+                    seed_block = dataset.seed_block
+                    seed_block_hash = dataset.seed_block_hash
             # Give each of the three quorum validators an independent dataset.
             # The post-commit block hash keeps the seed unpredictable; binding
             # the validator hotkey makes it distinct and publicly reproducible.
