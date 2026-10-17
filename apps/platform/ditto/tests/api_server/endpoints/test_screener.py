@@ -14499,6 +14499,53 @@ class TestQuarantineReviewContext:
         assert parked.status_code == 200
         assert parked.json()["items"] == []
 
+    @pytest.mark.parametrize(
+        "reason_code",
+        [
+            "l3-critic-http-429",
+            "l2-model-provider-fault",
+            "l3-adjudicator-incomplete",
+            "l2-model-step-budget",
+        ],
+    )
+    async def test_any_retryable_infra_review_retries_automatically(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        reason_code: str,
+    ) -> None:
+        # The worker said "retry" for a run it could not finish. On 2026-10-17
+        # ten submissions sat parked under codes the allowlist did not name.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="retryable_infra",
+                reason_code=reason_code,
+                detail="review could not finish",
+            ),
+        )
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.screening_reason == AUTO_REVIEW_RETRY_PUBLIC_REASON
+            assert agent.screening_reason_code is None
+            grant = await session.scalar(
+                select(ScreeningRetryOverride).where(
+                    ScreeningRetryOverride.attempt_id == attempt_id
+                )
+            )
+            assert grant is not None
+            assert grant.actor == "platform:auto-review-retry"
+
     async def test_automatic_retry_cap_is_shared_by_one_artifact(
         self,
         app: FastAPI,

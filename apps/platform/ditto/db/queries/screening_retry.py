@@ -15,6 +15,7 @@ from ditto.db.models import (
     ScreeningAttempt,
     ScreeningRetryOverride,
 )
+from ditto_screening_protocol import reason_codes
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +46,26 @@ AUTO_REVIEW_RETRY_REASON_CODES: frozenset[str] = frozenset(
 )
 AUTO_REVIEW_RETRY_MAX_PER_AGENT = 2
 AUTO_REVIEW_RETRY_ACTOR = "platform:auto-review-retry"
+# The worker's own disposition for a run it could not finish: rate limits
+# (``l3-critic-http-429``), provider faults on any stage
+# (``l2-model-provider-fault``), an unfinished adjudication
+# (``l3-adjudicator-incomplete``), a non-exhausted step budget. On 2026-10-17
+# ten submissions sat parked under such codes because the list above names only
+# the codes seen first; the worker had already said "retry". Codes the fleet
+# retries through ``plan_infra_retries`` keep that path instead.
+AUTO_REVIEW_RETRY_OUTCOME = "retryable_infra"
+
+
+def automatic_review_retry_eligible(
+    reason_code: str | None, outcome: str | None
+) -> bool:
+    """Whether a verdict-less attempt earns a bounded automatic retry."""
+    if reason_code in AUTO_REVIEW_RETRY_REASON_CODES:
+        return True
+    return (
+        outcome == AUTO_REVIEW_RETRY_OUTCOME
+        and reason_code not in reason_codes.INFRA_AUTO_RETRY_REASON_CODES
+    )
 
 
 def latest_screening_attempt_id() -> ScalarSelect[UUID]:
@@ -78,6 +99,7 @@ async def authorize_automatic_review_retry(
     attempt: ScreeningAttempt,
     reason_code: str | None,
     now: datetime,
+    outcome: str | None = None,
 ) -> ScreeningRetryOverride | None:
     """Grant one bounded retry of a review that ended without a verdict.
 
@@ -86,7 +108,7 @@ async def authorize_automatic_review_retry(
     when the code is not eligible, the attempt already has a grant, or the
     artifact has used its automatic retries.
     """
-    if reason_code not in AUTO_REVIEW_RETRY_REASON_CODES:
+    if not automatic_review_retry_eligible(reason_code, outcome):
         return None
     if session.get_bind().dialect.name == "postgresql":
         # Copies of one artifact can finish concurrently; serialize the

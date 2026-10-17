@@ -6224,6 +6224,7 @@ async def submit_result(
                 attempt=attempt,
                 reason_code=attempt.reason_code,
                 now=datetime.now(UTC),
+                outcome=outcome_value,
             )
             is not None
         ):
