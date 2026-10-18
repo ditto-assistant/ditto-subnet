@@ -13,7 +13,11 @@ from sqlalchemy import event, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.coding_hosted_start import HostedStartRequest
+from ditto.api_server.coding_hosted_launch import HostedLaunchError, inspect_launch
 from ditto.api_server.coding_hosted_start import HostedStartStore
+from ditto.api_server.screener_policy_activation import (
+    resolve_screener_policy_activation,
+)
 from ditto.db.models import Agent, CodingHostedAssignment, CodingPrivateV2Release
 from ditto.db.queries.coding_hosted_admission import HostedAdmissionError
 from ditto.db.queries.coding_hosted_private import close_hosted_private_task
@@ -94,6 +98,67 @@ async def test_drift_never_consumes_start(session_maker, field, value):
         row = await session.get(CodingHostedAssignment, authority.evaluation_id)
         assert row.started_at is None
     assert await HostedStartStore(session_maker, worker).commit_start(request)
+
+
+async def _set_agent_policy_version(maker, agent_id, version):
+    async with maker() as session, session.begin():
+        await session.execute(
+            update(Agent)
+            .where(Agent.agent_id == agent_id)
+            .values(screening_policy_version=version)
+        )
+
+
+async def test_start_accepts_the_effective_policy_while_the_ceiling_lags_the_builtin(
+    session_maker,
+):
+    # The build ships policy 14 but activation is what the queue requires; an
+    # agent screened at the effective version is current, one below it is not.
+    authority, worker, request = await prepared(session_maker)
+    async with session_maker() as session:
+        required = (
+            await resolve_screener_policy_activation(session)
+        ).required_policy_version
+    assert required < SCREENING_POLICY_VERSION
+    store = HostedStartStore(session_maker, worker)
+
+    await _set_agent_policy_version(session_maker, authority.agent_id, required - 1)
+    stale = request.model_copy(update={"screening_policy_version": required - 1})
+    with pytest.raises(HostedAdmissionError):
+        await store.commit_start(stale)
+
+    await _set_agent_policy_version(session_maker, authority.agent_id, required)
+    current = request.model_copy(update={"screening_policy_version": required})
+    assert await store.commit_start(current) is True
+
+
+async def test_launch_precondition_accepts_the_effective_policy_while_the_ceiling_lags(
+    session_maker,
+):
+    # inspect_launch shares the start rule: the screened image must carry the
+    # policy the activation record requires, not the built-in constant.
+    authority, _worker, _request = await prepared(session_maker)
+    async with session_maker() as session:
+        required = (
+            await resolve_screener_policy_activation(session)
+        ).required_policy_version
+    assert required < SCREENING_POLICY_VERSION
+    launch = {
+        "evaluation_id": authority.evaluation_id,
+        "attempt_id": authority.attempt_id,
+        "assignment_sha256": authority.digest(),
+        "policy_sha256": authority.policy_sha256,
+        "execution_profile_sha256": authority.execution_profile_sha256,
+        "grading_profile_sha256": authority.grading_profile_sha256,
+    }
+
+    await _set_agent_policy_version(session_maker, authority.agent_id, required - 1)
+    with pytest.raises(HostedLaunchError, match="inputs unavailable"):
+        await inspect_launch(session_maker, **launch)
+
+    await _set_agent_policy_version(session_maker, authority.agent_id, required)
+    projection = await inspect_launch(session_maker, **launch)
+    assert projection.screening_policy_version == required
 
 
 async def test_wrong_worker_and_retirement_fail_closed(session_maker):

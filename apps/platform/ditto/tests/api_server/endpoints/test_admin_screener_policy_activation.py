@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -1007,12 +1008,79 @@ _POLICY_V14_DRY_RUN_EVIDENCE = (
     / "evidence"
     / "policy-v14-top25-dry-run.json"
 )
-_GATE_ITEM = re.compile(r"^- \[( |x|X)\]", re.MULTILINE)
+_GATE_ITEM = re.compile(r"^- \[( |x|X)\] (.*)$", re.MULTILINE)
+_DRY_RUN_ITEM_PREFIX = "Dry-run rescreen of the current top-25"
 
 
 def _co_activation_gate() -> str:
     policy = _POLICY_V14_DOC.read_text()
     return policy[policy.index("### Co-activation gate") :]
+
+
+def _gate_items(gate: str) -> list[tuple[str, str]]:
+    """``(mark, text)`` for every checklist item; mark is ``" "`` or ``x``."""
+    return _GATE_ITEM.findall(gate)
+
+
+def _dry_run_item_checked(gate: str) -> bool:
+    marks = [
+        mark
+        for mark, text in _gate_items(gate)
+        if text.startswith(_DRY_RUN_ITEM_PREFIX)
+    ]
+    assert len(marks) == 1, "co-activation gate lost its dry-run item"
+    return marks[0] != " "
+
+
+def _dry_run_evidence_required(gate: str, ceiling: int) -> bool:
+    """The evidence record must exist once the dry-run item is ticked or the
+    ceiling admits v14; before that its absence is the honest state."""
+    return _dry_run_item_checked(gate) or ceiling >= 14
+
+
+def _assert_dry_run_evidence(evidence: dict[str, Any]) -> None:
+    """Acceptance criterion 3: fail-open below 5% and finalizer outcomes
+    reviewed, checked against the operator-written evidence record."""
+    assert evidence["policy_version"] == 14
+    assert evidence["cohort_size"] >= 25
+    outcomes = evidence["outcomes"]
+    assert len(outcomes) == evidence["cohort_size"]
+    fail_open_rate = evidence["fail_open_count"] / evidence["cohort_size"]
+    assert fail_open_rate < 0.05, f"fail-open rate {fail_open_rate:.3f} >= 0.05"
+    assert evidence["finalizer_outcomes_reviewed_by"]
+    assert evidence["finalizer_outcomes_reviewed_at"]
+    for row in outcomes:
+        assert row["outcome"] in {"CLEAR", "REJECT", "review_timed_out"}
+        if row["outcome"] == "REJECT" and row["violation_proven"]:
+            assert row["evidence_references"], row["agent_id"]
+        if row["outcome"] == "review_timed_out":
+            assert row["violation_proven"] is False
+            assert row["failure_domain"] in {"platform", "provider"}
+
+
+def _dry_run_evidence(*, cohort_size: int, fail_open_count: int) -> dict[str, Any]:
+    """A synthetic evidence record shaped like the operator's file."""
+    outcomes: list[dict[str, Any]] = [
+        {
+            "agent_id": str(uuid4()),
+            "artifact_sha256": f"{index:064x}",
+            "outcome": "CLEAR",
+            "violation_proven": False,
+            "failure_domain": None,
+            "evidence_references": [],
+        }
+        for index in range(cohort_size)
+    ]
+    return {
+        "policy_version": 14,
+        "activation_revision_dry_run": "manual",
+        "cohort_size": cohort_size,
+        "cohort_selected_at": "2026-09-14T00:00:00Z",
+        "fail_open_count": fail_open_count,
+        "finalizer_outcomes_reviewed_by": "operator@example.test",
+        "finalizer_outcomes_reviewed_at": "2026-09-14T01:00:00Z",
+        "outcomes": outcomes,
+    }
 
 
 class TestPolicyV14CoActivationGate:
@@ -1024,16 +1092,18 @@ class TestPolicyV14CoActivationGate:
     recorded as done, and it never stops at 13 (v13 is never activated
     standalone). These tests are the checklist's executable form: the two
     evidence-bearing items (dry-run fail-open rate, finalizer review) read the
-    operator-written evidence record and skip until it exists.
+    operator-written evidence record. Its absence is tolerated only while the
+    dry-run item is still unticked and the ceiling still blocks v14; ticking
+    every box without the record, or raising the ceiling without it, fails.
     """
 
     async def test_ceiling_stays_below_v14_while_any_gate_item_is_unchecked(
         self,
     ) -> None:
         gate = _co_activation_gate()
-        items = _GATE_ITEM.findall(gate)
+        items = _gate_items(gate)
         assert len(items) >= 8, "co-activation gate lost its checklist"
-        unchecked = [item for item in items if item == " "]
+        unchecked = [text for mark, text in items if mark == " "]
         assert SCREENING_POLICY_VERSION >= 14
         assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION != 13, (
             "policy v13 is never activated standalone"
@@ -1044,10 +1114,35 @@ class TestPolicyV14CoActivationGate:
                 f"{_POLICY_V14_DOC}; the activation ceiling cannot reach 14"
             )
         else:
+            relative = _POLICY_V14_DRY_RUN_EVIDENCE.relative_to(_REPO_ROOT)
+            assert _POLICY_V14_DRY_RUN_EVIDENCE.exists(), (
+                "every co-activation gate item is checked but the dry-run "
+                f"evidence record {relative} does not exist; a ticked checklist "
+                "without the record is not the gate"
+            )
             assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION >= 14, (
                 "every co-activation gate item is checked but the ceiling still "
                 "blocks v14"
             )
+
+    async def test_dry_run_evidence_is_required_once_ticked_or_ceiling_admits_v14(
+        self,
+    ) -> None:
+        gate = _co_activation_gate()
+        unticked_item = f"- [ ] {_DRY_RUN_ITEM_PREFIX}"
+        ticked_item = f"- [x] {_DRY_RUN_ITEM_PREFIX}"
+        unticked = gate.replace(ticked_item, unticked_item)
+        ticked = unticked.replace(unticked_item, ticked_item)
+        assert not _dry_run_item_checked(unticked)
+        assert _dry_run_item_checked(ticked)
+        # Unticked and the ceiling still blocks v14: the record may be absent.
+        assert not _dry_run_evidence_required(unticked, 12)
+        # Ticking the item, or admitting v14 at the ceiling, demands the record.
+        assert _dry_run_evidence_required(ticked, 12)
+        assert _dry_run_evidence_required(unticked, 14)
+        # Losing the item entirely is a broken checklist, never a pass.
+        with pytest.raises(AssertionError, match="lost its dry-run item"):
+            _dry_run_item_checked(gate.replace(_DRY_RUN_ITEM_PREFIX, "Dry run"))
 
     async def test_gate_names_the_bench_v13_co_activation_and_rescreen_scored(
         self,
@@ -1080,26 +1175,80 @@ class TestPolicyV14CoActivationGate:
     async def test_top25_dry_run_rescreen_fail_open_is_below_five_percent(
         self,
     ) -> None:
+        relative = _POLICY_V14_DRY_RUN_EVIDENCE.relative_to(_REPO_ROOT)
         if not _POLICY_V14_DRY_RUN_EVIDENCE.exists():
+            if _dry_run_evidence_required(
+                _co_activation_gate(), SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+            ):
+                pytest.fail(
+                    "the co-activation gate claims the top-25 dry run is done (item "
+                    "ticked or ceiling >= 14) but the evidence record "
+                    f"{relative} does not exist"
+                )
             pytest.skip(
                 "co-activation gate evidence not recorded: run the top-25 dry-run "
-                "rescreen under policy v14 and write "
-                f"{_POLICY_V14_DRY_RUN_EVIDENCE.relative_to(_REPO_ROOT)}"
+                f"rescreen under policy v14 and write {relative}"
             )
-        evidence = json.loads(_POLICY_V14_DRY_RUN_EVIDENCE.read_text())
+        _assert_dry_run_evidence(json.loads(_POLICY_V14_DRY_RUN_EVIDENCE.read_text()))
 
-        assert evidence["policy_version"] == 14
-        assert evidence["cohort_size"] >= 25
-        outcomes = evidence["outcomes"]
-        assert len(outcomes) == evidence["cohort_size"]
-        fail_open_rate = evidence["fail_open_count"] / evidence["cohort_size"]
-        assert fail_open_rate < 0.05, f"fail-open rate {fail_open_rate:.3f} >= 0.05"
-        assert evidence["finalizer_outcomes_reviewed_by"]
-        assert evidence["finalizer_outcomes_reviewed_at"]
-        for row in outcomes:
-            assert row["outcome"] in {"CLEAR", "REJECT", "review_timed_out"}
-            if row["outcome"] == "REJECT" and row["violation_proven"]:
-                assert row["evidence_references"], row["agent_id"]
-            if row["outcome"] == "review_timed_out":
-                assert row["violation_proven"] is False
-                assert row["failure_domain"] in {"platform", "provider"}
+    @pytest.mark.parametrize(
+        ("cohort_size", "fail_open_count", "accepted"),
+        [
+            (25, 0, True),
+            (25, 1, True),  # 4%: below the published 5%
+            (25, 2, False),  # 8%
+            (40, 2, False),  # exactly 5% is not below 5%
+            (100, 4, True),  # 4%
+            (100, 5, False),  # exactly 5%
+        ],
+    )
+    async def test_dry_run_evidence_refuses_fail_open_at_or_above_five_percent(
+        self, tmp_path: Path, cohort_size: int, fail_open_count: int, accepted: bool
+    ) -> None:
+        record = tmp_path / "policy-v14-top25-dry-run.json"
+        record.write_text(
+            json.dumps(
+                _dry_run_evidence(
+                    cohort_size=cohort_size, fail_open_count=fail_open_count
+                )
+            )
+        )
+        evidence = json.loads(record.read_text())
+        if accepted:
+            _assert_dry_run_evidence(evidence)
+        else:
+            with pytest.raises(AssertionError, match="fail-open rate"):
+                _assert_dry_run_evidence(evidence)
+
+    async def test_dry_run_evidence_refuses_an_unreviewed_or_short_cohort(
+        self, tmp_path: Path
+    ) -> None:
+        record = tmp_path / "policy-v14-top25-dry-run.json"
+        short = _dry_run_evidence(cohort_size=24, fail_open_count=0)
+        record.write_text(json.dumps(short))
+        with pytest.raises(AssertionError):
+            _assert_dry_run_evidence(json.loads(record.read_text()))
+
+        unreviewed = _dry_run_evidence(cohort_size=25, fail_open_count=0)
+        unreviewed["finalizer_outcomes_reviewed_by"] = ""
+        record.write_text(json.dumps(unreviewed))
+        with pytest.raises(AssertionError):
+            _assert_dry_run_evidence(json.loads(record.read_text()))
+
+        # A capacity timeout finalized as a plain violation REJECT is refused.
+        timed_out = _dry_run_evidence(cohort_size=25, fail_open_count=0)
+        timed_out["outcomes"][0].update(
+            {"outcome": "review_timed_out", "violation_proven": True}
+        )
+        record.write_text(json.dumps(timed_out))
+        with pytest.raises(AssertionError):
+            _assert_dry_run_evidence(json.loads(record.read_text()))
+
+        # A proven REJECT without evidence references is refused.
+        unreferenced = _dry_run_evidence(cohort_size=25, fail_open_count=0)
+        unreferenced["outcomes"][0].update(
+            {"outcome": "REJECT", "violation_proven": True}
+        )
+        record.write_text(json.dumps(unreferenced))
+        with pytest.raises(AssertionError):
+            _assert_dry_run_evidence(json.loads(record.read_text()))

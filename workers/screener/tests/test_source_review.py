@@ -5506,14 +5506,23 @@ def test_written_policy_v14_publishes_the_nine_clauses_and_reason_codes() -> Non
     assert "vacuous for the turns the host emptied" in policy
 
 
-def test_written_policy_v14_maps_every_rejected_artifact_to_a_clause() -> None:
+def test_written_policy_v14_maps_every_recommended_artifact_to_a_clause() -> None:
     policy = (
         Path(__file__).resolve().parents[1] / "docs" / "policy-v14.md"
     ).read_text()
     table_start = policy.index(
-        "### 2026-09-13 rejected artifacts mapped to v14 clauses"
+        "### 2026-09-13 board-review recommendations mapped to v14 clauses"
     )
     table = policy[table_start : policy.index("### `review_timed_out`")]
+    # The mapping never describes a miner as rejected: the board review is a
+    # recommendation record and every decision is opened through Backroom.
+    flat = " ".join(policy.split())
+    assert "rejected artifacts" not in flat
+    assert "rejections stand" not in flat
+    assert "recommendations only" in flat
+    assert "no Backroom decision has been opened or executed" in flat
+    assert "Each row is a mapping, not a finding or a decision" in flat
+    assert "| Backroom status (2026-09-13) |" in table
     artifacts = {
         "lets_623 v1": "c25489aa-faf0-46fc-8b06-8e2240a5ac01",
         "comeτ-2 v1": "db0d4d25-dce7-4c7c-a49a-425beacb6c05",
@@ -5528,6 +5537,8 @@ def test_written_policy_v14_maps_every_rejected_artifact_to_a_clause() -> None:
     for name, agent_id in artifacts.items():
         row = next(line for line in rows if line.startswith(f"| {name} |"))
         assert agent_id in row
+        # Every row carries the live Backroom state the mapping was read at.
+        assert "cleared 2026-09" in row or "no ATH review opened" in row, name
         # Every row names at least one v14 clause and one ledger evidence field.
         assert any(f"A{index}" in row for index in range(1, 10)), name
         assert any(

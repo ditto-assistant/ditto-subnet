@@ -13,6 +13,9 @@ from ditto.api_models.coding_private_v2_registry import (
     CodingPrivateV2RegistrationAuthority,
 )
 from ditto.api_server.coding_private_v2_retrieval import PrivateV2InputRetriever
+from ditto.api_server.screener_policy_activation import (
+    resolve_screener_policy_activation,
+)
 from ditto.api_server.storage import S3StorageClient
 from ditto.db.models import Agent, CodingPrivateV2Release
 from ditto.db.queries.coding_hosted_admission import (
@@ -21,7 +24,6 @@ from ditto.db.queries.coding_hosted_admission import (
     _now,
 )
 from ditto.db.queries.coding_hosted_private import _selection_matches, _task
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 
 class HostedLaunchError(ValueError):
@@ -77,6 +79,12 @@ async def inspect_launch(
         task = await _task(session, evaluation_id)
         agent = await session.get(Agent, row.agent_id)
         release = await session.get(CodingPrivateV2Release, row.release_row_id)
+        # The screened image must carry the policy the queue requires now, not
+        # the newest version the build ships: while the activation ceiling lags
+        # the built-in constant no agent can be screened at the built-in.
+        required_policy = (
+            await resolve_screener_policy_activation(session)
+        ).required_policy_version
         if (
             task is None
             or task.closed_at is not None
@@ -90,7 +98,7 @@ async def inspect_launch(
             or agent.screened_image_id is None
             or agent.screened_image_ref is None
             or agent.screening_policy_version is None
-            or agent.screening_policy_version < SCREENING_POLICY_VERSION
+            or agent.screening_policy_version < required_policy
             or authority.agent_id != row.agent_id
             or authority.artifact_sha256 != row.artifact_sha256
             or authority.screened_image_sha256 != row.screened_image_sha256

@@ -1132,22 +1132,25 @@ An operator override is an administrative action, not a third review outcome.
 
 Policy v14 changes no v13 invariant, safe harbor, outcome, or proof standard.
 It adds the nine clauses A1-A9 below, three additive reason codes, one W13
-training-data declaration, a mapping of the five 2026-09-13 rejected artifacts
-to the clause and evidence field that would have surfaced each mechanism, and
-the co-activation gate. Every clause is additive: a v13 finding remains a v14
+training-data declaration, a mapping of the five artifacts the 2026-09-13
+board review recommends for rejection to the clause and evidence field that
+would have surfaced each mechanism, and the co-activation gate. Every clause is additive: a v13 finding remains a v14
 finding, and nothing below creates a rejection ground outside I1-I8, S1-S3, Q1,
 and V1-V3.
 
-The 2026-09-13 top-five board review
-(`docs/sn118-top5-board-review-2026-09-13.json`) rejected all five top-of-board
-v12 artifacts on mechanisms v13 already names: request-keyed tool-list writers
-that empty or omit the catalog (I7), prompt constants inside tool-definition
-constructors (W10/I5), empty-catalog branches credited as routing (I7),
-miner test fixtures pinning generator strings (leads), and draft replacement
-by wording (I3). Four of the five carried prior automated or operator clears
-that stopped at the first tool-bearing turn. The addendum closes the evidence
-gap, not the rule gap: it names what the reviewer must read, what the relay
-ledger can now show, and which safe harbor must be checked before a finding.
+The 2026-09-13 top-five board review, an operator record held in Backroom,
+recommended rejection of all five top-of-board v12 artifacts on mechanisms v13
+already names: request-keyed tool-list writers that empty or omit the catalog
+(I7), prompt constants inside tool-definition constructors (W10/I5),
+empty-catalog branches credited as routing (I7), miner test fixtures pinning
+generator strings (leads), and draft replacement by wording (I3). These are
+recommendations only: as of publication each of the five remains cleared or
+unreviewed under policy v12, and no Backroom decision has been opened or
+executed on any of them. Four of the five carry prior automated or operator
+clears that stopped at the first tool-bearing turn. The addendum closes the
+evidence gap, not the rule gap: it names what the reviewer must read, what the
+relay ledger can now show, and which safe harbor must be checked before a
+finding.
 
 ### A1: relay ledger fields are leads that trigger the safe-harbor check
 
@@ -1339,20 +1342,26 @@ I7.model_emitted_call_swallowed
 `reproduction`, or `fixture_lead`. A `violation_proven: true` decision carries
 at least one `source` reference.
 
-### 2026-09-13 rejected artifacts mapped to v14 clauses
+### 2026-09-13 board-review recommendations mapped to v14 clauses
 
-| Artifact | Agent UUID | Mechanism (path:line in the artifact) | v13 grounds | v14 clause | Ledger evidence field(s) |
-|---|---|---|---|---|---|
-| lets_623 v1 | `c25489aa-faf0-46fc-8b06-8e2240a5ac01` | `PREFERENCE_ADVISORY_GUIDANCE` prose compiler (`baseline.py:663-689`); `WireTool.from_wire` `description +=` generator font/model pools (`baseline.py:1189-1215`); `policy_tool_free -> disable_tools` (`baseline.py:1884-1887`, `:2419`; `chat.py:1842`) | I5, I7 | A4 planner prose; A6 W10 mutation; A2 `I7.catalog_withheld_by_request_classifier` | `harness_system_span_hash`, `tools_offered`, `catalog_present`, `tool_choice` |
-| comeτ-2 v1 | `db0d4d25-dce7-4c7c-a49a-425beacb6c05` | `withhold_host_tools -> Vec::new()` (`baseline.rs:3786-3802`, `:15132-15141`) keyed on `declarative_appearance_preference` phrase table (`optimizer.rs:3561-3618`); `dumpish` draft replacement (`baseline.rs:15765-15820`); fixture `task_spec.rs:2975-2988` | I7, I3, I5 | A2 `I7.catalog_withheld_by_request_classifier`; A4 judge-model draft selection; A7 fixture lead; A9 | `catalog_present`, `tool_choice`, `completions_after_last_tool_result`, `harness_system_span_hash` |
-| Pentagon v1 | `5064eb97-b179-4a37-8b5f-9fb38f55f7db` | `ACTION_GROUNDING_PROMPT:79` span-copy recipe restated at `serve.rs:2374-2380`; literal trigger `serve.rs:4750-4752`; `"tools": [], "tool_choice": "none"` lane (`chat.rs:509-510`, lead) | I5 | A4 planner prose; A7 fixture lead (`cakendar`); A2 lead | `harness_system_span_hash`, `slot_provenance`, `tools_offered` |
-| Clear v14 | `db9b919d-241b-4131-a2cc-f426b4356950` | `Route { ReadOnly, ops: Vec::new() }` before any model call (`agent.rs:344-354`); request body without a `tools` key (`model.rs:691-705`); `missing_action_value` phrase table (`intent.rs:1116-1256`); contact compaction (`graph.rs:1190-1211`); fixtures `intent.rs:2397-2419` | I7, I5, I2 | A2 `I7.catalog_withheld_by_request_classifier`; A3 read-path evidence loss; A4; A7 | `catalog_present`, `tools_offered`, `harness_system_span_hash` |
-| unione v27 | `dd0783d1-b592-4de1-a788-ca7646b27f51` | `Predicate` operand-sign contracts assigned at `/seed` ingest (`facts.rs:14-47`, `:83-90`; `world.rs:3796-3915`) rendered as a factual index into the deciding prompt (`world.rs:2767-2899`); `host_tools.retain(...)` singleton (`baseline.rs:8766-8772`) | I5, I7 | A3 ingest-time compilation; A2 singleton; A5 launder evidence | `answer_in_prompt`, `harness_system_span_hash`, `tools_offered` |
+The `Backroom status` column is the live `get_ath_review` state read on
+2026-09-13 when this text was published; it is not updated by this document.
 
-Each row is a mapping, not a new finding: the rejections stand on the v13
-grounds recorded in the board review. The v14 clause names what the automated
-layers must read next time, and the evidence field names the ledger row that
-would have opened the A2 check before the prior clear was recorded.
+| Artifact | Agent UUID | Backroom status (2026-09-13) | Mechanism (path:line in the artifact) | v13 grounds | v14 clause | Ledger evidence field(s) |
+|---|---|---|---|---|---|---|
+| lets_623 v1 | `c25489aa-faf0-46fc-8b06-8e2240a5ac01` | cleared 2026-09-11 (policy v12), `scored` | `PREFERENCE_ADVISORY_GUIDANCE` prose compiler (`baseline.py:663-689`); `WireTool.from_wire` `description +=` generator font/model pools (`baseline.py:1189-1215`); `policy_tool_free -> disable_tools` (`baseline.py:1884-1887`, `:2419`; `chat.py:1842`) | I5, I7 | A4 planner prose; A6 W10 mutation; A2 `I7.catalog_withheld_by_request_classifier` | `harness_system_span_hash`, `tools_offered`, `catalog_present`, `tool_choice` |
+| comeτ-2 v1 | `db0d4d25-dce7-4c7c-a49a-425beacb6c05` | cleared 2026-09-07 (policy v12), `scored` | `withhold_host_tools -> Vec::new()` (`baseline.rs:3786-3802`, `:15132-15141`) keyed on `declarative_appearance_preference` phrase table (`optimizer.rs:3561-3618`); `dumpish` draft replacement (`baseline.rs:15765-15820`); fixture `task_spec.rs:2975-2988` | I7, I3, I5 | A2 `I7.catalog_withheld_by_request_classifier`; A4 judge-model draft selection; A7 fixture lead; A9 | `catalog_present`, `tool_choice`, `completions_after_last_tool_result`, `harness_system_span_hash` |
+| Pentagon v1 | `5064eb97-b179-4a37-8b5f-9fb38f55f7db` | cleared 2026-09-11 (policy v12), `scored` | `ACTION_GROUNDING_PROMPT:79` span-copy recipe restated at `serve.rs:2374-2380`; literal trigger `serve.rs:4750-4752`; `"tools": [], "tool_choice": "none"` lane (`chat.rs:509-510`, lead) | I5 | A4 planner prose; A7 fixture lead (`cakendar`); A2 lead | `harness_system_span_hash`, `slot_provenance`, `tools_offered` |
+| Clear v14 | `db9b919d-241b-4131-a2cc-f426b4356950` | cleared 2026-09-08 (policy v12), `scored` | `Route { ReadOnly, ops: Vec::new() }` before any model call (`agent.rs:344-354`); request body without a `tools` key (`model.rs:691-705`); `missing_action_value` phrase table (`intent.rs:1116-1256`); contact compaction (`graph.rs:1190-1211`); fixtures `intent.rs:2397-2419` | I7, I5, I2 | A2 `I7.catalog_withheld_by_request_classifier`; A3 read-path evidence loss; A4; A7 | `catalog_present`, `tools_offered`, `harness_system_span_hash` |
+| unione v27 | `dd0783d1-b592-4de1-a788-ca7646b27f51` | no ATH review opened | `Predicate` operand-sign contracts assigned at `/seed` ingest (`facts.rs:14-47`, `:83-90`; `world.rs:3796-3915`) rendered as a factual index into the deciding prompt (`world.rs:2767-2899`); `host_tools.retain(...)` singleton (`baseline.rs:8766-8772`) | I5, I7 | A3 ingest-time compilation; A2 singleton; A5 launder evidence | `answer_in_prompt`, `harness_system_span_hash`, `tools_offered` |
+
+Each row is a mapping, not a finding or a decision. The v13 grounds column
+records what the board review recommended; any rejection must be opened and
+resolved through Backroom on its own evidence, with the decision record and
+`evidence_references` this policy requires, and until then the Backroom status
+column is the miner's status. The v14 clause names what the automated layers
+must read next time, and the evidence field names the ledger row that would
+have opened the A2 check before the prior clear was recorded.
 
 ### `review_timed_out`
 

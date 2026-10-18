@@ -8,6 +8,9 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.coding_hosted_start import HostedStartRequest
+from ditto.api_server.screener_policy_activation import (
+    resolve_screener_policy_activation,
+)
 from ditto.db.models import Agent
 from ditto.db.queries.coding_hosted_admission import (
     HostedAdmissionError,
@@ -17,7 +20,6 @@ from ditto.db.queries.coding_hosted_admission import (
     start_hosted_attempt,
 )
 from ditto.db.queries.coding_hosted_private import _selection_matches, _task
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 
 class HostedStartStore:
@@ -58,6 +60,12 @@ class HostedStartStore:
                 ):
                     raise HostedAdmissionError("hosted start assignment does not match")
                 agent = await session.get(Agent, row.agent_id)
+                # Compare against the policy the queue requires now (the
+                # activation record), never the built-in constant the build
+                # ships ahead of activation.
+                required_policy = (
+                    await resolve_screener_policy_activation(session)
+                ).required_policy_version
                 if (
                     agent is None
                     or agent.screened_image_size_bytes
@@ -66,7 +74,7 @@ class HostedStartStore:
                     or agent.screened_image_ref != request.screened_image_ref
                     or agent.screening_policy_version
                     != request.screening_policy_version
-                    or agent.screening_policy_version < SCREENING_POLICY_VERSION
+                    or agent.screening_policy_version < required_policy
                     or agent.screened_image_verified_at is None
                 ):
                     raise HostedAdmissionError(

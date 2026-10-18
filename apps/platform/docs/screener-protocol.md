@@ -47,9 +47,9 @@ backlog the capacity controller scales on honest.
 
 Policy 13 preserves the historical seven-invariant payload as nested assessment
 schema version 1 and adds I8 evaluation independence through schema version 2.
-Workers carrying v13 still serve policy v10-v12 during a scheduled transition;
-their exact-version tool schemas require seven decisions for old policies and
-eight for v13. Shipping the built-in version does not activate it. The separate
+Workers carrying v14 still serve policy v10-v13 during a scheduled transition;
+their exact-version tool schemas require seven decisions for v10-v12 and eight
+for v13/v14. Shipping the built-in version does not activate it. The separate
 `SCREENING_ACTIVATION_CEILING_POLICY_VERSION` remains at v12, so the scheduling
 API cannot mistake fleet adoption for v13 or v14 activation readiness. Raise that
 ceiling only after the readiness, retry/deadline, transition, opaque-component
