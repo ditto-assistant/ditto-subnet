@@ -55,6 +55,17 @@ class RevealChain:
     epoch_shift: tuple[int, int] | None = None
     owner_limit: int = 2
     malformed_hash_at: int | None = None
+    # uid -> [(block, new hotkey)]: re-registrations inside the range.
+    registrations: dict[int, list[tuple[int, str]]] = field(default_factory=dict)
+
+    def keys_at(self, block: int) -> list[tuple[int, str]]:
+        keys = dict(KEYS)
+        for uid, changes in self.registrations.items():
+            for at, hotkey in sorted(changes):
+                if at <= block:
+                    keys[uid] = hotkey
+        return sorted(keys.items())
+
     calls: list[str] = field(default_factory=list)
 
     @staticmethod
@@ -105,6 +116,11 @@ class RevealChain:
             if block == self.malformed_hash_at:
                 return {"error": "provider returned no result"}
             name = bytes.fromhex(key[2:]).decode()
+            if name.startswith("Keys:"):
+                hotkey = dict(self.keys_at(block)).get(int(name.split(":")[1]))
+                return {
+                    "result": "0x" + hashlib.sha256(str(hotkey).encode()).hexdigest()
+                }
             assert name.startswith("TimelockedWeightCommits:")
             epoch = int(name.split(":")[1])
             state = self.queue(epoch, block)
@@ -137,6 +153,8 @@ class RevealChain:
     ) -> _Key:
         if name == "TimelockedWeightCommits":
             return _Key(f"TimelockedWeightCommits:{params[1]}")
+        if name == "Keys":
+            return _Key(f"Keys:{params[1]}")
         return _Key(name)
 
     async def query(self, *, storage_function: str, block_hash: str, **_: Any):
@@ -157,7 +175,7 @@ class RevealChain:
         block = self.block_of(block_hash)
         rows: list[tuple[Any, Any]] = []
         if storage_function == "Keys":
-            rows = list(KEYS)
+            rows = self.keys_at(block)
         elif block in self.v2_commit_at:
             assert storage_function == "WeightCommits"
             rows = [("validator", ["hash"])]
@@ -265,3 +283,34 @@ async def test_malformed_storage_hash_is_not_read_as_unchanged() -> None:
     chain.malformed_hash_at = FIRST - 1
     with pytest.raises(ValueError, match="missing storage hash"):
         await _plan(chain)
+
+
+@pytest.mark.parametrize(
+    "planner", [plan_source_emission_range, plan_source_emission_range_by_reveals]
+)
+async def test_a_reregistered_uid_is_located_and_read_instead_of_a_full_scan(
+    planner,
+) -> None:
+    chain = _chain()
+    chain.registrations = {2: [(1333, "newminer")]}
+    plan = await planner(chain, netuid=NETUID, first_block=FIRST, last_block=LAST)
+    assert not plan.full_scan
+    assert 1333 in plan.interesting
+    # Everything else is planned exactly as without the registration.
+    assert set(plan.interesting) - {1333} == {1010, 1100, 1101, 1233, 1460, 1702}
+
+
+async def test_two_registrations_of_one_uid_are_both_found() -> None:
+    chain = _chain()
+    chain.registrations = {2: [(1200, "second"), (1600, "third")]}
+    plan = await _plan(chain)
+    assert {1200, 1600} <= set(plan.interesting)
+
+
+async def test_too_many_changed_uids_plan_the_range_in_full(monkeypatch) -> None:
+    from ditto.chain import source_emission_verifier
+
+    monkeypatch.setattr(source_emission_verifier, "_MAX_IDENTITY_CHANGES", 0)
+    chain = _chain()
+    chain.registrations = {2: [(1333, "newminer")]}
+    assert (await _plan(chain)).full_scan

@@ -11,9 +11,14 @@ only the blocks that can matter. Two planners exist:
 | Extra full reads | every structural event on *any* subnet | queue shrinks without a reveal (rare) |
 | Status | drives the cursor | **shadow** (`_REVEAL_PLAN_MODE`) |
 
-Both share `_range_endpoints`: equal runtime code, mode controls, Yuma
-consensus and `Keys(118)` at the range ends, or the collector falls back to the
-per-block scan.
+Both share `_range_endpoints`: equal runtime code, mode controls and Yuma
+consensus at the range ends, or the collector falls back to the per-block scan.
+A UID re-registered inside the range no longer forces that fallback. Each
+changed UID's `Keys(118, uid)` storage hash is bisected to the exact block,
+which is read in full (the reader resets provenance there). A hotkey cannot
+return to its old UID inside one range, so those values never repeat. Before
+this, any registration in a 720-block range sent the whole range to the
+per-block scan, which was most of the backlog on 2026-10-18.
 
 ## Why the reveal planner is enough
 
