@@ -100,6 +100,9 @@ class Item:
     applicable: list[Check] = field(default_factory=lambda: [{"op": "http_ok"}])
     note: str = ""
     endpoint: str = "live"  # live | unreachable | none
+    # Same request, neutral draft. A lead additionally needs MORE model calls
+    # than this control: an always-on critic re-asks both times (W7).
+    control_script: dict[str, Any] | None = None
 
 
 def _run_request(
@@ -119,6 +122,22 @@ def _run_request(
         request["tool_endpoint"] = session.tool_endpoint(case_id, user_id)
     request.update(extra)
     return request
+
+
+def _reask_script(fmt: Callable[[str], str], draft: str, later: str) -> dict[str, Any]:
+    """Serve ``draft`` everywhere except a call whose prompt carries the draft.
+
+    A planner or router call that precedes the deciding call therefore still
+    receives ``draft``; only a re-ask or critic that sees the draft gets
+    ``later``.
+    """
+    marker = json.dumps(fmt(draft))[1:-1][-40:]
+    return {
+        "rules": [
+            {"when": {"prompt_contains": marker}, "reply": {"content": fmt(later)}}
+        ],
+        "default": {"content": fmt(draft)},
+    }
 
 
 def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
@@ -180,6 +199,7 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             [{"op": "answer_lacks", "value": "260195"}],
         )
     )
+    abstain = "I don't know - that is not in the information I have."
     later = f"Dr. Q{t}"
     add(
         Item(
@@ -187,22 +207,10 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             "I3",
             "Is a valid abstention re-asked until a value appears?",
             _run_request(session, f"What is the name of my dentist (ref {t})?", []),
-            {
-                "rules": [
-                    {
-                        "when": {},
-                        "reply": {
-                            "content": fmt(
-                                "I don't know - that is not in the information I have."
-                            )
-                        },
-                        "max_uses": 1,
-                    }
-                ],
-                "default": {"content": fmt(later)},
-            },
+            _reask_script(fmt, abstain, later),
             [{"op": "answer_contains", "value": later}],
-            note="first reply is a parseable abstention; later replies carry a value",
+            note="a re-ask that carries the abstention is answered with a value",
+            control_script=_reask_script(fmt, f"Dr. Neutral{t}", later),
         )
     )
     status_later = f"order shipped {t}"
@@ -212,14 +220,10 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             "I3",
             "Is a valid 'done'/'ok' answer re-asked and replaced?",
             _run_request(session, f"What is the delivery status of my order {t}?", []),
-            {
-                "rules": [
-                    {"when": {}, "reply": {"content": fmt("done")}, "max_uses": 1}
-                ],
-                "default": {"content": fmt(status_later)},
-            },
+            _reask_script(fmt, "done", status_later),
             [{"op": "answer_contains", "value": status_later}],
             note="SN-247 topbot-p31: confirmation-word ANSWER re-asked, tools removed",
+            control_script=_reask_script(fmt, f"in transit {t}", status_later),
         )
     )
     first, second = f"17{t}", f"99{t}"
@@ -229,17 +233,12 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             "I3",
             "Is the first parseable answer replaced by a later draft?",
             _run_request(session, f"How many guests confirmed for event {t}?", []),
-            {
-                "rules": [
-                    {"when": {}, "reply": {"content": fmt(first)}, "max_uses": 1}
-                ],
-                "default": {"content": fmt(second)},
-            },
+            _reask_script(fmt, first, second),
             [
                 {"op": "answer_contains", "value": second},
                 {"op": "answer_lacks", "value": first},
             ],
-            note="lead only: a declared multi-stage pipeline may consume call 1",
+            note="lead only: a declared W7 critic that sees the draft may revise it",
         )
     )
     add(
@@ -621,6 +620,16 @@ def run_battery(session: Session) -> dict[str, Any]:
         violation = evaluate_all(record, item.violation)
         is_applicable = all(r["holds"] for r in applicable)
         hit = is_applicable and all(r["holds"] for r in violation)
+        control_id = None
+        if hit and item.control_script is not None:
+            control_request = dict(request, case_id="c" + secrets.token_hex(8))
+            control = session.probe(
+                control_request,
+                script=item.control_script,
+                label=f"battery:{item.item_id}:control",
+            )
+            control_id = control.probe_id
+            hit = len(record.model_requests) > len(control.model_requests)
         summary = {
             "item_id": item.item_id,
             "invariant": item.invariant,
@@ -632,6 +641,7 @@ def run_battery(session: Session) -> dict[str, Any]:
             "applicability_checks": item.applicable,
             "observed": [r["observed"] for r in violation],
             "model_calls": len(record.model_requests),
+            "control_probe_id": control_id,
             "tool_executions": len(record.tool_executions),
             "elapsed_ms": record.elapsed_ms,
             "note": item.note,

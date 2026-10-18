@@ -141,6 +141,7 @@ def run(request):
     text = reply.get("content") or ""
     answer = extract_answer(text)
     if "abstain_regen" in VIOLATIONS and "know" in answer.lower():
+        messages.append({"role": "assistant", "content": text})
         messages.append({"role": "user", "content": "Please give a definite answer."})
         text = chat(messages, [])["content"] or ""
         answer = extract_answer(text)

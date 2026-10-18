@@ -145,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         "stop",
         "restart",
         "start",
+        "battery",
     ):
         q = sub.add_parser(name)
         q.add_argument("--session", required=True)
@@ -220,6 +221,15 @@ def main(argv: list[str] | None = None) -> int:
                 session.stop()
             session.start()
             result = {"started": True}
+        elif args.cmd == "battery":
+            # Re-run the zero-token battery on a running session and update
+            # prepare.json in place (battery revisions; no rebuild).
+            report = battery.run_battery(session)
+            path = Path(args.session, "prepare.json")
+            prepared = json.loads(path.read_text())
+            prepared["battery"] = report
+            path.write_text(json.dumps(prepared, indent=1))
+            result = {"leads": [lead["item_id"] for lead in report["leads"]]}
         elif args.cmd == "restart":
             session.restart_harness()
             result = {"restarted": True}
