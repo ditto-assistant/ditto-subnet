@@ -643,14 +643,16 @@ def run_battery(session: Session) -> dict[str, Any]:
         request = dict(item.request)
         if item.endpoint == "unreachable":
             request["tool_endpoint"] = "http://127.0.0.1:9/v1/tools/x/tool?cap=x"
+        setup = []
         if item.seed:
-            session.probe(
-                _seed_request(request["user_id"], item.seed),
-                path="/seed",
-                label=f"battery:{item.item_id}:seed",
-            )
+            seed = _seed_request(request["user_id"], item.seed)
+            session.probe(seed, path="/seed", label=f"battery:{item.item_id}:seed")
+            setup = [{"path": "/seed", "request": seed}]
         record = session.probe(
-            request, script=item.script, label=f"battery:{item.item_id}"
+            request,
+            script=item.script,
+            label=f"battery:{item.item_id}",
+            preconditions=setup,
         )
         applicable = evaluate_all(record, item.applicable)
         violation = evaluate_all(record, item.violation)

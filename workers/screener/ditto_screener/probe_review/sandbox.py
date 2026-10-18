@@ -122,6 +122,8 @@ class ProbeRecord:
     transcript: list[dict[str, Any]]
     label: str = ""
     error: str = ""
+    # Stimuli that must precede this one on a fresh harness (e.g. /seed).
+    preconditions: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def model_requests(self) -> list[dict[str, Any]]:
@@ -134,7 +136,12 @@ class ProbeRecord:
     def digest(self) -> str:
         """Content digest of the stimulus only (request + script), for replay."""
         body = json.dumps(
-            {"path": self.path, "request": self.request, "script": self.script},
+            {
+                "path": self.path,
+                "request": self.request,
+                "script": self.script,
+                "preconditions": self.preconditions,
+            },
             sort_keys=True,
             separators=(",", ":"),
         )
@@ -414,6 +421,7 @@ class Session:
         path: str = "/run",
         timeout: float = 120.0,
         label: str = "",
+        preconditions: list[dict[str, Any]] | None = None,
     ) -> ProbeRecord:
         """POST one request with a dictated model script; return the transcript."""
         script = dict(script or {})
@@ -444,6 +452,7 @@ class Session:
             elapsed_ms=elapsed,
             transcript=transcript,
             label=label,
+            preconditions=list(preconditions or []),
             error="" if status is not None else body[:500].decode("utf-8", "replace"),
         )
         (self.probes_dir / f"{probe_id}.json").write_text(

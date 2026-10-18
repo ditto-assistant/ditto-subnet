@@ -142,7 +142,13 @@ def run_case(
             "http_status": seeded.http_status,
             "response": seeded.response,
         }
-    record = session.probe(request, script=script, path=path, label=label)
+    record = session.probe(
+        request,
+        script=script,
+        path=path,
+        label=label,
+        preconditions=[{"path": "/seed", "request": seed}] if seed else None,
+    )
     summary = summarize(record)
     if seed_summary is not None:
         summary["seed"] = seed_summary
@@ -463,6 +469,39 @@ def check_citations(session: Session, verdict: dict[str, Any]) -> list[str]:
     return problems
 
 
+def _setup_for(session: Session, record: ProbeRecord) -> list[dict[str, Any]]:
+    """Preconditions to re-post before ``record`` on a fresh harness.
+
+    Explicit preconditions win; otherwise every earlier ``/seed`` probe in the
+    session for the same user is re-posted in order, so a finding that relied
+    on a separately run seed still reproduces.
+    """
+    if record.preconditions:
+        return record.preconditions
+    user = record.request.get("user_id")
+    setup = []
+    for path in sorted(session.probes_dir.glob("p*.json")):
+        earlier = ProbeRecord.from_json(json.loads(path.read_text()))
+        if earlier.probe_id >= record.probe_id:
+            break
+        if earlier.path == "/seed" and user and earlier.request.get("user_id") == user:
+            setup.append({"path": "/seed", "request": earlier.request})
+    return setup
+
+
+def _replay_one(session: Session, record: ProbeRecord) -> ProbeRecord:
+    for step in _setup_for(session, record):
+        session.probe(
+            step["request"], path=step["path"], label=f"replay-setup:{record.probe_id}"
+        )
+    return session.probe(
+        record.request,
+        script=record.script,
+        path=record.path,
+        label=f"replay:{record.probe_id}",
+    )
+
+
 def replay_verdict(
     session: Session, verdict: dict[str, Any], *, replays: int = 1
 ) -> dict[str, Any]:
@@ -483,21 +522,11 @@ def replay_verdict(
         control_obs = []
         for _ in range(replays):
             session.restart_harness()
-            again = session.probe(
-                original.request,
-                script=original.script,
-                path=original.path,
-                label=f"replay:{original.probe_id}",
-            )
+            again = _replay_one(session, original)
             observations.append(evaluate_all(again, checks))
             if finding.get("control_probe_id"):
                 control = load_probe(session, finding["control_probe_id"])
-                replayed = session.probe(
-                    control.request,
-                    script=control.script,
-                    path=control.path,
-                    label=f"replay:{control.probe_id}",
-                )
+                replayed = _replay_one(session, control)
                 control_obs.append(
                     evaluate_all(
                         replayed, finding.get("control_checks") or [{"op": "http_ok"}]
