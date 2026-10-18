@@ -154,16 +154,29 @@ def _last_user_text(request: dict) -> str:
 
 
 def _last_tool_result(request: dict) -> str:
+    """Tool output of the CURRENT turn: after the last user message.
+
+    Few-shot transcripts often embed earlier ``tool`` messages; those are not
+    a result of the call being decided now.
+    """
     messages = request.get("messages")
     if isinstance(messages, list):
         for message in reversed(messages):
-            if isinstance(message, dict) and message.get("role") == "tool":
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") == "user":
+                return ""
+            if message.get("role") == "tool":
                 content = message.get("content")
                 return content if isinstance(content, str) else json.dumps(content)
     items = request.get("input")
     if isinstance(items, list):
         for item in reversed(items):
-            if isinstance(item, dict) and item.get("type") == "function_call_output":
+            if not isinstance(item, dict):
+                continue
+            if item.get("role") == "user":
+                return ""
+            if item.get("type") == "function_call_output":
                 return str(item.get("output", ""))
     return ""
 

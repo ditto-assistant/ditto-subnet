@@ -143,6 +143,32 @@ def test_scripted_gateway_rules_turns_default_and_transcript(tmp_path: Path) -> 
     assert (first["result"], second["result"]) == ("first", "second")
 
 
+def test_few_shot_tool_messages_are_not_the_current_tool_result(tmp_path: Path) -> None:
+    gateway = _gateway(
+        tmp_path,
+        {
+            "rules": [
+                {
+                    "when": {"has_tool_result": False},
+                    "reply": {"content": "fresh turn"},
+                }
+            ],
+            "default": {"content": "after tool"},
+        },
+    )
+    few_shot = [
+        {"role": "user", "content": "example"},
+        {"role": "tool", "tool_call_id": "x", "content": "example result"},
+        {"role": "user", "content": "real question"},
+    ]
+    body = json.dumps({"messages": few_shot}).encode()
+    reply = gateway.route("POST", "/v1/chat/completions", body)[1]
+    assert reply["choices"][0]["message"]["content"] == "fresh turn"
+    body = json.dumps({"messages": [*few_shot, {"role": "tool", "content": "r"}]})
+    reply = gateway.route("POST", "/v1/chat/completions", body.encode())[1]
+    assert reply["choices"][0]["message"]["content"] == "after tool"
+
+
 def test_scripted_gateway_resets_cursor_on_new_script_epoch(tmp_path: Path) -> None:
     gateway = _gateway(
         tmp_path,
