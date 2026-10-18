@@ -820,3 +820,50 @@ async def test_configured_fingerprint_must_match_the_observed_runtime(
         await read_source_emission_block(
             substrate, netuid=118, block=100, expected_runtime_code_hash=_UNTAGGED
         )
+
+
+async def test_read_cache_loads_a_key_once_for_concurrent_readers() -> None:
+    import asyncio
+
+    cache = SourceEmissionReadCache()
+    release, calls = asyncio.Event(), []
+
+    async def load() -> str:
+        calls.append(1)
+        await release.wait()
+        return "state"
+
+    readers = [asyncio.ensure_future(cache.get(("Keys", "h1"), load)) for _ in range(3)]
+    await asyncio.sleep(0)
+    release.set()
+    assert await asyncio.gather(*readers) == ["state"] * 3
+    assert len(calls) == 1
+
+
+async def test_read_cache_waiter_retries_a_failed_load_and_cancels_alone() -> None:
+    import asyncio
+
+    cache = SourceEmissionReadCache()
+    release = asyncio.Event()
+    attempts = []
+
+    async def load() -> str:
+        attempts.append(1)
+        await release.wait()
+        if len(attempts) == 1:
+            raise ConnectionError("provider dropped")
+        return "state"
+
+    owner = asyncio.ensure_future(cache.get(("Keys", "h1"), load))
+    waiter = asyncio.ensure_future(cache.get(("Keys", "h1"), load))
+    cancelled = asyncio.ensure_future(cache.get(("Keys", "h1"), load))
+    await asyncio.sleep(0)
+    cancelled.cancel()  # one reader giving up leaves the load running
+    await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(ConnectionError):
+        await owner
+    assert await waiter == "state"  # the waiter retried the failed load itself
+    assert len(attempts) == 2
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled

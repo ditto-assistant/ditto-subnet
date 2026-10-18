@@ -331,18 +331,36 @@ class SourceEmissionReadCache:
 
     def __init__(self, limit: int = 64) -> None:
         self._values: dict[tuple[Any, ...], Any] = {}
+        self._loading: dict[tuple[Any, ...], asyncio.Future[None]] = {}
         self._limit = limit
 
     async def get(
         self, key: tuple[Any, ...], load: Callable[[], Awaitable[Any]]
     ) -> Any:
-        if key in self._values:
-            return self._values[key]
-        value = await load()
-        if len(self._values) >= self._limit:
-            self._values.pop(next(iter(self._values)))
-        self._values[key] = value
-        return value
+        # Concurrent block reads share one cache: a key already being loaded
+        # is awaited, not fetched again. If that load fails, a waiter retries
+        # it itself; a waiter's own cancellation never cancels the load.
+        while key not in self._values:
+            loading = self._loading.get(key)
+            if loading is None:
+                return await self._load(key, load)
+            await asyncio.shield(loading)
+        return self._values[key]
+
+    async def _load(
+        self, key: tuple[Any, ...], load: Callable[[], Awaitable[Any]]
+    ) -> Any:
+        done = asyncio.get_running_loop().create_future()
+        self._loading[key] = done
+        try:
+            value = await load()
+            if len(self._values) >= self._limit:
+                self._values.pop(next(iter(self._values)))
+            self._values[key] = value
+            return value
+        finally:
+            del self._loading[key]
+            done.set_result(None)
 
 
 async def read_source_emission_block(
