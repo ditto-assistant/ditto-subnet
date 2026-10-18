@@ -144,6 +144,7 @@ def test_signed_field_list_matches_the_terms_model():
         {"dependencies": ["not a reference"]},
         {"dependencies": ["Ditto-Assistant/ditto-subnet#2889"]},
         {"dependencies": ["ditto-assistant/ditto-subnet#0"]},
+        {"dependencies": ["ditto-assistant/ditto-subnet#2147483648"]},
         {"reviewer_login": "has space"},
         {"funding_mode": "simulated"},
         {"fee_escrow_hotkey": "not-an-address"},
@@ -152,6 +153,13 @@ def test_signed_field_list_matches_the_terms_model():
 def test_terms_reject_coerced_or_invalid_values(change):
     with pytest.raises(ValidationError):
         BountyTerms.model_validate({**TERMS, **change})
+
+
+def test_a_dependency_names_any_issue_an_issue_number_can():
+    terms = BountyTerms.model_validate(
+        {**TERMS, "dependencies": ["ditto-assistant/ditto-subnet#2147483647"]}
+    )
+    assert terms.dependencies == ["ditto-assistant/ditto-subnet#2147483647"]
 
 
 def test_amounts_stay_exact_in_every_json_client():

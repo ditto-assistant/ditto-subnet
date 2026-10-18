@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field
+from pydantic import AfterValidator, AwareDatetime, Field
 
 from ditto_screening_protocol.contributor_identity import (
     Address,
@@ -34,8 +34,22 @@ from ditto_screening_protocol.contributor_identity import (
 _REPO = r"[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}"
 REPO_PATTERN = rf"^{_REPO}$"
 Repo = Annotated[str, Field(pattern=REPO_PATTERN)]
-IssueNumber = Annotated[int, Field(strict=True, ge=1, le=2147483647)]
-IssueRef = Annotated[str, Field(pattern=rf"^{_REPO}#[1-9][0-9]{{0,9}}$")]
+MAX_ISSUE_NUMBER = 2147483647
+IssueNumber = Annotated[int, Field(strict=True, ge=1, le=MAX_ISSUE_NUMBER)]
+
+
+def _issue_in_range(reference: str) -> str:
+    # The pattern bounds the digits; the number is bounded like IssueNumber.
+    if int(reference.rpartition("#")[2]) > MAX_ISSUE_NUMBER:
+        raise ValueError(f"issue numbers are at most {MAX_ISSUE_NUMBER}")
+    return reference
+
+
+IssueRef = Annotated[
+    str,
+    Field(pattern=rf"^{_REPO}#[1-9][0-9]{{0,9}}$"),
+    AfterValidator(_issue_in_range),
+]
 # 1 alpha = 10^9 rao. Amounts are exact integers, never floats, and at most
 # 2^53 - 1 (over nine million alpha) so every JSON client, the dashboard and
 # Backroom included, reads them exactly.
