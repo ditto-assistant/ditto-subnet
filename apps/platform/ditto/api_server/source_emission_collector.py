@@ -122,6 +122,28 @@ def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
     )
 
 
+# Payout resolution stops this long before the sweep budget expires: one row
+# can take several archive reads, and an expired budget fails the sweep.
+_RESOLUTION_RESERVE_SECONDS = 45.0
+
+
+def _resolution_deadline(
+    budget: asyncio.Timeout | None, *, share: float | None = None
+) -> float | None:
+    """When payout resolution must stop inside ``budget``.
+
+    With ``share``, at most that fraction of the time left; otherwise the
+    budget's end less a reserve. None (no limit) without a budget.
+    """
+    when = budget.when() if budget is not None else None
+    if when is None:
+        return None
+    now = asyncio.get_running_loop().time()
+    if share is not None:
+        return now + (when - now) * share
+    return when - _RESOLUTION_RESERVE_SECONDS
+
+
 class _CallCounter:
     """Counts the chain calls a planner makes, for the shadow's cost figure."""
 
@@ -281,7 +303,10 @@ class SourceEmissionCollector:
         if not catchup:
             # Durable payouts must not wait for a full scan batch to succeed.
             # Keep archive verification and provider fallback on the same path.
-            await self.resolve_pending_payouts(substrate)
+            # Half the budget at most, so the scan still gets its turn.
+            await self.resolve_pending_payouts(
+                substrate, deadline=_resolution_deadline(budget, share=0.5)
+            )
         batch = _SWEEP_CATCHUP_BATCH_BLOCKS if catchup else _SWEEP_BATCH_BLOCKS
         reads = SourceEmissionReadCache()
         try:
@@ -303,11 +328,18 @@ class SourceEmissionCollector:
             # error would hide why the cursor stopped (an unaudited runtime
             # once read as a decoder error for weeks).
             try:
-                await self.resolve_pending_payouts(substrate)
+                await self.resolve_pending_payouts(
+                    substrate, deadline=_resolution_deadline(budget)
+                )
             except Exception:
                 logger.exception("source emission payout resolution failed")
             raise
-        await self.resolve_pending_payouts(substrate)
+        # Stop with time to spare rather than let the budget expire mid-row:
+        # an expired budget fails the whole sweep and sends the next one to
+        # the rate-limited fallback providers, though the replay succeeded.
+        await self.resolve_pending_payouts(
+            substrate, deadline=_resolution_deadline(budget)
+        )
 
     async def _run_pending_shadow(
         self, substrate: Any, budget: asyncio.Timeout | None
@@ -914,9 +946,17 @@ class SourceEmissionCollector:
             binding["vector_digest"],
         ), receipt
 
-    async def resolve_pending_payouts(self, substrate: Any) -> int:
+    async def resolve_pending_payouts(
+        self, substrate: Any, *, deadline: float | None = None
+    ) -> int:
+        """Resolve pending payouts, oldest-checked first, until ``deadline``.
+
+        ``deadline`` is a ``loop.time()`` value. Rows left over are untouched
+        and come first next time, since rows cycle by ``last_checked_at``.
+        """
         if not self.confirmation_enabled:
             return 0
+        loop = asyncio.get_running_loop()
         async with self.sessions() as session:
             rows = list(
                 await session.scalars(
@@ -944,6 +984,8 @@ class SourceEmissionCollector:
         confirmed = 0
         refetched = 0
         for block, block_hash, snapshot in snapshots:
+            if deadline is not None and loop.time() >= deadline:
+                break
             if snapshot.get("receipt") is None:
                 # Reopened after a non-reproducible ambiguity verdict.
                 if refetched >= _RECEIPT_REFETCH_LIMIT:
