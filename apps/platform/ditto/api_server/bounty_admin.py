@@ -34,7 +34,7 @@ from ditto.api_models.bounty import (
     BountySubmissionView,
 )
 from ditto.api_server import bounty, bounty_claims
-from ditto.api_server.bounty_claims import claim_view
+from ditto.api_server.bounty_claims import claim_views
 from ditto.api_server.bounty_obligations import (
     current_policy,
     obligation_state,
@@ -355,7 +355,7 @@ async def operator_view(session: AsyncSession, bounty_id: UUID) -> BountyOperato
         if claim_ids
         else []
     )
-    claim_views = [await claim_view(session, claim, now=now) for claim in claims]
+    views = await claim_views(session, claims, now=now)
     appeal_views = [
         BountyAdminAppealView(
             appeal_id=appeal.appeal_id,
@@ -387,11 +387,11 @@ async def operator_view(session: AsyncSession, bounty_id: UUID) -> BountyOperato
             )
             for row in revisions
         ],
-        claims=claim_views,
+        claims=views,
         appeals=appeal_views,
         audit=audit,
         report=bounty_report(
-            detail=detail, claims=claim_views, appeals=appeal_views, audit=audit
+            detail=detail, claims=views, appeals=appeal_views, audit=audit
         ),
     )
 

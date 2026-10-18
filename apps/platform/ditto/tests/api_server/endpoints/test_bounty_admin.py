@@ -10,6 +10,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event
 
 from ditto.tests.api_server.endpoints.test_bounties import publish as publish_bounty
 from ditto.tests.api_server.endpoints.test_bounty_claims import (
@@ -18,6 +19,7 @@ from ditto.tests.api_server.endpoints.test_bounty_claims import (
     ALICE,
     BOB,
     CAROL,
+    DAVE,
     ISSUE,
     REPO,
     World,
@@ -133,6 +135,64 @@ async def test_the_operator_view_audits_every_decision(world):
         "fixture pause for audit",
     ):
         assert private not in public
+
+
+async def reopen(world, claim: dict) -> None:
+    reopened = await world.client.post(
+        f"{ADMIN}/slots/{claim['slot_id']}/reopen",
+        headers=_HEADERS,
+        json={
+            "reason": "fixture reopen for history",
+            "confirmation": f"REOPEN BOUNTY SLOT {REPO}#{ISSUE} ROUND 1 SLOT "
+            f"{claim['position']}",
+        },
+    )
+    assert reopened.status_code == 200, reopened.text
+
+
+async def statements_of_operator_view(world, engine) -> tuple[int, dict]:
+    statements: list[str] = []
+
+    def count(_conn, _cursor, statement, *_args) -> None:
+        statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", count)
+    try:
+        view = await operator(world)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", count)
+    return len(statements), view
+
+
+async def test_the_operator_view_reads_history_in_a_fixed_number_of_statements(
+    world, engine
+):
+    await world.start(ALICE, BOB, CAROL, DAVE)
+    # Every kind of record a claim view reads: payments, a submission and its
+    # review, an appeal, a paid refund and an award, and a reopened claim.
+    won = await accepted(world, ALICE)
+    lost = (await submit(world, BOB, await claimed(world, BOB))).json()
+    await review(world, lost, "reject")
+    rejection = next(e for e in await events(world) if e["kind"] == "rejected")
+    await appeal(world, BOB, lost, rejection["event_id"], "Fixture private statement.")
+    await policy(world)
+    granted = (await award(world, won, 40_000_000_000)).json()
+    refund = obligation(granted, "fee_refund")
+    await approve(world, refund)
+    await dispatch(world, refund)
+    left = await claimed(world, CAROL)
+    assert (await withdraw(world, CAROL, left)).status_code == 200
+    await reopen(world, left)
+    before, view = await statements_of_operator_view(world, engine)
+    assert len(view["claims"]) == 3
+    # Lapsed and reopened slots keep adding claims to the bounty's history.
+    for who in (DAVE, CAROL, DAVE):
+        again = await claimed(world, who)
+        assert (await withdraw(world, who, again)).status_code == 200
+        await reopen(world, again)
+    after, view = await statements_of_operator_view(world, engine)
+    assert len(view["claims"]) == 6
+    assert after == before
 
 
 async def test_slot_actions_audit_what_they_changed(world):

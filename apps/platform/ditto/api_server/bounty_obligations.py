@@ -37,6 +37,8 @@ from ditto.db.models import (
 )
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 LIVE_TRANSFER_STATES = ("dispatched", "uncertain", "confirmed")
@@ -78,26 +80,74 @@ async def obligation_state(
     obligation: BountyObligation,
     policy: BountyPayoutPolicy | None,
 ) -> ObligationState:
+    return (await obligation_states(session, [obligation], policy))[
+        obligation.obligation_id
+    ]
+
+
+async def obligation_states(
+    session: AsyncSession,
+    obligations: list[BountyObligation],
+    policy: BountyPayoutPolicy | None,
+) -> dict[UUID, ObligationState]:
+    """Each obligation's state, in two reads however many obligations there are."""
+    settled = [o.obligation_id for o in obligations if o.kind != "fee_retained"]
+    transfers: dict[UUID, list[BountyTransfer]] = {}
+    # Distinct operators who approved each round under the policy in force.
+    approvals: dict[tuple[UUID, int], int] = {}
+    if settled:
+        for transfer in await session.scalars(
+            select(BountyTransfer)
+            .where(BountyTransfer.obligation_id.in_(settled))
+            .order_by(BountyTransfer.round)
+        ):
+            transfers.setdefault(transfer.obligation_id, []).append(transfer)
+    if settled and policy is not None:
+        approvals = {
+            (obligation_id, round_number): int(count)
+            for obligation_id, round_number, count in await session.execute(
+                select(
+                    BountyObligationApproval.obligation_id,
+                    BountyObligationApproval.round,
+                    func.count(func.distinct(BountyObligationApproval.actor)),
+                )
+                .where(
+                    BountyObligationApproval.obligation_id.in_(settled),
+                    BountyObligationApproval.policy_revision == policy.revision,
+                )
+                .group_by(
+                    BountyObligationApproval.obligation_id,
+                    BountyObligationApproval.round,
+                )
+            )
+        }
+    return {
+        o.obligation_id: _derive(
+            o, transfers.get(o.obligation_id, []), approvals, policy
+        )
+        for o in obligations
+    }
+
+
+def _derive(
+    obligation: BountyObligation,
+    transfers: list[BountyTransfer],
+    approved: dict[tuple[UUID, int], int],
+    policy: BountyPayoutPolicy | None,
+) -> ObligationState:
     if obligation.kind == "fee_retained":
         return ObligationState("retained", 0, 0, 0, [])
-    transfers = list(
-        await session.scalars(
-            select(BountyTransfer)
-            .where(BountyTransfer.obligation_id == obligation.obligation_id)
-            .order_by(BountyTransfer.round)
-        )
-    )
     latest = transfers[-1] if transfers else None
     if latest is not None and latest.state in LIVE_TRANSFER_STATES:
         return ObligationState(
             latest.state,
             latest.round,
-            await _approvals(session, obligation, latest.round, policy),
+            approved.get((obligation.obligation_id, latest.round), 0),
             required_approvals(obligation.amount_alpha_rao, policy),
             transfers,
         )
     round_number = latest.round + 1 if latest is not None else 1
-    approvals = await _approvals(session, obligation, round_number, policy)
+    approvals = approved.get((obligation.obligation_id, round_number), 0)
     required = required_approvals(obligation.amount_alpha_rao, policy)
     if policy is not None and required is None:
         state = "over_policy_limit"
@@ -109,27 +159,6 @@ async def obligation_state(
     else:
         state = "awaiting_approval"
     return ObligationState(state, round_number, approvals, required, transfers)
-
-
-async def _approvals(
-    session: AsyncSession,
-    obligation: BountyObligation,
-    round_number: int,
-    policy: BountyPayoutPolicy | None,
-) -> int:
-    """Distinct operators who approved this round under the policy in force."""
-    if policy is None:
-        return 0
-    return int(
-        await session.scalar(
-            select(func.count(func.distinct(BountyObligationApproval.actor))).where(
-                BountyObligationApproval.obligation_id == obligation.obligation_id,
-                BountyObligationApproval.round == round_number,
-                BountyObligationApproval.policy_revision == policy.revision,
-            )
-        )
-        or 0
-    )
 
 
 def transfer_view(transfer: BountyTransfer) -> BountyTransferView:

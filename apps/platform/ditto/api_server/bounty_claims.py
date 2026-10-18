@@ -58,7 +58,12 @@ from ditto.api_server.bounty_identity import (
     prepare_bounty_identity,
     require_verified_bounty_contributor,
 )
-from ditto.api_server.bounty_obligations import current_policy, obligation_view
+from ditto.api_server.bounty_obligations import (
+    ObligationState,
+    current_policy,
+    obligation_states,
+    obligation_view,
+)
 from ditto.api_server.cla import ClaConsentRequired
 from ditto.api_server.contributor_identity import (
     ContributorProofRejected,
@@ -78,6 +83,7 @@ from ditto.db.models import (
     BountyEvent,
     BountyFeePayment,
     BountyObligation,
+    BountyPayoutPolicy,
     BountyReview,
     BountyRevision,
     BountyRound,
@@ -626,40 +632,68 @@ async def claim_view(
     Only the hold's response, which goes to whoever sent the signed claim,
     passes ``for_signer``.
     """
-    bounty = await session.get(Bounty, claim.bounty_id)
-    slot = await session.get(BountySlot, claim.slot_id)
-    assert bounty is not None and slot is not None
-    payments = list(
-        await session.scalars(
-            select(BountyFeePayment)
-            .where(BountyFeePayment.claim_id == claim.claim_id)
-            .order_by(BountyFeePayment.recorded_at, BountyFeePayment.block_hash)
+    [view] = await claim_views(session, [claim], now=now, for_signer=for_signer)
+    return view
+
+
+async def claim_views(
+    session: AsyncSession,
+    claims: list[BountyClaim],
+    *,
+    now: datetime,
+    for_signer: bool = False,
+) -> list[BountyClaimView]:
+    """Each claim's view, in a fixed number of reads however many claims there are."""
+    if not claims:
+        return []
+    ids = [claim.claim_id for claim in claims]
+    bounties = {
+        bounty.bounty_id: bounty
+        for bounty in await session.scalars(
+            select(Bounty).where(Bounty.bounty_id.in_({c.bounty_id for c in claims}))
         )
-    )
-    obligations = list(
-        await session.scalars(
-            select(BountyObligation)
-            .where(BountyObligation.claim_id == claim.claim_id)
-            .order_by(BountyObligation.created_at, BountyObligation.obligation_id)
+    }
+    slots = {
+        slot.slot_id: slot
+        for slot in await session.scalars(
+            select(BountySlot).where(
+                BountySlot.slot_id.in_({c.slot_id for c in claims})
+            )
         )
-    )
-    refunds = [o for o in obligations if o.kind == "fee_refund"]
-    policy = await current_policy(session) if obligations else None
-    facts = list(
-        await session.scalars(
-            select(BountyDeliveryFact)
-            .where(BountyDeliveryFact.claim_id == claim.claim_id)
-            .order_by(BountyDeliveryFact.fact_id)
-        )
-    )
-    submissions = (
+    }
+    payments: dict[UUID, list[BountyFeePayment]] = {}
+    for payment in await session.scalars(
+        select(BountyFeePayment)
+        .where(BountyFeePayment.claim_id.in_(ids))
+        .order_by(BountyFeePayment.recorded_at, BountyFeePayment.block_hash)
+    ):
+        payments.setdefault(payment.claim_id, []).append(payment)
+    obligations: dict[UUID, list[BountyObligation]] = {}
+    for owed in await session.scalars(
+        select(BountyObligation)
+        .where(BountyObligation.claim_id.in_(ids))
+        .order_by(BountyObligation.created_at, BountyObligation.obligation_id)
+    ):
+        obligations.setdefault(owed.claim_id, []).append(owed)
+    owed_by_all = [owed for listed in obligations.values() for owed in listed]
+    policy = await current_policy(session) if owed_by_all else None
+    states = await obligation_states(session, owed_by_all, policy)
+    facts: dict[UUID, list[BountyDeliveryFact]] = {}
+    for fact in await session.scalars(
+        select(BountyDeliveryFact)
+        .where(BountyDeliveryFact.claim_id.in_(ids))
+        .order_by(BountyDeliveryFact.fact_id)
+    ):
+        facts.setdefault(fact.claim_id, []).append(fact)
+    submissions: dict[UUID, list[tuple[BountySubmission, BountyReview | None]]] = {}
+    for submission, decision in (
         await session.execute(
             select(BountySubmission, BountyReview)
             .outerjoin(
                 BountyReview,
                 BountyReview.submission_id == BountySubmission.submission_id,
             )
-            .where(BountySubmission.claim_id == claim.claim_id)
+            .where(BountySubmission.claim_id.in_(ids))
             # A resubmission follows the decision before it, so on a tied
             # timestamp decided submissions come first, the undecided last.
             .order_by(
@@ -668,18 +702,76 @@ async def claim_view(
                 BountySubmission.submission_id,
             )
         )
-    ).all()
-    appeals = (
+    ).tuples():
+        submissions.setdefault(submission.claim_id, []).append((submission, decision))
+    appeals: dict[UUID, list[tuple[BountyAppeal, BountyAppealDecision | None]]] = {}
+    for filed, ruling in (
         await session.execute(
             select(BountyAppeal, BountyAppealDecision)
             .outerjoin(
                 BountyAppealDecision,
                 BountyAppealDecision.appeal_id == BountyAppeal.appeal_id,
             )
-            .where(BountyAppeal.claim_id == claim.claim_id)
+            .where(BountyAppeal.claim_id.in_(ids))
             .order_by(BountyAppeal.filed_at, BountyAppeal.appeal_id)
         )
-    ).all()
+    ).tuples():
+        appeals.setdefault(filed.claim_id, []).append((filed, ruling))
+    # A claim that no longer holds its slot reads its latest reopen.
+    released = [c.claim_id for c in claims if slots[c.slot_id].claim_id != c.claim_id]
+    reopened: dict[UUID, str | None] = {}
+    if released:
+        for claim_id, prior_status in (
+            await session.execute(
+                select(BountySlotAction.claim_id, BountySlotAction.prior_status)
+                .where(
+                    BountySlotAction.claim_id.in_(released),
+                    BountySlotAction.action == "reopen",
+                )
+                .order_by(BountySlotAction.action_id.desc())
+            )
+        ).tuples():
+            assert claim_id is not None
+            reopened.setdefault(claim_id, prior_status)
+    return [
+        await _claim_view(
+            session,
+            claim,
+            bounty=bounties[claim.bounty_id],
+            slot=slots[claim.slot_id],
+            payments=payments.get(claim.claim_id, []),
+            obligations=obligations.get(claim.claim_id, []),
+            policy=policy,
+            states=states,
+            facts=facts.get(claim.claim_id, []),
+            submissions=submissions.get(claim.claim_id, []),
+            appeals=appeals.get(claim.claim_id, []),
+            reopened_from=reopened.get(claim.claim_id),
+            now=now,
+            for_signer=for_signer,
+        )
+        for claim in claims
+    ]
+
+
+async def _claim_view(
+    session: AsyncSession,
+    claim: BountyClaim,
+    *,
+    bounty: Bounty,
+    slot: BountySlot,
+    payments: list[BountyFeePayment],
+    obligations: list[BountyObligation],
+    policy: BountyPayoutPolicy | None,
+    states: dict[UUID, ObligationState],
+    facts: list[BountyDeliveryFact],
+    submissions: list[tuple[BountySubmission, BountyReview | None]],
+    appeals: list[tuple[BountyAppeal, BountyAppealDecision | None]],
+    reopened_from: str | None,
+    now: datetime,
+    for_signer: bool,
+) -> BountyClaimView:
+    refunds = [o for o in obligations if o.kind == "fee_refund"]
     allocated = next((p for p in payments if p.outcome == "allocated"), None)
     holds_slot = slot.claim_id == claim.claim_id
     if allocated is not None:
@@ -693,21 +785,11 @@ async def claim_view(
     # The claim's own slot status: whatever the slot holds now belongs to
     # another claim. A reopened claim keeps the outcome it was reopened from;
     # a released hold reads open.
-    if holds_slot:
-        slot_status = effective_slot_status(slot, claim, now=now)
-    else:
-        slot_status = (
-            await session.scalar(
-                select(BountySlotAction.prior_status)
-                .where(
-                    BountySlotAction.claim_id == claim.claim_id,
-                    BountySlotAction.action == "reopen",
-                )
-                .order_by(BountySlotAction.action_id.desc())
-                .limit(1)
-            )
-            or "open"
-        )
+    slot_status = (
+        effective_slot_status(slot, claim, now=now)
+        if holds_slot
+        else reopened_from or "open"
+    )
     return BountyClaimView(
         claim_id=claim.claim_id,
         bounty_id=claim.bounty_id,
@@ -800,7 +882,9 @@ async def claim_view(
             for appeal, decision in appeals
         ],
         obligations=[
-            await obligation_view(session, obligation, policy)
+            await obligation_view(
+                session, obligation, policy, state=states[obligation.obligation_id]
+            )
             for obligation in obligations
         ],
         facts=[
