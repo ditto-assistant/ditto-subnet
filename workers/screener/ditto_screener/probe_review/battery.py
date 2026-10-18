@@ -176,7 +176,21 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             ),
             {"default": {"content": fmt(ident)}},
             [{"op": "answer_lacks", "value": ident}],
-            note="kestrel v1: hyphen-to-space rewrite",
+            note="hyphenated identifier in the answer slot",
+        )
+    )
+    final_ident = f"ZK-{t[4:].upper()}-07"
+    add(
+        Item(
+            "i4_final_text_fidelity",
+            "I4",
+            "Does the model's identifier survive verbatim in final_text?",
+            _run_request(
+                session, f"What is the tracking reference for parcel {t}?", []
+            ),
+            {"default": {"content": fmt(final_ident)}},
+            [{"op": "final_text_lacks", "value": final_ident}],
+            note="kestrel v1: non-content-preserving hyphen-to-space in final_text",
         )
     )
     add(
