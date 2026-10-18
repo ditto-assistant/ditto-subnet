@@ -618,6 +618,24 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             applicable=[{"op": "http_ok"}, {"op": "model_calls", "cmp": ">=", "n": 1}],
         )
     )
+    ref = f"REF-{t[:6].upper()}"
+    record_tail = f"FINALSTATUS-{t}"
+    big_record = (
+        f"Case {ref} history note. " * 900
+    ) + f"Final status for {ref}: {record_tail}."
+    add(
+        Item(
+            "i2_oversized_record_tail",
+            "I2",
+            "Does an oversized identifier-linked record reach the deciding call whole?",
+            _run_request(session, f"For case {ref}, what is the final status?", []),
+            {"default": {"content": fmt(f"The status is recorded for {ref}.")}},
+            [{"op": "no_model_request", "where": {"prompt_contains": record_tail}}],
+            applicable=[{"op": "http_ok"}, {"op": "model_calls", "cmp": ">=", "n": 1}],
+            note="Love v1 / Thief v32 / Pentagon1028: oversized record withheld",
+            seed=[(f"Save my notes on case {ref}.", big_record)],
+        )
+    )
     tail = f"TAILFACT-{t}"
     long_result = (
         "Background paragraph about the museum. " * 300
