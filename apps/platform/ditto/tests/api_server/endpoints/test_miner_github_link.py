@@ -2169,6 +2169,28 @@ async def test_exchange_deadline_fails_as_an_outage_and_still_revokes(
     assert [r.method for r in provider.requests].count("DELETE") == 1
 
 
+async def test_a_deadline_reached_while_revoking_keeps_the_rejection(
+    app, session_maker, monkeypatch
+):
+    from ditto.api_server import github_link
+
+    provider = setup(app, session_maker)
+    provider.scope = "repo"
+    provider.revoke_gate = asyncio.Event()
+    monkeypatch.setattr(github_link, "EXCHANGE_DEADLINE_SECONDS", 0.2)
+    exchange = asyncio.create_task(
+        app.state.github_link.exchange(code="fixture", verifier="fixture")
+    )
+    while not any(r.method == "DELETE" for r in provider.requests):
+        await asyncio.sleep(0.01)
+    # GitHub answered in time; only the revocation outlasts the deadline.
+    await asyncio.sleep(0.3)
+    provider.revoke_gate.set()
+    with pytest.raises(GithubLinkRejected, match="public-profile-only") as rejected:
+        await exchange
+    assert not isinstance(rejected.value, GithubProviderUnavailable)
+
+
 async def test_a_cancelled_exchange_still_finishes_its_revocation(app, session_maker):
     provider = setup(app, session_maker)
     github = app.state.github_link

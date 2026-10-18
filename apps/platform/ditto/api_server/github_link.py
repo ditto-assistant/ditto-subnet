@@ -136,32 +136,38 @@ class GithubLinkClient:
         return f"https://github.com/login/oauth/authorize?{query}"
 
     async def exchange(self, *, code: str, verifier: str) -> GithubIdentity:
+        # The deadline bounds GitHub's two answers, not the revocation after
+        # them, which has its own bound: a deadline reached while revoking
+        # must not replace the verification's own outcome.
+        deadline = asyncio.get_running_loop().time() + EXCHANGE_DEADLINE_SECONDS
         try:
-            async with asyncio.timeout(EXCHANGE_DEADLINE_SECONDS):
-                return await self._exchange(code=code, verifier=verifier)
+            return await self._exchange(code=code, verifier=verifier, deadline=deadline)
         except TimeoutError:
             raise GithubProviderUnavailable(
                 "GitHub did not answer in time; start a new link attempt"
             ) from None
 
-    async def _exchange(self, *, code: str, verifier: str) -> GithubIdentity:
+    async def _exchange(
+        self, *, code: str, verifier: str, deadline: float
+    ) -> GithubIdentity:
         try:
             async with httpx.AsyncClient(
                 transport=self.transport,
                 timeout=self.config.timeout_seconds,
                 follow_redirects=False,
             ) as client:
-                response = await client.post(
-                    "https://github.com/login/oauth/access_token",
-                    headers={"Accept": "application/json"},
-                    data={
-                        "client_id": self.config.client_id,
-                        "client_secret": self.config.client_secret,
-                        "redirect_uri": self.config.redirect_url,
-                        "code": code,
-                        "code_verifier": verifier,
-                    },
-                )
+                async with asyncio.timeout_at(deadline):
+                    response = await client.post(
+                        "https://github.com/login/oauth/access_token",
+                        headers={"Accept": "application/json"},
+                        data={
+                            "client_id": self.config.client_id,
+                            "client_secret": self.config.client_secret,
+                            "redirect_uri": self.config.redirect_url,
+                            "code": code,
+                            "code_verifier": verifier,
+                        },
+                    )
                 response.raise_for_status()
                 token_response = response.json()
                 token = token_response.get("access_token")
@@ -187,14 +193,15 @@ class GithubLinkClient:
                         raise GithubLinkRejected(
                             "GitHub linking requires a public-profile-only OAuth app"
                         )
-                    user_response = await client.get(
-                        "https://api.github.com/user",
-                        headers={
-                            "Accept": "application/vnd.github+json",
-                            "Authorization": f"Bearer {token}",
-                            "X-GitHub-Api-Version": "2022-11-28",
-                        },
-                    )
+                    async with asyncio.timeout_at(deadline):
+                        user_response = await client.get(
+                            "https://api.github.com/user",
+                            headers={
+                                "Accept": "application/vnd.github+json",
+                                "Authorization": f"Bearer {token}",
+                                "X-GitHub-Api-Version": "2022-11-28",
+                            },
+                        )
                     user_response.raise_for_status()
                     user = user_response.json()
                     user_id, login = user.get("id"), user.get("login")

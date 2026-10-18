@@ -42,7 +42,12 @@ DEADLINE_STATUSES = ("claimed", "rework")
 def effective_slot_status(
     slot: BountySlot, holder: BountyClaim | None, *, now: datetime
 ) -> str:
-    """A slot's status as of ``now``, before any write records it."""
+    """A slot's status as of ``now``, before any write records it.
+
+    ``holder`` is ``None`` only for an open slot, read through an outer join: a
+    held slot always has its claim (``ck_bounty_slots_claim`` and its foreign
+    key), so the ``None`` test below only narrows the type.
+    """
     if slot.status == "held" and (holder is None or now >= holder.hold_expires_at):
         return "open"
     if (
