@@ -1071,6 +1071,45 @@ async def test_payout_resolution_stops_at_its_deadline_and_resumes_later(
     assert await collector.resolve_pending_payouts(SimpleNamespace()) == 1
 
 
+async def test_a_payout_row_cut_short_by_the_deadline_stays_pending(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.db.models import SourceEmissionPayout
+
+    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
+
+    async def slow_receipt(**_kwargs):
+        await asyncio.sleep(5)
+
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=slow_receipt, _safe_rpc_error=str
+    )
+    soon = asyncio.get_running_loop().time() + 0.05
+    assert (
+        await collector.resolve_pending_payouts(SimpleNamespace(), deadline=soon) == 0
+    )
+    async with session_maker() as session:
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        # At most a transient retry note: never terminal, never confirmed.
+        assert row.terminal is False
+        assert row.blocked_reason is None or row.blocked_reason.startswith(
+            "receipt_retry"
+        )
+
+
+async def test_a_provider_timeout_is_not_mistaken_for_the_deadline(
+    app, client, session_maker, monkeypatch
+):
+    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
+    del a
+    monkeypatch.setattr(
+        collector, "_refetch_receipt", AsyncMock(side_effect=TimeoutError)
+    )
+    later = asyncio.get_running_loop().time() + 60
+    with pytest.raises(TimeoutError):
+        await collector.resolve_pending_payouts(SimpleNamespace(), deadline=later)
+
+
 async def test_reopened_payout_reproduced_ambiguity_is_terminal_again(
     app, client, session_maker, monkeypatch
 ):

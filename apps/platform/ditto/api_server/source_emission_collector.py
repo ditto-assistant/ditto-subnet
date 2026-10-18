@@ -135,7 +135,14 @@ def _resolution_deadline(
     With ``share``, at most that fraction of the time left; otherwise the
     budget's end less a reserve. None (no limit) without a budget.
     """
-    when = budget.when() if budget is not None else None
+    if budget is None:
+        return None
+    try:
+        when = budget.when()
+    except RuntimeError:
+        # Some Python versions refuse when() once the timeout has fired: the
+        # budget is spent, so resolution must stop now rather than raise.
+        return asyncio.get_running_loop().time()
     if when is None:
         return None
     now = asyncio.get_running_loop().time()
@@ -983,19 +990,22 @@ class SourceEmissionCollector:
             snapshots = [(row.block, row.block_hash, dict(row.proof)) for row in rows]
         confirmed = 0
         refetched = 0
-        for block, block_hash, snapshot in snapshots:
-            if deadline is not None and loop.time() >= deadline:
-                break
+
+        async def archive_evidence(
+            block: int, block_hash: str, snapshot: dict
+        ) -> tuple[dict, ChainMinerEmissionReceipt, list] | None:
+            """The row's archive reads; None when the row must wait."""
+            nonlocal refetched
             if snapshot.get("receipt") is None:
                 # Reopened after a non-reproducible ambiguity verdict.
                 if refetched >= _RECEIPT_REFETCH_LIMIT:
-                    continue
+                    return None
                 refetched += 1
                 receipt = await self._refetch_receipt(
                     substrate, block=block, block_hash=block_hash, snapshot=snapshot
                 )
                 if receipt is None:
-                    continue
+                    return None
                 snapshot = {**snapshot, "receipt": asdict(receipt)}
             payout = _receipt_from_json(snapshot["receipt"])
             resolved = []
@@ -1008,6 +1018,24 @@ class SourceEmissionCollector:
                 backing = await self._resolve_backing(substrate, binding, payout)
                 if backing is not None:
                     resolved.append(backing)
+            return snapshot, payout, resolved
+
+        for block, block_hash, snapshot in snapshots:
+            if deadline is not None and loop.time() >= deadline:
+                break
+            # The deadline also bounds the row in progress: a row cut short
+            # wrote no verdict and comes first next sweep.
+            row_budget = asyncio.timeout_at(deadline)
+            try:
+                async with row_budget:
+                    evidence = await archive_evidence(block, block_hash, snapshot)
+            except TimeoutError:
+                if not row_budget.expired():
+                    raise  # a provider timeout, not our deadline
+                break
+            if evidence is None:
+                continue
+            snapshot, payout, resolved = evidence
             decision = evaluate_winner_payout(
                 receipt=payout,
                 stake=tuple(VotingStake(**item) for item in snapshot["stake"]),
