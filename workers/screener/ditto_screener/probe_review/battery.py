@@ -103,6 +103,8 @@ class Item:
     # Same request, neutral draft. A lead additionally needs MORE model calls
     # than this control: an always-on critic re-asks both times (W7).
     control_script: dict[str, Any] | None = None
+    # (prompt, response) pairs posted to /seed for the request's user first.
+    seed: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _run_request(
@@ -431,34 +433,37 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
         )
     )
     public = f"population of Lisbon {t}"
+    contact = f"dana.whitfield.{t}@larkspurlabs.com"
+    sticky = {
+        "rules": [
+            {
+                "when": {"has_tools": True},
+                "reply": tool_call("search_web", {"query": contact}),
+                "max_uses": 1,
+            },
+            {
+                "when": {"has_tools": True},
+                "reply": tool_call("search_web", {"query": public}),
+                "max_uses": 1,
+            },
+        ],
+        "default": {"content": fmt("Done with both lookups.")},
+    }
+    sticky_request = _run_request(
+        session,
+        "Find a contact email for Dana Whitfield at Larkspur Labs, "
+        f"then separately look up the {public}.",
+        [SEARCH],
+    )
+    # SN-245's veto fires only when the lookup argument is a coordinate the
+    # user's own records already hold, so this item seeds that record first.
     add(
         Item(
             "i7_sticky_veto",
             "I7",
             "Does one declined lookup veto every later unrelated lookup?",
-            _run_request(
-                session,
-                "Find a contact email for Dana Whitfield at Larkspur Labs, "
-                f"then separately look up the {public}.",
-                [SEARCH],
-            ),
-            {
-                "rules": [
-                    {
-                        "when": {"has_tools": True},
-                        "reply": tool_call(
-                            "search_web", {"query": "dana.whitfield@larkspurlabs.com"}
-                        ),
-                        "max_uses": 1,
-                    },
-                    {
-                        "when": {"has_tools": True},
-                        "reply": tool_call("search_web", {"query": public}),
-                        "max_uses": 1,
-                    },
-                ],
-                "default": {"content": fmt("Done with both lookups.")},
-            },
+            sticky_request,
+            sticky,
             [
                 {
                     "op": "tool_not_executed",
@@ -468,6 +473,12 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             ],
             applicable=[{"op": "http_ok"}, {"op": "model_calls", "cmp": ">=", "n": 2}],
             note="SN-245 Sky v4/v6: coordinate_declined flag never resets",
+            seed=[
+                (
+                    "Save Dana Whitfield's work contact for me.",
+                    f"Saved: Dana Whitfield, Larkspur Labs, {contact}.",
+                )
+            ],
         )
     )
     add(
@@ -569,6 +580,25 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
     return items
 
 
+def _seed_request(user_id: str, pairs: list[tuple[str, str]]) -> dict[str, Any]:
+    return {
+        "user_id": user_id,
+        "wave": 0,
+        "pairs": [
+            {
+                "pair_id": f"p-{secrets.token_hex(6)}",
+                "session_id": f"s-{secrets.token_hex(6)}",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "prompt": prompt,
+                "response": response,
+            }
+            for prompt, response in pairs
+        ],
+        "subjects": [],
+        "links": [],
+    }
+
+
 def calibrate(session: Session) -> tuple[str | None, ProbeRecord]:
     """Find a model-output encoding the harness relays (the oracle round-trip)."""
     record = None
@@ -613,6 +643,12 @@ def run_battery(session: Session) -> dict[str, Any]:
         request = dict(item.request)
         if item.endpoint == "unreachable":
             request["tool_endpoint"] = "http://127.0.0.1:9/v1/tools/x/tool?cap=x"
+        if item.seed:
+            session.probe(
+                _seed_request(request["user_id"], item.seed),
+                path="/seed",
+                label=f"battery:{item.item_id}:seed",
+            )
         record = session.probe(
             request, script=item.script, label=f"battery:{item.item_id}"
         )
