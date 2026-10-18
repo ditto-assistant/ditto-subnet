@@ -455,5 +455,16 @@ ansible-playbook -i inventory/hetzner-screener.yml playbooks/hetzner-screener-lo
 A fresh check-mode run predicts account creation and skips key ownership until
 the account actually exists. Repeat the check after applying. The role validates
 SSH configuration and reloads SSH only when its allowlist changes; no workers
-are restarted. Log reads use `journalctl --no-pager -u 'ditto-screener-worker@*'`.
-Operational tooling adoption is tracked separately in DITTO-1093.
+are restarted.
+
+For normal log reads use the bounded helper rather than an operator shell:
+
+```bash
+.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh --since 15m --lines 200
+.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh --worker 1 --json --lines 20
+```
+
+It pins `logs@100.79.84.29` and the host key, offers one explicit
+`DITTOBOX_SSH_IDENTITY`, and never retries as an operator or through public SSH.
+Backroom remains the first source for live queue, capacity and attempt state.
+Tooling adoption is tracked in DITTO-1093.
