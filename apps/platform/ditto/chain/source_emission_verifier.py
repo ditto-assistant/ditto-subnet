@@ -767,6 +767,18 @@ class _RangeEndpoints:
 _MAX_IDENTITY_CHANGES = 16
 
 
+async def _gather_or_cancel(*coroutines: Awaitable[Any]) -> list[Any]:
+    """``asyncio.gather``, but a failure cancels and awaits the siblings."""
+    tasks = [asyncio.ensure_future(c) for c in coroutines]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 async def _storage_change_blocks(
     substrate: Any,
     key_hex: str,
@@ -795,25 +807,14 @@ async def _storage_change_blocks(
             memo[block] = result["result"]
         return memo[block]
 
-    async def both(*coroutines: Awaitable[Any]) -> list[Any]:
-        """gather, but a failure cancels and awaits the sibling reads."""
-        tasks = [asyncio.ensure_future(c) for c in coroutines]
-        try:
-            return list(await asyncio.gather(*tasks))
-        except BaseException:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-
     async def changes(lo: int, hi: int) -> list[int]:
-        lo_hash, hi_hash = await both(at(lo), at(hi))
+        lo_hash, hi_hash = await _gather_or_cancel(at(lo), at(hi))
         if lo_hash == hi_hash:
             return []
         if hi - lo == 1:
             return [hi]
         mid = (lo + hi) // 2
-        left, right = await both(changes(lo, mid), changes(mid, hi))
+        left, right = await _gather_or_cancel(changes(lo, mid), changes(mid, hi))
         return left + right
 
     return await changes(low, high)
@@ -909,7 +910,7 @@ async def _range_endpoints(
     # for a hotkey swap, which registers nothing; a UID's hotkey can be
     # swapped at most once per HotkeySwapOnSubnetInterval (a day), so its
     # value cannot flip back inside one range either.
-    registered = await asyncio.gather(
+    registered = await _gather_or_cancel(
         *(mapping_at("BlockAtRegistration", at) for at in (start, end))
     )
     if any(set(dict(rows)) != set(start_map) for rows in registered):
@@ -923,31 +924,22 @@ async def _range_endpoints(
     if len(changed) > _MAX_IDENTITY_CHANGES:
         return full(code[0])
     gate = asyncio.Semaphore(8)
-    per_key = []
-    for uid in changed:
-        for storage in ("BlockAtRegistration", "Keys"):
-            key = await substrate.create_storage_key(
-                "SubtensorModule", storage, [netuid, uid], block_hash=end
-            )
-            per_key.append(
-                asyncio.create_task(
-                    _storage_change_blocks(
-                        substrate,
-                        key.to_hex(),
-                        hashes,
-                        first_block - 1,
-                        last_block,
-                        gate,
-                    )
-                )
-            )
-    try:
-        found = await asyncio.gather(*per_key)
-    except BaseException:
-        for task in per_key:
-            task.cancel()
-        await asyncio.gather(*per_key, return_exceptions=True)
-        raise
+
+    async def bisect(uid: int, storage: str) -> list[int]:
+        key = await substrate.create_storage_key(
+            "SubtensorModule", storage, [netuid, uid], block_hash=end
+        )
+        return await _storage_change_blocks(
+            substrate, key.to_hex(), hashes, first_block - 1, last_block, gate
+        )
+
+    found = await _gather_or_cancel(
+        *(
+            bisect(uid, storage)
+            for uid in changed
+            for storage in ("BlockAtRegistration", "Keys")
+        )
+    )
     identity_changes: set[int] = set()
     for registrations, swaps in zip(found[::2], found[1::2], strict=True):
         blocks = {*registrations, *swaps}
