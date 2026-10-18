@@ -116,3 +116,13 @@ the report and the pin script therefore read `metadata_at(substrate, hash)`
 (`state_getMetadata` at that exact state, decoded with a fresh configuration)
 and never `init_runtime`. Otherwise an upgrade that changed a consumed type
 would be admitted, and cached by code hash, on its predecessor's interface.
+
+The reverse applies to the *storage* at that block. Its state was written by
+the previous runtime (the new one's migrations run in the next block), so the
+library decodes it with the previous metadata, and an item added by the
+upgrade is "not found" there. `SubnetEpochConsensus` reads are therefore gated
+by the runtime that **wrote** the state, the code stored at its parent
+(`_epoch_consensus_at`). A writer from before v475 runs Yuma only. Before this
+fix the collector stopped at block 9233782 on 2026-10-18, the first block
+whose parent is v475's upgrade block 9233781. The treasury receipt reader
+gates the same way.

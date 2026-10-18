@@ -122,6 +122,35 @@ async def admit_runtime(substrate: Any, *, code_hash: Any, at: Any) -> RuntimeAd
     return admitted
 
 
+async def _code_hash_at(substrate: Any, at: str) -> Any:
+    result = await substrate.rpc_request("state_getStorageHash", ["0x3a636f6465", at])
+    return result.get("result") if isinstance(result, dict) else None
+
+
+async def _epoch_consensus_at(
+    substrate: Any, *, netuid: int, at: str, writer: RuntimeAdmission
+) -> Any:
+    """``SubnetEpochConsensus`` in the state at ``at``.
+
+    ``writer`` is the admission of the runtime stored at ``at``'s parent, the
+    one that executed ``at``. The first block that stores an upgrade's code
+    was still executed, and its state written, by the previous runtime; the
+    new one's migrations run in the next block. A writer without the item
+    (before v475) runs Yuma only, and the library decodes that state with the
+    writer's metadata, where reading the item fails as "not found".
+    """
+    if not writer.epoch_consensus_gated:
+        return "Yuma"
+    return _unwrap(
+        await substrate.query(
+            module="SubtensorModule",
+            storage_function="SubnetEpochConsensus",
+            params=[netuid],
+            block_hash=at,
+        )
+    )
+
+
 @dataclass(frozen=True)
 class VotingStake:
     uid: int
@@ -433,13 +462,32 @@ async def read_source_emission_block(
     if controls[1] is not True or controls[3] is not True:
         raise ValueError("unsupported direct/manual weights mode")
     if admissions[1].epoch_consensus_gated:
+        # Each state is gated by the runtime that wrote it: the parent's state
+        # by the code stored at the grandparent (see _epoch_consensus_at).
+        grandparent = await hash_at(block - 2) if block > 1 else None
+        if not grandparent:
+            raise ValueError("missing historical block")
+        writer_code = await cache.get(
+            ("code_hash", grandparent),
+            functools.partial(_code_hash_at, substrate, grandparent),
+        )
+        writers = (
+            await admit_runtime(substrate, code_hash=writer_code, at=grandparent),
+            admissions[0],
+        )
         modes = await asyncio.gather(
             *(
                 cache.get(
                     (netuid, "SubnetEpochConsensus", at),
-                    functools.partial(read, "SubnetEpochConsensus", at, [netuid]),
+                    functools.partial(
+                        _epoch_consensus_at,
+                        substrate,
+                        netuid=netuid,
+                        at=at,
+                        writer=writer,
+                    ),
                 )
-                for at in (parent_hash, block_hash)
+                for at, writer in zip((parent_hash, block_hash), writers, strict=True)
             )
         )
         if any(mode != "Yuma" for mode in modes):
@@ -888,6 +936,25 @@ async def _range_endpoints(
     except (ValueError, ChainConnectionError):
         # The full scan admits the same fingerprint and reports why it stopped.
         return full()
+    # The end's state was written by the range's runtime; the start's by the
+    # code stored before it (see _epoch_consensus_at).
+    writers = {end: admission}
+    if admission.epoch_consensus_gated:
+        if first_block < 2:
+            return full(code[0])
+        before = await substrate.rpc_request("chain_getBlockHash", [[first_block - 2]])
+        rows = before.get("result") if isinstance(before, dict) else None
+        before_hash = rows[0] if isinstance(rows, list) and len(rows) == 1 else None
+        if not isinstance(before_hash, str):
+            return full(code[0])
+        try:
+            writers[start] = await admit_runtime(
+                substrate,
+                code_hash=await _code_hash_at(substrate, before_hash),
+                at=before_hash,
+            )
+        except (ValueError, ChainConnectionError):
+            return full(code[0])
     for at in (start, end):
         if await read("MechanismCountCurrent", at) != 1:
             return full(code[0])
@@ -895,7 +962,10 @@ async def _range_endpoints(
             return full(code[0])
         if (
             admission.epoch_consensus_gated
-            and await read("SubnetEpochConsensus", at) != "Yuma"
+            and await _epoch_consensus_at(
+                substrate, netuid=netuid, at=at, writer=writers[at]
+            )
+            != "Yuma"
         ):
             return full(code[0])
     start_keys, end_keys = await keys_at(start), await keys_at(end)
@@ -1203,30 +1273,41 @@ async def verify_finalized_weight_commit(substrate: Any, receipt: Any) -> None:
         raise ChainConnectionError("missing canonical commit block")
     if canonical != attempt.commit_block_hash:
         raise ValueError("commit block is not canonical")
-    for at in (await substrate.get_block_hash(attempt.commit_block - 1), canonical):
+
+    async def admitted_at(at: Any) -> RuntimeAdmission:
         if not at:
             raise ChainConnectionError("missing commit parent block")
         code = await substrate.rpc_request("state_getStorageHash", ["0x3a636f6465", at])
         if not isinstance(code, dict) or not code.get("result"):
             raise ChainConnectionError("missing historical commit runtime")
         try:
-            admission = await admit_runtime(substrate, code_hash=code["result"], at=at)
+            return await admit_runtime(substrate, code_hash=code["result"], at=at)
         except ValueError as error:
             raise ValueError("commit runtime is not audited") from error
-        if admission.epoch_consensus_gated:
-            # Null consensus queues commits differently; only Yuma is audited.
-            mode = _unwrap(
-                await substrate.query(
-                    module="SubtensorModule",
-                    storage_function="SubnetEpochConsensus",
-                    params=[receipt.netuid],
-                    block_hash=at,
-                )
+
+    parent = await substrate.get_block_hash(attempt.commit_block - 1)
+    parent_admission = await admitted_at(parent)
+    canonical_admission = await admitted_at(canonical)
+    for at, admission in ((parent, parent_admission), (canonical, canonical_admission)):
+        if not admission.epoch_consensus_gated:
+            continue
+        # Each state is gated by the runtime that wrote it, the one stored at
+        # its parent (_epoch_consensus_at).
+        writer = (
+            parent_admission
+            if at == canonical
+            else await admitted_at(
+                await substrate.get_block_hash(attempt.commit_block - 2)
             )
-            if mode is None:
-                raise ChainConnectionError("missing historical epoch consensus")
-            if mode != "Yuma":
-                raise ValueError("commit epoch consensus is not audited")
+        )
+        # Null consensus queues commits differently; only Yuma is audited.
+        mode = await _epoch_consensus_at(
+            substrate, netuid=receipt.netuid, at=at, writer=writer
+        )
+        if mode is None:
+            raise ChainConnectionError("missing historical epoch consensus")
+        if mode != "Yuma":
+            raise ValueError("commit epoch consensus is not audited")
     raw, decoded, events = await asyncio.gather(
         substrate.rpc_request("chain_getBlock", [canonical]),
         substrate.get_block(block_hash=canonical),

@@ -154,6 +154,8 @@ def chain(request: pytest.FixtureRequest) -> tuple[AsyncMock, dict]:
 
     async def rpc(method: str, params: list) -> dict:
         assert method == "state_getStorageHash"
+        if params[-1] in state.get("code_at", {}):
+            return {"result": state["code_at"][params[-1]]}
         return {
             "result": state.get("post_runtime", state["runtime"])
             if params[-1] == "h100"
@@ -463,10 +465,10 @@ def commit_chain(chain: tuple) -> tuple:
         },
     }
 
-    async def rpc(method: str, _params: list) -> dict:
+    async def rpc(method: str, params: list) -> dict:
         if method == "chain_getBlock":
             return {"result": {"block": {"extrinsics": [raw]}}}
-        return {"result": state["runtime"]}
+        return {"result": state.get("code_at", {}).get(params[-1], state["runtime"])}
 
     substrate.rpc_request.side_effect = rpc
 
@@ -642,6 +644,44 @@ async def test_null_epoch_consensus_fails_closed(chain: tuple, at: str) -> None:
     state["consensus"] = {at: "Null"}
     with pytest.raises(ValueError, match="unsupported epoch consensus"):
         await read_source_emission_block(substrate, netuid=118, block=100)
+
+
+def _library_decodes_with_the_writer(substrate: AsyncMock, state: dict) -> None:
+    """Fail SubnetEpochConsensus where the state's writer predates v475."""
+    query = substrate.query.side_effect
+
+    async def strict(**kw: Any) -> Any:
+        number = int(kw["block_hash"][1:])
+        writer = state.get("code_at", {}).get(f"h{number - 1}", state["runtime"])
+        if kw["storage_function"] == "SubnetEpochConsensus" and writer != _V475:
+            raise ValueError('Storage function "SubnetEpochConsensus" not found')
+        return await query(**kw)
+
+    substrate.query.side_effect = strict
+
+
+async def test_first_block_after_the_v475_upgrade_block_is_read(chain: tuple) -> None:
+    # h99 stores v475's code but was written by the previous runtime, whose
+    # metadata has no SubnetEpochConsensus (Finney block 9233781).
+    substrate, state = chain
+    state["runtime"] = _V475
+    state["code_at"] = {"h98": sorted(AUDITED_RUNTIME_CODE_HASHES)[0]}
+    _library_decodes_with_the_writer(substrate, state)
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.runtime_code_hash == _V475
+    assert block.updates
+
+
+async def test_commit_right_after_the_v475_upgrade_block_is_verified(
+    commit_chain: tuple,
+) -> None:
+    from ditto.chain.source_emission_verifier import verify_finalized_weight_commit
+
+    substrate, state, claim = commit_chain
+    state["runtime"] = _V475
+    state["code_at"] = {"h98": sorted(AUDITED_RUNTIME_CODE_HASHES)[0]}
+    _library_decodes_with_the_writer(substrate, state)
+    await verify_finalized_weight_commit(substrate, claim)
 
 
 async def test_pre_v475_runtime_never_reads_epoch_consensus(chain: tuple) -> None:
