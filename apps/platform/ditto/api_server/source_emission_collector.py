@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from collections.abc import Awaitable, Mapping
 from contextlib import suppress
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -77,7 +78,7 @@ _RECEIPT_REFETCH_LIMIT = 5
 # (Backroom release_gate.reveal_plan_shadow). "primary": the reveal-anchored
 # planner drives it. Promote only after a long run of shadowed ranges with no
 # miss; docs/source-runtime-interface.md has the criterion.
-_REVEAL_PLAN_MODE = "shadow"
+_REVEAL_PLAN_MODE = "primary"
 # A shadow comparison must never starve the sweep that hosts it: it runs only
 # after the sweep (payouts included) has finished, in a window of its own.
 _REVEAL_PLAN_SHADOW_SECONDS = 90.0
@@ -88,6 +89,11 @@ _REVEAL_PLAN_SHADOW_MIN_SECONDS = 10.0
 _SWEEP_SPARSE_BATCH_BLOCKS = 720
 # Quiet blocks re-read in full per sparse range; any disagreement fails closed.
 _SPARSE_AUDIT_SAMPLES = 2
+# Full block reads (and payout receipts) run this many at a time during a
+# sparse replay; commits still happen one block at a time, in order. Each read
+# took 1-1.7 minutes on Dwellir, run one after another, which was most of a
+# range's time.
+_SPARSE_READ_CONCURRENCY = 4
 
 
 def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
@@ -422,15 +428,18 @@ class SourceEmissionCollector:
             raise ValueError("durable cursor does not match the planned range")
         interesting = set(plan.interesting)
         quiet = [b for b in range(current + 1, end + 1) if b not in interesting]
-        # Continuous self-audit: the full reader must agree a sampled skip is quiet.
-        for block in random.sample(quiet, min(_SPARSE_AUDIT_SAMPLES, len(quiet))):
-            observed = await read_source_emission_block(
-                substrate,
-                netuid=self.netuid,
-                block=block,
-                finalized_block=finalized,
-                cache=SourceEmissionReadCache(),
-            )
+        gate = asyncio.Semaphore(_SPARSE_READ_CONCURRENCY)
+
+        async def audit(block: int) -> None:
+            # Continuous self-audit: the full reader must agree a skip is quiet.
+            async with gate:
+                observed = await read_source_emission_block(
+                    substrate,
+                    netuid=self.netuid,
+                    block=block,
+                    finalized_block=finalized,
+                    cache=SourceEmissionReadCache(),
+                )
             if (
                 observed.is_payout
                 or observed.updates
@@ -438,6 +447,45 @@ class SourceEmissionCollector:
                 or observed.block_hash != plan.hashes[block]
             ):
                 raise ValueError(f"sparse replay audit disagreed at block {block}")
+
+        async def read_ahead(
+            block: int,
+        ) -> tuple[SourceEmissionBlock, ChainMinerEmissionReceipt | None, str | None]:
+            async with gate:
+                return await self._read_block(substrate, block, finalized, reads)
+
+        # Every read starts now and runs under the gate; the audits are created
+        # first, so they take the first slots, and must pass before any commit.
+        audits = [
+            asyncio.ensure_future(audit(block))
+            for block in random.sample(quiet, min(_SPARSE_AUDIT_SAMPLES, len(quiet)))
+        ]
+        ahead = {
+            block: asyncio.ensure_future(read_ahead(block))
+            for block in sorted(interesting)
+        }
+        try:
+            await asyncio.gather(*audits)
+            return await self._replay_planned(
+                current=current, end=end, plan=plan, ahead=ahead
+            )
+        finally:
+            # A failure (or a cancelled sweep) must not leave reads running.
+            pending = [task for task in (*audits, *ahead.values()) if not task.done()]
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*audits, *ahead.values(), return_exceptions=True)
+
+    async def _replay_planned(
+        self,
+        *,
+        current: int,
+        end: int,
+        plan: Any,
+        ahead: Mapping[int, Awaitable[Any]],
+    ) -> bool:
+        """Commit a planned range in cursor order from reads already under way."""
+        interesting = set(ahead)
         cursor_block, cursor_hash = current, plan.hashes[current]
         # Blocks the full reader acted on: what any range plan must include.
         acted: list[int] = []
@@ -460,7 +508,10 @@ class SourceEmissionCollector:
                 cursor_block, cursor_hash = target, plan.hashes[target]
             if stop is None:
                 break
-            observed = await self._scan_block(substrate, stop, finalized, reads)
+            observed, payout, payout_blocked_reason = await ahead[stop]
+            await self.process_block(
+                observed, payout, payout_blocked_reason=payout_blocked_reason
+            )
             if (
                 observed.is_payout
                 or observed.updates
@@ -547,6 +598,26 @@ class SourceEmissionCollector:
         reads: SourceEmissionReadCache,
     ) -> SourceEmissionBlock:
         """Read one finalized block in full and commit it to the cursor."""
+        observed, payout, payout_blocked_reason = await self._read_block(
+            substrate, block, finalized, reads
+        )
+        await self.process_block(
+            observed, payout, payout_blocked_reason=payout_blocked_reason
+        )
+        return observed
+
+    async def _read_block(
+        self,
+        substrate: Any,
+        block: int,
+        finalized: int,
+        reads: SourceEmissionReadCache,
+    ) -> tuple[SourceEmissionBlock, ChainMinerEmissionReceipt | None, str | None]:
+        """Read one finalized block and its payout receipt, writing nothing.
+
+        Finalized chain state never changes, so reads of different blocks can
+        run concurrently; only ``process_block`` must follow cursor order.
+        """
         observed = await read_source_emission_block(
             substrate,
             netuid=self.netuid,
@@ -571,10 +642,7 @@ class SourceEmissionCollector:
                 )
             except ChainEmissionReceiptUnavailable as error:
                 payout_blocked_reason = f"unverifiable_payout: {str(error)[:200]}"
-        await self.process_block(
-            observed, payout, payout_blocked_reason=payout_blocked_reason
-        )
-        return observed
+        return observed, payout, payout_blocked_reason
 
     async def _confirmed_receipt(
         self, substrate: Any, *, block: int, allow_initialization_reveals: bool

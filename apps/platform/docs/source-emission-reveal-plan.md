@@ -9,7 +9,7 @@ only the blocks that can matter. Two planners exist:
 | How it finds blocks | reads every block's `System.Events` | payout hops + reveal-queue bisection |
 | Calls per 720 blocks | ≥ 720 heavy reads | ~80–140 small reads |
 | Extra full reads | every structural event on *any* subnet | queue shrinks without a reveal (rare) |
-| Status | drives the cursor | **shadow** (`_REVEAL_PLAN_MODE`) |
+| Status | fallback only (`shadow` mode) | **drives the cursor** (`_REVEAL_PLAN_MODE = "primary"`, since 2026-10-18) |
 
 Both share `_range_endpoints`: equal runtime code, mode controls and Yuma
 consensus at the range ends, or the collector falls back to the per-block scan.
@@ -92,7 +92,21 @@ connection. It never fails the sweep and delays the next one by at most that
 window. (On v0.372.0 it ran inside whatever the replay left of the sweep
 budget, which on Dwellir was never enough, so no comparison was recorded.)
 
-**Promote** (`_REVEAL_PLAN_MODE = "primary"`) only after at least 100 shadowed
-ranges with `missed == 0` and errors explained. In primary mode the sparse
+**Promoted on 2026-10-18** at the owner's call, after 27 shadowed ranges
+(19,440 blocks on v475), all agreed, no misses,
+fallbacks or errors. The original bar was 100; the catch-up was going to end
+before it could be reached. In primary mode the shadow no longer runs, and
+Backroom keeps showing the frozen summary with `mode: "primary"`. The sparse
 self-audit still re-reads two skipped blocks per range with the full reader,
-and any disagreement stops the sweep.
+and any disagreement stops the sweep. To demote, set the mode back to
+`shadow`; the event planner and the comparison are unchanged.
+
+## Where a range's time goes
+
+On Dwellir, a 720-block range took about 8 minutes. Planning was 1 to
+1.5 minutes of that. Most of the rest was the full reads of the ~4 planned
+blocks (payouts and reveals) and their payout receipts, at 1 to 1.7 minutes
+each, run one after another. The replay now starts every planned read, and
+the two audit reads, at once, `_SPARSE_READ_CONCURRENCY` (4) at a time. It
+still commits each block in cursor order. The audits must pass before
+anything is committed, and a failure cancels every read still running.

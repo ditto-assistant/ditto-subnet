@@ -1217,6 +1217,17 @@ async def test_refetch_does_not_touch_a_payout_resolved_meanwhile(
         assert row.proof["receipt"] is None and row.last_checked_at is None
 
 
+@pytest.fixture(autouse=True)
+def _event_planner_mode(monkeypatch):
+    """The sparse tests below stub the event planner, so they pin shadow mode.
+
+    Production runs "primary"; the primary-mode tests override this.
+    """
+    from ditto.api_server import source_emission_collector as module
+
+    monkeypatch.setattr(module, "_REVEAL_PLAN_MODE", "shadow")
+
+
 def _sparse_plan(current, end, interesting, *, full_scan=False):
     from ditto.chain.source_emission_verifier import SourceEmissionRangePlan
 
@@ -1566,3 +1577,94 @@ async def test_sparse_plan_must_start_at_the_durable_cursor(
 
     with pytest.raises(ValueError, match="does not match the planned range"):
         await collector._sweep_provider(substrate)
+
+
+async def test_primary_replay_reads_planned_blocks_concurrently_and_commits_in_order(
+    app, session_maker, monkeypatch
+):
+    from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionCollectorCursor, SourceEmissionPayout
+
+    monkeypatch.setattr(module, "_REVEAL_PLAN_MODE", "primary")
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    planned = (151, 158, 511, 518)
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range_by_reveals",
+        AsyncMock(return_value=_sparse_plan(100, end, planned)),
+    )
+    in_flight, peak = 0, 0
+    all_started = asyncio.Event()
+    started: set[int] = set()
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        nonlocal in_flight, peak
+        del netuid
+        in_flight += 1
+        peak = max(peak, in_flight)
+        started.add(block)
+        if set(planned) <= started:
+            all_started.set()
+        try:
+            if block in planned:
+                # No planned read finishes until all of them are under way.
+                await asyncio.wait_for(all_started.wait(), 5)
+            return _observed(a, block, payout=block in (151, 511))
+        finally:
+            in_flight -= 1
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    monkeypatch.setattr(module.random, "sample", lambda seq, k: list(seq)[:k])
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=AsyncMock(
+            side_effect=lambda _netuid, *, payout_block, **_kw: _payout(a, payout_block)
+        ),
+        _safe_rpc_error=str,
+    )
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    await collector._sweep_provider(substrate)
+
+    assert peak == module._SPARSE_READ_CONCURRENCY
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert cursor.block == end
+        payouts = (await session.scalars(select(SourceEmissionPayout.block))).all()
+        assert sorted(payouts) == [151, 511]
+
+
+async def test_primary_audit_failure_commits_nothing_and_stops_every_read(
+    app, session_maker, monkeypatch
+):
+    from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    monkeypatch.setattr(module, "_REVEAL_PLAN_MODE", "primary")
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range_by_reveals",
+        AsyncMock(return_value=_sparse_plan(100, end, (151, 511))),
+    )
+    hang = asyncio.Event()
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        if block in (151, 511):
+            await hang.wait()  # a planned read still running when the audit fails
+        return _observed(a, block, reveal=True)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    monkeypatch.setattr(module.random, "sample", lambda seq, k: list(seq)[:k])
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    with pytest.raises(ValueError, match="audit disagreed"):
+        await collector._sweep_provider(substrate)
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert cursor.block == 100
