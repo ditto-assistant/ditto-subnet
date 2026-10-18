@@ -74,9 +74,11 @@ plan. The running summary is on Backroom `get_source_release_policy` →
 - `fallback` / `error`: it asked for a full scan, or couldn't be planned.
 - `calls` / `blocks`: its cost per block.
 
-The shadow runs last in a sweep, after payout resolution, within what is left
-of the sweep budget (at most 90 s, keeping a 15 s reserve), and is skipped when
-less than 10 s remain. It never fails the sweep.
+The shadow runs only after a sweep has finished, payout resolution included,
+in a fresh window of its own (90 s plus a 15 s reserve) on the same archive
+connection. It never fails the sweep and delays the next one by at most that
+window. (On v0.372.0 it ran inside whatever the replay left of the sweep
+budget, which on Dwellir was never enough, so no comparison was recorded.)
 
 **Promote** (`_REVEAL_PLAN_MODE = "primary"`) only after at least 100 shadowed
 ranges with `missed == 0` and errors explained. In primary mode the sparse

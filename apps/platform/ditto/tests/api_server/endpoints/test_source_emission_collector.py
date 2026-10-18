@@ -933,10 +933,15 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
     await collector.sweep()
     assert collector._backlog_deep is True
     assert timeouts == [120.0]
-    assert rescheduled == [600]
+    # Then the finished sweep hands the shadow its own 90 s + 15 s window.
+    shadow = round(
+        collector_module._REVEAL_PLAN_SHADOW_SECONDS
+        + collector_module._REVEAL_PLAN_SHADOW_RESERVE_SECONDS
+    )
+    assert rescheduled == [600, shadow]
     await collector.sweep()
     assert timeouts == [120.0, 600.0]
-    assert rescheduled == [600, 600]
+    assert rescheduled == [600, shadow, 600, shadow]
 
 
 _OWNERSHIP = "subnet ownership changed during distribution block"
@@ -1255,10 +1260,27 @@ async def _shadowed_sweep(app, session_maker, monkeypatch, reveal_plan):
     app.state.chain = SimpleNamespace(
         get_miner_emission_receipt=AsyncMock(return_value=_payout(a, 151)),
         _safe_rpc_error=str,
+        _historical_substrate_urls=lambda: ["wss://archive.invalid"],
     )
+
+    class _Connect:
+        """Stands in for AsyncSubstrateInterface(url=...) as a context manager."""
+
+        def __call__(self, url):
+            del url
+            return self
+
+        async def __aenter__(self):
+            return substrate
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr("async_substrate_interface.AsyncSubstrateInterface", _Connect())
     collector = _collector(app, session_maker)
     monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
-    await collector._sweep_provider(substrate)
+    # The whole sweep: the shadow runs after it, in a window of its own.
+    await collector.sweep()
     async with session_maker() as session:
         cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
         # The event planner's evidence drives the cursor whatever the shadow says.
@@ -1326,7 +1348,7 @@ async def test_reveal_plan_shadow_failure_never_blocks_the_sweep(
 async def test_reveal_plan_shadow_runs_after_payouts_within_the_budget(
     app, session_maker, monkeypatch
 ):
-    """Resolution comes first; a nearly spent budget skips the shadow."""
+    """The shadow runs after payout resolution; a spent window skips it."""
     from ditto.api_server import source_emission_collector as module
 
     end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
@@ -1350,7 +1372,7 @@ async def test_reveal_plan_shadow_runs_after_payouts_within_the_budget(
     await _shadowed_sweep(app, session_maker, monkeypatch, shadow_plan)
     assert order[-2:] == ["resolve", "shadow"]
 
-    # With almost no budget left after the replay, no comparison runs.
+    # A window too short for a comparison skips it rather than racing it.
     collector = _collector(app, session_maker)
     collector._pending_shadow = (101, end, [150])
     planner = AsyncMock()

@@ -78,8 +78,8 @@ _RECEIPT_REFETCH_LIMIT = 5
 # planner drives it. Promote only after a long run of shadowed ranges with no
 # miss; docs/source-runtime-interface.md has the criterion.
 _REVEAL_PLAN_MODE = "shadow"
-# A shadow comparison must never starve the sweep that hosts it: it runs after
-# payout resolution, inside what is left of the sweep budget minus a reserve.
+# A shadow comparison must never starve the sweep that hosts it: it runs only
+# after the sweep (payouts included) has finished, in a window of its own.
 _REVEAL_PLAN_SHADOW_SECONDS = 90.0
 _REVEAL_PLAN_SHADOW_RESERVE_SECONDS = 15.0
 _REVEAL_PLAN_SHADOW_MIN_SECONDS = 10.0
@@ -223,6 +223,16 @@ class SourceEmissionCollector:
                 async with asyncio.timeout(self._sweep_timeout_seconds()) as budget:
                     async with AsyncSubstrateInterface(url=url) as substrate:
                         await self._sweep_provider(substrate, budget=budget)
+                        # The sweep's work, payouts included, is done: the
+                        # optional comparison gets its own window instead of
+                        # whatever the replay left, which on a slow archive
+                        # was never enough for it to run.
+                        budget.reschedule(
+                            asyncio.get_running_loop().time()
+                            + _REVEAL_PLAN_SHADOW_SECONDS
+                            + _REVEAL_PLAN_SHADOW_RESERVE_SECONDS
+                        )
+                        await self._run_pending_shadow(substrate, budget)
                 return
             except Exception as error:
                 failures.append(self.state.chain._safe_rpc_error(error)[:200])
@@ -298,9 +308,6 @@ class SourceEmissionCollector:
                 logger.exception("source emission payout resolution failed")
             raise
         await self.resolve_pending_payouts(substrate)
-        # Last, and only with budget to spare: payouts and the cursor never
-        # wait on the optional comparison.
-        await self._run_pending_shadow(substrate, budget)
 
     async def _run_pending_shadow(
         self, substrate: Any, budget: asyncio.Timeout | None
