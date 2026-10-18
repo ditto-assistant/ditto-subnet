@@ -138,6 +138,23 @@ describe("bounty board", () => {
 });
 
 describe("bounty detail", () => {
+  it("returns to the board page a bounty was opened from", async () => {
+    const item = board.items.find((candidate) => candidate.bounty_id === bountyId)!;
+    vi.mocked(getJSON).mockImplementation(((path: string) => {
+      const [pathname, query] = path.split("?");
+      if (pathname !== "/public/bounties") return serve(path);
+      const offset = Number(new URLSearchParams(query).get("offset"));
+      return Promise.resolve({ items: [item], total: 120, limit: 50, offset });
+    }) as typeof getJSON);
+    render(() => <BountiesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Next" }));
+    expect(await screen.findByText("51–51 of 120")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: detail.summary.title }));
+    await screen.findByRole("heading", { name: "Terms" });
+    fireEvent.click(screen.getByRole("button", { name: "← All bounties" }));
+    expect(await screen.findByText("51–51 of 120")).toBeInTheDocument();
+  });
+
   it("opens from the board into a linkable detail and back", async () => {
     await openBounty();
     expect(location.pathname + location.search).toBe(`/bounties?bounty=${bountyId}`);

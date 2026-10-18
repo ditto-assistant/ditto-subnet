@@ -144,6 +144,9 @@ function showBounty(id: string | null): void {
 
 export function BountiesPage(): JSX.Element {
   const [selected, setSelected] = createSignal(selectedFromUrl());
+  // The board's page outlives the board, so returning from a bounty lands on
+  // the page it was opened from.
+  const [offset, setOffset] = createSignal(0);
   const restore = () => setSelected(selectedFromUrl());
   window.addEventListener("popstate", restore);
   onCleanup(() => window.removeEventListener("popstate", restore));
@@ -154,7 +157,11 @@ export function BountiesPage(): JSX.Element {
   };
   return (
     <section class="page active bounties-page" data-page="bounties" aria-label="Build bounties">
-      <Show when={selected()} fallback={<BountyBoard onOpen={open} />} keyed>
+      <Show
+        when={selected()}
+        fallback={<BountyBoard offset={offset()} onPage={setOffset} onOpen={open} />}
+        keyed
+      >
         {(id) => <BountyDetailView bountyId={id} onBack={() => open(null)} />}
       </Show>
     </section>
@@ -194,10 +201,13 @@ function SlotCounts(props: { summary: BountySummary }): JSX.Element {
   );
 }
 
-function BountyBoard(props: { onOpen: (id: string) => void }): JSX.Element {
-  const [offset, setOffset] = createSignal(0);
+function BountyBoard(props: {
+  offset: number;
+  onPage: (offset: number) => void;
+  onOpen: (id: string) => void;
+}): JSX.Element {
   const board = useEndpoint<BountyBoardPage>(
-    () => `/public/bounties?limit=${PAGE_SIZE}&offset=${offset()}`,
+    () => `/public/bounties?limit=${PAGE_SIZE}&offset=${props.offset}`,
     { pollMs: REFRESH_MS },
   );
   const data = () => (board.error() ? undefined : board.data());
@@ -242,7 +252,7 @@ function BountyBoard(props: { onOpen: (id: string) => void }): JSX.Element {
               >
                 <p class="bounty-state">
                   No bounties on this page.{" "}
-                  <button type="button" onClick={() => setOffset(0)}>
+                  <button type="button" onClick={() => props.onPage(0)}>
                     First page
                   </button>
                 </p>
@@ -313,14 +323,14 @@ function BountyBoard(props: { onOpen: (id: string) => void }): JSX.Element {
                 <button
                   type="button"
                   disabled={page().offset === 0}
-                  onClick={() => setOffset(Math.max(0, page().offset - page().limit))}
+                  onClick={() => props.onPage(Math.max(0, page().offset - page().limit))}
                 >
                   Previous
                 </button>
                 <button
                   type="button"
                   disabled={page().offset + page().items.length >= page().total}
-                  onClick={() => setOffset(page().offset + page().limit)}
+                  onClick={() => props.onPage(page().offset + page().limit)}
                 >
                   Next
                 </button>
