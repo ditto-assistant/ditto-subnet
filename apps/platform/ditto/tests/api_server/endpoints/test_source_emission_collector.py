@@ -1222,6 +1222,142 @@ async def test_sparse_catchup_reads_only_planned_blocks_and_skips_the_rest(
         assert payout is not None and payout.proof["receipt"]["block"] == 151
 
 
+async def _shadowed_sweep(app, session_maker, monkeypatch, reveal_plan):
+    """Replay one sparse range with blocks 150 (reveal) and 151 (payout).
+
+    ``reveal_plan`` stands in for the reveal-anchored planner the shadow runs.
+    Returns the netuid row's shadow summary after the sweep.
+    """
+    from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range",
+        AsyncMock(return_value=_sparse_plan(100, end, (150, 151, 160))),
+    )
+    monkeypatch.setattr(module, "plan_source_emission_range_by_reveals", reveal_plan)
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        if block == 150:
+            return _observed(a, block, reveal=True)
+        if block == 151:
+            return _observed(a, block, payout=True)
+        # 160 was planned by the event planner but turned out quiet.
+        return _observed(a, block)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    monkeypatch.setattr(module.random, "sample", lambda seq, k: list(seq)[:k])
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=AsyncMock(return_value=_payout(a, 151)),
+        _safe_rpc_error=str,
+    )
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+    await collector._sweep_provider(substrate)
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        # The event planner's evidence drives the cursor whatever the shadow says.
+        assert (cursor.block, cursor.block_hash) == (end, _hash(end))
+        return cursor.reveal_plan_shadow
+
+
+async def test_reveal_plan_shadow_agrees_when_it_plans_every_acted_block(
+    app, session_maker, monkeypatch
+):
+    from ditto.api_server import source_emission_collector as module
+
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    summary = await _shadowed_sweep(
+        app,
+        session_maker,
+        monkeypatch,
+        AsyncMock(return_value=_sparse_plan(100, end, (150, 151))),
+    )
+    assert summary["ranges"] == summary["agreed"] == 1
+    assert summary["last_outcome"] == "agreed"
+    assert summary["last_range"] == [101, end]
+    assert summary["blocks"] == end - 100
+
+
+async def test_reveal_plan_shadow_records_a_missed_reveal(
+    app, session_maker, monkeypatch
+):
+    from ditto.api_server import source_emission_collector as module
+
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    summary = await _shadowed_sweep(
+        app,
+        session_maker,
+        monkeypatch,
+        AsyncMock(return_value=_sparse_plan(100, end, (151,))),
+    )
+    assert summary["missed"] == 1 and summary.get("agreed", 0) == 0
+    assert summary["recent_misses"] == [
+        {"first_block": 101, "last_block": end, "blocks": [150]}
+    ]
+
+
+@pytest.mark.parametrize("failure", ["error", "fallback"])
+async def test_reveal_plan_shadow_failure_never_blocks_the_sweep(
+    app, session_maker, monkeypatch, failure
+):
+    from ditto.api_server import source_emission_collector as module
+    from ditto.chain.source_emission_verifier import SourceEmissionRangePlan
+
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    planner = (
+        AsyncMock(side_effect=RuntimeError("archive throttled"))
+        if failure == "error"
+        else AsyncMock(
+            return_value=SourceEmissionRangePlan(101, end, {}, (), True, None)
+        )
+    )
+    summary = await _shadowed_sweep(app, session_maker, monkeypatch, planner)
+    assert summary[failure] == 1 and summary["last_outcome"] == failure
+    if failure == "error":
+        assert "archive throttled" in summary["last_error"]
+
+
+async def test_primary_mode_plans_with_the_reveal_planner_only(
+    app, session_maker, monkeypatch
+):
+    from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    monkeypatch.setattr(module, "_REVEAL_PLAN_MODE", "primary")
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    events = AsyncMock(side_effect=AssertionError("event planner must not run"))
+    monkeypatch.setattr(module, "plan_source_emission_range", events)
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range_by_reveals",
+        AsyncMock(return_value=_sparse_plan(100, end, (151,))),
+    )
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        return _observed(a, block, payout=block == 151)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    monkeypatch.setattr(module.random, "sample", lambda seq, k: list(seq)[:k])
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=AsyncMock(return_value=_payout(a, 151)),
+        _safe_rpc_error=str,
+    )
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+    await collector._sweep_provider(substrate)
+    events.assert_not_awaited()
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert cursor.block == end and cursor.reveal_plan_shadow is None
+
+
 async def test_sparse_audit_disagreement_fails_closed(app, session_maker, monkeypatch):
     from ditto.api_server import source_emission_collector as module
     from ditto.db.models import SourceEmissionCollectorCursor

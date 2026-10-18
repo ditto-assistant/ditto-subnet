@@ -30147,6 +30147,74 @@ export interface components {
             /** Representative */
             representative: boolean;
         };
+        /** RevealPlanShadowMiss */
+        RevealPlanShadowMiss: {
+            /** Blocks */
+            blocks?: number[];
+            /** First Block */
+            first_block: number;
+            /** Last Block */
+            last_block: number;
+        };
+        /**
+         * RevealPlanShadowStatus
+         * @description Running check of the reveal-anchored range planner, before it is trusted.
+         *
+         *     ``agreed`` ranges planned every block the full reader acted on; ``missed``
+         *     ranges did not (a correctness failure: do not promote); ``fallback``
+         *     ranges asked for the full scan; ``error`` ranges could not be planned.
+         *     ``calls`` / ``blocks`` is its chain cost per block; the event planner makes
+         *     at least one call per block.
+         */
+        RevealPlanShadowStatus: {
+            /**
+             * Agreed
+             * @default 0
+             */
+            agreed: number;
+            /**
+             * Blocks
+             * @default 0
+             */
+            blocks: number;
+            /**
+             * Calls
+             * @default 0
+             */
+            calls: number;
+            /**
+             * Error
+             * @default 0
+             */
+            error: number;
+            /**
+             * Fallback
+             * @default 0
+             */
+            fallback: number;
+            /** Last Error */
+            last_error?: string | null;
+            /** Last Outcome */
+            last_outcome?: string | null;
+            /** Last Range */
+            last_range?: number[] | null;
+            /**
+             * Missed
+             * @default 0
+             */
+            missed: number;
+            /** Mode */
+            mode: string;
+            /**
+             * Ranges
+             * @default 0
+             */
+            ranges: number;
+            /** Recent Misses */
+            recent_misses?: components["schemas"]["RevealPlanShadowMiss"][];
+            /** Updated At */
+            updated_at?: string | null;
+        };
         /** RotateV13ScorerCohortRequest */
         RotateV13ScorerCohortRequest: {
             /** Actor */
@@ -32945,6 +33013,7 @@ export interface components {
              * @default false
              */
             receipt_diagnostics_has_more: boolean;
+            reveal_plan_shadow?: components["schemas"]["RevealPlanShadowStatus"] | null;
             /** Rows */
             rows: components["schemas"]["SourceReleaseEligibilityRow"][];
             /** Rows Has More */

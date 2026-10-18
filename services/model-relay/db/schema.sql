@@ -4928,7 +4928,8 @@ CREATE TABLE public.source_emission_collector_cursors (
     block_hash text NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     runtime_code_hash text,
-    last_blocked_reason text
+    last_blocked_reason text,
+    reveal_plan_shadow jsonb
 );
 
 

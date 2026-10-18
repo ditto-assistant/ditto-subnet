@@ -34,6 +34,7 @@ from ditto.chain.source_emission_verifier import (
     WinnerBacking,
     evaluate_winner_payout,
     plan_source_emission_range,
+    plan_source_emission_range_by_reveals,
     read_source_emission_block,
     vector_digest,
 )
@@ -49,6 +50,7 @@ from ditto.db.queries.king_reign import KingEmissionProof, record_emission_confi
 from ditto.db.queries.source_emission_collector import (
     advance_source_emission_cursor,
     list_source_emission_vector_bindings,
+    record_reveal_plan_shadow,
     record_source_emission_payout,
     skip_quiet_source_emission_blocks,
     upsert_source_emission_vector_binding,
@@ -70,6 +72,14 @@ _SWEEP_CATCHUP_MIN_BACKLOG = 1000
 # Each reopened payout re-reads a full historical receipt. Bound that work so a
 # rescan cannot consume the sweep deadline that also covers the block scan.
 _RECEIPT_REFETCH_LIMIT = 5
+# Range planner for catch-up. "shadow": the event planner drives the cursor and
+# the reveal-anchored planner is compared against what the full reader acted on
+# (Backroom release_gate.reveal_plan_shadow). "primary": the reveal-anchored
+# planner drives it. Promote only after a long run of shadowed ranges with no
+# miss; docs/source-runtime-interface.md has the criterion.
+_REVEAL_PLAN_MODE = "shadow"
+# A shadow comparison must never starve the sweep that hosts it.
+_REVEAL_PLAN_SHADOW_SECONDS = 90.0
 # Sparse replay reads one storage call per quiet block and the full reader only
 # for the few blocks that can matter, so a catch-up range can span two tempos.
 _SWEEP_SPARSE_BATCH_BLOCKS = 720
@@ -107,6 +117,27 @@ def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
             tuple(item) for item in data["validator_last_update_timestamps"]
         ),
     )
+
+
+class _CallCounter:
+    """Counts the chain calls a planner makes, for the shadow's cost figure."""
+
+    _COUNTED = frozenset({"rpc_request", "query", "query_map", "get_block_metadata"})
+
+    def __init__(self, substrate: Any) -> None:
+        self._substrate = substrate
+        self.calls = 0
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._substrate, name)
+        if name not in self._COUNTED:
+            return attr
+
+        async def counted(*args: Any, **kwargs: Any) -> Any:
+            self.calls += 1
+            return await attr(*args, **kwargs)
+
+        return counted
 
 
 class SourceEmissionCollector:
@@ -280,8 +311,13 @@ class SourceEmissionCollector:
         """
         if end <= current:
             return False
+        planner = (
+            plan_source_emission_range_by_reveals
+            if _REVEAL_PLAN_MODE == "primary"
+            else plan_source_emission_range
+        )
         try:
-            plan = await plan_source_emission_range(
+            plan = await planner(
                 substrate,
                 netuid=self.netuid,
                 first_block=current + 1,
@@ -325,6 +361,8 @@ class SourceEmissionCollector:
             ):
                 raise ValueError(f"sparse replay audit disagreed at block {block}")
         cursor_block, cursor_hash = current, plan.hashes[current]
+        # Blocks the full reader acted on: what any range plan must include.
+        acted: list[int] = []
         stops: list[int | None] = [*sorted(interesting), None]
         for stop in stops:
             target = end if stop is None else stop - 1
@@ -344,9 +382,74 @@ class SourceEmissionCollector:
                 cursor_block, cursor_hash = target, plan.hashes[target]
             if stop is None:
                 break
-            await self._scan_block(substrate, stop, finalized, reads)
+            observed = await self._scan_block(substrate, stop, finalized, reads)
+            if (
+                observed.is_payout
+                or observed.updates
+                or observed.reset_reason
+                or observed.invalidated_hotkeys
+            ):
+                acted.append(stop)
             cursor_block, cursor_hash = stop, plan.hashes[stop]
+        if _REVEAL_PLAN_MODE == "shadow":
+            await self._shadow_reveal_plan(
+                substrate, first_block=current + 1, last_block=end, acted=acted
+            )
         return True
+
+    async def _shadow_reveal_plan(
+        self, substrate: Any, *, first_block: int, last_block: int, acted: list[int]
+    ) -> None:
+        """Check the reveal-anchored planner against an already-replayed range.
+
+        Every block the full reader acted on (payouts, weight writes, resets)
+        must be in its plan. Extra blocks only cost reads. Never raises: the
+        cursor already moved on the event planner's evidence.
+        """
+        counted = _CallCounter(substrate)
+        outcome, missed, detail = "error", [], None
+        try:
+            async with asyncio.timeout(_REVEAL_PLAN_SHADOW_SECONDS):
+                plan = await plan_source_emission_range_by_reveals(
+                    counted,
+                    netuid=self.netuid,
+                    first_block=first_block,
+                    last_block=last_block,
+                )
+            if plan.full_scan:
+                outcome = "fallback"
+            else:
+                missed = sorted(set(acted) - set(plan.interesting))
+                outcome = "missed" if missed else "agreed"
+        except Exception as error:
+            chain = getattr(self.state, "chain", None)
+            detail = (
+                chain._safe_rpc_error(error)
+                if chain is not None
+                else type(error).__name__
+            )
+        if outcome == "missed":
+            logger.warning(
+                "reveal plan shadow missed blocks %s in %s-%s",
+                missed,
+                first_block,
+                last_block,
+            )
+        try:
+            async with self.sessions() as session, session.begin():
+                await record_reveal_plan_shadow(
+                    session,
+                    netuid=self.netuid,
+                    first_block=first_block,
+                    last_block=last_block,
+                    outcome=outcome,
+                    missed=missed,
+                    calls=counted.calls,
+                    detail=detail,
+                    now=datetime.now(UTC),
+                )
+        except Exception:
+            logger.exception("reveal plan shadow summary write failed")
 
     async def _scan_block(
         self,
@@ -354,7 +457,7 @@ class SourceEmissionCollector:
         block: int,
         finalized: int,
         reads: SourceEmissionReadCache,
-    ) -> None:
+    ) -> SourceEmissionBlock:
         """Read one finalized block in full and commit it to the cursor."""
         observed = await read_source_emission_block(
             substrate,
@@ -383,6 +486,7 @@ class SourceEmissionCollector:
         await self.process_block(
             observed, payout, payout_blocked_reason=payout_blocked_reason
         )
+        return observed
 
     async def _confirmed_receipt(
         self, substrate: Any, *, block: int, allow_initialization_reveals: bool

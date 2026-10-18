@@ -6822,6 +6822,11 @@ class SourceEmissionCollectorCursor(Base):
     )
     runtime_code_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Running comparison of the reveal-anchored planner against the event
+    # planner; see source_emission_collector._shadow_reveal_plan.
+    reveal_plan_shadow: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
 
 
 class SourceEmissionVectorBinding(Base):
