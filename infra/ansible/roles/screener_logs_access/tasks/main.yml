@@ -1,0 +1,64 @@
+---
+- name: Require managed public keys for the read-only logs account
+  ansible.builtin.assert:
+    that:
+      - screener_logs_public_keys | length > 0
+      - "'logs' not in (team_members | default([]))"
+    fail_msg: Supply managed team keys; logs must never be a privileged team member.
+
+- name: Check whether logs already exists for check-mode key installation
+  ansible.builtin.getent:
+    database: passwd
+    key: logs
+    fail_key: false
+
+- name: Ensure the logs primary group exists
+  ansible.builtin.group:
+    name: logs
+    state: present
+
+- name: Ensure logs has journal-read access only
+  ansible.builtin.user:
+    name: logs
+    group: logs
+    groups: [systemd-journal]
+    append: false
+    shell: /bin/bash
+    password: "*"
+    create_home: true
+    state: present
+
+# A fresh check-mode run predicts user creation without actually creating it;
+# ownership/key modules cannot look that user up until the real apply.
+- name: Install the managed logs keys
+  when: not ansible_check_mode or ansible_facts.getent_passwd.logs is not none
+  block:
+    - name: Ensure the logs SSH directory is private
+      ansible.builtin.file:
+        path: /home/logs/.ssh
+        state: directory
+        owner: logs
+        group: logs
+        mode: "0700"
+
+    - name: Authorize team keys without forwarding or a PTY
+      ansible.posix.authorized_key:
+        user: logs
+        key: "{{ screener_logs_public_keys | join('\n') }}"
+        key_options: restrict
+        exclusive: true
+        state: present
+
+# OpenSSH accumulates AllowUsers across files. Keep this separate from the
+# base role's ditto.conf so every future base converge preserves logs access.
+- name: Allow SSH for logs without changing the existing user allowlist
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/60-ditto-logs.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by the screener_logs_access role; additive to base's AllowUsers.
+      AllowUsers logs
+    validate: /usr/sbin/sshd -t -f %s
+  notify: reload screener logs ssh
