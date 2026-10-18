@@ -669,3 +669,116 @@ async def test_v475_commit_inclusion_requires_yuma(
     else:
         with pytest.raises(ValueError, match="commit epoch consensus"):
             await verify_finalized_weight_commit(substrate, claim)
+
+
+_UNTAGGED = "0x" + "ab" * 32
+
+
+@pytest.fixture
+def interface_admission(monkeypatch: pytest.MonkeyPatch):
+    """Admit runtimes whose synthetic consumed interface is pinned as audited."""
+    from types import SimpleNamespace
+
+    from ditto.chain import audited_runtime_interfaces, source_emission_verifier
+    from ditto.chain.runtime_interface import runtime_interface
+    from ditto.tests.chain.runtime_metadata import metadata
+
+    pinned = {}
+    for epoch in (False, True):
+        interface = runtime_interface(metadata(epoch_consensus=epoch))
+        pinned[interface.digest] = ("vTest", interface)
+    monkeypatch.setattr(
+        audited_runtime_interfaces, "AUDITED_RUNTIME_INTERFACES", pinned
+    )
+    monkeypatch.setattr(source_emission_verifier, "_INTERFACE_ADMISSIONS", {})
+
+    def install(substrate: AsyncMock, *, epoch_consensus: bool) -> None:
+        substrate.init_runtime.return_value = SimpleNamespace(
+            metadata=metadata(epoch_consensus=epoch_consensus)
+        )
+
+    return install
+
+
+async def test_untagged_upgrade_with_unchanged_interface_is_read(
+    chain: tuple, interface_admission
+) -> None:
+    """v472 and v479 shipped with no release to audit; their interface did not move."""
+    substrate, state = chain
+    state["runtime"] = _UNTAGGED
+    interface_admission(substrate, epoch_consensus=False)
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.runtime_code_hash == _UNTAGGED
+    assert block.updates
+    assert not any(
+        c.kwargs["storage_function"] == "SubnetEpochConsensus"
+        for c in substrate.query.call_args_list
+    )
+
+
+async def test_upgrade_boundary_into_admitted_runtime_resets_provenance(
+    chain: tuple, interface_admission
+) -> None:
+    substrate, state = chain
+    state["post_runtime"] = _UNTAGGED
+    interface_admission(substrate, epoch_consensus=False)
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.reset_reason == "runtime_changed"
+    assert block.runtime_code_hash == _UNTAGGED
+
+
+@pytest.mark.parametrize(("mode", "accepted"), [("Yuma", True), ("Null", False)])
+async def test_admitted_runtime_with_epoch_consensus_requires_yuma(
+    chain: tuple, interface_admission, mode: str, accepted: bool
+) -> None:
+    substrate, state = chain
+    state["runtime"] = _UNTAGGED
+    state["consensus_default"] = mode
+    interface_admission(substrate, epoch_consensus=True)
+    if accepted:
+        block = await read_source_emission_block(substrate, netuid=118, block=100)
+        assert block.runtime_code_hash == _UNTAGGED
+    else:
+        with pytest.raises(ValueError, match="unsupported epoch consensus"):
+            await read_source_emission_block(substrate, netuid=118, block=100)
+
+
+@pytest.mark.usefixtures("interface_admission")
+async def test_changed_interface_names_the_moved_entry(chain: tuple) -> None:
+    from types import SimpleNamespace
+
+    from ditto.tests.chain.runtime_metadata import clone, entry, metadata
+
+    substrate, state = chain
+    state["runtime"] = _UNTAGGED
+    changed = clone(metadata(epoch_consensus=False))
+    entry(changed, "SubtensorModule", "StakeWeight").update(default="\x01")
+    substrate.init_runtime.return_value = SimpleNamespace(metadata=changed)
+    with pytest.raises(
+        ValueError, match="not audited: .*storage:SubtensorModule.StakeWeight"
+    ):
+        await read_source_emission_block(substrate, netuid=118, block=100)
+
+
+async def test_configured_interface_admitted_runtime_reads_on_first_call(
+    chain: tuple, interface_admission
+) -> None:
+    """A fresh process has no cached admission; configuring it must not refuse."""
+    substrate, state = chain
+    state["runtime"] = _UNTAGGED
+    interface_admission(substrate, epoch_consensus=False)
+    block = await read_source_emission_block(
+        substrate, netuid=118, block=100, expected_runtime_code_hash=_UNTAGGED
+    )
+    assert block.runtime_code_hash == _UNTAGGED
+
+
+async def test_configured_fingerprint_must_match_the_observed_runtime(
+    chain: tuple, interface_admission
+) -> None:
+    substrate, _ = chain
+    interface_admission(substrate, epoch_consensus=False)
+    with pytest.raises(ValueError, match="not audited"):
+        await read_source_emission_block(
+            substrate, netuid=118, block=100, expected_runtime_code_hash=_UNTAGGED
+        )

@@ -252,7 +252,13 @@ class SourceEmissionCollector:
             # A failed scan must not starve payout resolution: the resolver
             # cycles pending rows by last_checked_at with its own archive
             # reads, so it can make progress when the block scan cannot.
-            await self.resolve_pending_payouts(substrate)
+            # A resolver failure is logged, not raised: replacing the scan's
+            # error would hide why the cursor stopped (an unaudited runtime
+            # once read as a decoder error for weeks).
+            try:
+                await self.resolve_pending_payouts(substrate)
+            except Exception:
+                logger.exception("source emission payout resolution failed")
             raise
         await self.resolve_pending_payouts(substrate)
 

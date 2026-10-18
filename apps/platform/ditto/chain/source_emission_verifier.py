@@ -23,6 +23,10 @@ from uuid import UUID
 
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import ChainMinerEmissionReceipt
+from ditto.chain.runtime_interface import (
+    require_audited_interface,
+    runtime_interface,
+)
 
 # v475 adds a per-subnet epoch consensus (Yuma or Null). Payout-critical Yuma
 # semantics are unchanged through v478 (docs/source-runtime-v475.md); Null
@@ -38,11 +42,13 @@ _YUMA_GATED_RUNTIME_CODE_HASHES = frozenset(
 
 # https://github.com/RaoFoundation/subtensor/releases/download/v464/subtensor-digest.json
 # Compressed/compact WASM for v464 and v459, plus verified compressed
-# v466/v467 and v468-v473 (v472 was an untagged deploy of the v471 runtime).
-# Reveal, weights, epoch math and block_step are unchanged through v471; v473
-# only drops a redundant root-coldkey map population from block_step.
-# Artifact verification and scoped runtime audits:
-# docs/source-runtime-v{466,467,468,475}.md.
+# v466/v467 and v468-v473. Reveal, weights, epoch math and block_step are
+# unchanged through v471; v473 only drops a redundant root-coldkey map
+# population from block_step. Artifact verification and scoped runtime audits:
+# docs/source-runtime-v{466,467,468,475}.md. v472 was an untagged deploy with
+# its own artifact (0x43bc67be…), not v471's; it and every later runtime whose
+# consumed interface is unchanged are admitted by admit_runtime instead
+# (docs/source-runtime-interface.md), so this list no longer has to grow.
 AUDITED_RUNTIME_CODE_HASHES = frozenset(
     {
         "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2",
@@ -59,6 +65,61 @@ AUDITED_RUNTIME_CODE_HASHES = frozenset(
         *_YUMA_GATED_RUNTIME_CODE_HASHES,
     }
 )
+
+
+@dataclass(frozen=True)
+class RuntimeAdmission:
+    """Why a runtime fingerprint may be read, and what it must still satisfy.
+
+    ``interface_digest`` is set when the runtime was admitted because its
+    consumed interface matches an audited runtime's, rather than because its
+    WASM artifact was audited (docs/source-runtime-interface.md).
+    """
+
+    code_hash: str
+    epoch_consensus_gated: bool
+    interface_digest: str | None = None
+
+
+# Keyed by :code hash, which fixes the metadata, so an admission never goes
+# stale. Rejections are not cached: a transient metadata failure must retry.
+_INTERFACE_ADMISSIONS: dict[str, RuntimeAdmission] = {}
+
+
+async def admit_runtime(substrate: Any, *, code_hash: Any, at: Any) -> RuntimeAdmission:
+    """Admit an audited artifact, or a runtime with an audited interface.
+
+    Runtime upgrades that leave every consumed storage item, event and call
+    unchanged are admitted from their own metadata; any change to that surface
+    still fails closed and names what moved. A runtime that carries
+    ``SubnetEpochConsensus`` is read only while that is Yuma.
+    """
+    if not isinstance(code_hash, str) or not code_hash.startswith("0x"):
+        raise ValueError(f"runtime fingerprint is not audited: {code_hash}")
+    if code_hash in AUDITED_RUNTIME_CODE_HASHES:
+        return RuntimeAdmission(code_hash, code_hash in _YUMA_GATED_RUNTIME_CODE_HASHES)
+    admitted = _INTERFACE_ADMISSIONS.get(code_hash)
+    if admitted is not None:
+        return admitted
+    try:
+        runtime = await substrate.init_runtime(block_hash=at)
+        metadata = runtime.metadata
+    except Exception as error:
+        raise ChainConnectionError(
+            f"runtime metadata unavailable for {code_hash}"
+        ) from error
+    try:
+        interface = runtime_interface(metadata)
+        require_audited_interface(interface)
+    except ValueError as error:
+        raise ValueError(
+            f"runtime fingerprint is not audited: {code_hash} ({error})"
+        ) from error
+    admitted = RuntimeAdmission(
+        code_hash, interface.has_epoch_consensus, interface.digest
+    )
+    _INTERFACE_ADMISSIONS[code_hash] = admitted
+    return admitted
 
 
 @dataclass(frozen=True)
@@ -277,11 +338,9 @@ async def read_source_emission_block(
     """
     if block < 1:
         raise ValueError("positive block required")
-    if (
-        expected_runtime_code_hash is not None
-        and expected_runtime_code_hash not in AUDITED_RUNTIME_CODE_HASHES
-    ):
-        raise ValueError("configured runtime fingerprint is not audited")
+    # A configured fingerprint is not trusted on its own: each observed parent
+    # and block hash must equal it and pass admit_runtime below, which admits
+    # an interface-matched runtime even on a fresh process's first read.
     if cache is None:
         cache = SourceEmissionReadCache()
     if finalized_block is None:
@@ -319,14 +378,17 @@ async def read_source_emission_block(
         )
     )
     runtime_hashes = []
-    for code_hash in code_hashes:
+    admissions = []
+    for code_hash, at in zip(code_hashes, (parent_hash, block_hash), strict=True):
         observed = code_hash.get("result") if isinstance(code_hash, dict) else None
-        if observed not in AUDITED_RUNTIME_CODE_HASHES or (
+        if (
             expected_runtime_code_hash is not None
             and observed != expected_runtime_code_hash
         ):
             raise ValueError(f"runtime fingerprint is not audited: {observed}")
-        runtime_hashes.append(observed)
+        admission = await admit_runtime(substrate, code_hash=observed, at=at)
+        admissions.append(admission)
+        runtime_hashes.append(admission.code_hash)
     if runtime_hashes[0] != runtime_hashes[1]:
         return SourceEmissionBlock(
             block,
@@ -370,7 +432,7 @@ async def read_source_emission_block(
         raise ValueError("unsupported mechanism count")
     if controls[1] is not True or controls[3] is not True:
         raise ValueError("unsupported direct/manual weights mode")
-    if runtime_hashes[1] in _YUMA_GATED_RUNTIME_CODE_HASHES:
+    if admissions[1].epoch_consensus_gated:
         modes = await asyncio.gather(
             *(
                 cache.get(
@@ -741,7 +803,12 @@ async def plan_source_emission_range(
             "state_getStorageHash", ["0x3a636f6465", at]
         )
         code.append(result.get("result") if isinstance(result, dict) else None)
-    if code[0] != code[1] or code[0] not in AUDITED_RUNTIME_CODE_HASHES:
+    if code[0] != code[1]:
+        return full()
+    try:
+        admission = await admit_runtime(substrate, code_hash=code[0], at=start)
+    except (ValueError, ChainConnectionError):
+        # The full scan admits the same fingerprint and reports why it stopped.
         return full()
     for at in (start, end):
         if await read("MechanismCountCurrent", at) != 1:
@@ -749,7 +816,7 @@ async def plan_source_emission_range(
         if await read("CommitRevealWeightsEnabled", at) is not True:
             return full(code[0])
         if (
-            code[0] in _YUMA_GATED_RUNTIME_CODE_HASHES
+            admission.epoch_consensus_gated
             and await read("SubnetEpochConsensus", at) != "Yuma"
         ):
             return full(code[0])
@@ -853,9 +920,11 @@ async def verify_finalized_weight_commit(substrate: Any, receipt: Any) -> None:
         code = await substrate.rpc_request("state_getStorageHash", ["0x3a636f6465", at])
         if not isinstance(code, dict) or not code.get("result"):
             raise ChainConnectionError("missing historical commit runtime")
-        if code["result"] not in AUDITED_RUNTIME_CODE_HASHES:
-            raise ValueError("commit runtime is not audited")
-        if code["result"] in _YUMA_GATED_RUNTIME_CODE_HASHES:
+        try:
+            admission = await admit_runtime(substrate, code_hash=code["result"], at=at)
+        except ValueError as error:
+            raise ValueError("commit runtime is not audited") from error
+        if admission.epoch_consensus_gated:
             # Null consensus queues commits differently; only Yuma is audited.
             mode = _unwrap(
                 await substrate.query(

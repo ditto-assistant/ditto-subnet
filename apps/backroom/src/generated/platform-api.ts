@@ -2322,6 +2322,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/runtime-interface": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Runtime Interface Report
+         * @description Whether readers admit the runtime at ``block`` (default finalized head).
+         *
+         *     Reports, for source attribution and treasury receipt reading, how the
+         *     runtime was admitted or which consumed entries moved since the nearest
+         *     audited runtime, and for the treasury signer which calls changed since the
+         *     runtime its cold-signed policy binds. Changes nothing; not an approval.
+         */
+        get: operations["get_runtime_interface_report_api_v1_admin_runtime_interface_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/runtime-profiles": {
         parameters: {
             query?: never;
@@ -32603,6 +32628,20 @@ export interface components {
             /** Speed Weight */
             speed_weight: number;
         };
+        /** RuntimeInterfaceReport */
+        RuntimeInterfaceReport: {
+            /** Block */
+            block: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Runtime Code Hash */
+            runtime_code_hash: string;
+            /** Spec Version */
+            spec_version: number;
+            /** Surfaces */
+            surfaces: components["schemas"]["RuntimeSurfaceVerdict"][];
+            treasury_signer: components["schemas"]["TreasurySignerRuntimeView"];
+        };
         /** RuntimeProfileArtifact */
         RuntimeProfileArtifact: {
             /** Actor */
@@ -32674,6 +32713,24 @@ export interface components {
              * @enum {string}
              */
             target: "platform-relay-1" | "platform-relay-2";
+        };
+        /** RuntimeSurfaceVerdict */
+        RuntimeSurfaceVerdict: {
+            /** Admitted By */
+            admitted_by: ("audited_artifact" | "interface") | null;
+            /** Changed Entries */
+            changed_entries: string[];
+            /** Error */
+            error?: string | null;
+            /** Interface Digest */
+            interface_digest: string | null;
+            /** Nearest Audited Release */
+            nearest_audited_release: string | null;
+            /**
+             * Surface
+             * @enum {string}
+             */
+            surface: "source_emission" | "treasury_receipt";
         };
         /**
          * ScheduleScreenerPolicyActivationRequest
@@ -37158,6 +37215,21 @@ export interface components {
             /** Revision */
             revision: number;
             settings: components["schemas"]["TreasurySettings"];
+        };
+        /** TreasurySignerRuntimeView */
+        TreasurySignerRuntimeView: {
+            /** Approved Runtime Code Hash */
+            approved_runtime_code_hash: string;
+            /** Call Baseline Release */
+            call_baseline_release: string;
+            /** Calls Error */
+            calls_error?: string | null;
+            /** Changed Calls */
+            changed_calls: string[];
+            /** Changed Calls Truncated */
+            changed_calls_truncated: boolean;
+            /** Signs On This Runtime */
+            signs_on_this_runtime: boolean;
         };
         /** TreasurySourceClaim */
         TreasurySourceClaim: {
@@ -45276,6 +45348,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminRetirementResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_runtime_interface_report_api_v1_admin_runtime_interface_get: {
+        parameters: {
+            query?: {
+                block?: number | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeInterfaceReport"];
                 };
             };
             /** @description Validation Error */

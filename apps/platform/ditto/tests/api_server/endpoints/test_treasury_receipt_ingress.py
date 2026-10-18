@@ -25,6 +25,7 @@ from ditto.db.models import (
     TreasurySettingsRevision,
     TreasuryVerifiedReceipt,
 )
+from ditto.tests.chain.runtime_metadata import unaudited_treasury_runtime
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
     FINNEY_GENESIS,
@@ -198,6 +199,9 @@ class RPC:
         if method == "state_getStorageHash":
             return {"result": self.code}
         return {"result": {"block": {"extrinsics": ["0xab"]}}}
+
+    async def init_runtime(self, **_kwargs):
+        return unaudited_treasury_runtime()
 
     async def get_block(self, *, block_hash):
         if int(block_hash[2:], 16) in self.distribution_blocks or self.proxy_vendor:
@@ -954,6 +958,9 @@ async def test_exact_historical_execution_runtime_and_forward_upgrade(
 
         async def rpc_request(self, _method, params):
             return {"result": parent if params[-1] == h(119) else post}
+
+        async def init_runtime(self, **_kwargs):
+            return unaudited_treasury_runtime()
 
     if allowed:
         at, previous, code = await finalized_block(HistoricalRPC(), 120, FINNEY_GENESIS)

@@ -540,6 +540,7 @@ describe('Backroom MCP tools', () => {
         'record_treasury_settings',
         'record_treasury_runtime',
         'get_treasury_runtime',
+        'get_runtime_interface_report',
         'record_treasury_receipt',
         'record_v13_replay_private_group',
         'search_screening_source',

@@ -49,7 +49,8 @@ import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasury
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
 import { fetchTreasuryLedger, fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers } from './admin.service'
 import { fetchTreasuryActivationPreflight, fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
-import { fetchTreasuryRuntime, recordTreasuryRuntime } from './admin.service'
+import { fetchRuntimeInterfaceReport, fetchTreasuryRuntime, recordTreasuryRuntime } from './admin.service'
+import { runtimeInterfaceReportInputSchema } from '../lib/runtime-interface.schemas'
 import { recordTreasuryRuntimeInputSchema } from '../lib/treasury-ledger.schemas'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
@@ -1000,6 +1001,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_treasury_settings: 'Read shadow buckets/history; no weights or funds.',
   get_treasury_activation_preflight: 'Read managed Gamma readiness; no activation. See tool help.',
   get_treasury_runtime: 'Read durable Gamma control; not dispatch proof.',
+  get_runtime_interface_report:
+    'Read whether a Subtensor runtime upgrade is admitted and which calls/entries moved; no approval.',
   record_treasury_runtime: 'Control Gamma with CAS, policy and managed roster; no transfers. See tool help.',
   get_treasury_ledger_readiness: 'Read epoch/policy readiness; no activation.',
   record_treasury_settings: 'Record buckets with CAS; in-range Gamma % under signed range moves next epoch.',
@@ -3801,6 +3804,12 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Read current append-only Gamma public-proof producer control and audit. Configuration is separate from independently verified current enforcing epoch and actual weight dispatch. It cannot start transfers or timers. Requires backroom:read.',
     annotations: toolAnnotations('read'),
   }, async () => result(await fetchTreasuryRuntime()))
+  registerTool('get_runtime_interface_report', {
+    title: 'Read Subtensor runtime upgrade report',
+    description: 'Read how the runtime at a finalized block (default: head) compares with audited runtimes. For source attribution and treasury receipt reading it reports admitted_by (audited_artifact, interface, or null = refused), the nearest audited release and the consumed storage/event/call entries that moved. For the treasury signer it reports whether the runtime is the one its cold-signed policy binds and every Pallet.call added, removed or reshaped since that baseline, which is what a new cold approval must review. Admission by interface is read-only: the signer never signs on a runtime its policy does not name. Changes nothing. Requires backroom:read.',
+    inputSchema: runtimeInterfaceReportInputSchema,
+    annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchRuntimeInterfaceReport(input)))
   registerTool('record_treasury_runtime', {
     title: 'Control guarded Gamma producer',
     description: 'Append a durable public-proof control with expectedRevision and exact GAMMA <OBSERVE|ENFORCE|PAUSE> <policy digest> confirmation. Provide only public approvalJson, immutable emission/collector digests and reason. Observe configures finalized ledger observation without weights. Enforce requires an existing matching approval, matching public bucket allocation, immutable epoch mode and fresh exact-policy queued V2 guard for every explicitly configured managedValidatorHotkeys member, with current chain permission; independent validators do not block activation; activationEpoch must be the next independently observed epoch. Copy-weight history is not proof. Pause retains the approval and refuses V2 ledger dispatch; it does not disarm transport fences, cancel already queued tasks, undo finalized weights or restore legacy dispatch. Old epoch pins remain immutable; missing producer/fleet proof refuses without legacy fallback. Neither action starts custody timers, signs or transfers funds. Requires backroom:write.',

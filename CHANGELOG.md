@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.370.0 (2026-10-17)
+
+### Features
+
+- **validator,platform**: Announce host specs in heartbeat protocol v32
+  ([#2996](https://github.com/ditto-assistant/ditto-subnet/pull/2996),
+  [`3f27995`](https://github.com/ditto-assistant/ditto-subnet/commit/3f279959080d40682a95e1b6faac12eaeac4780a))
+
+
 ## v0.369.4 (2026-10-17)
 
 ### Bug Fixes

@@ -5,6 +5,7 @@ from collections import Counter
 import pytest
 
 from ditto.chain.treasury_receipts import _FinalizedReceiptSnapshot, finalized_block
+from ditto.tests.chain.runtime_metadata import unaudited_treasury_runtime
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
     FINNEY_GENESIS,
@@ -36,6 +37,9 @@ class Reads:
             if method == "state_getStorageHash"
             else self.calls[method, tuple(params)]
         }
+
+    async def init_runtime(self, **_kwargs):
+        return unaudited_treasury_runtime()
 
     async def query(self, *_args, **_kwargs):
         if _kwargs.get("storage_function") == "SubnetEpochConsensus":

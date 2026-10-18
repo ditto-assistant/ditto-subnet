@@ -782,6 +782,39 @@ async def test_failed_catchup_scan_still_resolves_pending_payouts(
     assert len(resolved) == 1
 
 
+async def test_resolver_failure_cannot_mask_why_the_scan_stopped(
+    app, session_maker, monkeypatch
+):
+    """The 2026-10 stall read as a SCALE decoder error from the resolver for
+    weeks; the scan's own refusal (an unaudited runtime) is what operators need."""
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, _ = await _prepare(app, session_maker)
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        cursor.block = 100
+        cursor.block_hash = _hash(100)
+    collector = _collector(app, session_maker)
+
+    async def read(_substrate, **_reads):
+        raise ValueError("runtime fingerprint is not audited: 0xnew")
+
+    async def resolve(_substrate):
+        raise AttributeError("'scale_info::460' object has no attribute 'index'")
+
+    substrate = SimpleNamespace(
+        get_chain_finalised_head=AsyncMock(return_value=_hash(15000)),
+        get_block_header=AsyncMock(return_value={"header": {"number": 15000}}),
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.source_emission_collector.read_source_emission_block",
+        read,
+    )
+    monkeypatch.setattr(collector, "resolve_pending_payouts", resolve)
+    with pytest.raises(ValueError, match="not audited: 0xnew"):
+        await collector._sweep_provider(substrate)
+
+
 async def test_sweep_keeps_steady_state_batch_and_leading_resolution(
     app, session_maker, monkeypatch
 ):

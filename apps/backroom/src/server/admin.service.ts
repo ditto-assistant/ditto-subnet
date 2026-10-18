@@ -43,6 +43,7 @@ export async function fetchTreasuryLedger(limit: number) {
 }
 import { publicTreasuryApprovalSchema, treasuryActivationPreflightInputSchema, treasuryActivationPreflightSchema, treasuryLedgerReadinessSchema } from '../lib/treasury-ledger.schemas'
 import { recordTreasuryRuntimeInputSchema, treasuryRuntimeControlSchema, treasuryRuntimeRevisionSchema } from '../lib/treasury-ledger.schemas'
+import { runtimeInterfaceReportInputSchema, runtimeInterfaceReportSchema } from '../lib/runtime-interface.schemas'
 import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
 
 export async function previewTreasuryTopup(rawInput: unknown) {
@@ -102,6 +103,16 @@ export async function fetchTreasuryLedgerReadiness() {
 
 export async function fetchTreasuryRuntime() {
   return treasuryRuntimeControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-runtime'))
+}
+
+export async function fetchRuntimeInterfaceReport(rawInput: unknown = {}) {
+  const input = z.object(runtimeInterfaceReportInputSchema).parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.block !== undefined) params.set('block', String(input.block))
+  const query = params.size ? `?${params.toString()}` : ''
+  return runtimeInterfaceReportSchema.parse(
+    await platformAdminRequest(`/api/v1/admin/runtime-interface${query}`),
+  )
 }
 
 export async function recordTreasuryRuntime(rawInput: unknown, actor: string) {

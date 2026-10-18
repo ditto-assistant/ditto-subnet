@@ -14,7 +14,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
-from ditto.chain.errors import TreasuryReceiptReadProgress
+from ditto.chain.errors import ChainConnectionError, TreasuryReceiptReadProgress
+from ditto.chain.runtime_interface import (
+    TREASURY_RECEIPT_SURFACE,
+    require_audited_interface,
+    runtime_interface,
+)
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_RECEIPT_HASHES,
     COLLECTOR_POW_REGISTRATION_HASHES,
@@ -31,6 +36,55 @@ from ditto_screening_protocol.treasury_identity import read_finalized_collector_
 
 def value(raw: Any) -> Any:
     return getattr(raw, "value", raw)
+
+
+# :code hash -> whether it carries SubnetEpochConsensus. Keyed by code hash,
+# which fixes the metadata; refusals are not cached so a transient read retries.
+_INTERFACE_RECEIPT_RUNTIMES: dict[str, bool] = {}
+
+
+async def _admit_receipt_runtime(
+    substrate: Any, code: Any, pinned: str
+) -> tuple[str, bool]:
+    """Admit a receipt runtime; return it and whether it must be read under Yuma.
+
+    Exact audited collector artifacts are admitted as before. Any other runtime
+    is admitted for *reading* when the storage, events and calls this reader
+    decodes are unchanged from an audited runtime (TREASURY_RECEIPT_SURFACE).
+    This never authorizes signing: the validator collector still requires the
+    runtime its cold-signed policy names.
+    """
+    if not isinstance(code, str) or not code.startswith("0x"):
+        raise ValueError("receipt runtime is not audited")
+    if code in AUDITED_COLLECTOR_RECEIPT_HASHES:
+        return code, code in COLLECTOR_POW_REGISTRATION_HASHES
+    cached = _INTERFACE_RECEIPT_RUNTIMES.get(code)
+    if cached is not None:
+        return code, cached
+    from ditto.chain.audited_runtime_interfaces import TREASURY_RECEIPT_INTERFACES
+
+    try:
+        metadata = (await substrate.init_runtime(block_hash=pinned)).metadata
+    except Exception as error:
+        raise ChainConnectionError(
+            f"receipt runtime metadata unavailable for {code}"
+        ) from error
+    try:
+        interface = runtime_interface(metadata, TREASURY_RECEIPT_SURFACE)
+        require_audited_interface(interface, TREASURY_RECEIPT_INTERFACES)
+    except ValueError as error:
+        raise ValueError(f"receipt runtime is not audited: {code} ({error})") from error
+    _INTERFACE_RECEIPT_RUNTIMES[code] = interface.has_epoch_consensus
+    return code, interface.has_epoch_consensus
+
+
+async def _spec_version(substrate: Any, pinned: str) -> int:
+    response = await substrate.rpc_request("state_getRuntimeVersion", [pinned])
+    result = response.get("result") if isinstance(response, dict) else None
+    spec = result.get("specVersion") if isinstance(result, dict) else None
+    if type(spec) is not int:
+        raise ChainConnectionError("historical receipt runtime version unavailable")
+    return spec
 
 
 class _FinalizedReceiptSnapshot:
@@ -110,11 +164,13 @@ async def finalized_block(
         response = await substrate.rpc_request(
             "state_getStorageHash", ["0x3a636f6465", pinned]
         )
-        code = response.get("result") if isinstance(response, dict) else None
-        if code not in AUDITED_COLLECTOR_RECEIPT_HASHES:
-            raise ValueError("receipt runtime is not audited")
+        code, epoch_gated = await _admit_receipt_runtime(
+            substrate,
+            response.get("result") if isinstance(response, dict) else None,
+            pinned,
+        )
         if (
-            code in COLLECTOR_POW_REGISTRATION_HASHES
+            epoch_gated
             and value(
                 await substrate.query(
                     module="SubtensorModule",
@@ -127,7 +183,16 @@ async def finalized_block(
         ):
             raise ValueError("receipt requires audited Yuma consensus")
         hashes.append(code)
-    return at, parent, collector_receipt_runtime(*hashes)
+    if all(code in AUDITED_COLLECTOR_RECEIPT_HASHES for code in hashes):
+        return at, parent, collector_receipt_runtime(*hashes)
+    # An interface-admitted runtime has no place in the reviewed order, so the
+    # chain's own spec versions order the upgrade. The code-changing block
+    # executes under its parent's runtime; a reverse change refuses.
+    if hashes[0] != hashes[1] and await _spec_version(
+        substrate, parent
+    ) >= await _spec_version(substrate, at):
+        raise ValueError("receipt crosses an unaudited runtime transition")
+    return at, parent, hashes[0]
 
 
 async def read_treasury_chain_proof(

@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from pylon_client.artanis import AsyncPylonClient
 
     from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
+    from ditto.chain.runtime_interface_report import RuntimeInterfaceReport
     from ditto.chain.treasury_receipts import TreasuryChainProof
 
 logger = logging.getLogger(__name__)
@@ -625,6 +626,32 @@ class ChainClient:
                 continue
         raise ChainTreasuryReceiptUnavailable(
             progress.phase, attempts, timed_out=timed_out
+        )
+
+    async def get_runtime_interface_report(
+        self, block: int | None = None
+    ) -> RuntimeInterfaceReport:
+        """Compare one runtime's consumed interfaces with audits; reads only."""
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        from ditto.chain.runtime_interface_report import (
+            read_runtime_interface_report,
+        )
+
+        failures: list[str] = []
+        for url in self._historical_substrate_urls():
+            try:
+                async with (
+                    asyncio.timeout(self._config.archive_rpc_timeout_seconds),
+                    AsyncSubstrateInterface(url=url) as substrate,
+                ):
+                    return await read_runtime_interface_report(substrate, block=block)
+            except ValueError:
+                raise
+            except Exception as error:
+                failures.append(self._safe_rpc_error(error)[:200])
+        raise ChainConnectionError(
+            "runtime interface report unavailable: " + "; ".join(failures)
         )
 
     async def get_finalized_block(self) -> BlockInfo:

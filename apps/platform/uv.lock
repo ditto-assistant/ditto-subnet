@@ -250,18 +250,17 @@ wheels = [
 
 [[package]]
 name = "async-substrate-interface"
-version = "2.0.4"
+version = "2.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "cyscale" },
     { name = "websockets" },
-    { name = "wheel" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/00/05/a7c693b274dbf8c6ed2ceb6b38afe9e78e1dbec36b9d5a2e622cd9104a81/async_substrate_interface-2.0.4.tar.gz", hash = "sha256:6c686a035059b6922e2a3372a62ddf54484fa117fde5d6741d1aeb3e01f67117", size = 98581, upload-time = "2026-05-14T19:52:57.349Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/9b/29b1d609ed59bb768f913853e664dbac9d6490207a0ada154cbd5a1c7883/async_substrate_interface-2.2.1.tar.gz", hash = "sha256:bd5ca091dfbbbb27d0bba6fc0e24aea3ca5a00c7439e23d0bacd0c8270c85ffd", size = 106484, upload-time = "2026-06-29T18:31:50.977Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9c/84/e7d8e3d358e3936d1460576f74e96f69c5dc0c59c2178fd89f16cf39ff36/async_substrate_interface-2.0.4-py3-none-any.whl", hash = "sha256:9f1f931bd9f854b753fb7d28de7bb4c11e642ffabbb9ebf6b8aa2f64c0bba297", size = 102511, upload-time = "2026-05-14T19:52:55.519Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/f9/bfb9103ce9c991196367468aa203f658494b83413e6b5c6668a9cb11cfce/async_substrate_interface-2.2.1-py3-none-any.whl", hash = "sha256:448a5a9843d2498bb57b28fd91b131cec01d3e8a710886fcec550283a00180cf", size = 110613, upload-time = "2026-06-29T18:31:49.63Z" },
 ]
 
 [[package]]
