@@ -344,13 +344,13 @@ function BountyBoard(props: {
 }
 
 /** The deadline that applies to a slot's current status, if any. */
-function slotDeadline(slot: BountySlotView): { label: string; at: string } | null {
+function slotDeadline(slot: BountySlotView): { what: string; at: string } | null {
   if (slot.status === "held" && slot.hold_expires_at)
-    return { label: "Payment due", at: slot.hold_expires_at };
+    return { what: "Payment", at: slot.hold_expires_at };
   if ((slot.status === "claimed" || slot.status === "rework") && slot.deadline_at)
-    return { label: "Delivery due", at: slot.deadline_at };
+    return { what: "Delivery", at: slot.deadline_at };
   if (slot.status === "submitted" && slot.review_due_at)
-    return { label: "Review due", at: slot.review_due_at };
+    return { what: "Review", at: slot.review_due_at };
   return null;
 }
 
@@ -649,7 +649,11 @@ function SlotRow(props: { slot: BountySlotView }): JSX.Element {
         <Show when={deadline()} fallback="—">
           {(due) => (
             <>
-              {due().label} {relTimeUntil(due().at)}
+              {/* A review stays submitted past its due date, so an elapsed
+                  deadline reads overdue, not as about to pass. */}
+              {Date.parse(due().at) <= Date.now()
+                ? `${due().what} overdue`
+                : `${due().what} due ${relTimeUntil(due().at)}`}
               <small>{athDate(due().at)}</small>
             </>
           )}

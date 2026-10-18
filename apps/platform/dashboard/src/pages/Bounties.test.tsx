@@ -289,6 +289,27 @@ describe("bounty detail", () => {
     expect(within(slotRow(alice.position)).getByText("Payments")).toBeInTheDocument();
   });
 
+  it("reads a review past its due date as overdue, not about to pass", async () => {
+    const edited = structuredClone(detail);
+    const slot = edited.slots.find((candidate) => candidate.status === "claimed")!;
+    const due = Date.now() - 3_600_000;
+    Object.assign(slot, {
+      status: "submitted",
+      deadline_at: null,
+      review_due_at: new Date(due).toISOString(),
+      review_overdue: true,
+    });
+    vi.mocked(getJSON).mockImplementation(((path: string) =>
+      path.split("?")[0] === `/public/bounties/${bountyId}`
+        ? Promise.resolve(edited)
+        : serve(path)) as typeof getJSON);
+    await openBounty();
+    const row = slotRow(slot.position);
+    const deadline = within(row).getAllByRole("cell").at(-1)!;
+    expect(deadline).toHaveTextContent("Review overdue");
+    expect(deadline).not.toHaveTextContent("any moment now");
+  });
+
   it("counts a deadline down again when the bounty refreshes", async () => {
     // A real fetch parses a new object every poll, as the detail polls.
     vi.mocked(getJSON).mockImplementation(((path: string) =>
