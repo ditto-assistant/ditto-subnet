@@ -368,7 +368,7 @@ async def test_a_failed_bisection_leaves_no_reads_running() -> None:
     assert asyncio.all_tasks() == {asyncio.current_task()}
 
 
-async def test_a_failed_storage_key_leaves_no_reads_running() -> None:
+async def test_a_failed_storage_key_leaves_no_reads_running(monkeypatch) -> None:
     chain = _chain()
     chain.registrations = {1: [(1200, "a")], 2: [(1300, "b")]}
     create = chain.create_storage_key
@@ -378,7 +378,7 @@ async def test_a_failed_storage_key_leaves_no_reads_running() -> None:
             raise ValueError("no such storage item")
         return await create(pallet, name, params, **kw)
 
-    chain.create_storage_key = failing  # type: ignore[method-assign]
+    monkeypatch.setattr(chain, "create_storage_key", failing)
     with pytest.raises(ValueError, match="no such storage item"):
         await _plan(chain)
     assert asyncio.all_tasks() == {asyncio.current_task()}
