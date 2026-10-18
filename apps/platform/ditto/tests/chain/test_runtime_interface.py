@@ -8,6 +8,7 @@ import pytest
 from ditto.chain import audited_runtime_interfaces, source_emission_verifier
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.runtime_interface import (
+    metadata_at,
     require_audited_interface,
     runtime_interface,
 )
@@ -217,6 +218,13 @@ async def test_upgrade_block_is_fingerprinted_on_its_own_runtime() -> None:
     with pytest.raises(ValueError, match="storage:SubtensorModule.Weights"):
         await admit_runtime(substrate, code_hash=UPGRADE, at="upgrade-block")
     substrate.init_runtime.assert_not_awaited()
+
+
+async def test_missing_metadata_is_a_connection_fault() -> None:
+    substrate = AsyncMock()
+    substrate.get_block_metadata.return_value = None
+    with pytest.raises(ChainConnectionError, match="no runtime metadata"):
+        await metadata_at(substrate, "h1")
 
 
 async def test_audited_artifact_needs_no_metadata() -> None:

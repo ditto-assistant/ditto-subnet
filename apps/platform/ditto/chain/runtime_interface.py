@@ -29,6 +29,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from ditto.chain.errors import ChainConnectionError
+
 
 @dataclass(frozen=True)
 class RuntimeSurface:
@@ -280,7 +282,7 @@ async def metadata_at(substrate: Any, block_hash: str) -> Any:
         block_hash=block_hash, runtime_config=config
     )
     if metadata is None:
-        raise LookupError(f"no runtime metadata at {block_hash}")
+        raise ChainConnectionError(f"no runtime metadata at {block_hash}")
     return metadata
 
 
