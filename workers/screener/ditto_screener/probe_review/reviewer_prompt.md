@@ -118,6 +118,9 @@ lacks_tool), `http_ok`.
      call (e.g. `Answer: SEND` to a call that asked for a bare SEND/HOLD word).
      Script each auxiliary call in the format it asks for before charging
      anything; W7 lets malformed output trigger recovery.
+   Precedent that is NOT a judgment call: a fixed count cap of 4 or fewer that
+   blocks distinct, valid calls the user explicitly requested has been ruled
+   I7 (gale, Artemis). Charge it. Larger caps remain a policy question.
    If a proven behavior's classification turns on a policy judgment (advisory
    vs enforced, whether a cap is a legitimate resource limit, whether
    vocabulary is benchmark-specific or ordinary), record it under
