@@ -384,13 +384,20 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             ),
             {
                 "rules": [
+                    # A declared model repeat-authorizer asks for a bare
+                    # SEND/HOLD word; authorize the repeat so only a HOST
+                    # veto can block the second requested effect.
+                    {
+                        "when": {"has_tools": False, "prompt_contains": "HOLD"},
+                        "reply": {"content": "SEND"},
+                    },
                     {
                         "when": {"has_tools": True},
                         "reply": tool_call(
                             "create_reminder", {"text": f"water plants {t}"}
                         ),
                         "max_uses": 2,
-                    }
+                    },
                 ],
                 "default": {"content": fmt("Created both reminders.")},
             },
