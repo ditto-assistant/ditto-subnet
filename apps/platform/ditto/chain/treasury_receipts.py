@@ -17,6 +17,7 @@ from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
 from ditto.chain.errors import ChainConnectionError, TreasuryReceiptReadProgress
 from ditto.chain.runtime_interface import (
     TREASURY_RECEIPT_SURFACE,
+    metadata_at,
     require_audited_interface,
     runtime_interface,
 )
@@ -64,7 +65,7 @@ async def _admit_receipt_runtime(
     from ditto.chain.audited_runtime_interfaces import TREASURY_RECEIPT_INTERFACES
 
     try:
-        metadata = (await substrate.init_runtime(block_hash=pinned)).metadata
+        metadata = await metadata_at(substrate, pinned)
     except Exception as error:
         raise ChainConnectionError(
             f"receipt runtime metadata unavailable for {code}"

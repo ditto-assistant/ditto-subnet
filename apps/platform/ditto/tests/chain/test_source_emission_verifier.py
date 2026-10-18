@@ -677,7 +677,6 @@ _UNTAGGED = "0x" + "ab" * 32
 @pytest.fixture
 def interface_admission(monkeypatch: pytest.MonkeyPatch):
     """Admit runtimes whose synthetic consumed interface is pinned as audited."""
-    from types import SimpleNamespace
 
     from ditto.chain import audited_runtime_interfaces, source_emission_verifier
     from ditto.chain.runtime_interface import runtime_interface
@@ -693,8 +692,8 @@ def interface_admission(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(source_emission_verifier, "_INTERFACE_ADMISSIONS", {})
 
     def install(substrate: AsyncMock, *, epoch_consensus: bool) -> None:
-        substrate.init_runtime.return_value = SimpleNamespace(
-            metadata=metadata(epoch_consensus=epoch_consensus)
+        substrate.get_block_metadata.return_value = metadata(
+            epoch_consensus=epoch_consensus
         )
 
     return install
@@ -745,7 +744,6 @@ async def test_admitted_runtime_with_epoch_consensus_requires_yuma(
 
 @pytest.mark.usefixtures("interface_admission")
 async def test_changed_interface_names_the_moved_entry(chain: tuple) -> None:
-    from types import SimpleNamespace
 
     from ditto.tests.chain.runtime_metadata import clone, entry, metadata
 
@@ -753,7 +751,7 @@ async def test_changed_interface_names_the_moved_entry(chain: tuple) -> None:
     state["runtime"] = _UNTAGGED
     changed = clone(metadata(epoch_consensus=False))
     entry(changed, "SubtensorModule", "StakeWeight").update(default="\x01")
-    substrate.init_runtime.return_value = SimpleNamespace(metadata=changed)
+    substrate.get_block_metadata.return_value = changed
     with pytest.raises(
         ValueError, match="not audited: .*storage:SubtensorModule.StakeWeight"
     ):

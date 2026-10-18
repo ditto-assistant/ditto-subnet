@@ -4003,9 +4003,19 @@ async def test_partial_dossier_safe_consensus_cannot_clear(
 
     assert requests == 3
     assert not result.observation.ok
-    assert result.observation.failure_disposition == "retryable_infra"
+    # A truncated dossier recurs on every retry of the same bytes: it is an
+    # inconclusive hold naming the partial components, never an infra retry.
+    assert result.observation.failure_disposition == "inconclusive"
     assert result.observation.error_code == "l3-adjudicator-incomplete"
     assert not result.dossier_complete
+    assert result.dossier_incomplete_components
+    assert result.failure_subcode == "+".join(result.dossier_incomplete_components)
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.reason_code == "l3-adjudicator-incomplete"
+    assert audit.final_stage == "adjudicator"
+    assert audit.dossier_incomplete_components == list(
+        result.dossier_incomplete_components
+    )
 
 
 @pytest.mark.parametrize("deep_nesting", [False, True])
@@ -4143,7 +4153,9 @@ async def test_l3_no_tool_failure_reports_bounded_subcode(
     if recovers:
         assert requests == 4
         assert result.observation.error_code == "l3-adjudicator-incomplete"
-        assert result.failure_subcode is None
+        # The recovered tool-contract slug does not leak; only the partial
+        # dossier components name the hold.
+        assert result.failure_subcode == "+".join(result.dossier_incomplete_components)
         return
     assert requests == 5
     assert result.observation.error_code == "l3-adjudicator-model-tool-contract"
@@ -5155,9 +5167,10 @@ async def test_incomplete_inventory_allows_violation_but_never_clear(
         deadline=None,
     )
     assert not safe_result.observation.ok
-    assert safe_result.observation.failure_disposition == "retryable_infra"
+    assert safe_result.observation.failure_disposition == "inconclusive"
     assert safe_result.observation.error_code == "l3-adjudicator-incomplete"
     assert safe_result.clearance_path == "l3_adjudicator_incomplete"
+    assert safe_result.failure_subcode == "workspace_index"
     assert safe_requests == 6
 
 

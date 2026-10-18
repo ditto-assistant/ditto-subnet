@@ -1,7 +1,5 @@
 """Treasury receipts stay readable across upgrades that leave their surface alone."""
 
-from types import SimpleNamespace
-
 import pytest
 
 from ditto.chain import audited_runtime_interfaces, treasury_receipts
@@ -70,9 +68,9 @@ class Chain:
         assert method == "state_getRuntimeVersion"
         return {"result": {"specVersion": self.specs[0 if parent else 1]}}
 
-    async def init_runtime(self, **_kwargs):
+    async def get_block_metadata(self, **_kwargs):
         self.runtime_reads += 1
-        return SimpleNamespace(metadata=self.meta)
+        return self.meta
 
     async def query(self, **_kwargs):
         return self.consensus
@@ -129,7 +127,7 @@ async def test_unreadable_metadata_is_a_provider_fault_not_a_refusal() -> None:
     async def unavailable(**_kwargs):
         raise OSError("archive dropped")
 
-    setattr(chain, "init_runtime", unavailable)  # noqa: B010
+    setattr(chain, "get_block_metadata", unavailable)  # noqa: B010
     with pytest.raises(ChainConnectionError):
         await finalized_block(chain, 120, FINNEY_GENESIS)
 

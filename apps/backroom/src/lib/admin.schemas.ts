@@ -1188,6 +1188,28 @@ export const artifactReleaseRevisionSchema = z.object({
   created_at: z.string().nullable(),
 })
 
+// Shadow comparison of the reveal-anchored range planner. `missed` > 0 is a
+// correctness failure: that planner must not be promoted.
+export const revealPlanShadowSchema = z.object({
+  mode: z.string(),
+  ranges: z.number().int().nonnegative().default(0),
+  agreed: z.number().int().nonnegative().default(0),
+  missed: z.number().int().nonnegative().default(0),
+  fallback: z.number().int().nonnegative().default(0),
+  error: z.number().int().nonnegative().default(0),
+  blocks: z.number().int().nonnegative().default(0),
+  calls: z.number().int().nonnegative().default(0),
+  last_range: z.array(z.number().int()).nullish().default(null),
+  last_outcome: z.string().nullish().default(null),
+  last_error: z.string().nullish().default(null),
+  recent_misses: z.array(z.object({
+    first_block: z.number().int(),
+    last_block: z.number().int(),
+    blocks: z.array(z.number().int()).max(720).default([]),
+  })).max(5).default([]),
+  updated_at: z.string().nullish().default(null),
+})
+
 export const sourceReleaseGateSchema = z.object({
   version: z.string(),
   automatic_confirmation_enabled: z.boolean(),
@@ -1201,6 +1223,7 @@ export const sourceReleaseGateSchema = z.object({
   collector_cursor_hash: z.string().nullable().optional(),
   collector_runtime_code_hash: z.string().nullable().optional(),
   collector_blocked_reason: z.string().nullable().optional(),
+  reveal_plan_shadow: revealPlanShadowSchema.nullish(),
   last_payout_block: z.number().nullable().optional(),
   last_payout_blocked_reason: z.string().nullable().optional(),
   last_payout_attributed: z.boolean().optional(),

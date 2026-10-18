@@ -29,6 +29,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from ditto.chain.errors import ChainConnectionError
+
 
 @dataclass(frozen=True)
 class RuntimeSurface:
@@ -259,6 +261,29 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+async def metadata_at(substrate: Any, block_hash: str) -> Any:
+    """Metadata of the runtime whose ``:code`` is stored at ``block_hash``.
+
+    Never ``init_runtime(block_hash=...)``: the library decodes a block with
+    its *parent's* runtime, so at an upgrade block it returns the previous
+    runtime's metadata. Fingerprinting that would admit the new code hash on
+    the old interface. ``state_getMetadata`` at the hash is the exact runtime,
+    decoded with a fresh configuration that shares no session cache.
+    """
+    from scalecodec.base import RuntimeConfigurationObject
+    from scalecodec.type_registry import load_type_registry_preset
+
+    config = RuntimeConfigurationObject()
+    config.clear_type_registry()
+    config.update_type_registry(load_type_registry_preset(name="core") or {})
+    metadata = await substrate.get_block_metadata(
+        block_hash=block_hash, runtime_config=config
+    )
+    if metadata is None:
+        raise ChainConnectionError(f"no runtime metadata at {block_hash}")
+    return metadata
 
 
 # What malformed metadata raises below the explicit shape checks.

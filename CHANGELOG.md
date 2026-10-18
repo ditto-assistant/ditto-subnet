@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v0.371.2 (2026-10-18)
+
+### Bug Fixes
+
+- **screener**: Report an L3 safe claim on a truncated dossier as inconclusive
+  ([#2999](https://github.com/ditto-assistant/ditto-subnet/pull/2999),
+  [`29a8f4d`](https://github.com/ditto-assistant/ditto-subnet/commit/29a8f4d5d2f595a4f469b3c2557bb8db1e66de78))
+
+
+## v0.371.1 (2026-10-18)
+
+### Bug Fixes
+
+- **platform**: Unstick source-emission decoding and fingerprint upgrade blocks on their own runtime
+  ([#3000](https://github.com/ditto-assistant/ditto-subnet/pull/3000),
+  [`abc2ab0`](https://github.com/ditto-assistant/ditto-subnet/commit/abc2ab06990d9b20e968e1a6ceaf3ef9758ebc19))
+
+
+## v0.371.0 (2026-10-18)
+
+### Bug Fixes
+
+- **platform**: Admit runtime upgrades by consumed interface, not WASM hash
+  ([#2993](https://github.com/ditto-assistant/ditto-subnet/pull/2993),
+  [`7a3c66f`](https://github.com/ditto-assistant/ditto-subnet/commit/7a3c66ffe82f3f684a5b6f3005aad2dbdb000763))
+
+### Features
+
+- **platform**: Read treasury receipts across runtime upgrades and report what moved
+  ([#2994](https://github.com/ditto-assistant/ditto-subnet/pull/2994),
+  [`c96c33e`](https://github.com/ditto-assistant/ditto-subnet/commit/c96c33e6b83f426fc167d0fd05a9d395ba1de246))
+
+
 ## v0.370.0 (2026-10-17)
 
 ### Features

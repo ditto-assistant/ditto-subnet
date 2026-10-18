@@ -16,7 +16,7 @@ import asyncio
 import functools
 import hashlib
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -24,6 +24,7 @@ from uuid import UUID
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import ChainMinerEmissionReceipt
 from ditto.chain.runtime_interface import (
+    metadata_at,
     require_audited_interface,
     runtime_interface,
 )
@@ -102,8 +103,7 @@ async def admit_runtime(substrate: Any, *, code_hash: Any, at: Any) -> RuntimeAd
     if admitted is not None:
         return admitted
     try:
-        runtime = await substrate.init_runtime(block_hash=at)
-        metadata = runtime.metadata
+        metadata = await metadata_at(substrate, at)
     except Exception as error:
         raise ChainConnectionError(
             f"runtime metadata unavailable for {code_hash}"
@@ -740,23 +740,37 @@ def _quiet_block_events(events: Any, netuid: int) -> bool:
     return True
 
 
-async def plan_source_emission_range(
-    substrate: Any,
-    *,
-    netuid: int,
-    first_block: int,
-    last_block: int,
-    concurrency: int = 8,
-) -> SourceEmissionRangePlan:
-    """Find the blocks of ``[first_block, last_block]`` that need a full read.
+@dataclass(frozen=True)
+class _RangeEndpoints:
+    """A range whose endpoint invariants hold, ready for a quiet-block filter."""
 
-    Endpoint invariants first: if the runtime code, the mode controls or the
-    ``Keys`` map differ between ``first_block - 1`` and ``last_block``, or are
-    not valid at either end, the plan requests the unchanged full scan. Equal
-    endpoints rule out a net change; a code change and revert inside the range
-    is caught by ``System.CodeUpdated`` and an identity flip-flop is caught by
-    the structural event markers. Each block's events and payout marker are
-    then read with one ``state_queryStorageAt`` call.
+    first_block: int
+    last_block: int
+    hashes: dict[int, str]
+    runtime_code_hash: str
+
+    def plan(self, interesting: Iterable[int]) -> SourceEmissionRangePlan:
+        return SourceEmissionRangePlan(
+            self.first_block,
+            self.last_block,
+            self.hashes,
+            tuple(sorted(set(interesting))),
+            False,
+            self.runtime_code_hash,
+        )
+
+
+async def _range_endpoints(
+    substrate: Any, *, netuid: int, first_block: int, last_block: int
+) -> _RangeEndpoints | SourceEmissionRangePlan:
+    """Shared endpoint checks; a ``full_scan`` plan when any of them fails.
+
+    If the runtime code, the mode controls or the ``Keys`` map differ between
+    ``first_block - 1`` and ``last_block``, or are not valid at either end, the
+    caller must run the unchanged per-block scan. Equal endpoints rule out a net
+    change: a runtime upgrade cannot revert (spec versions only increase), and
+    an identity cannot flip back inside one range (the replacement would be
+    pruned inside its own immunity period).
     """
     if not 0 < first_block <= last_block:
         raise ValueError("invalid source-emission range")
@@ -827,6 +841,31 @@ async def plan_source_emission_range(
         or dict(start_keys) != dict(end_keys)
     ):
         return full(code[0])
+    return _RangeEndpoints(first_block, last_block, hashes, admission.code_hash)
+
+
+async def plan_source_emission_range(
+    substrate: Any,
+    *,
+    netuid: int,
+    first_block: int,
+    last_block: int,
+    concurrency: int = 8,
+) -> SourceEmissionRangePlan:
+    """Find the blocks of ``[first_block, last_block]`` that need a full read.
+
+    After the shared endpoint checks (``_range_endpoints``), a code change and
+    revert inside the range is caught by ``System.CodeUpdated`` and an identity
+    flip-flop by the structural event markers. Each block's events and payout
+    marker are then read with one ``state_queryStorageAt`` call.
+    """
+    endpoints = await _range_endpoints(
+        substrate, netuid=netuid, first_block=first_block, last_block=last_block
+    )
+    if isinstance(endpoints, SourceEmissionRangePlan):
+        return endpoints
+    hashes = endpoints.hashes
+    end = hashes[last_block]
 
     events_key = await substrate.create_storage_key(
         "System", "Events", [], block_hash=end
@@ -877,14 +916,186 @@ async def plan_source_emission_range(
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
-    return SourceEmissionRangePlan(
-        first_block,
-        last_block,
-        hashes,
-        tuple(block for block, flag in zip(blocks, flags, strict=True) if flag),
-        False,
-        code[0],
+    return endpoints.plan(
+        block for block, flag in zip(blocks, flags, strict=True) if flag
     )
+
+
+async def plan_source_emission_range_by_reveals(
+    substrate: Any,
+    *,
+    netuid: int,
+    first_block: int,
+    last_block: int,
+    concurrency: int = 8,
+) -> SourceEmissionRangePlan:
+    """Plan a range from payouts and reveal-queue changes, without event reads.
+
+    Under the shared endpoint checks, the only blocks the full reader can act
+    on are payouts and SN118 weight writes. With commit-reveal enabled every
+    write comes from a commit-reveal v3 reveal (direct ``set_weights`` is
+    rejected) or a v2 ``reveal_weights``, refused here by requiring an empty
+    v2 commit store at every probed block.
+
+    * **Payouts** are found by hopping ``LastMechansimStepBlock`` back from
+      the range end, one read per payout.
+    * **Reveals** pop entries off ``TimelockedWeightCommits(netuid, e)``, where
+      ``e`` is the epoch before the current one. Within one epoch that key
+      only shrinks (commits go to the current epoch's key, and a taken entry
+      never comes back), so bisecting its storage hash between payouts finds
+      every block that revealed, exactly and with tiny reads.
+
+    Any other shape (epoch moving without a payout, a changed reveal period,
+    controls changing between payouts) returns the full-scan plan. Shadowed
+    against ``plan_source_emission_range`` before it is trusted: a reveal
+    path this misses shows up there as a disagreement.
+    """
+    endpoints = await _range_endpoints(
+        substrate, netuid=netuid, first_block=first_block, last_block=last_block
+    )
+    if isinstance(endpoints, SourceEmissionRangePlan):
+        return endpoints
+    hashes = endpoints.hashes
+    end = hashes[last_block]
+    gate = asyncio.Semaphore(concurrency)
+
+    def full() -> SourceEmissionRangePlan:
+        return SourceEmissionRangePlan(
+            first_block, last_block, hashes, (), True, endpoints.runtime_code_hash
+        )
+
+    async def read(name: str, block: int) -> Any:
+        async with gate:
+            return _unwrap(
+                await substrate.query(
+                    module="SubtensorModule",
+                    storage_function=name,
+                    params=[netuid],
+                    block_hash=hashes[block],
+                )
+            )
+
+    async def v2_commits(block: int) -> int:
+        async with gate:
+            rows = await substrate.query_map(
+                module="SubtensorModule",
+                storage_function="WeightCommits",
+                params=[netuid],
+                block_hash=hashes[block],
+                fully_exhaust=True,
+            )
+            return len([row async for row in rows])
+
+    reveal_periods = {
+        _uint(await read("RevealPeriodEpochs", block))
+        for block in (first_block - 1, last_block)
+    }
+    if len(reveal_periods) != 1 or 0 in reveal_periods:
+        return full()
+    reveal_period = reveal_periods.pop()
+
+    # The controls are read at the ends and at every payout, not every block.
+    # A subnet owner cannot switch commit-reveal or the mechanism count off and
+    # back on between them: each change is rate-limited to one per
+    # tempo * OwnerHyperparamRateLimit blocks, longer than the range. Only root
+    # can, and root can also change that limit, so it must hold at both ends.
+    async def owner_change_interval(block: int) -> int:
+        async with gate:
+            limit = _unwrap(
+                await substrate.query(
+                    module="SubtensorModule",
+                    storage_function="OwnerHyperparamRateLimit",
+                    params=[],
+                    block_hash=hashes[block],
+                )
+            )
+        return _uint(await read("Tempo", block)) * _uint(limit)
+
+    intervals = {
+        await owner_change_interval(block) for block in (first_block - 1, last_block)
+    }
+    if len(intervals) != 1 or intervals.pop() <= last_block - first_block:
+        return full()
+
+    # Payouts, newest first: each payout's parent state names the previous one.
+    payouts: list[int] = []
+    step = _uint(await read("LastMechansimStepBlock", last_block))
+    while step >= first_block:
+        payouts.append(step)
+        previous = _uint(await read("LastMechansimStepBlock", step - 1))
+        if previous >= step:
+            raise ValueError("payout markers do not move backwards")
+        step = previous
+    payouts.reverse()
+
+    # One segment per epoch: (state before, last block, epoch it reveals for).
+    starts = [first_block - 1, *payouts]
+    segments: list[tuple[int, int, int]] = []
+    for index, start in enumerate(starts):
+        last = payouts[index] - 1 if index < len(payouts) else last_block
+        epoch = _uint(await read("SubnetEpochIndex", start))
+        if _uint(await read("SubnetEpochIndex", last)) != epoch:
+            return full()  # the epoch moved without a payout marker
+        if epoch < reveal_period:
+            return full()
+        # A payout's own block reveals too, so its segment starts before it.
+        before = start if index == 0 else start - 1
+        segments.append((before, last, epoch - reveal_period))
+    for block in {first_block - 1, last_block, *payouts}:
+        if await read("CommitRevealWeightsEnabled", block) is not True:
+            return full()
+        if await read("MechanismCountCurrent", block) != 1:
+            return full()
+        if await v2_commits(block):
+            return full()
+
+    async def storage_hash(key_hex: str, block: int, memo: dict[int, Any]) -> Any:
+        if block not in memo:
+            async with gate:
+                result = await substrate.rpc_request(
+                    "state_getStorageHash", [key_hex, hashes[block]]
+                )
+            # ``result: null`` is absent storage, a valid answer; a response
+            # without it is not, and must not read as "unchanged".
+            if not isinstance(result, dict) or "result" not in result:
+                raise ValueError(f"missing storage hash at block {block}")
+            memo[block] = result["result"]
+        return memo[block]
+
+    async def changes(key_hex: str, low: int, high: int, memo: dict) -> list[int]:
+        """Blocks in ``(low, high]`` whose post-state hash differs from the parent's."""
+        low_hash, high_hash = await asyncio.gather(
+            storage_hash(key_hex, low, memo), storage_hash(key_hex, high, memo)
+        )
+        if low_hash == high_hash:
+            return []
+        if high - low == 1:
+            return [high]
+        mid = (low + high) // 2
+        tasks = [
+            asyncio.create_task(changes(key_hex, low, mid, memo)),
+            asyncio.create_task(changes(key_hex, mid, high, memo)),
+        ]
+        try:
+            left, right = await asyncio.gather(*tasks)
+        except BaseException:
+            # Stop the sibling branch's reads before the caller falls back.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        return left + right
+
+    interesting = set(payouts)
+    for before, last, reveal_epoch in segments:
+        key = await substrate.create_storage_key(
+            "SubtensorModule",
+            "TimelockedWeightCommits",
+            [netuid, reveal_epoch],
+            block_hash=end,
+        )
+        interesting.update(await changes(key.to_hex(), before, last, {}))
+    return endpoints.plan(interesting)
 
 
 async def verify_finalized_weight_commit(substrate: Any, receipt: Any) -> None:
