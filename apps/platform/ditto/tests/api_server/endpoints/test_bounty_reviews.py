@@ -381,6 +381,34 @@ async def test_closing_never_waits_on_a_blocked_sweep(world, monkeypatch):
     assert sweeper._task is None
 
 
+async def test_a_cancelled_close_still_ends_the_sweep(world, monkeypatch):
+    from ditto.api_server import bounty_deadlines
+
+    blocked = asyncio.Event()
+
+    async def due(_session, **_kwargs):
+        return [uuid4()]
+
+    async def stuck(_maker, _bounty_id, **_kwargs):
+        blocked.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(bounty_deadlines, "due_bounties", due)
+    monkeypatch.setattr(bounty_deadlines, "settle_deadlines", stuck)
+    sweeper = BountyDeadlineSweeper(session_maker=world.maker, interval_seconds=60)
+    await sweeper.start()
+    running = sweeper._task
+    assert running is not None
+    await asyncio.wait_for(blocked.wait(), timeout=5)
+    closing = asyncio.create_task(sweeper.aclose(grace_seconds=60))
+    await asyncio.sleep(0.05)
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    # The caller's cancellation ends the sweep too: a restart runs one loop.
+    assert running.done()
+
+
 async def test_one_failing_bounty_never_blocks_the_sweep(world, monkeypatch):
     from ditto.api_server import bounty_deadlines
 

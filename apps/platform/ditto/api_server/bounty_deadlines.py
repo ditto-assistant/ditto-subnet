@@ -243,6 +243,12 @@ class BountyDeadlineSweeper:
             # deadlines, so shutdown never waits on it.
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        except asyncio.CancelledError:
+            # The shield keeps the sweep running past a cancelled close; end it
+            # too, or a later start would run a second loop beside it.
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
 
     async def sweep(self, *, now: datetime | None = None) -> int:
         """Apply due deadlines, one bounty per transaction; returns the count.
