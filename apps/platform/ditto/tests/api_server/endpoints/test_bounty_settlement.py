@@ -6,6 +6,7 @@ and CLA flows. Money is simulated end to end; nothing here moves funds.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from types import SimpleNamespace
@@ -402,6 +403,131 @@ async def test_approvals_bind_payee_amount_policy_and_distinct_operators(world):
     await policy(world, expected=1, single=SINGLE, dual=DUAL + 1)
     stale = (await claim_of(world, claim))["obligations"]
     assert {o["state"] for o in stale if o["kind"] == "award"} == {"awaiting_approval"}
+
+
+async def _wait_for_policy_lock(world, task):
+    """Wait for a real advisory-lock waiter, not a scheduling delay."""
+
+    async def waiting():
+        async with world.maker() as session:
+            while not task.done():
+                if await session.scalar(
+                    text(
+                        "SELECT EXISTS (SELECT 1 FROM pg_locks "
+                        "WHERE locktype = 'advisory' AND NOT granted "
+                        "AND database = (SELECT oid FROM pg_database "
+                        "WHERE datname = current_database()))"
+                    )
+                ):
+                    return
+                await asyncio.sleep(0)
+        raise AssertionError("the operation completed without waiting for the policy")
+
+    await asyncio.wait_for(waiting(), timeout=10)
+
+
+async def test_policy_publication_waits_for_dispatch_commit_but_not_execution(
+    world, monkeypatch
+):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    assert (await policy(world)).status_code == 200
+    refund = obligation(claim, "fee_refund")
+    assert (await approve(world, refund)).json()["state"] == "approved"
+
+    checked, record, executing, finish = (asyncio.Event() for _ in range(4))
+    original_state = bounty_settlement.obligation_state
+    executor = world.app.state.bounty_transfer_executor
+    original_execute = executor.execute
+
+    async def checked_state(*args, **kwargs):
+        state = await original_state(*args, **kwargs)
+        checked.set()
+        await record.wait()
+        return state
+
+    async def pending_execute(*args, **kwargs):
+        executing.set()
+        await finish.wait()
+        return await original_execute(*args, **kwargs)
+
+    monkeypatch.setattr(bounty_settlement, "obligation_state", checked_state)
+    monkeypatch.setattr(executor, "execute", pending_execute)
+    sending = asyncio.create_task(dispatch(world, refund))
+    publishing = None
+    try:
+        await asyncio.wait_for(checked.wait(), timeout=10)
+        publishing = asyncio.create_task(
+            policy(world, expected=1, single=1, dual=FEE - 1)
+        )
+        # The policy cannot invalidate approvals between the check and commit.
+        await _wait_for_policy_lock(world, publishing)
+        record.set()
+        await asyncio.wait_for(executing.wait(), timeout=10)
+        # Once dispatch is durable, execution must hold no policy lock: a slow
+        # executor must not prevent operators publishing the next policy.
+        changed = await asyncio.wait_for(publishing, timeout=10)
+        assert changed.status_code == 200 and changed.json()["revision"] == 2
+        assert not sending.done()
+        recorded = obligation(await claim_of(world, claim), "fee_refund")
+        assert recorded["state"] == "dispatched"
+    finally:
+        record.set()
+        finish.set()
+        await asyncio.gather(
+            sending,
+            *([publishing] if publishing is not None else []),
+            return_exceptions=True,
+        )
+    result = sending.result()
+    assert result.status_code == 200 and result.json()["state"] == "confirmed"
+
+
+@pytest.mark.parametrize("action", ["approve", "dispatch"])
+async def test_settlement_waits_for_a_policy_publication_and_uses_its_revision(
+    world, monkeypatch, action
+):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    assert (await policy(world)).status_code == 200
+    refund = obligation(claim, "fee_refund")
+    if action == "dispatch":
+        assert (await approve(world, refund)).json()["state"] == "approved"
+
+    read, publish = asyncio.Event(), asyncio.Event()
+    original_policy = bounty_settlement.current_policy
+
+    async def publishing_policy(session, **kwargs):
+        current = await original_policy(session, **kwargs)
+        if not read.is_set():
+            # The publisher holds its exclusive lock but has not committed yet.
+            read.set()
+            await publish.wait()
+        return current
+
+    monkeypatch.setattr(bounty_settlement, "current_policy", publishing_policy)
+    publishing = asyncio.create_task(policy(world, expected=1, single=1, dual=FEE - 1))
+    settling = None
+    try:
+        await asyncio.wait_for(read.wait(), timeout=10)
+        operation = approve if action == "approve" else dispatch
+        settling = asyncio.create_task(operation(world, refund))
+        await _wait_for_policy_lock(world, settling)
+        publish.set()
+        changed = await asyncio.wait_for(publishing, timeout=10)
+        assert changed.status_code == 200 and changed.json()["revision"] == 2
+        result = await asyncio.wait_for(settling, timeout=10)
+        assert result.status_code == 409, result.text
+        recorded = obligation(await claim_of(world, claim), "fee_refund")
+        assert recorded["state"] == "over_policy_limit"
+        assert recorded["approvals"] == 0 and recorded["transfers"] == []
+    finally:
+        publish.set()
+        await asyncio.gather(
+            publishing,
+            *([settling] if settling is not None else []),
+            return_exceptions=True,
+        )
 
 
 async def test_amounts_beyond_the_policy_cannot_be_approved(world):

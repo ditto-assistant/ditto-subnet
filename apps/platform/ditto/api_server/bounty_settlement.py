@@ -562,6 +562,8 @@ async def approve_obligation(
         obligation, claim = await _locked_obligation(session, obligation_id)
         if obligation.kind == "fee_retained":
             raise HTTPException(409, "a retained fee moves no money")
+        # A policy publication must wait until this approval is committed.
+        await lock_identity_writes(session, namespace=_POLICY_LOCK, shared=True)
         policy = await current_policy(session)
         if policy is None:
             raise HTTPException(409, "no bounty payout policy is configured")
@@ -744,6 +746,9 @@ async def dispatch_obligation(
             raise HTTPException(
                 409, "this obligation and the transfer executor differ in funding mode"
             )
+        # Serialize the policy/approval check and durable dispatch record with
+        # policy publication. Release this with the transaction, before execute.
+        await lock_identity_writes(session, namespace=_POLICY_LOCK, shared=True)
         state = await obligation_state(
             session, obligation, await current_policy(session)
         )
