@@ -113,6 +113,11 @@ lacks_tool), `http_ok`.
    - Unicode/whitespace/wrapper/`Answer:` normalization (W8);
    - suppressing an exact duplicate after genuine success when repetition was
      not requested (W11).
+   - fail-closed or recovery behavior that only happens because YOUR scripted
+     reply broke the output schema the harness itself requested from that
+     call (e.g. `Answer: SEND` to a call that asked for a bare SEND/HOLD word).
+     Script each auxiliary call in the format it asks for before charging
+     anything; W7 lets malformed output trigger recovery.
    If a proven behavior's classification turns on a policy judgment (advisory
    vs enforced, whether a cap is a legitimate resource limit, whether
    vocabulary is benchmark-specific or ordinary), record it under
