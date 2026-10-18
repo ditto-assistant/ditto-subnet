@@ -643,9 +643,14 @@ async def upload_agent(
     try:
         await asyncio.to_thread(validate_upload_archive, tar_bytes)
     except SourceInspectError as exc:
-        raise HTTPException(
-            status_code=400, detail=_UPLOAD_ARCHIVE_DETAILS.get(exc.code, exc.code)
-        ) from exc
+        # A per-file limit names the miner's own file and the fix; every other
+        # archive code keeps its fixed public sentence.
+        detail = (
+            str(exc)
+            if exc.code == "source-file-limit"
+            else _UPLOAD_ARCHIVE_DETAILS.get(exc.code, exc.code)
+        )
+        raise HTTPException(status_code=400, detail=detail) from exc
 
     # 6. Chain-side verification. Typed PaymentVerifierError subclasses
     # are mapped to 3201-3206 by the envelope handler; we re-raise them

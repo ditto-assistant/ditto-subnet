@@ -15,6 +15,7 @@ import io
 import logging
 import os
 import tarfile
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,10 @@ from ditto.miner_cli.models import PreflightCheckResult
 from ditto.miner_cli.tar_validator import (
     MAX_TARBALL_SIZE_BYTES,
     run_preflight,
+)
+from ditto_screening_protocol.source_limits import (
+    MAX_SOURCE_FILE_LINES,
+    SOURCE_LIMITS_EFFECTIVE_AT,
 )
 
 
@@ -44,6 +49,7 @@ class TestPreflight:
             "gzip_valid",
             "tar_opens",
             "archive_contract",
+            "source_limits",
         }
 
     @pytest.mark.parametrize(
@@ -235,3 +241,37 @@ class TestArchiveContract:
     def test_unreadable_tar_skips_the_contract_check(self, bad_gzip_tar: Path) -> None:
         names = [c.name for c in run_preflight(bad_gzip_tar).checks]
         assert "archive_contract" not in names
+
+
+class TestSourceLimits:
+    """Platform's per-file source limits, warned before they are enforced."""
+
+    def _source_check(self, path: Path, *, enforced: bool) -> PreflightCheckResult:
+        now = SOURCE_LIMITS_EFFECTIVE_AT + (
+            timedelta(0) if enforced else -timedelta(days=1)
+        )
+        return next(
+            c for c in run_preflight(path, now=now).checks if c.name == "source_limits"
+        )
+
+    def test_oversized_source_file_blocks_once_enforced(self, tmp_path: Path) -> None:
+        big = b"x = 1\n" * (MAX_SOURCE_FILE_LINES + 1)
+        tar = _archive(tmp_path, [_DOCKERFILE, ("src/agent.py", big)])
+        check = self._source_check(tar, enforced=True)
+        assert check.passed is False
+        assert "src/agent.py: 10,001 lines (limit 10,000)" in check.detail
+
+    def test_oversized_source_file_only_warns_before_enforcement(
+        self, tmp_path: Path
+    ) -> None:
+        big = b"x = 1\n" * (MAX_SOURCE_FILE_LINES + 1)
+        tar = _archive(tmp_path, [_DOCKERFILE, ("src/agent.py", big)])
+        check = self._source_check(tar, enforced=False)
+        assert check.passed is True
+        assert check.detail.startswith("WARNING, enforced for uploads from")
+        assert "src/agent.py" in check.detail
+
+    def test_data_files_are_not_source(self, tmp_path: Path) -> None:
+        big = b"token\n" * (MAX_SOURCE_FILE_LINES + 1)
+        tar = _archive(tmp_path, [_DOCKERFILE, ("fixtures/vocab.txt", big)])
+        assert self._source_check(tar, enforced=True).passed is True

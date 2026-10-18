@@ -25,7 +25,14 @@ import io
 import re
 import tarfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
+
+from ditto_screening_protocol.source_limits import (
+    check_source_file,
+    is_source_path,
+    source_limits_enforced,
+)
 
 MAX_LISTING_FILES = 512
 MAX_OPAQUE_BLOBS = 128
@@ -530,14 +537,19 @@ class TarSourceInspector:
             return extracted.read(TEXT_SIZE_LIMIT + 1).decode("utf-8")
 
 
-def validate_upload_archive(tar_bytes: bytes) -> None:
+def validate_upload_archive(tar_bytes: bytes, *, now: datetime | None = None) -> None:
     """Reject an upload that is not a bounded gzip tar with a root Dockerfile.
 
     One sequential pass mirroring the screener's archive contract. Member
     count and unpacked size use the screener's caps. Unsafe paths, links, and
     special files are rejected rather than skipped. Import allowlisting stays
     with the screener: there is no upload-time crate allowlist yet.
+
+    From ``SOURCE_LIMITS_EFFECTIVE_AT`` each source file must also fit the
+    shared per-file limits (``ditto_screening_protocol.source_limits``), so a
+    file no reviewer can read is refused here instead of parking in screening.
     """
+    enforce_source_limits = source_limits_enforced(now or datetime.now(UTC))
     if not tar_bytes.startswith(b"\x1f\x8b"):
         raise SourceInspectError("archive-not-gzip", "archive is not gzip-compressed")
     count = 0
@@ -594,6 +606,20 @@ def validate_upload_archive(tar_bytes: bytes) -> None:
                         f"archive exceeds {UPLOAD_MAX_UNPACKED_BYTES} unpacked bytes",
                     )
                 seen.add(canonical_name)
+                if (
+                    enforce_source_limits
+                    and member.isfile()
+                    and is_source_path(canonical_name)
+                ):
+                    source = archive.extractfile(member)
+                    violation = (
+                        check_source_file(canonical_name, source.read())
+                        if source is not None
+                        else None
+                    )
+                    if violation is not None:
+                        raise SourceInspectError("source-file-limit", violation.message)
+                    continue
                 if canonical_name != "Dockerfile" or not member.isfile():
                     continue
                 extracted = archive.extractfile(member)

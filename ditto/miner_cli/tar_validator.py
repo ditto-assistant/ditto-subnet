@@ -20,10 +20,18 @@ import gzip
 import hashlib
 import logging
 import tarfile
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 from ditto.miner_cli.errors import TarStructureError
 from ditto.miner_cli.models import PreflightCheckResult, PreflightResult
+from ditto_screening_protocol.source_limits import (
+    SOURCE_LIMITS_EFFECTIVE_AT,
+    SourceLimitViolation,
+    check_source_file,
+    is_source_path,
+    source_limits_enforced,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +55,7 @@ MAX_ARCHIVE_MEMBERS = 20_000
 MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 
 
-def run_preflight(tar_path: Path) -> PreflightResult:
+def run_preflight(tar_path: Path, *, now: datetime | None = None) -> PreflightResult:
     """Run every pre-flight check and aggregate results.
 
     Always returns a :class:`PreflightResult`; per-check failures are
@@ -75,6 +83,7 @@ def run_preflight(tar_path: Path) -> PreflightResult:
     checks.append(tar_opens)
     if tar_opens.passed:
         checks.append(_check_archive_contract(tar_path))
+        checks.append(_check_source_limits(tar_path, now or datetime.now(UTC)))
 
     # Deferred checks (logged, not gating, pending external artifacts)
     checks.extend(_deferred_checks())
@@ -238,6 +247,55 @@ def _check_archive_contract(tar_path: Path) -> PreflightCheckResult:
         name="archive_contract",
         passed=True,
         detail=f"{len(members)} paths; root Dockerfile present",
+    )
+
+
+# Shown per run; the rest are summarized so one generated tree cannot flood
+# the terminal.
+_MAX_REPORTED_SOURCE_VIOLATIONS = 5
+
+
+def _check_source_limits(tar_path: Path, now: datetime) -> PreflightCheckResult:
+    """Apply Platform's per-file source limits (ditto_screening_protocol).
+
+    Uploads before ``SOURCE_LIMITS_EFFECTIVE_AT`` are grandfathered, so until
+    then a breach is reported but does not block the upload.
+    """
+    violations: list[SourceLimitViolation] = []
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            for member in tar:
+                name = member.name.removeprefix("./")
+                if not member.isfile() or not is_source_path(name):
+                    continue
+                handle = tar.extractfile(member)
+                if handle is None:
+                    continue
+                violation = check_source_file(name, handle.read())
+                if violation is not None:
+                    violations.append(violation)
+    except (tarfile.TarError, EOFError, OSError):
+        # The archive contract check already reports an unreadable archive.
+        return PreflightCheckResult(
+            name="source_limits", passed=True, detail="skipped: archive unreadable"
+        )
+    if not violations:
+        return PreflightCheckResult(
+            name="source_limits", passed=True, detail="every source file within limits"
+        )
+    shown = "; ".join(v.message for v in violations[:_MAX_REPORTED_SOURCE_VIOLATIONS])
+    more = len(violations) - _MAX_REPORTED_SOURCE_VIOLATIONS
+    if more > 0:
+        shown += f"; and {more} more"
+    if source_limits_enforced(now):
+        return PreflightCheckResult(name="source_limits", passed=False, detail=shown)
+    return PreflightCheckResult(
+        name="source_limits",
+        passed=True,
+        detail=(
+            f"WARNING, enforced for uploads from "
+            f"{SOURCE_LIMITS_EFFECTIVE_AT:%Y-%m-%d %H:%M} UTC: {shown}"
+        ),
     )
 
 

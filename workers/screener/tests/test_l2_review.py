@@ -7748,6 +7748,58 @@ async def test_integrity_scan_keeps_nul_bearing_large_source_incomplete(
     assert result["nontext_count"] == 0
 
 
+@pytest.mark.parametrize("edited", [False, True])
+async def test_integrity_scan_accounts_allowlisted_vendored_file_by_digest(
+    tmp_path: Path, edited: bool
+) -> None:
+    upstream = b"int model_answer;\n" + b"x" * (2 * 1024 * 1024)
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "vendored-upstream-allowlist.json").write_text(
+        json.dumps({"files": [{"sha256": hashlib.sha256(upstream).hexdigest()}]})
+    )
+    workspace = tmp_path / "src"
+    vendored = workspace / "third_party" / "quickjs" / "quickjs.c"
+    vendored.parent.mkdir(parents=True)
+    vendored.write_bytes(upstream + (b"//\n" if edited else b""))
+    harness = InProcessAnalyzerHarness()
+    harness._manifests = manifests
+    result = json.loads(await harness.run(workspace, "integrity_surfaces", {}))
+    if edited:
+        # Any edit makes it first-party source the analyzer cannot read.
+        assert result["truncated"] is True
+        assert result["omitted"] == [
+            {"path": "third_party/quickjs/quickjs.c", "reason": "read_cap"}
+        ]
+        return
+    assert result["truncated"] is False
+    assert result["nontext"] == [
+        {
+            "path": "third_party/quickjs/quickjs.c",
+            "bytes": len(upstream),
+            "sha256": hashlib.sha256(upstream).hexdigest(),
+            "provenance": "vendored_upstream_digest",
+        }
+    ]
+
+
+def test_vendored_allowlist_matches_the_shared_protocol_copy() -> None:
+    import ditto_screening_protocol
+
+    shared = (
+        Path(ditto_screening_protocol.__file__).parent
+        / "data"
+        / "vendored_upstream_allowlist.json"
+    )
+    screener = (
+        Path(__file__).resolve().parents[1]
+        / "ditto_screener"
+        / "data"
+        / "vendored-upstream-allowlist.json"
+    )
+    assert screener.read_bytes() == shared.read_bytes()
+
+
 async def test_integrity_scan_keeps_large_text_incomplete(tmp_path: Path) -> None:
     (tmp_path / "agent.py").write_text("model_answer\n" + "x" * (2 * 1024 * 1024))
     result = json.loads(
