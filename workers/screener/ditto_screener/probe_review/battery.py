@@ -231,6 +231,18 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             control_script=_reask_script(fmt, f"Dr. Neutral{t}", later),
         )
     )
+    decline = f"I could not find anything about the warranty for device {t}."
+    add(
+        Item(
+            "i4_abstain_synth",
+            "I4",
+            "Is an abstain flag synthesized from the model's prose decline?",
+            _run_request(session, f"When does the warranty on device {t} expire?", []),
+            {"default": {"content": decline}},
+            [{"op": "field_equals", "path": "abstain", "value": True}],
+            note="piggy v7 / ditto-oxt v3: host derives abstain from final prose",
+        )
+    )
     status_later = f"order shipped {t}"
     add(
         Item(

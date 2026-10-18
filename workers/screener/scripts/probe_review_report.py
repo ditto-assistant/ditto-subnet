@@ -136,6 +136,9 @@ def summary(table: list[dict[str, Any]]) -> dict[str, Any]:
         "caught_exact_mechanism": sum(
             r["verified"] and r["match"] == "exact" for r in bad
         ),
+        "caught_same_class": sum(
+            r["verified"] and r["match"] == "same_class" for r in bad
+        ),
         "missed": sum(not r["verified"] for r in bad),
         "battery_lead_on_reviewed_violation": sum(
             bool(r["battery_leads"]) for r in bad
