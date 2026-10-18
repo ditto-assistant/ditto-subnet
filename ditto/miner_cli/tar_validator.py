@@ -267,7 +267,7 @@ def _check_source_limits(tar_path: Path, now: datetime) -> PreflightCheckResult:
     # installation reads as a failed check rather than an unreadable archive.
     try:
         vendored_upstream_digests()
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except Exception as error:  # noqa: BLE001 - run_preflight reports, never raises
         return PreflightCheckResult(
             name="source_limits",
             passed=False,
