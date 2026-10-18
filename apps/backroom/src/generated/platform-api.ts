@@ -34958,6 +34958,8 @@ export interface components {
             approved_runtime_code_hash: string;
             /** Call Baseline Release */
             call_baseline_release: string;
+            /** Calls Error */
+            calls_error?: string | null;
             /** Changed Calls */
             changed_calls: string[];
             /** Changed Calls Truncated */

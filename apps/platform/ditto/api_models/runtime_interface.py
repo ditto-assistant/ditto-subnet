@@ -28,6 +28,9 @@ class TreasurySignerRuntimeView(BaseModel):
     # Pallet.call entries added, removed or reshaped since the baseline.
     changed_calls: list[str]
     changed_calls_truncated: bool
+    # Set when call metadata is unreadable; changed_calls is then not evidence
+    # that nothing changed.
+    calls_error: str | None = None
 
 
 class RuntimeInterfaceReport(BaseModel):

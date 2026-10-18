@@ -12,7 +12,10 @@ from ditto.chain.runtime_interface import (
     runtime_call_digests,
     runtime_interface,
 )
-from ditto.chain.runtime_interface_report import read_runtime_interface_report
+from ditto.chain.runtime_interface_report import (
+    BlockNotFinalized,
+    read_runtime_interface_report,
+)
 from ditto.tests.chain.runtime_metadata import CALLS, clone, entry, metadata, type_def
 from ditto_screening_protocol.collector_receipts import AUDITED_COLLECTOR_CODE_HASH
 
@@ -124,7 +127,19 @@ async def test_unreadable_surface_reports_the_error_not_a_verdict(pins) -> None:
     assert "call:Proxy.proxy" in (treasury.error or "")
 
 
+async def test_unreadable_calls_still_return_each_surface_verdict(pins) -> None:
+    broken = clone(pins)
+    proxy = next(p for p in broken[1]["V15"]["pallets"] if p["name"] == "Proxy")
+    proxy["calls"] = {"ty": 0}  # a primitive, not a call enum
+    report = await read_runtime_interface_report(Chain(UPGRADE, broken))
+    source, treasury = report.surfaces
+    assert source.admitted_by == "interface"
+    assert treasury.admitted_by is None and treasury.error
+    signer = report.treasury_signer
+    assert signer.calls_error and signer.changed_calls == ()
+
+
 @pytest.mark.parametrize("block", [0, 501])
 async def test_unfinalized_or_invalid_block_refuses(pins, block) -> None:
-    with pytest.raises(ValueError, match="not finalized"):
+    with pytest.raises(BlockNotFinalized, match="not finalized"):
         await read_runtime_interface_report(Chain(UPGRADE, pins), block=block)

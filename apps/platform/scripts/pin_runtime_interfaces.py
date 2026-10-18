@@ -106,6 +106,11 @@ def _pins(
 async def render(url: str) -> str:
     from async_substrate_interface import AsyncSubstrateInterface
 
+    if TREASURY_CALL_BASELINE not in {release for release, _, _ in PINS}:
+        raise SystemExit(
+            f"PINS does not contain TREASURY_CALL_BASELINE {TREASURY_CALL_BASELINE}"
+        )
+
     source, treasury = [], []
     calls: dict[str, str] = {}
     async with AsyncSubstrateInterface(url=url) as substrate:

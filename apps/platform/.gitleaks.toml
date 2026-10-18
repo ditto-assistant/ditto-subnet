@@ -49,3 +49,16 @@ condition = "AND"
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]{40}$''']
 paths = ['''^dashboard/src/components/EntityPanel\.stack\.test\.tsx$''']
+
+# Generated metadata digests (scripts/pin_runtime_interfaces.py). A Substrate
+# call name containing "key" (e.g. sudo_set_min_childkey_take_per_subnet) makes
+# its public 16- or 64-hex digest look like a credential. The digests change
+# on every regeneration, so constrain to the rule, the generated file and the
+# hex-digest shape rather than exact values.
+[[allowlists]]
+description = "Generated runtime-interface metadata digests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^(?:[0-9a-f]{16}|[0-9a-f]{64})$''']
+paths = ['''^ditto/chain/audited_runtime_interfaces\.py$''']

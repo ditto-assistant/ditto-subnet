@@ -24,6 +24,10 @@ from ditto.chain.runtime_interface import (
 _CHANGED_CALL_LIMIT = 100
 
 
+class BlockNotFinalized(ValueError):
+    """The requested block is outside the finalized chain: a caller error."""
+
+
 @dataclass(frozen=True)
 class SurfaceVerdict:
     surface: str
@@ -43,6 +47,9 @@ class TreasurySignerView:
     # Calls added, removed or reshaped since the baseline (bounded).
     changed_calls: tuple[str, ...]
     changed_calls_truncated: bool = False
+    # Set when the call metadata is unreadable; changed_calls is then empty
+    # because nothing could be compared, not because nothing changed.
+    calls_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -106,7 +113,7 @@ async def read_runtime_interface_report(
     finalized = int(raw, 16) if isinstance(raw, str) else int(raw)
     number = finalized if block is None else block
     if not 0 < number <= finalized:
-        raise ValueError("block is not finalized")
+        raise BlockNotFinalized("block is not finalized")
     at = head if block is None else await substrate.get_block_hash(number)
     code = (await substrate.rpc_request("state_getStorageHash", ["0x3a636f6465", at]))[
         "result"
@@ -114,12 +121,19 @@ async def read_runtime_interface_report(
     version = (await substrate.rpc_request("state_getRuntimeVersion", [at]))["result"]
     metadata = (await substrate.init_runtime(block_hash=at)).metadata
     baseline_release, baseline_calls = TREASURY_CALL_BASELINE
-    calls = runtime_call_digests(metadata)
-    changed_calls = sorted(
-        call
-        for call in calls.keys() | baseline_calls.keys()
-        if calls.get(call) != baseline_calls.get(call)
-    )
+    calls_error = None
+    changed_calls: list[str] = []
+    try:
+        calls = runtime_call_digests(metadata)
+    except ValueError as error:
+        # Report each surface's own verdict even when calls are unreadable.
+        calls_error = str(error)[:300]
+    else:
+        changed_calls = sorted(
+            call
+            for call in calls.keys() | baseline_calls.keys()
+            if calls.get(call) != baseline_calls.get(call)
+        )
     return RuntimeInterfaceReport(
         block=number,
         block_hash=at,
@@ -147,5 +161,6 @@ async def read_runtime_interface_report(
             call_baseline_release=baseline_release,
             changed_calls=tuple(changed_calls[:_CHANGED_CALL_LIMIT]),
             changed_calls_truncated=len(changed_calls) > _CHANGED_CALL_LIMIT,
+            calls_error=calls_error,
         ),
     )

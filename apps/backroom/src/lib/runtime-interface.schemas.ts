@@ -17,6 +17,8 @@ export const treasurySignerRuntimeViewSchema = z.object({
   call_baseline_release: z.string(),
   changed_calls: z.array(z.string()),
   changed_calls_truncated: z.boolean(),
+  // Set when call metadata is unreadable; changed_calls is then not evidence.
+  calls_error: z.string().nullish().default(null),
 })
 
 export const runtimeInterfaceReportSchema = z.object({

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.api_server.dependencies import get_session
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.runtime_interface_report import (
+    BlockNotFinalized,
     RuntimeInterfaceReport,
     SurfaceVerdict,
     TreasurySignerView,
@@ -76,6 +77,7 @@ async def test_report_round_trips_and_is_not_cached(
         "call_baseline_release": "v478",
         "changed_calls": ["SubtensorModule.set_reject_staking_hotkey_growth"],
         "changed_calls_truncated": False,
+        "calls_error": None,
     }
     chain.assert_awaited_once_with(9305810)
 
@@ -89,7 +91,8 @@ async def test_requires_admin(client: httpx.AsyncClient, chain: AsyncMock) -> No
 @pytest.mark.parametrize(
     ("error", "status"),
     [
-        (ValueError("block is not finalized"), 422),
+        (BlockNotFinalized("block is not finalized"), 422),
+        (ValueError("malformed runtime metadata: KeyError"), 503),
         (ChainConnectionError("archive down"), 503),
         (TimeoutError(), 503),
     ],
