@@ -21,7 +21,10 @@ ROOT = Path(os.environ.get("L2_ANALYZER_ROOT", "/workspace"))
 MANIFESTS = Path(os.environ.get("L2_ANALYZER_MANIFESTS", "/opt/starter-manifests"))
 MAX_FILES = 512
 MAX_WALK_ENTRIES = 1_024
-MAX_FILE_BYTES = 2 * 1024 * 1024
+# Vendored upstream sources run past 2 MiB (QuickJS quickjs.c is 2.1 MB), and a
+# file the dossier cannot read can never support a clearance. Mirrors
+# ditto_screener.source_review._MAX_TEXT_READ_BYTES.
+MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_DIGEST_BYTES = 20 * 1024 * 1024
 MAX_OUTPUT = 256_000
 MAX_INTEGRITY_HITS_PER_SURFACE = 32

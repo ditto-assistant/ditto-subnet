@@ -7695,7 +7695,7 @@ async def test_integrity_scan_is_not_limited_to_named_languages(tmp_path: Path) 
 async def test_integrity_scan_keeps_unknown_large_binary_incomplete(
     tmp_path: Path,
 ) -> None:
-    payload = b"\x00" + b"x" * (2 * 1024 * 1024)
+    payload = b"\x00" + b"x" * (4 * 1024 * 1024)
     (tmp_path / "model.onnx").write_bytes(payload)
     (tmp_path / "agent.py").write_text("def run(): return model_answer()\n")
     result = json.loads(
@@ -7738,7 +7738,7 @@ async def test_integrity_scan_keeps_nul_bearing_large_source_incomplete(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "agent.py").write_bytes(
-        b"model_answer\n\x00" + b"x" * (2 * 1024 * 1024)
+        b"model_answer\n\x00" + b"x" * (4 * 1024 * 1024)
     )
     result = json.loads(
         await InProcessAnalyzerHarness().run(tmp_path, "integrity_surfaces", {})
@@ -7748,8 +7748,24 @@ async def test_integrity_scan_keeps_nul_bearing_large_source_incomplete(
     assert result["nontext_count"] == 0
 
 
+async def test_integrity_scan_reads_vendored_source_past_two_mib(
+    tmp_path: Path,
+) -> None:
+    # otter v5 vendors QuickJS: quickjs.c is 2,146,468 bytes. Under the old
+    # 2 MiB cap it was omitted, the dossier stayed incomplete, and no review
+    # of that artifact could ever clear.
+    vendored = tmp_path / "third_party" / "quickjs" / "quickjs.c"
+    vendored.parent.mkdir(parents=True)
+    vendored.write_text("int model_answer;\n" + "x" * 2_146_400)
+    result = json.loads(
+        await InProcessAnalyzerHarness().run(tmp_path, "integrity_surfaces", {})
+    )
+    assert result["truncated"] is False
+    assert result["omitted"] == []
+
+
 async def test_integrity_scan_keeps_large_text_incomplete(tmp_path: Path) -> None:
-    (tmp_path / "agent.py").write_text("model_answer\n" + "x" * (2 * 1024 * 1024))
+    (tmp_path / "agent.py").write_text("model_answer\n" + "x" * (4 * 1024 * 1024))
     result = json.loads(
         await InProcessAnalyzerHarness().run(tmp_path, "integrity_surfaces", {})
     )
@@ -7835,7 +7851,7 @@ async def test_search_keeps_unproven_large_file_incomplete(
 ) -> None:
     target = tmp_path / path
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(head + b"x" * (2 * 1024 * 1024))
+    target.write_bytes(head + b"x" * (4 * 1024 * 1024))
     result = json.loads(
         await InProcessAnalyzerHarness().run(
             tmp_path, "search", {"query": "model_answer"}
@@ -7904,7 +7920,7 @@ async def test_real_analyzer_container_isolated_and_diffs_only_runtime_manifests
     assert long_read["truncated"]
     oversized = tmp_path / "oversized"
     oversized.mkdir()
-    (oversized / "large.rs").write_bytes(b"answer" + b"x" * (2 * 1024 * 1024))
+    (oversized / "large.rs").write_bytes(b"answer" + b"x" * (4 * 1024 * 1024))
     oversized_search = json.loads(
         await harness.run(oversized, "search", {"query": "answer"})
     )

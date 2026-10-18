@@ -284,7 +284,10 @@ ROUTER_AUTH_RETRY_DELAYS_SECONDS = (15.0, 30.0, 60.0, 90.0, 120.0)
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
-_OPAQUE_SIZE_LIMIT = 2 * 1024 * 1024
+# Largest member the review tools read as text. Mirrors MAX_FILE_BYTES in
+# tools/l2_analyzer.py so the dossier and the model see the same files.
+_MAX_TEXT_READ_BYTES = 4 * 1024 * 1024
+_OPAQUE_SIZE_LIMIT = _MAX_TEXT_READ_BYTES
 # The starter kit compiles one committed model larger than the lead-scan limit
 # into its reference service. Only that exact path whose SHA-256 matches an
 # installed provenance manifest is accounted for instead of marking the lead
@@ -1198,7 +1201,7 @@ Use duplicate_submission only when an external cross-submission observation is
 provided. Never infer originality or ownership from one archive alone.
 
 The initial inventory includes an "opaque_blobs" list of files the text tools
-cannot show (non-UTF-8 or larger than 2 MiB) plus compact, precomputed
+cannot show (non-UTF-8 or larger than 4 MiB) plus compact, precomputed
 "binary_analysis" for the listed opaque files. Start with those summaries; use
 analyze_binary only when you need the full bounded strings or format metadata.
 Binary analysis reports format, digest, entropy, public DittoBench schema
@@ -1639,7 +1642,7 @@ Use duplicate_submission only when an external cross-submission observation is
 provided. Never infer originality or ownership from one archive alone.
 
 The initial inventory includes an "opaque_blobs" list of files the text tools
-cannot show (non-UTF-8 or larger than 2 MiB) plus compact, precomputed
+cannot show (non-UTF-8 or larger than 4 MiB) plus compact, precomputed
 "binary_analysis" for the listed opaque files. Start with those summaries; use
 analyze_binary only when you need the full bounded strings or format metadata.
 Binary analysis reports format, digest, entropy, public DittoBench schema
@@ -3456,7 +3459,7 @@ class TarSourceRepository:
     def opaque_blobs(self) -> tuple[list[dict[str, object]], int, bool]:
         """List files the reviewer cannot read as UTF-8 text.
 
-        Oversized (> 2 MiB) or non-UTF-8 files return ``file-is-not-utf8-text``
+        Oversized (> 4 MiB) or non-UTF-8 files return ``file-is-not-utf8-text``
         from ``read_file``/``search`` and would otherwise be invisible. They
         are the natural hiding place for a committed string table, so they are
         reported with path, size, and reason for the reviewer to weigh.
@@ -3590,14 +3593,14 @@ class TarSourceRepository:
     def _read_text(self, path: str) -> str | None:
         self._assert_archive_unchanged()
         member_info = self._members[path]
-        if member_info.size > 2 * 1024 * 1024:
+        if member_info.size > _MAX_TEXT_READ_BYTES:
             return None
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
             member = archive.getmember(member_info.archive_name)
             extracted = archive.extractfile(member)
             if extracted is None:
                 return None
-            raw = extracted.read(2 * 1024 * 1024 + 1)
+            raw = extracted.read(_MAX_TEXT_READ_BYTES + 1)
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError:

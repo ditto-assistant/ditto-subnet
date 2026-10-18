@@ -899,7 +899,7 @@ def test_inventory_preanalysis_is_reused_by_agent_tool(
 
 
 def test_oversized_file_is_surfaced_as_opaque(tmp_path: Path) -> None:
-    big = b"a" * (2 * 1024 * 1024 + 16)
+    big = b"a" * (4 * 1024 * 1024 + 16)
     repo = TarSourceRepository(str(_archive_with(tmp_path, {"data/big.txt": big})))
     opaque = json.loads(repo.inventory())["opaque_blobs"]
     assert any(
@@ -949,8 +949,8 @@ def test_review_leads_keep_unproven_oversized_member_truncated(
     raw = {
         "stock": _stock_starter_model(),
         "flipped": bytes(flipped),
-        "nul-prefixed": b"\x00" + b"x" * (2 * 1024 * 1024),
-        "text": b"answer\n" + b"x" * (2 * 1024 * 1024),
+        "nul-prefixed": b"\x00" + b"x" * (4 * 1024 * 1024),
+        "text": b"answer\n" + b"x" * (4 * 1024 * 1024),
     }[payload]
     leads = TarSourceRepository(
         str(_archive_with(tmp_path, {path: raw}))
