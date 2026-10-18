@@ -163,6 +163,18 @@ function latest(view: Operator, kinds: string[], matches: (entry: Operator['audi
     .find((entry) => kinds.includes(entry.kind) && matches(entry))
 }
 
+/** The control in force: the latest entry of one family of controls within a
+ * scope. Two recorded at the same instant leave no latest one ('tied'), so
+ * neither can be read as a write's outcome. Controls carry no id, so the one in
+ * force may be this write or an earlier identical one; an older matching entry
+ * with a later control after it cannot show whether this write was either. */
+function inForce(view: Operator, kinds: string[], within: (entry: Operator['audit'][number]) => boolean = () => true) {
+  const control = latest(view, kinds, within)
+  if (control && view.audit.some((entry) => entry !== control && kinds.includes(entry.kind) && within(entry) &&
+    Date.parse(entry.recorded_at) === Date.parse(control.recorded_at))) return 'tied'
+  return control
+}
+
 export async function setBountyClaimsPaused(actor: string, rawInput: unknown) {
   const input = bountyPauseInputSchema.parse(rawInput)
   const kind = input.paused ? 'claims_paused' : 'claims_resumed'
@@ -173,14 +185,8 @@ export async function setBountyClaimsPaused(actor: string, rawInput: unknown) {
     parse: parsed(bountySummarySchema),
     readBack: async () => {
       const view = await fetchBounty({ bountyId: input.bountyId })
-      const controls = ['claims_paused', 'claims_resumed']
-      const control = latest(view, controls)
-      // Two controls recorded at the same instant leave no latest one, so
-      // neither can be read as this write's outcome.
-      if (control && view.audit.some((entry) => entry !== control && controls.includes(entry.kind) &&
-        Date.parse(entry.recorded_at) === Date.parse(control.recorded_at))) return { state: 'absent' }
-      // Controls carry no id, so an entry with this operator's reason may be
-      // this write or an earlier identical one.
+      const control = inForce(view, ['claims_paused', 'claims_resumed'])
+      if (control === 'tied') return { state: 'absent' }
       const own = latest(view, [kind], (entry) => entry.actor === actor.trim() && entry.reason === input.reason)
       if (control && control === own) {
         return { state: 'applied', value: bountySummarySchema.parse(view.detail.summary) }
@@ -253,9 +259,16 @@ export async function reassignBountyReviewer(actor: string, rawInput: unknown) {
     parse: parsed(bountySummarySchema),
     readBack: async () => {
       const view = await fetchBounty({ bountyId: input.bountyId })
-      const mine = latest(view, ['reviewer_assigned'], (entry) =>
-        entry.actor === actor.trim() && entry.reason === input.reason && entry.detail === `reviewer ${input.reviewerActor.trim()}`)
-      if (mine) return { state: 'applied', value: bountySummarySchema.parse(view.detail.summary) }
+      const reviewer = input.reviewerActor.trim()
+      // A publication binds a reviewer too, so this assignment must be the
+      // latest of either, and its reviewer the one Platform has in force.
+      const control = inForce(view, ['reviewer_assigned', 'revision_published'])
+      if (
+        control !== 'tied' && control?.kind === 'reviewer_assigned' && view.reviewer_actor === reviewer &&
+        control.actor === actor.trim() && control.reason === input.reason && control.detail === `reviewer ${reviewer}`
+      ) {
+        return { state: 'applied', value: bountySummarySchema.parse(view.detail.summary) }
+      }
       return { state: 'absent' }
     },
     retryHint: 'read the bounty and retry with the same input.',
@@ -278,9 +291,10 @@ export async function controlBountySlot(actor: string, rawInput: unknown) {
     parse: parsed(bountySummarySchema),
     readBack: async () => {
       const view = await fetchBounty({ bountyId: input.bountyId })
-      const mine = latest(view, [kind], (entry) =>
-        entry.slot_id === input.slotId && entry.actor === actor.trim() && entry.reason === input.reason)
-      if (mine) return { state: 'applied', value: bountySummarySchema.parse(view.detail.summary) }
+      const control = inForce(view, ['slot_cancelled', 'slot_reopened'], (entry) => entry.slot_id === input.slotId)
+      if (control !== 'tied' && control?.kind === kind && control.actor === actor.trim() && control.reason === input.reason) {
+        return { state: 'applied', value: bountySummarySchema.parse(view.detail.summary) }
+      }
       return { state: 'absent' }
     },
     retryHint: 'read the bounty and retry with the same input.',

@@ -140,7 +140,9 @@ const cases: Case[] = [
     path: `/api/v1/admin/bounties/${BOUNTY}/reviewer`,
     body: { reviewer_actor: 'next@example.com', reason },
     committed: { bounty_id: BOUNTY, claims_paused: false },
-    applied: [Response.json(operator({ audit: [audit('reviewer_assigned', { detail: 'reviewer next@example.com' })] }))],
+    applied: [Response.json(operator({
+      reviewer_actor: 'next@example.com', audit: [audit('reviewer_assigned', { detail: 'reviewer next@example.com' })],
+    }))],
     absent: [Response.json(operator())],
   },
   {
@@ -415,6 +417,49 @@ describe('bounty read-backs find this write, not the latest state', () => {
       ],
     }))))
     await expect(pause()).resolves.toMatchObject({ bounty_id: BOUNTY })
+  })
+
+  const reassign = () => reassignBountyReviewer(ACTOR, {
+    bountyId: BOUNTY, reviewerActor: 'next@example.com', reason, confirmation: `REASSIGN BOUNTY REVIEWER ${REPO}#2942`,
+  })
+  const assigned = (at: string) => audit('reviewer_assigned', { detail: 'reviewer next@example.com', recorded_at: at })
+
+  it.each([
+    ['another reassignment', 'other@example.com', audit('reviewer_assigned', { actor: 'other@example.com', detail: 'reviewer other@example.com', recorded_at: '2026-10-16T02:00:00Z' })],
+    ['a publication binding the same reviewer', 'next@example.com', audit('revision_published', { recorded_at: '2026-10-16T02:00:00Z' })],
+    ['a control at the same instant', 'next@example.com', audit('reviewer_assigned', { actor: 'other@example.com', detail: 'reviewer next@example.com', recorded_at: '2026-10-16T01:00:00Z' })],
+  ])('never reads an earlier identical reassignment followed by %s as a refused write applied', async (_name, inForce, later) => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(envelope('explicit confirmation is required', 409))
+      .mockResolvedValueOnce(Response.json(operator({ reviewer_actor: inForce, audit: [assigned('2026-10-16T01:00:00Z'), later] }))))
+    await expect(reassign()).rejects.toThrow('explicit confirmation is required')
+  })
+
+  const cancel = () => controlBountySlot(ACTOR, {
+    bountyId: BOUNTY, slotId: SLOT, action: 'cancel', kind: 'team', reason, confirmation: `CANCEL BOUNTY SLOT ${REPO}#2942 ROUND 1 SLOT 1`,
+  })
+
+  it.each([
+    ['reopened since', '2026-10-16T02:00:00Z'],
+    ['reopened at the same instant', '2026-10-16T01:00:00Z'],
+  ])('reports a slot cancel whose earlier identical cancel was %s as unknown, never applied', async (_name, at) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator({
+      audit: [
+        audit('slot_cancelled', { slot_id: SLOT, recorded_at: '2026-10-16T01:00:00Z' }),
+        audit('slot_reopened', { slot_id: SLOT, actor: 'other@example.com', recorded_at: at }),
+      ],
+    }))))
+    await expect(cancel()).rejects.toThrow('may have committed')
+  })
+
+  it('reads a slot cancel by its own slot, whatever other slots record', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator({
+      audit: [
+        audit('slot_cancelled', { slot_id: SLOT, recorded_at: '2026-10-16T01:00:00Z' }),
+        audit('slot_reopened', { slot_id: '00000000-0000-4000-8000-0000000000d2', actor: 'other@example.com', recorded_at: '2026-10-16T02:00:00Z' }),
+      ],
+    }))))
+    await expect(cancel()).resolves.toMatchObject({ bounty_id: BOUNTY })
   })
 
   it('reports a pause tied in time with another control as unknown', async () => {

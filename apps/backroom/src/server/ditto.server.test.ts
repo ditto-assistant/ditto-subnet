@@ -264,6 +264,22 @@ describe('platformAdminRequest', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  it('classifies a successful answer whose body fails as transport, whatever its code', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    const broken = new ReadableStream({
+      start(controller) {
+        controller.error(Object.assign(new TypeError('terminated'), { cause: { code: 'ECONNREFUSED' } }))
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(broken)))
+
+    const error = await platformAdminRequest('/api/v1/admin/cla/settings', { method: 'POST', body: { mode: 'shadow' } })
+      .catch((caught: unknown) => caught)
+
+    expect((error as PlatformAdminError).failure).toBe('transport')
+    expect((error as Error).message).toContain('terminated')
+  })
+
   it('retries a GET whose body read fails with a timeout as its cause', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
     const stalled = new ReadableStream({

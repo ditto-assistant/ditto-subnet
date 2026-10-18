@@ -266,7 +266,14 @@ export async function platformAdminRequest(
       if (!response.ok) {
         text = ''
       } else {
-        if (!isTimeout(error)) throw connectionError(path, error)
+        // Platform has answered, so the request reached it: a body that fails
+        // now is a lost answer, whatever code it carries, never 'unreachable'.
+        if (!isTimeout(error)) {
+          throw new PlatformAdminError(
+            'transport',
+            `The platform API answer to ${path} was lost: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
         if (attempt++ < retries) continue
         throw new PlatformAdminError(
           'timeout',
