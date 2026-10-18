@@ -386,12 +386,15 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(reconcile('confirmed')).resolves.toMatchObject({ obligation_id: OBLIGATION })
   })
 
-  it('reports a rework decision as unknown when its times do not parse', async () => {
+  it.each([
+    ['do not parse', { decided_at: 'not-a-time', rework_deadline_at: 'not-a-time' }],
+    ['are missing', {}],
+    ['lack a rework deadline', { decided_at: '2026-10-16T00:00:00Z', rework_deadline_at: null }],
+  ])('reports a rework decision as unknown when its times %s', async (_name, times) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage())
       .mockResolvedValueOnce(Response.json(claim({
         submissions: [{
-          submission_id: SUBMISSION, decision: 'changes_requested', decision_reason: reason,
-          decided_at: 'not-a-time', rework_deadline_at: 'not-a-time',
+          submission_id: SUBMISSION, decision: 'changes_requested', decision_reason: reason, ...times,
         }],
       })))
       .mockResolvedValueOnce(Response.json(operator({
