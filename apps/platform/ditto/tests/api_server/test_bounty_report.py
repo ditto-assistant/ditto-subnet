@@ -69,6 +69,12 @@ def test_a_later_smaller_pool_never_fails_an_award_its_claim_signed_for():
     made = report(detail, CLAIMS)
     assert [check.name for check in made.checks if not check.ok] == []
     assert made.reward_pool_alpha_rao == 1
+    # The check's evidence is the bound it checks, not the current pool.
+    check = next(c for c in made.checks if c.name == "awards_within_pool")
+    assert check.detail == (
+        "40000000000 alpha rao awarded, each bounded by the pool its claim "
+        "signed: 100000000000 in revision 1"
+    )
 
 
 @pytest.mark.parametrize(

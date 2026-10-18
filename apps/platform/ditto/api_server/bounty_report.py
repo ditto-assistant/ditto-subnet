@@ -107,6 +107,13 @@ def _awards_within_pools(detail: BountyDetail, claims: list[BountyClaimView]) ->
     )
 
 
+def _signed_pools(detail: BountyDetail, claims: list[BountyClaimView]) -> str:
+    """The bounds ``_awards_within_pools`` checks: each awarded claim's pool."""
+    pools = {r.revision: r.terms.reward_pool_alpha_rao for r in detail.revisions}
+    signed = sorted({c.revision for c in claims if _award(c) is not None})
+    return ", ".join(f"{pools[revision]} in revision {revision}" for revision in signed)
+
+
 def _checks(
     detail: BountyDetail, claims: list[BountyClaimView]
 ) -> list[BountyReportCheck]:
@@ -116,13 +123,18 @@ def _checks(
     awards = [o for o in obligations if o.kind == "award"]
     awarded = sum(o.amount_alpha_rao for o in awards)
     confirmed = [t for t in transfers if t.state == "confirmed"]
+    signed = _signed_pools(detail, claims)
     return [
         BountyReportCheck(
             name="awards_within_pool",
             ok=_awards_within_pools(detail, claims),
+            # The bound checked is the pool each claim signed, which a later
+            # revision never changes, so the current pool is not evidence.
             detail=(
-                f"{awarded} alpha rao awarded; the current pool is "
-                f"{detail.summary.reward_pool_alpha_rao}"
+                f"{awarded} alpha rao awarded, each bounded by the pool its claim "
+                f"signed: {signed}"
+                if signed
+                else f"{awarded} alpha rao awarded"
             ),
         ),
         BountyReportCheck(
