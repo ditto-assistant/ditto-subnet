@@ -467,9 +467,18 @@ async def read_source_emission_block(
         grandparent = await hash_at(block - 2) if block > 1 else None
         if not grandparent:
             raise ValueError("missing historical block")
-        writer_code = await cache.get(
-            ("code_hash", grandparent),
-            functools.partial(_code_hash_at, substrate, grandparent),
+        # Shares the ("code", at) entry the code-hash reads above fill, so a
+        # consecutive scan already has it from the previous block.
+        writer_response = await cache.get(
+            ("code", grandparent),
+            functools.partial(
+                substrate.rpc_request,
+                "state_getStorageHash",
+                ["0x3a636f6465", grandparent],
+            ),
+        )
+        writer_code = (
+            writer_response.get("result") if isinstance(writer_response, dict) else None
         )
         writers = (
             await admit_runtime(substrate, code_hash=writer_code, at=grandparent),
