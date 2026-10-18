@@ -2,6 +2,42 @@
 
 <!-- version list -->
 
+## v0.372.3 (2026-10-18)
+
+### Bug Fixes
+
+- **platform**: Keep sparse catch-up across a UID re-registration
+  ([#3006](https://github.com/ditto-assistant/ditto-subnet/pull/3006),
+  [`01caef4`](https://github.com/ditto-assistant/ditto-subnet/commit/01caef42f3456f1b19be8c173fbaff7198d822d2))
+
+
+## v0.372.2 (2026-10-18)
+
+### Bug Fixes
+
+- **platform**: Stop payout resolution before the sweep budget expires
+  ([#3005](https://github.com/ditto-assistant/ditto-subnet/pull/3005),
+  [`1ea4d25`](https://github.com/ditto-assistant/ditto-subnet/commit/1ea4d258ce4c8694c28bdf6d989970f5d61745db))
+
+
+## v0.372.1 (2026-10-18)
+
+### Bug Fixes
+
+- **platform**: Give the reveal-plan shadow its own window after each sweep
+  ([#3004](https://github.com/ditto-assistant/ditto-subnet/pull/3004),
+  [`73cc093`](https://github.com/ditto-assistant/ditto-subnet/commit/73cc0930c59e477b4ae9080298fe17f2ccdccb14))
+
+
+## v0.372.0 (2026-10-18)
+
+### Features
+
+- **platform**: Shadow a reveal-anchored range planner for source-emission catch-up
+  ([#3003](https://github.com/ditto-assistant/ditto-subnet/pull/3003),
+  [`af0c55d`](https://github.com/ditto-assistant/ditto-subnet/commit/af0c55d0e2f174aab3b61241e8c37529d6c4389b))
+
+
 ## v0.371.2 (2026-10-18)
 
 ### Bug Fixes

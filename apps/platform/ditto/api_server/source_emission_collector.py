@@ -78,8 +78,8 @@ _RECEIPT_REFETCH_LIMIT = 5
 # planner drives it. Promote only after a long run of shadowed ranges with no
 # miss; docs/source-runtime-interface.md has the criterion.
 _REVEAL_PLAN_MODE = "shadow"
-# A shadow comparison must never starve the sweep that hosts it: it runs after
-# payout resolution, inside what is left of the sweep budget minus a reserve.
+# A shadow comparison must never starve the sweep that hosts it: it runs only
+# after the sweep (payouts included) has finished, in a window of its own.
 _REVEAL_PLAN_SHADOW_SECONDS = 90.0
 _REVEAL_PLAN_SHADOW_RESERVE_SECONDS = 15.0
 _REVEAL_PLAN_SHADOW_MIN_SECONDS = 10.0
@@ -120,6 +120,35 @@ def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
             tuple(item) for item in data["validator_last_update_timestamps"]
         ),
     )
+
+
+# Payout resolution stops this long before the sweep budget expires: one row
+# can take several archive reads, and an expired budget fails the sweep.
+_RESOLUTION_RESERVE_SECONDS = 45.0
+
+
+def _resolution_deadline(
+    budget: asyncio.Timeout | None, *, share: float | None = None
+) -> float | None:
+    """When payout resolution must stop inside ``budget``.
+
+    With ``share``, at most that fraction of the time left; otherwise the
+    budget's end less a reserve. None (no limit) without a budget.
+    """
+    if budget is None:
+        return None
+    try:
+        when = budget.when()
+    except RuntimeError:
+        # Some Python versions refuse when() once the timeout has fired: the
+        # budget is spent, so resolution must stop now rather than raise.
+        return asyncio.get_running_loop().time()
+    if when is None:
+        return None
+    now = asyncio.get_running_loop().time()
+    if share is not None:
+        return now + (when - now) * share
+    return when - _RESOLUTION_RESERVE_SECONDS
 
 
 class _CallCounter:
@@ -223,6 +252,16 @@ class SourceEmissionCollector:
                 async with asyncio.timeout(self._sweep_timeout_seconds()) as budget:
                     async with AsyncSubstrateInterface(url=url) as substrate:
                         await self._sweep_provider(substrate, budget=budget)
+                        # The sweep's work, payouts included, is done: the
+                        # optional comparison gets its own window instead of
+                        # whatever the replay left, which on a slow archive
+                        # was never enough for it to run.
+                        budget.reschedule(
+                            asyncio.get_running_loop().time()
+                            + _REVEAL_PLAN_SHADOW_SECONDS
+                            + _REVEAL_PLAN_SHADOW_RESERVE_SECONDS
+                        )
+                        await self._run_pending_shadow(substrate, budget)
                 return
             except Exception as error:
                 failures.append(self.state.chain._safe_rpc_error(error)[:200])
@@ -271,7 +310,10 @@ class SourceEmissionCollector:
         if not catchup:
             # Durable payouts must not wait for a full scan batch to succeed.
             # Keep archive verification and provider fallback on the same path.
-            await self.resolve_pending_payouts(substrate)
+            # Half the budget at most, so the scan still gets its turn.
+            await self.resolve_pending_payouts(
+                substrate, deadline=_resolution_deadline(budget, share=0.5)
+            )
         batch = _SWEEP_CATCHUP_BATCH_BLOCKS if catchup else _SWEEP_BATCH_BLOCKS
         reads = SourceEmissionReadCache()
         try:
@@ -293,14 +335,18 @@ class SourceEmissionCollector:
             # error would hide why the cursor stopped (an unaudited runtime
             # once read as a decoder error for weeks).
             try:
-                await self.resolve_pending_payouts(substrate)
+                await self.resolve_pending_payouts(
+                    substrate, deadline=_resolution_deadline(budget)
+                )
             except Exception:
                 logger.exception("source emission payout resolution failed")
             raise
-        await self.resolve_pending_payouts(substrate)
-        # Last, and only with budget to spare: payouts and the cursor never
-        # wait on the optional comparison.
-        await self._run_pending_shadow(substrate, budget)
+        # Stop with time to spare rather than let the budget expire mid-row:
+        # an expired budget fails the whole sweep and sends the next one to
+        # the rate-limited fallback providers, though the replay succeeded.
+        await self.resolve_pending_payouts(
+            substrate, deadline=_resolution_deadline(budget)
+        )
 
     async def _run_pending_shadow(
         self, substrate: Any, budget: asyncio.Timeout | None
@@ -907,9 +953,17 @@ class SourceEmissionCollector:
             binding["vector_digest"],
         ), receipt
 
-    async def resolve_pending_payouts(self, substrate: Any) -> int:
+    async def resolve_pending_payouts(
+        self, substrate: Any, *, deadline: float | None = None
+    ) -> int:
+        """Resolve pending payouts, oldest-checked first, until ``deadline``.
+
+        ``deadline`` is a ``loop.time()`` value. Rows left over are untouched
+        and come first next time, since rows cycle by ``last_checked_at``.
+        """
         if not self.confirmation_enabled:
             return 0
+        loop = asyncio.get_running_loop()
         async with self.sessions() as session:
             rows = list(
                 await session.scalars(
@@ -936,17 +990,22 @@ class SourceEmissionCollector:
             snapshots = [(row.block, row.block_hash, dict(row.proof)) for row in rows]
         confirmed = 0
         refetched = 0
-        for block, block_hash, snapshot in snapshots:
+
+        async def archive_evidence(
+            block: int, block_hash: str, snapshot: dict
+        ) -> tuple[dict, ChainMinerEmissionReceipt, list] | None:
+            """The row's archive reads; None when the row must wait."""
+            nonlocal refetched
             if snapshot.get("receipt") is None:
                 # Reopened after a non-reproducible ambiguity verdict.
                 if refetched >= _RECEIPT_REFETCH_LIMIT:
-                    continue
+                    return None
                 refetched += 1
                 receipt = await self._refetch_receipt(
                     substrate, block=block, block_hash=block_hash, snapshot=snapshot
                 )
                 if receipt is None:
-                    continue
+                    return None
                 snapshot = {**snapshot, "receipt": asdict(receipt)}
             payout = _receipt_from_json(snapshot["receipt"])
             resolved = []
@@ -959,6 +1018,24 @@ class SourceEmissionCollector:
                 backing = await self._resolve_backing(substrate, binding, payout)
                 if backing is not None:
                     resolved.append(backing)
+            return snapshot, payout, resolved
+
+        for block, block_hash, snapshot in snapshots:
+            if deadline is not None and loop.time() >= deadline:
+                break
+            # The deadline also bounds the row in progress: a row cut short
+            # wrote no verdict and comes first next sweep.
+            row_budget = asyncio.timeout_at(deadline)
+            try:
+                async with row_budget:
+                    evidence = await archive_evidence(block, block_hash, snapshot)
+            except TimeoutError:
+                if not row_budget.expired():
+                    raise  # a provider timeout, not our deadline
+                break
+            if evidence is None:
+                continue
+            snapshot, payout, resolved = evidence
             decision = evaluate_winner_payout(
                 receipt=payout,
                 stake=tuple(VotingStake(**item) for item in snapshot["stake"]),

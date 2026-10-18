@@ -748,16 +748,76 @@ class _RangeEndpoints:
     last_block: int
     hashes: dict[int, str]
     runtime_code_hash: str
+    # Blocks that changed a UID's hotkey inside the range. Always read in
+    # full: the reader resets provenance there (uid_mapping_changed).
+    identity_changes: tuple[int, ...] = ()
 
     def plan(self, interesting: Iterable[int]) -> SourceEmissionRangePlan:
         return SourceEmissionRangePlan(
             self.first_block,
             self.last_block,
             self.hashes,
-            tuple(sorted(set(interesting))),
+            tuple(sorted({*interesting, *self.identity_changes})),
             False,
             self.runtime_code_hash,
         )
+
+
+# More changed UIDs than this in one range: plan the range in full instead.
+_MAX_IDENTITY_CHANGES = 16
+
+
+async def _gather_or_cancel(*coroutines: Awaitable[Any]) -> list[Any]:
+    """``asyncio.gather``, but a failure cancels and awaits the siblings."""
+    tasks = [asyncio.ensure_future(c) for c in coroutines]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
+async def _storage_change_blocks(
+    substrate: Any,
+    key_hex: str,
+    hashes: dict[int, str],
+    low: int,
+    high: int,
+    gate: asyncio.Semaphore,
+) -> list[int]:
+    """Blocks in ``(low, high]`` where ``key_hex``'s storage hash changed.
+
+    Exact only for a value that never returns to an earlier one inside the
+    interval (bisection cannot see A -> B -> A); callers argue that per key.
+    """
+    memo: dict[int, Any] = {}
+
+    async def at(block: int) -> Any:
+        if block not in memo:
+            async with gate:
+                result = await substrate.rpc_request(
+                    "state_getStorageHash", [key_hex, hashes[block]]
+                )
+            # ``result: null`` is absent storage, a valid answer; a response
+            # without it is not, and must not read as "unchanged".
+            if not isinstance(result, dict) or "result" not in result:
+                raise ValueError(f"missing storage hash at block {block}")
+            memo[block] = result["result"]
+        return memo[block]
+
+    async def changes(lo: int, hi: int) -> list[int]:
+        lo_hash, hi_hash = await _gather_or_cancel(at(lo), at(hi))
+        if lo_hash == hi_hash:
+            return []
+        if hi - lo == 1:
+            return [hi]
+        mid = (lo + hi) // 2
+        left, right = await _gather_or_cancel(changes(lo, mid), changes(mid, hi))
+        return left + right
+
+    return await changes(low, high)
 
 
 async def _range_endpoints(
@@ -765,12 +825,13 @@ async def _range_endpoints(
 ) -> _RangeEndpoints | SourceEmissionRangePlan:
     """Shared endpoint checks; a ``full_scan`` plan when any of them fails.
 
-    If the runtime code, the mode controls or the ``Keys`` map differ between
-    ``first_block - 1`` and ``last_block``, or are not valid at either end, the
-    caller must run the unchanged per-block scan. Equal endpoints rule out a net
-    change: a runtime upgrade cannot revert (spec versions only increase), and
-    an identity cannot flip back inside one range (the replacement would be
-    pruned inside its own immunity period).
+    If the runtime code or the mode controls differ between ``first_block - 1``
+    and ``last_block``, or any of them (or the ``Keys`` map) is invalid at
+    either end, the caller must run the unchanged per-block scan. A runtime
+    upgrade cannot revert inside a range (spec versions only increase). A UID
+    whose hotkey or ``BlockAtRegistration`` differs at the ends is located by
+    bisection and its blocks are returned as ``identity_changes``; see the
+    comment below for why a UID equal on both at the ends was not touched.
     """
     if not 0 < first_block <= last_block:
         raise ValueError("invalid source-emission range")
@@ -801,15 +862,18 @@ async def _range_endpoints(
             )
         )
 
-    async def keys_at(at: str) -> list[tuple[Any, Any]]:
+    async def mapping_at(name: str, at: str) -> list[tuple[Any, Any]]:
         rows = await substrate.query_map(
             module="SubtensorModule",
-            storage_function="Keys",
+            storage_function=name,
             params=[netuid],
             block_hash=at,
             fully_exhaust=True,
         )
         return [(_unwrap(k), _unwrap(v)) async for k, v in rows]
+
+    async def keys_at(at: str) -> list[tuple[Any, Any]]:
+        return await mapping_at("Keys", at)
 
     code = []
     for at in (start, end):
@@ -835,13 +899,60 @@ async def _range_endpoints(
         ):
             return full(code[0])
     start_keys, end_keys = await keys_at(start), await keys_at(end)
-    if (
-        _valid_uid_mapping(start_keys) is None
-        or _valid_uid_mapping(end_keys) is None
-        or dict(start_keys) != dict(end_keys)
-    ):
+    start_map, end_map = _valid_uid_mapping(start_keys), _valid_uid_mapping(end_keys)
+    if start_map is None or end_map is None or set(start_map) != set(end_map):
         return full(code[0])
-    return _RangeEndpoints(first_block, last_block, hashes, admission.code_hash)
+    # UIDs re-registered inside the range, found by BlockAtRegistration: every
+    # registration sets it to the current block, so per UID it only increases
+    # and never repeats. That catches A -> B -> A, which equal Keys at the
+    # ends would hide (SN118's 300-block immunity is shorter than a range),
+    # and bisecting it finds every registration exactly. Keys is bisected too
+    # for a hotkey swap, which registers nothing; a UID's hotkey can be
+    # swapped at most once per HotkeySwapOnSubnetInterval (a day), so its
+    # value cannot flip back inside one range either.
+    registered = await _gather_or_cancel(
+        *(mapping_at("BlockAtRegistration", at) for at in (start, end))
+    )
+    if any(set(dict(rows)) != set(start_map) for rows in registered):
+        return full(code[0])
+    first_reg, last_reg = (dict(rows) for rows in registered)
+    changed = sorted(
+        uid
+        for uid in start_map
+        if start_map[uid] != end_map[uid] or first_reg[uid] != last_reg[uid]
+    )
+    if len(changed) > _MAX_IDENTITY_CHANGES:
+        return full(code[0])
+    gate = asyncio.Semaphore(8)
+
+    async def bisect(uid: int, storage: str) -> list[int]:
+        key = await substrate.create_storage_key(
+            "SubtensorModule", storage, [netuid, uid], block_hash=end
+        )
+        return await _storage_change_blocks(
+            substrate, key.to_hex(), hashes, first_block - 1, last_block, gate
+        )
+
+    found = await _gather_or_cancel(
+        *(
+            bisect(uid, storage)
+            for uid in changed
+            for storage in ("BlockAtRegistration", "Keys")
+        )
+    )
+    identity_changes: set[int] = set()
+    for registrations, swaps in zip(found[::2], found[1::2], strict=True):
+        blocks = {*registrations, *swaps}
+        if not blocks:
+            return full(code[0])  # the endpoints disagree but no change found
+        identity_changes.update(blocks)
+    return _RangeEndpoints(
+        first_block,
+        last_block,
+        hashes,
+        admission.code_hash,
+        tuple(sorted(identity_changes)),
+    )
 
 
 async def plan_source_emission_range(
@@ -1049,43 +1160,6 @@ async def plan_source_emission_range_by_reveals(
         if await v2_commits(block):
             return full()
 
-    async def storage_hash(key_hex: str, block: int, memo: dict[int, Any]) -> Any:
-        if block not in memo:
-            async with gate:
-                result = await substrate.rpc_request(
-                    "state_getStorageHash", [key_hex, hashes[block]]
-                )
-            # ``result: null`` is absent storage, a valid answer; a response
-            # without it is not, and must not read as "unchanged".
-            if not isinstance(result, dict) or "result" not in result:
-                raise ValueError(f"missing storage hash at block {block}")
-            memo[block] = result["result"]
-        return memo[block]
-
-    async def changes(key_hex: str, low: int, high: int, memo: dict) -> list[int]:
-        """Blocks in ``(low, high]`` whose post-state hash differs from the parent's."""
-        low_hash, high_hash = await asyncio.gather(
-            storage_hash(key_hex, low, memo), storage_hash(key_hex, high, memo)
-        )
-        if low_hash == high_hash:
-            return []
-        if high - low == 1:
-            return [high]
-        mid = (low + high) // 2
-        tasks = [
-            asyncio.create_task(changes(key_hex, low, mid, memo)),
-            asyncio.create_task(changes(key_hex, mid, high, memo)),
-        ]
-        try:
-            left, right = await asyncio.gather(*tasks)
-        except BaseException:
-            # Stop the sibling branch's reads before the caller falls back.
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-        return left + right
-
     interesting = set(payouts)
     for before, last, reveal_epoch in segments:
         key = await substrate.create_storage_key(
@@ -1094,7 +1168,11 @@ async def plan_source_emission_range_by_reveals(
             [netuid, reveal_epoch],
             block_hash=end,
         )
-        interesting.update(await changes(key.to_hex(), before, last, {}))
+        interesting.update(
+            await _storage_change_blocks(
+                substrate, key.to_hex(), hashes, before, last, gate
+            )
+        )
     return endpoints.plan(interesting)
 
 

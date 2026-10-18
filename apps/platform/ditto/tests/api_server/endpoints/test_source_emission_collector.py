@@ -725,7 +725,7 @@ async def test_sweep_widens_batch_and_skips_leading_resolution_in_catchup(
 
     resolved = []
 
-    async def resolve(_substrate):
+    async def resolve(_substrate, **_kwargs):
         resolved.append(True)
         return 0
 
@@ -765,7 +765,7 @@ async def test_failed_catchup_scan_still_resolves_pending_payouts(
 
     resolved = []
 
-    async def resolve(_substrate):
+    async def resolve(_substrate, **_kwargs):
         resolved.append(True)
         return 0
 
@@ -800,7 +800,7 @@ async def test_resolver_failure_cannot_mask_why_the_scan_stopped(
     async def read(_substrate, **_reads):
         raise ValueError("runtime fingerprint is not audited: 0xnew")
 
-    async def resolve(_substrate):
+    async def resolve(_substrate, **_kwargs):
         raise AttributeError("'scale_info::460' object has no attribute 'index'")
 
     substrate = SimpleNamespace(
@@ -838,7 +838,7 @@ async def test_sweep_keeps_steady_state_batch_and_leading_resolution(
 
     resolved = []
 
-    async def resolve(_substrate):
+    async def resolve(_substrate, **_kwargs):
         resolved.append(True)
         return 0
 
@@ -906,6 +906,9 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
             await self._inner.__aenter__()
             return self
 
+        def when(self):
+            return self._inner.when()
+
         def reschedule(self, when):
             loop = collector_module.asyncio.get_running_loop()
             rescheduled.append(round(when - loop.time()))
@@ -933,10 +936,15 @@ async def test_sweep_timeout_tracks_backlog_depth(app, session_maker, monkeypatc
     await collector.sweep()
     assert collector._backlog_deep is True
     assert timeouts == [120.0]
-    assert rescheduled == [600]
+    # Then the finished sweep hands the shadow its own 90 s + 15 s window.
+    shadow = round(
+        collector_module._REVEAL_PLAN_SHADOW_SECONDS
+        + collector_module._REVEAL_PLAN_SHADOW_RESERVE_SECONDS
+    )
+    assert rescheduled == [600, shadow]
     await collector.sweep()
     assert timeouts == [120.0, 600.0]
-    assert rescheduled == [600, 600]
+    assert rescheduled == [600, shadow, 600, shadow]
 
 
 _OWNERSHIP = "subnet ownership changed during distribution block"
@@ -1039,6 +1047,67 @@ async def test_reopened_receiptless_payout_refetches_and_confirms(
     # The persisted receipt is reused; no further historical reads.
     assert await collector.resolve_pending_payouts(SimpleNamespace()) == 0
     receipt.assert_awaited_once()
+
+
+async def test_payout_resolution_stops_at_its_deadline_and_resumes_later(
+    app, client, session_maker, monkeypatch
+):
+    """A spent deadline leaves rows untouched for the next sweep."""
+    from ditto.db.models import SourceEmissionPayout
+
+    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
+    receipt = AsyncMock(return_value=_payout(a, 201))
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=receipt, _safe_rpc_error=str
+    )
+    past = asyncio.get_running_loop().time() - 1
+    assert (
+        await collector.resolve_pending_payouts(SimpleNamespace(), deadline=past) == 0
+    )
+    receipt.assert_not_awaited()
+    async with session_maker() as session:
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        assert row.last_checked_at is None
+    assert await collector.resolve_pending_payouts(SimpleNamespace()) == 1
+
+
+async def test_a_payout_row_cut_short_by_the_deadline_stays_pending(
+    app, client, session_maker, monkeypatch
+):
+    from ditto.db.models import SourceEmissionPayout
+
+    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
+
+    async def slow_receipt(**_kwargs):
+        await asyncio.sleep(5)
+
+    app.state.chain = SimpleNamespace(
+        get_miner_emission_receipt=slow_receipt, _safe_rpc_error=str
+    )
+    soon = asyncio.get_running_loop().time() + 0.05
+    assert (
+        await collector.resolve_pending_payouts(SimpleNamespace(), deadline=soon) == 0
+    )
+    async with session_maker() as session:
+        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
+        # At most a transient retry note: never terminal, never confirmed.
+        assert row.terminal is False
+        assert row.blocked_reason is None or row.blocked_reason.startswith(
+            "receipt_retry"
+        )
+
+
+async def test_a_provider_timeout_is_not_mistaken_for_the_deadline(
+    app, client, session_maker, monkeypatch
+):
+    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
+    del a
+    monkeypatch.setattr(
+        collector, "_refetch_receipt", AsyncMock(side_effect=TimeoutError)
+    )
+    later = asyncio.get_running_loop().time() + 60
+    with pytest.raises(TimeoutError):
+        await collector.resolve_pending_payouts(SimpleNamespace(), deadline=later)
 
 
 async def test_reopened_payout_reproduced_ambiguity_is_terminal_again(
@@ -1255,10 +1324,27 @@ async def _shadowed_sweep(app, session_maker, monkeypatch, reveal_plan):
     app.state.chain = SimpleNamespace(
         get_miner_emission_receipt=AsyncMock(return_value=_payout(a, 151)),
         _safe_rpc_error=str,
+        _historical_substrate_urls=lambda: ["wss://archive.invalid"],
     )
+
+    class _Connect:
+        """Stands in for AsyncSubstrateInterface(url=...) as a context manager."""
+
+        def __call__(self, url):
+            del url
+            return self
+
+        async def __aenter__(self):
+            return substrate
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr("async_substrate_interface.AsyncSubstrateInterface", _Connect())
     collector = _collector(app, session_maker)
     monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
-    await collector._sweep_provider(substrate)
+    # The whole sweep: the shadow runs after it, in a window of its own.
+    await collector.sweep()
     async with session_maker() as session:
         cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
         # The event planner's evidence drives the cursor whatever the shadow says.
@@ -1326,7 +1412,7 @@ async def test_reveal_plan_shadow_failure_never_blocks_the_sweep(
 async def test_reveal_plan_shadow_runs_after_payouts_within_the_budget(
     app, session_maker, monkeypatch
 ):
-    """Resolution comes first; a nearly spent budget skips the shadow."""
+    """The shadow runs after payout resolution; a spent window skips it."""
     from ditto.api_server import source_emission_collector as module
 
     end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
@@ -1336,7 +1422,7 @@ async def test_reveal_plan_shadow_runs_after_payouts_within_the_budget(
         order.append("shadow")
         return _sparse_plan(100, end, (150, 151))
 
-    async def resolve(_substrate):
+    async def resolve(_substrate, **_kwargs):
         order.append("resolve")
         return 0
 
@@ -1350,7 +1436,7 @@ async def test_reveal_plan_shadow_runs_after_payouts_within_the_budget(
     await _shadowed_sweep(app, session_maker, monkeypatch, shadow_plan)
     assert order[-2:] == ["resolve", "shadow"]
 
-    # With almost no budget left after the replay, no comparison runs.
+    # A window too short for a comparison skips it rather than racing it.
     collector = _collector(app, session_maker)
     collector._pending_shadow = (101, end, [150])
     planner = AsyncMock()

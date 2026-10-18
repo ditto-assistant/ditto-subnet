@@ -206,6 +206,20 @@ The archive must be a gzip-compressed tarball no larger than 20 MiB, with its
 or special files. Cargo metadata is part of the Rust reference implementation,
 not a submission requirement.
 
+Each source file (`.py`, `.rs`, `.go`, `.c`/`.cpp`/`.h`, `.ts`/`.js` and
+similar) must stay within **10,000 lines**, **1 MiB**, and **4,000 characters
+on any one line**. A reviewer reads source 400 lines at a time, so larger files
+cannot be reviewed and leave screening unable to clear the submission. Split
+large files. The one exception is an **unmodified** upstream release file whose
+SHA-256 is on the vendored allowlist
+(`packages/ditto-screening-protocol/ditto_screening_protocol/data/vendored_upstream_allowlist.json`,
+currently QuickJS-ng 0.16.2 `quickjs.c`, SQLite 3.46.1 amalgamation files and
+cpp-httplib 0.18.3 `httplib.h`). Any edit to such a file makes it your own
+source again. Data files (`.json`, `.txt`, model weights) are not counted.
+Platform rejects uploads that break these limits from **2026-10-25 00:00 UTC**,
+and `ditto verify` warns until then. Submissions uploaded earlier are not
+affected.
+
 Submit to Finney:
 
 ```sh

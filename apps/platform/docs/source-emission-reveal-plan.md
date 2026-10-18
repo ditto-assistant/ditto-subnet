@@ -11,9 +11,21 @@ only the blocks that can matter. Two planners exist:
 | Extra full reads | every structural event on *any* subnet | queue shrinks without a reveal (rare) |
 | Status | drives the cursor | **shadow** (`_REVEAL_PLAN_MODE`) |
 
-Both share `_range_endpoints`: equal runtime code, mode controls, Yuma
-consensus and `Keys(118)` at the range ends, or the collector falls back to the
-per-block scan.
+Both share `_range_endpoints`: equal runtime code, mode controls and Yuma
+consensus at the range ends, or the collector falls back to the per-block scan.
+A UID re-registered inside the range no longer forces that fallback. A UID
+counts as changed when its `Keys` or `BlockAtRegistration` differs at the
+ends. Each changed UID's `BlockAtRegistration(118, uid)` and `Keys(118, uid)`
+storage hashes are bisected to the exact blocks, which are read in full (the
+reader resets provenance there). Neither value can repeat inside a range:
+every registration sets `BlockAtRegistration` to the current block, so it only
+increases. That also catches A → B → A, where the same hotkey is back at the
+end (SN118's 300-block immunity period is shorter than a range). A hotkey swap
+registers nothing but is limited to one per UID per
+`HotkeySwapOnSubnetInterval` (7200 blocks). Up to 16 changed UIDs are bisected
+concurrently; more fall back. Before this, any registration in a 720-block
+range sent the whole range to the per-block scan, which was most of the
+backlog on 2026-10-18.
 
 ## Why the reveal planner is enough
 
@@ -74,9 +86,11 @@ plan. The running summary is on Backroom `get_source_release_policy` →
 - `fallback` / `error`: it asked for a full scan, or couldn't be planned.
 - `calls` / `blocks`: its cost per block.
 
-The shadow runs last in a sweep, after payout resolution, within what is left
-of the sweep budget (at most 90 s, keeping a 15 s reserve), and is skipped when
-less than 10 s remain. It never fails the sweep.
+The shadow runs only after a sweep has finished, payout resolution included,
+in a fresh window of its own (90 s plus a 15 s reserve) on the same archive
+connection. It never fails the sweep and delays the next one by at most that
+window. (On v0.372.0 it ran inside whatever the replay left of the sweep
+budget, which on Dwellir was never enough, so no comparison was recorded.)
 
 **Promote** (`_REVEAL_PLAN_MODE = "primary"`) only after at least 100 shadowed
 ranges with `missed == 0` and errors explained. In primary mode the sparse

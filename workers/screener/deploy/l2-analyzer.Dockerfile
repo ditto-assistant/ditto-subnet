@@ -9,6 +9,7 @@ RUN groupadd --gid 65532 analyzer \
 
 COPY --chown=65532:65532 tools/l2_analyzer.py /opt/l2_analyzer.py
 COPY --chown=65532:65532 ditto_screener/data/starter-kit-provenance-*.json /opt/starter-manifests/
+COPY --chown=65532:65532 ditto_screener/data/vendored-upstream-allowlist.json /opt/starter-manifests/
 # Fleet release staging inherits a private umask. The rootless analyzer runs
 # as container root so its bind-mounted source maps to the daemon identity;
 # make only these immutable, repository-owned inputs readable by that identity.
