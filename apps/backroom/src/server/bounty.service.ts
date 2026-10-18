@@ -320,6 +320,8 @@ export async function decideBountyAppeal(actor: string, rawInput: unknown) {
       // An upheld appeal restores a deadline counted from its decision.
       const restores = input.restoreDays === undefined ? null : Date.parse(appeal.decided_at) + input.restoreDays * 86_400_000
       const restored = appeal.restored_deadline_at === null ? null : Date.parse(appeal.restored_deadline_at)
+      // Times that do not parse cannot be compared, so the outcome stays unknown.
+      if (Number.isNaN(restores) || Number.isNaN(restored)) return { state: 'absent' }
       if (
         appeal.upheld === input.upheld && appeal.decided_by === actor.trim() &&
         appeal.decision_reason === input.reason && restored === restores

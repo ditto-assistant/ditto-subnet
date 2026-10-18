@@ -359,6 +359,18 @@ describe('bounty read-backs find this write, not the latest state', () => {
     else await expect(run).rejects.toBeInstanceOf(NothingAppliedError)
   })
 
+  it.each([
+    ['its decision', { decided_at: 'not-a-time', restored_deadline_at: '2026-10-18T00:00:00Z' }],
+    ['its restored deadline', { restored_deadline_at: 'not-a-time' }],
+  ])('reports an upheld appeal as unknown when %s does not parse', async (_name, times) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator({
+      appeals: [decided({ upheld: true, decided_by: ACTOR, decision_reason: reason, ...times })],
+    }))))
+    await expect(decideBountyAppeal(ACTOR, {
+      bountyId: BOUNTY, appealId: APPEAL, upheld: true, restoreDays: 2, reason, confirmation: `UPHOLD BOUNTY APPEAL ${APPEAL}`,
+    })).rejects.toThrow('may have committed')
+  })
+
   it('reports an inconclusive reconciliation settled since by someone else as unknown, never applied or refused', async () => {
     vi.stubGlobal('fetch', reconciled('confirmed', [
       audit('transfer_reconciled', { reason: null, detail: `transfer ${TRANSFER} round 1: uncertain (asked unknown)`, recorded_at: '2026-10-16T01:00:00Z' }),
