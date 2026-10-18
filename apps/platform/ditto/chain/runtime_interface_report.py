@@ -16,6 +16,7 @@ from ditto.chain.runtime_interface import (
     TREASURY_RECEIPT_SURFACE,
     RuntimeInterface,
     RuntimeSurface,
+    metadata_at,
     nearest_audited_change,
     runtime_call_digests,
     runtime_interface,
@@ -119,7 +120,7 @@ async def read_runtime_interface_report(
         "result"
     ]
     version = (await substrate.rpc_request("state_getRuntimeVersion", [at]))["result"]
-    metadata = (await substrate.init_runtime(block_hash=at)).metadata
+    metadata = await metadata_at(substrate, at)
     baseline_release, baseline_calls = TREASURY_CALL_BASELINE
     calls_error = None
     changed_calls: list[str] = []

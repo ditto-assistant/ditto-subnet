@@ -24,6 +24,7 @@ from ditto.chain.runtime_interface import (
     SOURCE_EMISSION_SURFACE,
     TREASURY_RECEIPT_SURFACE,
     RuntimeInterface,
+    metadata_at,
     runtime_call_digests,
     runtime_interface,
 )
@@ -123,7 +124,7 @@ async def render(url: str) -> str:
             )["result"]
             if code != expected:
                 raise SystemExit(f"{release} block {block} runs {code}, not {expected}")
-            metadata = (await substrate.init_runtime(block_hash=at)).metadata
+            metadata = await metadata_at(substrate, at)
             source.append(
                 (
                     release,

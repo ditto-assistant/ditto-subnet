@@ -1,7 +1,5 @@
 """The upgrade report names what moved without changing any admission."""
 
-from types import SimpleNamespace
-
 import pytest
 
 from ditto.chain import audited_runtime_interfaces
@@ -56,8 +54,8 @@ class Chain:
             return {"result": self.code}
         return {"result": {"specVersion": 479}}
 
-    async def init_runtime(self, **_kwargs):
-        return SimpleNamespace(metadata=self.meta)
+    async def get_block_metadata(self, **_kwargs):
+        return self.meta
 
 
 @pytest.fixture

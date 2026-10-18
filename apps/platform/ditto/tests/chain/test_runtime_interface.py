@@ -192,13 +192,31 @@ def test_treasury_call_baseline_names_the_signed_runtime() -> None:
 
 async def test_upgrade_with_audited_interface_is_admitted_once() -> None:
     substrate = AsyncMock()
-    substrate.init_runtime.return_value = SimpleNamespace(metadata=metadata())
+    substrate.get_block_metadata.return_value = metadata()
     first = await admit_runtime(substrate, code_hash=UPGRADE, at="h1")
     second = await admit_runtime(substrate, code_hash=UPGRADE, at="h2")
     assert first == second
     assert first.epoch_consensus_gated is True
     assert first.interface_digest == runtime_interface(metadata()).digest
-    substrate.init_runtime.assert_awaited_once_with(block_hash="h1")
+    substrate.get_block_metadata.assert_awaited_once()
+    assert substrate.get_block_metadata.await_args.kwargs["block_hash"] == "h1"
+    substrate.init_runtime.assert_not_awaited()
+
+
+async def test_upgrade_block_is_fingerprinted_on_its_own_runtime() -> None:
+    """At an upgrade block the library decodes with the parent's runtime.
+
+    Fingerprinting that would admit the new code on the old, audited
+    interface; admission must read the exact state's metadata instead.
+    """
+    changed = clone(metadata())
+    entry(changed, "SubtensorModule", "Weights").update(default="\x01")
+    substrate = AsyncMock()
+    substrate.init_runtime.return_value = SimpleNamespace(metadata=metadata())
+    substrate.get_block_metadata.return_value = changed
+    with pytest.raises(ValueError, match="storage:SubtensorModule.Weights"):
+        await admit_runtime(substrate, code_hash=UPGRADE, at="upgrade-block")
+    substrate.init_runtime.assert_not_awaited()
 
 
 async def test_audited_artifact_needs_no_metadata() -> None:
@@ -206,26 +224,26 @@ async def test_audited_artifact_needs_no_metadata() -> None:
     code = sorted(AUDITED_RUNTIME_CODE_HASHES)[0]
     admission = await admit_runtime(substrate, code_hash=code, at="h1")
     assert admission.interface_digest is None
-    substrate.init_runtime.assert_not_awaited()
+    substrate.get_block_metadata.assert_not_awaited()
 
 
 async def test_changed_interface_is_refused_and_not_cached() -> None:
     changed = clone(metadata())
     entry(changed, "SubtensorModule", "Active").update(modifier="Optional")
     substrate = AsyncMock()
-    substrate.init_runtime.return_value = SimpleNamespace(metadata=changed)
+    substrate.get_block_metadata.return_value = changed
     for _ in range(2):
         with pytest.raises(
             ValueError,
             match=f"not audited: {UPGRADE} .*storage:SubtensorModule.Active",
         ):
             await admit_runtime(substrate, code_hash=UPGRADE, at="h1")
-    assert substrate.init_runtime.await_count == 2
+    assert substrate.get_block_metadata.await_count == 2
 
 
 async def test_unavailable_metadata_retries_as_a_connection_fault() -> None:
     substrate = AsyncMock()
-    substrate.init_runtime.side_effect = OSError("archive dropped")
+    substrate.get_block_metadata.side_effect = OSError("archive dropped")
     with pytest.raises(ChainConnectionError):
         await admit_runtime(substrate, code_hash=UPGRADE, at="h1")
     assert source_emission_verifier._INTERFACE_ADMISSIONS == {}

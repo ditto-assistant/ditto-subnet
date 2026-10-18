@@ -94,10 +94,25 @@ source.
 
 ## Decoder isolation
 
-async-substrate-interface 2.0.4 lost the type registry of an older runtime
-once a session had decoded a newer one: re-decoding a v469 block after a v472
-block failed with `'scale_info::N' object has no attribute 'index'`. That
-error, raised by the payout resolver in the scan's failure path, also replaced
-the scan's own "not audited" refusal in `collector_blocked_reason`. 2.2.1 does
-not reproduce it, and the collector now logs a resolver failure instead of
-letting it mask the scan error.
+Once a session had loaded a newer runtime, decoding an *extrinsic* from an
+older-runtime block failed inside cyscale's `GenericCall` with
+`'scale_info::N' object has no attribute 'index'`. Commit verification
+decodes old commit blocks after the scan has read new ones, so payout
+resolution failed on every sweep. cyscale 0.4.0 has the bug and 0.8.0 does
+not; async-substrate-interface 2.2.1 alone is not enough, since it still
+resolves cyscale 0.4.0 from the lock. Events decode correctly either way,
+which is why an events-only reproduction looks fixed. That error, raised by
+the payout resolver in the scan's failure path, also replaced the scan's own
+"not audited" refusal in `collector_blocked_reason`; the collector now logs a
+resolver failure instead.
+
+## Metadata at an upgrade block
+
+`init_runtime(block_hash=…)` decodes a block with its **parent's** runtime,
+which is right for that block's extrinsics and events but wrong for
+fingerprinting the runtime whose `:code` the block stores. At v475's upgrade
+block 9233781 it reports v473's interface. Admission, the treasury reader,
+the report and the pin script therefore read `metadata_at(substrate, hash)`
+(`state_getMetadata` at that exact state, decoded with a fresh configuration)
+and never `init_runtime`. Otherwise an upgrade that changed a consumed type
+would be admitted, and cached by code hash, on its predecessor's interface.

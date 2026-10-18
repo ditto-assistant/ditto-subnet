@@ -24,6 +24,7 @@ from uuid import UUID
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import ChainMinerEmissionReceipt
 from ditto.chain.runtime_interface import (
+    metadata_at,
     require_audited_interface,
     runtime_interface,
 )
@@ -102,8 +103,7 @@ async def admit_runtime(substrate: Any, *, code_hash: Any, at: Any) -> RuntimeAd
     if admitted is not None:
         return admitted
     try:
-        runtime = await substrate.init_runtime(block_hash=at)
-        metadata = runtime.metadata
+        metadata = await metadata_at(substrate, at)
     except Exception as error:
         raise ChainConnectionError(
             f"runtime metadata unavailable for {code_hash}"

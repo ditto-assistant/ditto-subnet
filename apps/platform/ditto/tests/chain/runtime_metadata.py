@@ -145,10 +145,8 @@ def type_def(value: tuple[str, dict[str, Any]], type_id: int) -> dict[str, Any]:
     return next(t for t in body(value)["types"]["types"] if t["id"] == type_id)["type"]
 
 
-def unaudited_treasury_runtime() -> Any:
-    """A runtime whose treasury surface matches no pinned audited interface."""
-    from types import SimpleNamespace
-
+def unaudited_treasury_metadata() -> Any:
+    """Metadata whose treasury surface matches no pinned audited interface."""
     from ditto.chain.runtime_interface import TREASURY_RECEIPT_SURFACE
 
-    return SimpleNamespace(metadata=metadata(surface=TREASURY_RECEIPT_SURFACE))
+    return metadata(surface=TREASURY_RECEIPT_SURFACE)
