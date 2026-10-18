@@ -361,6 +361,22 @@ def test_confirm_without_the_saved_claim_sends_nothing(capsys):
     assert "is not saved on this machine" in capsys.readouterr().err
 
 
+def test_confirm_names_an_unreadable_saved_claim_and_sends_nothing(home, capsys):
+    client = api()
+    held = claim_view("held", simulated_receipt=None)
+    saved = home / ".cache/ditto/bounty/local/claims" / f"{held.claim_id}.json"
+    saved.parent.mkdir(parents=True)
+    saved.write_text("{not json")
+    client.get_bounty_claim.return_value = held
+    assert run(["confirm", str(held.claim_id)], client) == 1
+    client.confirm_bounty_claim.assert_not_called()
+    err = capsys.readouterr().err
+    assert f"{saved} is unreadable" in err and "not saved on this machine" not in err
+    # A claim past its hold needs no saved copy, readable or not.
+    client.get_bounty_claim.return_value = claim_view("claimed")
+    assert run(["confirm", str(held.claim_id)], client) == 0
+
+
 def test_status_list_and_show(capsys):
     client = api()
     client.get_bounty_claim.return_value = claim_view("claimed")

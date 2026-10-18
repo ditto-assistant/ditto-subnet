@@ -298,13 +298,22 @@ def _saved_receipt(network_name: str, claim_id: UUID) -> BountyFeeReceipt | None
     try:
         saved = json.loads(path.read_text())
         request = BountyClaimRequest.model_validate(saved["request"])
-    except (OSError, ValueError, KeyError, TypeError):
+    except FileNotFoundError:
         return None
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        # The claim was saved here but cannot be read: say so, rather than
+        # sending the miner to look for a claim this machine does have.
+        raise MinerCliError(
+            f"saved claim {claim_id} at {path} is unreadable "
+            f"({type(exc).__name__}); restore it to confirm the hold"
+        ) from None
     return _fee_receipt(claim_id, request.proof.signature)
 
 
 def _confirm_fee(
-    client: ApiClient, view: BountyClaimView, receipt: BountyFeeReceipt | None
+    client: ApiClient,
+    view: BountyClaimView,
+    saved: Callable[[], BountyFeeReceipt | None],
 ) -> BountyClaimView:
     if view.state != "held":
         return view
@@ -312,6 +321,9 @@ def _confirm_fee(
         raise MinerCliError(
             "live bounty fees are not enabled; this CLI pays rehearsal fees only"
         )
+    # Read only for a hold that needs it, so a claim already past its hold
+    # never depends on the saved copy.
+    receipt = saved()
     if receipt is None:
         raise MinerCliError(
             f"claim {view.claim_id} is not saved on this machine: its rehearsal "
@@ -463,7 +475,7 @@ def _claim(client: ApiClient, args: argparse.Namespace, network_name: str) -> in
             "without the saved claim",
             file=sys.stderr,
         )
-    result = _confirm_fee(client, held, _fee_receipt(held.claim_id, signature))
+    result = _confirm_fee(client, held, lambda: _fee_receipt(held.claim_id, signature))
     if args.json:
         _print_json(result)
     else:
@@ -539,7 +551,7 @@ def run(args: argparse.Namespace) -> int:
             view = client.get_bounty_claim(args.claim_id)
             if command == "confirm":
                 view = _confirm_fee(
-                    client, view, _saved_receipt(network.name, args.claim_id)
+                    client, view, lambda: _saved_receipt(network.name, args.claim_id)
                 )
             if args.json:
                 _print_json(view)
