@@ -28,6 +28,7 @@ SYSTEM_PROMPT = "You are a helpful assistant. Follow the supplied system instruc
 FORMATS: dict[str, Callable[[str], str]] = {
     "answer_line": lambda v: f"Based on the available information.\n\nAnswer: {v}",
     "json": lambda v: json.dumps({"answer": v, "final_text": v, "final_answer": v}),
+    "answer_upper": lambda v: f"Based on the available information.\n\nANSWER: {v}",
     "plain": lambda v: v,
 }
 
@@ -179,7 +180,8 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             note="hyphenated identifier in the answer slot",
         )
     )
-    final_ident = f"ZK-{t[4:].upper()}-07"
+    # Lower-case compounds too: kestrel v1 only rewrote words like red-violet.
+    final_ident = f"red-violet ZK-{t[4:].upper()}-07"
     add(
         Item(
             "i4_final_text_fidelity",
@@ -664,29 +666,52 @@ def _seed_request(user_id: str, pairs: list[tuple[str, str]]) -> dict[str, Any]:
     }
 
 
-def calibrate(session: Session) -> tuple[str | None, ProbeRecord]:
-    """Find a model-output encoding the harness relays (the oracle round-trip)."""
+# A minimal graph for harnesses that refuse /run until a principal is seeded.
+_BASE_SEED = [("I keep my notes in this assistant.", "Noted: your notes live here.")]
+
+
+def calibrate(session: Session) -> tuple[str | None, ProbeRecord, bool]:
+    """Find a model-output encoding the harness relays (the oracle round-trip).
+
+    Returns ``(format, last_record, seed_first)``. When the harness rejects an
+    unseeded principal (non-2xx, no model call), calibration retries with a
+    minimal ``/seed`` for each probe's user, and the battery then does the same.
+    """
     record = None
-    for name, fmt in FORMATS.items():
-        token = secrets.token_hex(8)
-        request = _run_request(
-            session, f"Explain this ordinary request: {token[:6]}", []
-        )
-        record = session.probe(
-            request,
-            script={"default": {"content": fmt(token)}},
-            label=f"calibrate:{name}",
-        )
-        if token in (served_answer(record) or ""):
-            return name, record
+    for seed_first in (False, True):
+        for name, fmt in FORMATS.items():
+            token = secrets.token_hex(8)
+            request = _run_request(
+                session, f"Explain this ordinary request: {token[:6]}", []
+            )
+            setup = []
+            if seed_first:
+                seed = _seed_request(request["user_id"], _BASE_SEED)
+                session.probe(seed, path="/seed", label="calibrate:seed")
+                setup = [{"path": "/seed", "request": seed}]
+            record = session.probe(
+                request,
+                script={"default": {"content": fmt(token)}},
+                label=f"calibrate:{name}",
+                preconditions=setup,
+            )
+            if token in (served_answer(record) or ""):
+                return name, record, seed_first
+            rejected = record.http_status is not None and record.http_status >= 400
+            if not seed_first and rejected and not record.model_requests:
+                break
+        else:
+            if not seed_first:
+                break
     assert record is not None
-    return None, record
+    return None, record, False
 
 
 def run_battery(session: Session) -> dict[str, Any]:
-    fmt_name, calibration = calibrate(session)
+    fmt_name, calibration, seed_first = calibrate(session)
     report: dict[str, Any] = {
         "format": fmt_name,
+        "seed_first": seed_first,
         "calibration_probe": calibration.probe_id,
         "calibration_model_calls": len(calibration.model_requests),
         "items": [],
@@ -709,8 +734,9 @@ def run_battery(session: Session) -> dict[str, Any]:
         if item.endpoint == "unreachable":
             request["tool_endpoint"] = "http://127.0.0.1:9/v1/tools/x/tool?cap=x"
         setup = []
-        if item.seed:
-            seed = _seed_request(request["user_id"], item.seed)
+        pairs = [*(_BASE_SEED if seed_first else []), *item.seed]
+        if pairs:
+            seed = _seed_request(request["user_id"], pairs)
             session.probe(seed, path="/seed", label=f"battery:{item.item_id}:seed")
             setup = [{"path": "/seed", "request": seed}]
         record = session.probe(
