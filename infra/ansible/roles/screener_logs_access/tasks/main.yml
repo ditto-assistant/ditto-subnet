@@ -1,10 +1,6 @@
 ---
-- name: Require managed public keys for the read-only logs account
-  ansible.builtin.assert:
-    that:
-      - screener_logs_public_keys | length > 0
-      - "'logs' not in (team_members | default([]))"
-    fail_msg: Supply managed team keys; logs must never be a privileged team member.
+- name: Validate the managed logs key policy before host changes
+  ansible.builtin.import_tasks: validate.yml
 
 - name: Check whether logs already exists for check-mode key installation
   ansible.builtin.getent:
