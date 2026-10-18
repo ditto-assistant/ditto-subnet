@@ -81,6 +81,21 @@ describe("bounty board", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
+  it("hides a board a poll failed to refresh, and shows it again on the next good poll", async () => {
+    render(() => <BountiesPage />);
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    // A stale board would show slots open and deadlines counting that may
+    // have moved, so a failed refresh states the failure instead.
+    vi.mocked(getJSON).mockRejectedValue(new Error("offline"));
+    refreshAllEndpoints();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Bounties could not be loaded");
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    vi.mocked(getJSON).mockImplementation(serve as typeof getJSON);
+    refreshAllEndpoints();
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("states an empty board", async () => {
     vi.mocked(getJSON).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
     render(() => <BountiesPage />);
