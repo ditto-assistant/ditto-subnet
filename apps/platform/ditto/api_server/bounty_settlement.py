@@ -633,7 +633,7 @@ def _check_outcome(executor: BountyTransferExecutor, outcome: str | None) -> Non
     """A rehearsal is told its outcome; a live transfer reports its own."""
     if executor.simulated and outcome is None:
         raise HTTPException(400, "a rehearsal transfer needs a rehearsal_outcome")
-    if not executor.simulated and outcome not in (None, "confirmed"):
+    if not executor.simulated and outcome is not None:
         raise HTTPException(400, "only a rehearsal executor takes a rehearsal outcome")
 
 

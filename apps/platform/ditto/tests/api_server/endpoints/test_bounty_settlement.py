@@ -592,7 +592,13 @@ async def test_only_an_executor_of_the_same_funding_mode_reconciles(world, monke
     unknown = (await dispatch(world, refund, "unknown")).json()
     transfer_id = unknown["transfers"][0]["transfer_id"]
     monkeypatch.setattr(world.app.state.bounty_transfer_executor, "simulated", False)
-    refused = await reconcile(world, transfer_id, "confirmed")
+    # A live executor takes no rehearsal outcome, not even "confirmed".
+    for outcome in ("confirmed", "unknown"):
+        told = await reconcile(world, transfer_id, outcome)
+        assert told.status_code == 400 and "only a rehearsal executor" in told.text
+        told = await dispatch(world, refund, outcome)
+        assert told.status_code == 400 and "only a rehearsal executor" in told.text
+    refused = await reconcile(world, transfer_id, None)
     assert refused.status_code == 409 and "funding mode" in refused.text
     monkeypatch.undo()
     # Nor can another executor of the same mode speak for this transfer.
