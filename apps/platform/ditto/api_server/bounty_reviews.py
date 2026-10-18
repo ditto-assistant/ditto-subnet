@@ -853,20 +853,34 @@ async def decide_appeal(
                     403, "an appeal is decided by someone other than its reviewer"
                 )
         elif subject.kind == "deadline_missed":
-            # A missed rework deadline was set by the reviewer who asked for
-            # changes; it is recorded at that deadline. A first delivery
-            # deadline has no reviewer to exclude.
-            setter = await session.scalar(
-                select(BountyReview.reviewer_actor)
-                .where(
-                    BountyReview.claim_id == claim.claim_id,
-                    BountyReview.decision == "changes_requested",
-                    BountyReview.rework_deadline_at == subject.recorded_at,
+            # A missed deadline is recorded at that deadline, and whoever set
+            # it does not judge missing it: the reviewer who asked for changes
+            # sets a rework deadline, and the operator who upheld an appeal
+            # the delivery deadline it restored. A first delivery deadline
+            # has no one to exclude.
+            setters = set(
+                await session.scalars(
+                    select(BountyReview.reviewer_actor).where(
+                        BountyReview.claim_id == claim.claim_id,
+                        BountyReview.decision == "changes_requested",
+                        BountyReview.rework_deadline_at == subject.recorded_at,
+                    )
                 )
-                .order_by(BountyReview.decided_at.desc())
-                .limit(1)
+            ) | set(
+                await session.scalars(
+                    select(BountyAppealDecision.actor)
+                    .join(
+                        BountyAppeal,
+                        BountyAppeal.appeal_id == BountyAppealDecision.appeal_id,
+                    )
+                    .where(
+                        BountyAppeal.claim_id == claim.claim_id,
+                        BountyAppealDecision.restored_deadline_at
+                        == subject.recorded_at,
+                    )
+                )
             )
-            if setter == actor:
+            if actor in setters:
                 raise HTTPException(
                     403, "an appeal is decided by someone other than its reviewer"
                 )

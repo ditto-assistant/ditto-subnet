@@ -43,7 +43,9 @@ proof of a distinct operator (see [Deferred](bounty-claims.md#deferred)).
   overdue reviews one more window.
 - **Appeals.** `get_bounty` shows each appeal's private statement.
   `decide_bounty_appeal` upholds (restoring the claim with a new delivery
-  deadline) or denies. A rejection's reviewer can't decide its appeal.
+  deadline) or denies. A rejection's reviewer can't decide its appeal, and
+  whoever set a missed deadline (by requesting changes, or by upholding an
+  earlier appeal) can't decide the appeal of missing it.
 - **Slots.** `control_bounty_slot` cancels a slot (refunding a paid fee in full,
   as `team` or `system_fault`) or reopens a closed one for a new claim
   (retaining a rejected, expired or withdrawn fee). Reopening waits for a

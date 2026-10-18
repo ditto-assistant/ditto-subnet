@@ -191,8 +191,10 @@ Notes:
 A claimant can appeal a rejection or a missed deadline, once per decision,
 while the slot still shows that outcome. The statement is private; only its
 digest is public. An operator decides, and a rejection is never judged by the
-reviewer who rejected the work. Upholding restores the claim to claimed with a
-new delivery deadline; denying leaves the outcome in place.
+reviewer who rejected the work. Nor is a missed deadline judged by whoever set
+it: the reviewer who requested changes, or the operator whose upheld appeal
+restored it. Upholding restores the claim to claimed with a new delivery
+deadline; denying leaves the outcome in place.
 
 ## Fees and awards
 

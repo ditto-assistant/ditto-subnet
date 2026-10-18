@@ -690,6 +690,50 @@ async def test_a_missed_rework_deadline_is_appealed_to_someone_else(world, monke
     assert denied.status_code == 200, denied.text
 
 
+async def test_a_missed_restored_deadline_is_appealed_to_someone_else(
+    world, monkeypatch
+):
+    await world.start(ALICE)
+    claim = await claimed(world, ALICE)
+    travel(monkeypatch, timedelta(days=5, minutes=1))
+    assert (await submit(world, ALICE, claim)).status_code == 409
+    first = next(e for e in await events(world) if e["kind"] == "deadline_missed")
+    filed = (await appeal(world, ALICE, claim, first["event_id"], "Outage.")).json()
+    upheld = await world.client.post(
+        f"{ADMIN}/appeals/{filed['appeals'][0]['appeal_id']}/decision",
+        headers=_HEADERS,
+        json={
+            "upheld": True,
+            "restore_days": 2,
+            "reason": "fixture appeal review",
+            "confirmation": f"UPHOLD BOUNTY APPEAL {filed['appeals'][0]['appeal_id']}",
+        },
+    )
+    assert upheld.status_code == 200 and upheld.json()["slot_status"] == "claimed"
+    travel(monkeypatch, timedelta(days=7, minutes=2))
+    assert (await submit(world, ALICE, claim)).status_code == 409
+    second = next(
+        e
+        for e in reversed(await events(world))
+        if e["kind"] == "deadline_missed" and e["event_id"] != first["event_id"]
+    )
+    filed = (await appeal(world, ALICE, claim, second["event_id"], "Again.")).json()
+    appeal_id = next(a["appeal_id"] for a in filed["appeals"] if a["upheld"] is None)
+    body = {
+        "upheld": False,
+        "reason": "fixture appeal review",
+        "confirmation": f"DENY BOUNTY APPEAL {appeal_id}",
+    }
+    route = f"{ADMIN}/appeals/{appeal_id}/decision"
+    # The operator who restored the deadline does not judge missing it.
+    conflicted = await world.client.post(route, headers=_HEADERS, json=body)
+    assert (
+        conflicted.status_code == 403 and "other than its reviewer" in conflicted.text
+    )
+    denied = await world.client.post(route, headers=AS_REVIEWER, json=body)
+    assert denied.status_code == 200, denied.text
+
+
 async def test_cancellation_refunds_a_paid_fee(world):
     await world.start(ALICE, BOB)
     claim = await claimed(world, ALICE)
