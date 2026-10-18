@@ -106,16 +106,25 @@ def check_source_stream(
     digest = hashlib.sha256()
     decoder = codecs.getincrementaldecoder("utf-8")()
     size = newlines = current = longest = 0
+    # Whether the open line's last character so far is "\r", so a CRLF
+    # terminator split across chunks is still not counted as content.
+    ends_cr = False
     try:
         for chunk in chunks:
             digest.update(chunk)
             size += len(chunk)
             text = decoder.decode(chunk)
             for segment in text.split("\n")[:-1]:
-                longest = max(longest, current + len(segment))
+                if segment:
+                    ends_cr = segment.endswith("\r")
+                longest = max(longest, current + len(segment) - ends_cr)
                 current = 0
+                ends_cr = False
                 newlines += 1
-            current += len(text) - (text.rfind("\n") + 1)
+            remainder = text[text.rfind("\n") + 1 :]
+            if remainder:
+                current += len(remainder)
+                ends_cr = remainder.endswith("\r")
         tail = decoder.decode(b"", final=True)
     except UnicodeDecodeError:
         return None

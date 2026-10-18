@@ -264,8 +264,18 @@ def _check_source_limits(tar_path: Path, now: datetime) -> PreflightCheckResult:
     then a breach is reported but does not block the upload.
     """
     # Load the packaged allowlist before the archive handler below, so a broken
-    # installation fails loudly instead of reading as an unreadable archive.
-    vendored_upstream_digests()
+    # installation reads as a failed check rather than an unreadable archive.
+    try:
+        vendored_upstream_digests()
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return PreflightCheckResult(
+            name="source_limits",
+            passed=False,
+            detail=(
+                f"vendored-upstream allowlist could not be loaded ({error}); "
+                "reinstall ditto-subnet and retry"
+            ),
+        )
     violations: list[SourceLimitViolation] = []
     unpacked = 0
     try:

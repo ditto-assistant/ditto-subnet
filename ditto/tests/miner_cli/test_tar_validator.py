@@ -275,3 +275,15 @@ class TestSourceLimits:
         big = b"token\n" * (MAX_SOURCE_FILE_LINES + 1)
         tar = _archive(tmp_path, [_DOCKERFILE, ("fixtures/vocab.txt", big)])
         assert self._source_check(tar, enforced=True).passed is True
+
+    def test_broken_allowlist_is_a_failed_check_not_an_exception(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def missing() -> frozenset[str]:
+            raise OSError("allowlist missing")
+
+        monkeypatch.setattr(tar_validator, "vendored_upstream_digests", missing)
+        tar = _archive(tmp_path, [_DOCKERFILE, ("src/agent.py", b"x = 1\n")])
+        check = self._source_check(tar, enforced=True)
+        assert check.passed is False
+        assert "allowlist could not be loaded" in check.detail

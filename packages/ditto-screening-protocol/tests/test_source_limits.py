@@ -109,3 +109,13 @@ def test_streamed_line_count_handles_a_missing_final_newline() -> None:
     violation = check_source_stream("src/a.py", [data[:5], data[5:]])
     assert violation is not None
     assert violation.value == MAX_SOURCE_FILE_LINES + 1
+
+
+@pytest.mark.parametrize("chunk", [1, 2, MAX_SOURCE_LINE_CHARS + 1, 1 << 20])
+def test_crlf_terminator_is_not_counted_as_line_content(chunk: int) -> None:
+    data = b"a" * MAX_SOURCE_LINE_CHARS + b"\r\n" + b"b\r\n"
+    pieces = [data[i : i + chunk] for i in range(0, len(data), chunk)]
+    assert check_source_stream("src/win.cs", pieces) is None
+    over = b"a" * (MAX_SOURCE_LINE_CHARS + 1) + b"\r\n"
+    violation = check_source_stream("src/win.cs", [over])
+    assert violation is not None and violation.value == MAX_SOURCE_LINE_CHARS + 1
