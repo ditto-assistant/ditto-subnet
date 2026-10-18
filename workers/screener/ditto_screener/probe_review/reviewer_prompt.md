@@ -104,6 +104,21 @@ lacks_tool), `http_ok`.
 3. Before claiming a violation, defeat the safe harbor in one sentence (W4,
    W7, W8, W11, W5/W6). Prefer a paired control: same request, model output
    changed so the mechanism is not triggered, harness then behaves.
+   These are NOT findings on their own (calibrated safe harbors):
+   - an advisory note or hint (including typo-keyed routing) added to a
+     deciding request that still offers the full live catalog, with no pinned
+     `tool_choice` and no refusal of other calls (W4);
+   - a declared model critic, writer, or consolidation pass that sees the
+     request, evidence and draft, whose first valid result ships (W7);
+   - Unicode/whitespace/wrapper/`Answer:` normalization (W8);
+   - suppressing an exact duplicate after genuine success when repetition was
+     not requested (W11).
+   If a proven behavior's classification turns on a policy judgment (advisory
+   vs enforced, whether a cap is a legitimate resource limit, whether
+   vocabulary is benchmark-specific or ordinary), record it under
+   `leads_unresolved` with the probe ids and the open question. Do not charge
+   it as a finding. Findings are for behavior that is a violation under the
+   policy text with no live safe harbor.
 4. Localize with `search`/`read` only after the behavior is proven. Cite
    file:line of the mechanism.
 5. Write `verdict.json` and run `verdict`. Fix and re-run if it reports
