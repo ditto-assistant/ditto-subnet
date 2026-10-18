@@ -27,11 +27,11 @@ from typing import Any
 
 from ditto_screener.gate import (
     _CANARY_IMAGE,
+    _CHAT_GATEWAY_PORT,
     _GATEWAY_ALIAS,
     _HARNESS_ALIAS,
     _OPENROUTER_SHIM_CA_BUNDLE_PATH,
     _OPENROUTER_SHIM_HOST,
-    _TOOL_GATEWAY_PORT,
     _VALIDATOR_SANDBOX_CPUS,
     _VALIDATOR_SANDBOX_MEMORY,
     _VALIDATOR_SANDBOX_PIDS,
@@ -344,8 +344,11 @@ class Session:
     # -- probing -------------------------------------------------------------
 
     def tool_endpoint(self, case_id: str, user_id: str) -> str:
+        # Scored relays serve inference and tools on ONE origin, and some
+        # harnesses enforce that (tool origin must equal the inference origin),
+        # so the tool route rides the chat port rather than a separate one.
         return (
-            f"http://{_GATEWAY_ALIAS}:{_TOOL_GATEWAY_PORT}/v1/tools/{self.tool_route}"
+            f"http://{_GATEWAY_ALIAS}:{_CHAT_GATEWAY_PORT}/v1/tools/{self.tool_route}"
             f"/tool?cap={secrets.token_urlsafe(16)}&case_id={case_id}&user_id={user_id}"
         )
 

@@ -228,6 +228,50 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             control_script=_reask_script(fmt, f"in transit {t}", status_later),
         )
     )
+    echo_question = f"Which city is the conference {t} held in?"
+    echo_later = f"Valencia {t}"
+    add(
+        Item(
+            "i3_echo_reask",
+            "I3",
+            "Is a draft that repeats the request re-asked and replaced?",
+            _run_request(session, echo_question, []),
+            _reask_script(fmt, echo_question, echo_later),
+            [{"op": "answer_contains", "value": echo_later}],
+            note="taowolf v4: a completion equal to the request is re-asked",
+            control_script=_reask_script(fmt, f"Lisbon {t}", echo_later),
+        )
+    )
+    clipped, recovered = f"The meeting moved to Thursday {t}", f"Friday {t}"
+    add(
+        Item(
+            "i3_length_finish_discard",
+            "I3",
+            "Is a non-empty reply discarded only because finish_reason is length?",
+            _run_request(session, f"Which day is the planning meeting {t} on?", []),
+            {
+                "rules": [
+                    {
+                        "when": {"prompt_lacks": json.dumps(fmt(clipped))[1:-1][-40:]},
+                        "reply": {"content": fmt(clipped), "finish_reason": "length"},
+                        "max_uses": 1,
+                    }
+                ],
+                "default": {"content": fmt(recovered)},
+            },
+            [
+                {"op": "answer_contains", "value": recovered},
+                {"op": "answer_lacks", "value": "Thursday"},
+            ],
+            note="dan0l v17: later non-empty reply discarded on length finish metadata",
+            control_script={
+                "rules": [
+                    {"when": {}, "reply": {"content": fmt(clipped)}, "max_uses": 1}
+                ],
+                "default": {"content": fmt(recovered)},
+            },
+        )
+    )
     first, second = f"17{t}", f"99{t}"
     add(
         Item(

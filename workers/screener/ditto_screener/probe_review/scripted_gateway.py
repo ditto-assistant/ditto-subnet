@@ -422,7 +422,7 @@ class ScriptedGateway:
                 "application/json",
                 "embedding",
             )
-        if self._surface in {"tool", "all"} and path.startswith("/v1/tools/"):
+        if self._surface in {"tool", "model", "all"} and path.startswith("/v1/tools/"):
             if method == "GET":
                 return 204, b"", "application/json", "tool_health"
             return (*self._tool(request), "tool")
