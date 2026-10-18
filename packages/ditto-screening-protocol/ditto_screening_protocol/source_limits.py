@@ -12,13 +12,15 @@ Measured on 2026-10-18 across ten v13 submissions (592 first-party files): p99
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Literal, Protocol
 
 MAX_SOURCE_FILE_LINES = 10_000
 MAX_SOURCE_FILE_BYTES = 1024 * 1024
@@ -75,37 +77,68 @@ def is_source_path(path: str) -> bool:
     return PurePosixPath(path).suffix.lower() in SOURCE_EXTENSIONS
 
 
-def check_source_file(path: str, data: bytes) -> SourceLimitViolation | None:
-    """Return the first limit ``data`` breaks, or ``None``.
+# Archive members are checked in chunks so one oversized member never has to be
+# materialized; only the running digest, counters and decoder state are kept.
+SOURCE_READ_CHUNK_BYTES = 64 * 1024
+
+
+class _Reader(Protocol):
+    def read(self, size: int = ..., /) -> bytes: ...
+
+
+def read_chunks(reader: _Reader) -> Iterator[bytes]:
+    """Yield ``reader`` in ``SOURCE_READ_CHUNK_BYTES`` pieces until EOF."""
+    while chunk := reader.read(SOURCE_READ_CHUNK_BYTES):
+        yield chunk
+
+
+def check_source_stream(
+    path: str, chunks: Iterable[bytes]
+) -> SourceLimitViolation | None:
+    """Return the first limit a streamed source member breaks, or ``None``.
 
     Non-source paths and non-UTF-8 content are out of scope (the archive and
     opaque-file contracts govern those); an allowlisted digest is exempt.
+    Lines are counted like ``str.splitlines`` for ``\\n``-terminated text.
     """
     if not is_source_path(path):
         return None
+    digest = hashlib.sha256()
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    size = newlines = current = longest = 0
     try:
-        lines = data.decode("utf-8").splitlines()
+        for chunk in chunks:
+            digest.update(chunk)
+            size += len(chunk)
+            text = decoder.decode(chunk)
+            for segment in text.split("\n")[:-1]:
+                longest = max(longest, current + len(segment))
+                current = 0
+                newlines += 1
+            current += len(text) - (text.rfind("\n") + 1)
+        tail = decoder.decode(b"", final=True)
     except UnicodeDecodeError:
         return None
-    longest = max((len(line) for line in lines), default=0)
+    current += len(tail)
+    longest = max(longest, current)
+    lines = newlines + (1 if current else 0)
     violation: SourceLimitViolation | None = None
-    if len(lines) > MAX_SOURCE_FILE_LINES:
-        violation = SourceLimitViolation(
-            path, "lines", len(lines), MAX_SOURCE_FILE_LINES
-        )
-    elif len(data) > MAX_SOURCE_FILE_BYTES:
-        violation = SourceLimitViolation(
-            path, "bytes", len(data), MAX_SOURCE_FILE_BYTES
-        )
+    if lines > MAX_SOURCE_FILE_LINES:
+        violation = SourceLimitViolation(path, "lines", lines, MAX_SOURCE_FILE_LINES)
+    elif size > MAX_SOURCE_FILE_BYTES:
+        violation = SourceLimitViolation(path, "bytes", size, MAX_SOURCE_FILE_BYTES)
     elif longest > MAX_SOURCE_LINE_CHARS:
         violation = SourceLimitViolation(
             path, "line_length", longest, MAX_SOURCE_LINE_CHARS
         )
-    if violation is not None and (
-        hashlib.sha256(data).hexdigest() in vendored_upstream_digests()
-    ):
+    if violation is not None and digest.hexdigest() in vendored_upstream_digests():
         return None
     return violation
+
+
+def check_source_file(path: str, data: bytes) -> SourceLimitViolation | None:
+    """``check_source_stream`` for an in-memory file."""
+    return check_source_stream(path, (data,))
 
 
 def source_limits_enforced(now: datetime) -> bool:

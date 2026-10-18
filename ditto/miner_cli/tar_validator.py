@@ -28,9 +28,11 @@ from ditto.miner_cli.models import PreflightCheckResult, PreflightResult
 from ditto_screening_protocol.source_limits import (
     SOURCE_LIMITS_EFFECTIVE_AT,
     SourceLimitViolation,
-    check_source_file,
+    check_source_stream,
     is_source_path,
+    read_chunks,
     source_limits_enforced,
+    vendored_upstream_digests,
 )
 
 logger = logging.getLogger(__name__)
@@ -261,17 +263,29 @@ def _check_source_limits(tar_path: Path, now: datetime) -> PreflightCheckResult:
     Uploads before ``SOURCE_LIMITS_EFFECTIVE_AT`` are grandfathered, so until
     then a breach is reported but does not block the upload.
     """
+    # Load the packaged allowlist before the archive handler below, so a broken
+    # installation fails loudly instead of reading as an unreadable archive.
+    vendored_upstream_digests()
     violations: list[SourceLimitViolation] = []
+    unpacked = 0
     try:
         with tarfile.open(tar_path, "r:gz") as tar:
             for member in tar:
+                unpacked += max(member.size, 0)
+                if unpacked > MAX_UNPACKED_BYTES:
+                    # The archive contract check already fails this archive.
+                    return PreflightCheckResult(
+                        name="source_limits",
+                        passed=True,
+                        detail="skipped: archive exceeds the unpacked-size cap",
+                    )
                 name = member.name.removeprefix("./")
                 if not member.isfile() or not is_source_path(name):
                     continue
                 handle = tar.extractfile(member)
                 if handle is None:
                     continue
-                violation = check_source_file(name, handle.read())
+                violation = check_source_stream(name, read_chunks(handle))
                 if violation is not None:
                     violations.append(violation)
     except (tarfile.TarError, EOFError, OSError):

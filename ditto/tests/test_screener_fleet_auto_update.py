@@ -1287,6 +1287,7 @@ def _analyzer_release(releases: Path, revision: str) -> Path:
         "deploy/l2-analyzer.Dockerfile",
         ".dockerignore",
         "tools/l2_analyzer.py",
+        "ditto_screener/data/vendored-upstream-allowlist.json",
         *(
             str(path.relative_to(source))
             for path in (source / "ditto_screener/data").glob(

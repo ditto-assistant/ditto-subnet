@@ -16,6 +16,7 @@ from ditto_screening_protocol.source_limits import (
     MAX_SOURCE_LINE_CHARS,
     SOURCE_LIMITS_EFFECTIVE_AT,
     check_source_file,
+    check_source_stream,
     source_limits_enforced,
     vendored_upstream_digests,
 )
@@ -87,3 +88,24 @@ def test_allowlist_records_official_provenance() -> None:
 def test_enforcement_starts_at_the_published_instant() -> None:
     assert not source_limits_enforced(SOURCE_LIMITS_EFFECTIVE_AT - timedelta(seconds=1))
     assert source_limits_enforced(SOURCE_LIMITS_EFFECTIVE_AT)
+
+
+@pytest.mark.parametrize("chunk", [1, 3, 7, 64])
+def test_streamed_check_matches_in_memory_across_chunk_boundaries(chunk: int) -> None:
+    # A multi-byte character and line breaks land on chunk boundaries.
+    data = ("é" * (MAX_SOURCE_LINE_CHARS + 1) + "\nok\n").encode()
+    pieces = [data[i : i + chunk] for i in range(0, len(data), chunk)]
+    streamed = check_source_stream("src/a.rs", pieces)
+    assert streamed == check_source_file("src/a.rs", data)
+    assert streamed is not None
+    assert (streamed.kind, streamed.value) == (
+        "line_length",
+        MAX_SOURCE_LINE_CHARS + 1,
+    )
+
+
+def test_streamed_line_count_handles_a_missing_final_newline() -> None:
+    data = _lines(MAX_SOURCE_FILE_LINES) + b"tail"
+    violation = check_source_stream("src/a.py", [data[:5], data[5:]])
+    assert violation is not None
+    assert violation.value == MAX_SOURCE_FILE_LINES + 1

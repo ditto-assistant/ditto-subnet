@@ -29,8 +29,9 @@ from datetime import UTC, datetime
 from pathlib import PurePosixPath
 
 from ditto_screening_protocol.source_limits import (
-    check_source_file,
+    check_source_stream,
     is_source_path,
+    read_chunks,
     source_limits_enforced,
 )
 
@@ -612,8 +613,10 @@ def validate_upload_archive(tar_bytes: bytes, *, now: datetime | None = None) ->
                     and is_source_path(canonical_name)
                 ):
                     source = archive.extractfile(member)
+                    # Streamed in bounded chunks: an oversized member is never
+                    # materialized before it is refused.
                     violation = (
-                        check_source_file(canonical_name, source.read())
+                        check_source_stream(canonical_name, read_chunks(source))
                         if source is not None
                         else None
                     )
