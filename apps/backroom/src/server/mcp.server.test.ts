@@ -701,8 +701,9 @@ describe('Backroom MCP tools', () => {
     // The eighteen build-bounty operator tools (#2942) publish compact catalog
     // schemas (ids as format uuid, terms as an object; services parse
     // strictly) and one-line summaries with procedures in tool help: measured
-    // 197,867 bytes together. Keep the same ~0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(198_400)
+    // 197,867 bytes together. Main's runtime-interface report read (#2994)
+    // adds 659: measured 198,526 with both. Keep the same ~0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(199_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
