@@ -795,25 +795,25 @@ async def _storage_change_blocks(
             memo[block] = result["result"]
         return memo[block]
 
+    async def both(*coroutines: Awaitable[Any]) -> list[Any]:
+        """gather, but a failure cancels and awaits the sibling reads."""
+        tasks = [asyncio.ensure_future(c) for c in coroutines]
+        try:
+            return list(await asyncio.gather(*tasks))
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
     async def changes(lo: int, hi: int) -> list[int]:
-        lo_hash, hi_hash = await asyncio.gather(at(lo), at(hi))
+        lo_hash, hi_hash = await both(at(lo), at(hi))
         if lo_hash == hi_hash:
             return []
         if hi - lo == 1:
             return [hi]
         mid = (lo + hi) // 2
-        tasks = [
-            asyncio.create_task(changes(lo, mid)),
-            asyncio.create_task(changes(mid, hi)),
-        ]
-        try:
-            left, right = await asyncio.gather(*tasks)
-        except BaseException:
-            # Stop the sibling branch's reads before the caller falls back.
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
+        left, right = await both(changes(lo, mid), changes(mid, hi))
         return left + right
 
     return await changes(low, high)
@@ -828,10 +828,9 @@ async def _range_endpoints(
     and ``last_block``, or any of them (or the ``Keys`` map) is invalid at
     either end, the caller must run the unchanged per-block scan. A runtime
     upgrade cannot revert inside a range (spec versions only increase). A UID
-    whose hotkey differs at the ends is located by bisection and its blocks
-    are returned as ``identity_changes``; an unchanged UID cannot flip and
-    flip back inside one range (the replacement would be pruned inside its own
-    immunity period).
+    whose hotkey or ``BlockAtRegistration`` differs at the ends is located by
+    bisection and its blocks are returned as ``identity_changes``; see the
+    comment below for why a UID equal on both at the ends was not touched.
     """
     if not 0 < first_block <= last_block:
         raise ValueError("invalid source-emission range")
@@ -862,15 +861,18 @@ async def _range_endpoints(
             )
         )
 
-    async def keys_at(at: str) -> list[tuple[Any, Any]]:
+    async def mapping_at(name: str, at: str) -> list[tuple[Any, Any]]:
         rows = await substrate.query_map(
             module="SubtensorModule",
-            storage_function="Keys",
+            storage_function=name,
             params=[netuid],
             block_hash=at,
             fully_exhaust=True,
         )
         return [(_unwrap(k), _unwrap(v)) async for k, v in rows]
+
+    async def keys_at(at: str) -> list[tuple[Any, Any]]:
+        return await mapping_at("Keys", at)
 
     code = []
     for at in (start, end):
@@ -899,22 +901,56 @@ async def _range_endpoints(
     start_map, end_map = _valid_uid_mapping(start_keys), _valid_uid_mapping(end_keys)
     if start_map is None or end_map is None or set(start_map) != set(end_map):
         return full(code[0])
-    # A UID re-registered inside the range: find the exact block. A hotkey
-    # cannot return to its old UID inside one range (the replacement would be
-    # pruned inside its own immunity period), so each UID's Keys value never
-    # repeats here and bisecting its storage hash finds every change.
-    changed = sorted(uid for uid in start_map if start_map[uid] != end_map[uid])
+    # UIDs re-registered inside the range, found by BlockAtRegistration: every
+    # registration sets it to the current block, so per UID it only increases
+    # and never repeats. That catches A -> B -> A, which equal Keys at the
+    # ends would hide (SN118's 300-block immunity is shorter than a range),
+    # and bisecting it finds every registration exactly. Keys is bisected too
+    # for a hotkey swap, which registers nothing; a UID's hotkey can be
+    # swapped at most once per HotkeySwapOnSubnetInterval (a day), so its
+    # value cannot flip back inside one range either.
+    registered = await asyncio.gather(
+        *(mapping_at("BlockAtRegistration", at) for at in (start, end))
+    )
+    if any(set(dict(rows)) != set(start_map) for rows in registered):
+        return full(code[0])
+    first_reg, last_reg = (dict(rows) for rows in registered)
+    changed = sorted(
+        uid
+        for uid in start_map
+        if start_map[uid] != end_map[uid] or first_reg[uid] != last_reg[uid]
+    )
     if len(changed) > _MAX_IDENTITY_CHANGES:
         return full(code[0])
     gate = asyncio.Semaphore(8)
-    identity_changes: set[int] = set()
+    per_key = []
     for uid in changed:
-        key = await substrate.create_storage_key(
-            "SubtensorModule", "Keys", [netuid, uid], block_hash=end
-        )
-        blocks = await _storage_change_blocks(
-            substrate, key.to_hex(), hashes, first_block - 1, last_block, gate
-        )
+        for storage in ("BlockAtRegistration", "Keys"):
+            key = await substrate.create_storage_key(
+                "SubtensorModule", storage, [netuid, uid], block_hash=end
+            )
+            per_key.append(
+                asyncio.create_task(
+                    _storage_change_blocks(
+                        substrate,
+                        key.to_hex(),
+                        hashes,
+                        first_block - 1,
+                        last_block,
+                        gate,
+                    )
+                )
+            )
+    try:
+        found = await asyncio.gather(*per_key)
+    except BaseException:
+        for task in per_key:
+            task.cancel()
+        await asyncio.gather(*per_key, return_exceptions=True)
+        raise
+    identity_changes: set[int] = set()
+    for registrations, swaps in zip(found[::2], found[1::2], strict=True):
+        blocks = {*registrations, *swaps}
         if not blocks:
             return full(code[0])  # the endpoints disagree but no change found
         identity_changes.update(blocks)

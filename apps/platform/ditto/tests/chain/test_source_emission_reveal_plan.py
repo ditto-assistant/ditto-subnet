@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import dataclass, field
 from typing import Any
@@ -57,14 +58,30 @@ class RevealChain:
     malformed_hash_at: int | None = None
     # uid -> [(block, new hotkey)]: re-registrations inside the range.
     registrations: dict[int, list[tuple[int, str]]] = field(default_factory=dict)
+    # uid -> [(block, new hotkey)]: hotkey swaps, which register nothing.
+    swaps: dict[int, list[tuple[int, str]]] = field(default_factory=dict)
 
     def keys_at(self, block: int) -> list[tuple[int, str]]:
         keys = dict(KEYS)
-        for uid, changes in self.registrations.items():
-            for at, hotkey in sorted(changes):
-                if at <= block:
-                    keys[uid] = hotkey
+        changes = [
+            (at, uid, hotkey)
+            for source in (self.registrations, self.swaps)
+            for uid, rows in source.items()
+            for at, hotkey in rows
+        ]
+        for at, uid, hotkey in sorted(changes):
+            if at <= block:
+                keys[uid] = hotkey
         return sorted(keys.items())
+
+    def registered_at(self, block: int) -> list[tuple[int, int]]:
+        """``BlockAtRegistration``: the latest registration at or before ``block``."""
+        out = {uid: 7 for uid, _ in KEYS}  # all registered long before the range
+        for uid, rows in self.registrations.items():
+            for at, _hotkey in rows:
+                if at <= block:
+                    out[uid] = max(out[uid], at)
+        return sorted(out.items())
 
     calls: list[str] = field(default_factory=list)
 
@@ -116,10 +133,16 @@ class RevealChain:
             if block == self.malformed_hash_at:
                 return {"error": "provider returned no result"}
             name = bytes.fromhex(key[2:]).decode()
-            if name.startswith("Keys:"):
-                hotkey = dict(self.keys_at(block)).get(int(name.split(":")[1]))
+            if name.startswith(("Keys:", "BlockAtRegistration:")):
+                storage, uid = name.split(":")
+                rows = (
+                    self.keys_at(block)
+                    if storage == "Keys"
+                    else self.registered_at(block)
+                )
+                value = dict(rows).get(int(uid))
                 return {
-                    "result": "0x" + hashlib.sha256(str(hotkey).encode()).hexdigest()
+                    "result": "0x" + hashlib.sha256(str(value).encode()).hexdigest()
                 }
             assert name.startswith("TimelockedWeightCommits:")
             epoch = int(name.split(":")[1])
@@ -153,8 +176,8 @@ class RevealChain:
     ) -> _Key:
         if name == "TimelockedWeightCommits":
             return _Key(f"TimelockedWeightCommits:{params[1]}")
-        if name == "Keys":
-            return _Key(f"Keys:{params[1]}")
+        if name in ("Keys", "BlockAtRegistration"):
+            return _Key(f"{name}:{params[1]}")
         return _Key(name)
 
     async def query(self, *, storage_function: str, block_hash: str, **_: Any):
@@ -176,6 +199,8 @@ class RevealChain:
         rows: list[tuple[Any, Any]] = []
         if storage_function == "Keys":
             rows = self.keys_at(block)
+        elif storage_function == "BlockAtRegistration":
+            rows = self.registered_at(block)
         elif block in self.v2_commit_at:
             assert storage_function == "WeightCommits"
             rows = [("validator", ["hash"])]
@@ -314,3 +339,30 @@ async def test_too_many_changed_uids_plan_the_range_in_full(monkeypatch) -> None
     chain = _chain()
     chain.registrations = {2: [(1333, "newminer")]}
     assert (await _plan(chain)).full_scan
+
+
+async def test_a_uid_that_returns_to_its_old_hotkey_is_still_found() -> None:
+    # A -> B -> A: Keys match at both ends; BlockAtRegistration does not.
+    chain = _chain()
+    chain.registrations = {2: [(1200, "intruder"), (1550, "miner")]}
+    assert chain.keys_at(FIRST - 1) == chain.keys_at(LAST)
+    plan = await _plan(chain)
+    assert not plan.full_scan
+    assert {1200, 1550} <= set(plan.interesting)
+
+
+async def test_a_hotkey_swap_is_found_without_a_registration() -> None:
+    chain = _chain()
+    chain.swaps = {1: [(1400, "validator2")]}
+    plan = await _plan(chain)
+    assert not plan.full_scan
+    assert 1400 in plan.interesting
+
+
+async def test_a_failed_bisection_leaves_no_reads_running() -> None:
+    chain = _chain()
+    chain.registrations = {1: [(1200, "a")], 2: [(1300, "b")]}
+    chain.malformed_hash_at = (FIRST - 1 + LAST) // 2  # every bisection's first probe
+    with pytest.raises(ValueError, match="missing storage hash"):
+        await _plan(chain)
+    assert asyncio.all_tasks() == {asyncio.current_task()}
