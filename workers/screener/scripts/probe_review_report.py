@@ -123,6 +123,13 @@ def summary(table: list[dict[str, Any]]) -> dict[str, Any]:
         and r["assessment"] not in doubtful
         and not r["policy_sensitive"]
     ]
+    by_invariant: dict[str, dict[str, int]] = {}
+    for r in bad:
+        for inv in r["invariants"]:
+            row = by_invariant.setdefault(inv, {"n": 0, "caught": 0, "same_inv": 0})
+            row["n"] += 1
+            row["caught"] += r["verified"]
+            row["same_inv"] += r["verified"] and inv in r["found"]
     lo = sum(_cost(t)[0] for t in tokens)
     hi = sum(_cost(t)[1] for t in tokens)
     flagged = [r for r in good if r["verified"]]
@@ -139,7 +146,11 @@ def summary(table: list[dict[str, Any]]) -> dict[str, Any]:
         "caught_same_class": sum(
             r["verified"] and r["match"] == "same_class" for r in bad
         ),
+        "caught_different_mechanism": sum(
+            r["verified"] and r["match"] == "different" for r in bad
+        ),
         "missed": sum(not r["verified"] for r in bad),
+        "by_production_invariant": dict(sorted(by_invariant.items())),
         "battery_lead_on_reviewed_violation": sum(
             bool(r["battery_leads"]) for r in bad
         ),
