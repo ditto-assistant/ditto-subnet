@@ -493,6 +493,28 @@ async def test_an_executor_failure_is_logged_and_left_to_reconcile(
     assert "executor fixture fault" in str(record.exc_info[1])
 
 
+async def test_a_rehearsal_executor_is_told_exactly_the_requested_outcome(
+    world, monkeypatch
+):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    await policy(world)
+    refund = obligation(claim, "fee_refund")
+    await approve(world, refund)
+    execute = AsyncMock(return_value=TransferOutcome("uncertain"))
+    monkeypatch.setattr(world.app.state.bounty_transfer_executor, "execute", execute)
+    assert (await dispatch(world, refund, "unknown")).status_code == 200
+    assert execute.await_args.kwargs == {"rehearsal": "unknown"}
+
+
+async def test_a_live_executor_is_told_no_rehearsal_outcome():
+    live, rehearsal = SimpleNamespace(simulated=False), SimpleNamespace(simulated=True)
+    # A live transfer reports its own outcome; nothing stands in for one.
+    assert bounty_settlement._rehearsal(live, "confirmed") is None
+    assert bounty_settlement._rehearsal(live, None) is None
+    assert bounty_settlement._rehearsal(rehearsal, "failed") == "failed"
+
+
 @pytest.mark.parametrize(
     "reported",
     [TransferOutcome("settled-ish"), TransferOutcome("confirmed")],

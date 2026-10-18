@@ -118,17 +118,30 @@ class BountyTransferExecutor(Protocol):
     ``failed`` or ``expired`` only when the transfer can no longer land (for
     example, its extrinsic's mortality has passed), and ``uncertain`` until
     then, from ``execute`` and ``lookup`` alike.
+
+    ``rehearsal`` is the outcome a rehearsal executor is told to report; a
+    live executor is always passed ``None``.
     """
 
     name: str
     simulated: bool
 
     async def execute(
-        self, transfer_id: UUID, obligation: BountyObligation, /, *, rehearsal: str
+        self,
+        transfer_id: UUID,
+        obligation: BountyObligation,
+        /,
+        *,
+        rehearsal: str | None,
     ) -> TransferOutcome: ...
 
     async def lookup(
-        self, transfer_id: UUID, obligation: BountyObligation, /, *, rehearsal: str
+        self,
+        transfer_id: UUID,
+        obligation: BountyObligation,
+        /,
+        *,
+        rehearsal: str | None,
     ) -> TransferOutcome: ...
 
 
@@ -149,16 +162,29 @@ class SimulatedTransferExecutor:
     }
 
     async def execute(
-        self, transfer_id: UUID, _obligation: BountyObligation, /, *, rehearsal: str
+        self,
+        transfer_id: UUID,
+        _obligation: BountyObligation,
+        /,
+        *,
+        rehearsal: str | None,
     ) -> TransferOutcome:
         return self._outcome(transfer_id, rehearsal)
 
     async def lookup(
-        self, transfer_id: UUID, _obligation: BountyObligation, /, *, rehearsal: str
+        self,
+        transfer_id: UUID,
+        _obligation: BountyObligation,
+        /,
+        *,
+        rehearsal: str | None,
     ) -> TransferOutcome:
         return self._outcome(transfer_id, rehearsal)
 
-    def _outcome(self, transfer_id: UUID, rehearsal: str) -> TransferOutcome:
+    def _outcome(self, transfer_id: UUID, rehearsal: str | None) -> TransferOutcome:
+        # _check_outcome refuses a rehearsal transfer without its outcome.
+        if rehearsal is None:
+            raise ValueError("a rehearsal transfer needs a rehearsal outcome")
         state = self._STATES[rehearsal]
         if state != "confirmed":
             return TransferOutcome(state)
@@ -611,6 +637,11 @@ def _check_outcome(executor: BountyTransferExecutor, outcome: str | None) -> Non
         raise HTTPException(400, "only a rehearsal executor takes a rehearsal outcome")
 
 
+def _rehearsal(executor: BountyTransferExecutor, outcome: str | None) -> str | None:
+    """What an executor is told to report: a rehearsal its outcome, live nothing."""
+    return outcome if executor.simulated else None
+
+
 def _recordable(outcome: TransferOutcome, transfer_id: UUID) -> TransferOutcome:
     """The executor's outcome if a transfer can record it, else ``uncertain``.
 
@@ -748,7 +779,9 @@ async def dispatch_obligation(
     # transfer to reconcile, never one to send twice.
     try:
         outcome = await executor.execute(
-            transfer_id, obligation, rehearsal=body.rehearsal_outcome or "confirmed"
+            transfer_id,
+            obligation,
+            rehearsal=_rehearsal(executor, body.rehearsal_outcome),
         )
     except Exception:
         # Whatever failed, the transfer may have been sent: record it uncertain
@@ -795,7 +828,9 @@ async def reconcile_transfer(
         session.expunge(obligation)
     try:
         outcome = await executor.lookup(
-            transfer_id, obligation, rehearsal=body.rehearsal_outcome or "confirmed"
+            transfer_id,
+            obligation,
+            rehearsal=_rehearsal(executor, body.rehearsal_outcome),
         )
     except Exception:
         logger.exception("bounty transfer %s lookup failed; uncertain", transfer_id)
