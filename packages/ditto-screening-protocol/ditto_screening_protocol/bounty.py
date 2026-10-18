@@ -636,7 +636,7 @@ class BountyDispatchRequest(WireModel):
     round: Annotated[int, Field(strict=True, ge=1, le=1000)]
     confirmation: Annotated[str, Field(min_length=1, max_length=400)]
     # A rehearsal executor needs the outcome to rehearse, never a default; a
-    # live executor takes none (or "confirmed").
+    # live executor reports its own and refuses any, "confirmed" included.
     rehearsal_outcome: BountyRehearsalOutcome | None = None
 
 
