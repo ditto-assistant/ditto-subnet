@@ -671,14 +671,19 @@ _BASE_SEED = [("I keep my notes in this assistant.", "Noted: your notes live her
 
 
 def calibrate(session: Session) -> tuple[str | None, ProbeRecord, bool]:
-    """Find a model-output encoding the harness relays (the oracle round-trip).
+    """Find the model-output encoding the harness natively relays.
 
-    Returns ``(format, last_record, seed_first)``. When the harness rejects an
-    unseeded principal (non-2xx, no model call), calibration retries with a
-    minimal ``/seed`` for each probe's user, and the battery then does the same.
+    Returns ``(format, record, seed_first)``. Every encoding is tried and the
+    one that surfaces the token in the FEWEST model calls wins, so a harness
+    that only accepts an encoding through a format-recovery re-ask is not
+    calibrated onto its recovery path. When the harness rejects an unseeded
+    principal (non-2xx, no model call), calibration retries with a minimal
+    ``/seed`` per probe user, and the battery then does the same.
     """
     record = None
     for seed_first in (False, True):
+        passing: list[tuple[int, str, ProbeRecord]] = []
+        rejected_unseeded = False
         for name, fmt in FORMATS.items():
             token = secrets.token_hex(8)
             request = _run_request(
@@ -696,13 +701,17 @@ def calibrate(session: Session) -> tuple[str | None, ProbeRecord, bool]:
                 preconditions=setup,
             )
             if token in (served_answer(record) or ""):
-                return name, record, seed_first
+                passing.append((len(record.model_requests), name, record))
+                continue
             rejected = record.http_status is not None and record.http_status >= 400
             if not seed_first and rejected and not record.model_requests:
+                rejected_unseeded = True
                 break
-        else:
-            if not seed_first:
-                break
+        if passing:
+            calls, name, best = min(passing, key=lambda item: item[0])
+            return name, best, seed_first
+        if not rejected_unseeded:
+            break
     assert record is not None
     return None, record, False
 
