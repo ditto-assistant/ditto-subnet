@@ -110,3 +110,12 @@ each, run one after another. The replay now starts every planned read, and
 the two audit reads, at once, `_SPARSE_READ_CONCURRENCY` (4) at a time. It
 still commits each block in cursor order. The audits must pass before
 anything is committed, and a failure cancels every read still running.
+
+After that change (v0.374.0) a range's replay took under two minutes, but each
+sweep still took about ten. Payout resolution after the replay had been
+running until the 600 s budget's reserve, re-checking every pending row
+(~190 rows, ~6 s each). During catch-up it now gets at most
+`_CATCHUP_RESOLUTION_SECONDS` (90 s) per sweep. Rows are picked
+oldest-checked first, so a newly recorded payout is still checked in the
+sweep that recorded it, and older rows each come round every dozen or so
+sweeps. Steady state is unchanged.

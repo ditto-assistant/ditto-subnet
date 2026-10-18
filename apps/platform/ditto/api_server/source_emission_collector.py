@@ -131,6 +131,12 @@ def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
 # Payout resolution stops this long before the sweep budget expires: one row
 # can take several archive reads, and an expired budget fails the sweep.
 _RESOLUTION_RESERVE_SECONDS = 45.0
+# During catch-up, payout resolution after the replay gets at most this long.
+# It re-checks every pending row, oldest-checked first: ~6 s a row on Dwellir,
+# ~190 rows on 2026-10-18, so left unbounded it filled each 600 s sweep once
+# the replay itself took under two minutes. New rows have never been checked,
+# so they still go first.
+_CATCHUP_RESOLUTION_SECONDS = 90.0
 
 
 def _resolution_deadline(
@@ -350,9 +356,11 @@ class SourceEmissionCollector:
         # Stop with time to spare rather than let the budget expire mid-row:
         # an expired budget fails the whole sweep and sends the next one to
         # the rate-limited fallback providers, though the replay succeeded.
-        await self.resolve_pending_payouts(
-            substrate, deadline=_resolution_deadline(budget)
-        )
+        deadline = _resolution_deadline(budget)
+        if catchup:
+            cap = asyncio.get_running_loop().time() + _CATCHUP_RESOLUTION_SECONDS
+            deadline = cap if deadline is None else min(deadline, cap)
+        await self.resolve_pending_payouts(substrate, deadline=deadline)
 
     async def _run_pending_shadow(
         self, substrate: Any, budget: asyncio.Timeout | None

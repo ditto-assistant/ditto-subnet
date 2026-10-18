@@ -1668,3 +1668,37 @@ async def test_primary_audit_failure_commits_nothing_and_stops_every_read(
     async with session_maker() as session:
         cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
         assert cursor.block == 100
+
+
+async def test_catchup_bounds_payout_resolution_after_the_replay(
+    app, session_maker, monkeypatch
+):
+    from ditto.api_server import source_emission_collector as module
+
+    monkeypatch.setattr(module, "_REVEAL_PLAN_MODE", "primary")
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range_by_reveals",
+        AsyncMock(return_value=_sparse_plan(100, end, ())),
+    )
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        return _observed(a, block)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    collector = _collector(app, session_maker)
+    resolve = AsyncMock(return_value=0)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", resolve)
+    loop = asyncio.get_running_loop()
+
+    async with asyncio.timeout(600) as budget:
+        started = loop.time()
+        await collector._sweep_provider(substrate, budget=budget)
+        finished = loop.time()
+
+    # 600 s of budget, but the replay's trailing resolution gets 90 s at most.
+    deadline = resolve.await_args.kwargs["deadline"]
+    assert started < deadline <= finished + module._CATCHUP_RESOLUTION_SECONDS
