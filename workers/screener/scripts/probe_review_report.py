@@ -66,6 +66,7 @@ def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
                 "review_s": (meta.get("duration_ms") or 0) / 1000 or None,
                 "probes": (meta.get("final") or {}).get("probes"),
                 "policy_sensitive": meta.get("policy_sensitive", False),
+                "assessment": meta.get("operator_assessment", ""),
                 "note": meta.get("note", ""),
             }
         )
@@ -114,29 +115,66 @@ def summary(table: list[dict[str, Any]]) -> dict[str, Any]:
     good = [r for r in reviewed if r["group"] == "pass"]
     tokens = [r["tokens"] for r in reviewed if r["tokens"]]
     review_s = [r["review_s"] for r in reviewed if r["review_s"]]
-    battery_hits = [r for r in table if r.get("battery_leads") and r["group"] != "pass"]
+    doubtful = {"likely_artifact", "likely_false_finding"}
+    strict = [
+        r
+        for r in bad
+        if r["verified"]
+        and r["assessment"] not in doubtful
+        and not r["policy_sensitive"]
+    ]
     lo = sum(_cost(t)[0] for t in tokens)
     hi = sum(_cost(t)[1] for t in tokens)
+    flagged = [r for r in good if r["verified"]]
     return {
         "corpus": len(table),
         "prepared": sum(r["status"] != "not_run" for r in table),
         "reviewed": len(reviewed),
         "violations_reviewed": len(bad),
-        "caught": sum(r["verified"] for r in bad),
+        "caught_verified": sum(r["verified"] for r in bad),
+        "caught_strict": len(strict),
         "caught_exact_mechanism": sum(
             r["verified"] and r["match"] == "exact" for r in bad
         ),
+        "missed": sum(not r["verified"] for r in bad),
+        "battery_lead_on_reviewed_violation": sum(
+            bool(r["battery_leads"]) for r in bad
+        ),
         "passes_reviewed": len(good),
-        "passes_flagged": sum(r["verified"] for r in good),
-        "battery_lead_on_violation": len(battery_hits),
+        "passes_flagged": len(flagged),
+        "passes_flagged_by_assessment": {
+            a: sum(r["assessment"] == a for r in flagged)
+            for a in sorted({r["assessment"] or "unassessed" for r in flagged})
+        },
         "median_tokens": statistics.median(tokens) if tokens else None,
         "median_review_min": round(statistics.median(review_s) / 60, 1)
+        if review_s
+        else None,
+        "p90_review_min": round(sorted(review_s)[int(len(review_s) * 0.9)] / 60, 1)
         if review_s
         else None,
         "cost_usd_range_per_review": (
             round(lo / len(tokens), 2) if tokens else None,
             round(hi / len(tokens), 2) if tokens else None,
         ),
+        "baseline_median_min_reviewed_rejects": round(
+            statistics.median(
+                [r["baseline_wall_s"] for r in bad if r.get("baseline_wall_s")]
+            )
+            / 60,
+            1,
+        )
+        if any(r.get("baseline_wall_s") for r in bad)
+        else None,
+        "baseline_median_min_reviewed_passes": round(
+            statistics.median(
+                [r["baseline_wall_s"] for r in good if r.get("baseline_wall_s")]
+            )
+            / 60,
+            1,
+        )
+        if any(r.get("baseline_wall_s") for r in good)
+        else None,
     }
 
 
