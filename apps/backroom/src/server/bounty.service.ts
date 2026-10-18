@@ -478,15 +478,16 @@ export async function reconcileBountyTransfer(actor: string, rawInput: unknown) 
       const transfer = owed?.transfers.find((item) => item.transfer_id === input.transferId)
       if (!owed || !transfer) return { state: 'absent' }
       // Every reconciliation is recorded with its operator, the state it left
-      // and, for a rehearsal, the outcome asked for. Entries carry no id, so
-      // this operator's latest matching entry may be this write or an earlier
+      // and, for a rehearsal, the outcome asked for. This write is always a
+      // rehearsal (a live executor refuses any outcome), so only an entry
+      // asking the same one can be it. Entries carry no id, so this
+      // operator's latest matching entry may be this write or an earlier
       // identical one.
       const own = latest(await fetchBounty({ bountyId: claim.bounty_id }), ['transfer_reconciled'], (entry) =>
         entry.actor === actor.trim() &&
         entry.detail.startsWith(`transfer ${input.transferId} `) &&
-        // A live executor records no requested outcome.
-        (entry.detail.endsWith(` (asked ${input.rehearsalOutcome})`) || !entry.detail.includes(' (asked ')))
-      const left = own?.detail.match(/: (\w+)(?: \(asked \w+\))?$/)?.[1]
+        entry.detail.endsWith(` (asked ${input.rehearsalOutcome})`))
+      const left = own?.detail.match(/: (\w+) \(asked \w+\)$/)?.[1]
       if (own && left === transfer.state) return { state: 'applied', value: owed }
       // A later settlement hides whether this write was the entry found.
       if (own || ['dispatched', 'uncertain'].includes(transfer.state)) return { state: 'absent' }

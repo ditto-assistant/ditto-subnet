@@ -379,11 +379,11 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(reconcile('unknown')).rejects.toThrow('may have committed')
   })
 
-  it('recognises a live reconciliation, which records no requested outcome', async () => {
+  it('never reads a live reconciliation, which records no requested outcome, as this rehearsal', async () => {
     vi.stubGlobal('fetch', reconciled('confirmed', [
       audit('transfer_reconciled', { reason: null, detail: `transfer ${TRANSFER} round 1: confirmed` }),
     ]))
-    await expect(reconcile('confirmed')).resolves.toMatchObject({ obligation_id: OBLIGATION })
+    await expect(reconcile('confirmed')).rejects.toBeInstanceOf(NothingAppliedError)
   })
 
   it.each([
