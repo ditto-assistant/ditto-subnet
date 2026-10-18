@@ -672,7 +672,8 @@ function ClaimToggle(props: { claimId: string; label: string }): JSX.Element {
         type="button"
         class="bounty-claim-toggle"
         aria-expanded={shown()}
-        aria-controls={panel}
+        // The record is mounted only while open: never point at a missing id.
+        aria-controls={shown() ? panel : undefined}
         onClick={() => setShown(!shown())}
       >
         {props.label}

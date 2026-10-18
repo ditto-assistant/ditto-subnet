@@ -289,6 +289,21 @@ describe("bounty detail", () => {
     expect(within(slotRow(alice.position)).getByText("Payments")).toBeInTheDocument();
   });
 
+  it("points a claim toggle only at a record that is mounted", async () => {
+    await openBounty();
+    const alice = claimOf("alice-dev");
+    const toggle = within(slotRow(alice.position)).getByRole("button", { name: "Claim record" });
+    // A collapsed record is not mounted, so the toggle controls nothing yet.
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).not.toHaveAttribute("aria-controls");
+    fireEvent.click(toggle);
+    const payments = await within(slotRow(alice.position)).findByText("Payments");
+    const panel = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
+    expect(panel).toContainElement(payments);
+    fireEvent.click(toggle);
+    expect(toggle).not.toHaveAttribute("aria-controls");
+  });
+
   it("reads a review past its due date as overdue, not about to pass", async () => {
     const edited = structuredClone(detail);
     const slot = edited.slots.find((candidate) => candidate.status === "claimed")!;
