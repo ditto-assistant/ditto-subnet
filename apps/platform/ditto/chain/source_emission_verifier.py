@@ -1072,9 +1072,18 @@ async def plan_source_emission_range_by_reveals(
         if high - low == 1:
             return [high]
         mid = (low + high) // 2
-        left, right = await asyncio.gather(
-            changes(key_hex, low, mid, memo), changes(key_hex, mid, high, memo)
-        )
+        tasks = [
+            asyncio.create_task(changes(key_hex, low, mid, memo)),
+            asyncio.create_task(changes(key_hex, mid, high, memo)),
+        ]
+        try:
+            left, right = await asyncio.gather(*tasks)
+        except BaseException:
+            # Stop the sibling branch's reads before the caller falls back.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         return left + right
 
     interesting = set(payouts)

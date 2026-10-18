@@ -424,6 +424,12 @@ class SourceEmissionCollector:
                 acted.append(stop)
             cursor_block, cursor_hash = stop, plan.hashes[stop]
         if _REVEAL_PLAN_MODE == "shadow":
+            if self._pending_shadow is not None:
+                # The previous sweep failed before its comparison ran.
+                logger.warning(
+                    "reveal plan shadow for %s-%s dropped before comparison",
+                    *self._pending_shadow[:2],
+                )
             self._pending_shadow = (current + 1, end, acted)
         return True
 
