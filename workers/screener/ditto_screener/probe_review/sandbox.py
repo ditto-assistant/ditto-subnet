@@ -1,0 +1,453 @@
+"""Hostile-runtime probe sandbox for one submitted harness image.
+
+The sandbox reuses the screener's runtime contract from ``ditto_screener.gate``:
+the same non-root read-only container, tmpfs, resource limits, dropped
+capabilities, ``--internal`` Docker network, scorer-equivalent inference
+environment, and openrouter.ai TLS shim. The only difference is the sidecar:
+``scripted_gateway.py`` lets a reviewer dictate model and tool replies and
+records the full transcript. A session is persisted as JSON so separate CLI
+calls (one per reviewer tool call) reach the same running containers.
+
+This module is report-only. It never contacts Platform and cannot change a
+screening outcome.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import secrets
+import shutil
+import subprocess
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from ditto_screener.gate import (
+    _CANARY_IMAGE,
+    _GATEWAY_ALIAS,
+    _HARNESS_ALIAS,
+    _OPENROUTER_SHIM_CA_BUNDLE_PATH,
+    _OPENROUTER_SHIM_HOST,
+    _TOOL_GATEWAY_PORT,
+    _VALIDATOR_SANDBOX_CPUS,
+    _VALIDATOR_SANDBOX_MEMORY,
+    _VALIDATOR_SANDBOX_PIDS,
+    _VALIDATOR_SANDBOX_TMPFS,
+    _VALIDATOR_SANDBOX_USER,
+    _gateway_runtime_env,
+    _normalized_build_context,
+    _write_openrouter_shim_certs,
+)
+
+_GATEWAY_SCRIPT = Path(__file__).with_name("scripted_gateway.py")
+_CONTAINER_PORT = 8080
+# Production screeners and validators are x86_64; miner sources may use
+# arch-specific syscalls (e.g. ``libc::SYS_fork``), so probe the same target.
+PLATFORM = "linux/amd64"
+_MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+class SandboxError(RuntimeError):
+    """Infrastructure failure: never evidence about the submission."""
+
+
+def _docker(args: list[str], *, timeout: float, stdin: Any = None) -> tuple[int, str]:
+    try:
+        completed = subprocess.run(
+            ["docker", *args],
+            stdin=stdin,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, f"[timeout after {timeout:g}s]"
+    output = completed.stdout.decode("utf-8", "replace")
+    if completed.returncode != 0:
+        output += completed.stderr.decode("utf-8", "replace")
+    return completed.returncode, output
+
+
+def build_image(
+    archive: Path, tag: str, *, timeout: float = 5400.0
+) -> tuple[str, float]:
+    """Build the exact archive with the screener's build-context normalizer."""
+    started = time.monotonic()
+    code, out = _docker(["image", "inspect", "--format", "{{.Id}}", tag], timeout=30)
+    if code == 0:
+        return out.strip(), 0.0
+    with _normalized_build_context(str(archive)) as context:
+        code, out = _docker(
+            [
+                "build",
+                "--platform",
+                PLATFORM,
+                "--load",
+                "--pull=false",
+                "--provenance=false",
+                "--sbom=false",
+                "--memory",
+                "8g",
+                "-t",
+                tag,
+                "-f",
+                "Dockerfile",
+                "-",
+            ],
+            timeout=timeout,
+            stdin=context,
+        )
+    if code != 0:
+        raise SandboxError(f"build failed: {out[-1500:]}")
+    code, out = _docker(["image", "inspect", "--format", "{{.Id}}", tag], timeout=30)
+    if code != 0:
+        raise SandboxError("built image is not inspectable")
+    return out.strip(), time.monotonic() - started
+
+
+@dataclass
+class ProbeRecord:
+    """One executed probe with the complete gateway transcript."""
+
+    probe_id: str
+    path: str
+    request: dict[str, Any]
+    script: dict[str, Any]
+    http_status: int | None
+    response: Any
+    elapsed_ms: int
+    transcript: list[dict[str, Any]]
+    label: str = ""
+    error: str = ""
+
+    @property
+    def model_requests(self) -> list[dict[str, Any]]:
+        return [e for e in self.transcript if e.get("surface") in {"chat", "responses"}]
+
+    @property
+    def tool_executions(self) -> list[dict[str, Any]]:
+        return [e for e in self.transcript if e.get("surface") == "tool"]
+
+    def digest(self) -> str:
+        """Content digest of the stimulus only (request + script), for replay."""
+        body = json.dumps(
+            {"path": self.path, "request": self.request, "script": self.script},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(body.encode()).hexdigest()
+
+    def to_json(self) -> dict[str, Any]:
+        value = asdict(self)
+        value["stimulus_sha256"] = self.digest()
+        return value
+
+    @classmethod
+    def from_json(cls, value: dict[str, Any]) -> ProbeRecord:
+        value = {k: v for k, v in value.items() if k != "stimulus_sha256"}
+        return cls(**value)
+
+
+@dataclass
+class Session:
+    """Persistent identity of one running probe sandbox."""
+
+    root: str
+    image: str
+    artifact_sha256: str
+    bench_version: int
+    token: str = field(default_factory=lambda: secrets.token_hex(6))
+    tool_route: str = field(default_factory=lambda: secrets.token_hex(8))
+    started: bool = False
+    probe_count: int = 0
+
+    @property
+    def network(self) -> str:
+        return f"probe-net-{self.token}"
+
+    @property
+    def gateway(self) -> str:
+        return f"probe-gw-{self.token}"
+
+    @property
+    def harness(self) -> str:
+        return f"probe-harness-{self.token}"
+
+    @property
+    def state_dir(self) -> Path:
+        return Path(self.root) / "state"
+
+    @property
+    def probes_dir(self) -> Path:
+        return Path(self.root) / "probes"
+
+    def save(self) -> None:
+        (Path(self.root) / "session.json").write_text(
+            json.dumps(asdict(self), indent=2)
+        )
+
+    @classmethod
+    def load(cls, root: str | Path) -> Session:
+        return cls(**json.loads((Path(root) / "session.json").read_text()))
+
+    # -- lifecycle -----------------------------------------------------------
+
+    def start(self, *, health_timeout: float = 300.0) -> None:
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.probes_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir.chmod(0o777)
+        _write_openrouter_shim_certs(str(self.state_dir))
+        shutil.copyfile(_GATEWAY_SCRIPT, self.state_dir / "scripted_gateway.py")
+        (self.state_dir / "script.json").write_text("{}")
+        (self.state_dir / "transcript.jsonl").touch()
+        for path in self.state_dir.iterdir():
+            path.chmod(0o666 if path.is_file() else 0o777)
+        code, out = _docker(
+            ["network", "create", "--internal", self.network], timeout=120
+        )
+        if code != 0:
+            raise SandboxError(f"network create failed: {out[-500:]}")
+        code, out = _docker(
+            [
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                self.gateway,
+                "--network",
+                self.network,
+                "--network-alias",
+                _GATEWAY_ALIAS,
+                "--network-alias",
+                _OPENROUTER_SHIM_HOST,
+                "--read-only",
+                "--ipc",
+                "none",
+                "--cap-drop",
+                "ALL",
+                "--cap-add",
+                "NET_BIND_SERVICE",
+                "--security-opt",
+                "no-new-privileges",
+                "--memory",
+                "256m",
+                "--pids-limit",
+                "64",
+                "-e",
+                "PROBE_GATEWAY_STATE_DIR=/state",
+                "-e",
+                "PROBE_GATEWAY_TLS_CERT=/state/leaf.crt",
+                "-e",
+                "PROBE_GATEWAY_TLS_KEY=/state/leaf.key",
+                "-v",
+                f"{self.state_dir}:/state",
+                _CANARY_IMAGE,
+                "python",
+                "/state/scripted_gateway.py",
+            ],
+            timeout=300,
+        )
+        if code != 0:
+            self.stop()
+            raise SandboxError(f"gateway start failed: {out[-500:]}")
+        try:
+            self._start_harness(health_timeout)
+        except SandboxError:
+            self.stop()
+            raise
+        self.started = True
+        self.save()
+
+    def _start_harness(self, health_timeout: float) -> None:
+        chat = f"http://{_GATEWAY_ALIAS}:11435"
+        embed = f"http://{_GATEWAY_ALIAS}:11434"
+        env = _gateway_runtime_env(
+            provider="platform", chat_gateway=chat, embed_gateway=embed
+        )
+        args = [
+            "run",
+            "-d",
+            "--init",
+            "--platform",
+            PLATFORM,
+            "--name",
+            self.harness,
+            "--user",
+            _VALIDATOR_SANDBOX_USER,
+            "--read-only",
+            "--ipc",
+            "none",
+            "--tmpfs",
+            _VALIDATOR_SANDBOX_TMPFS,
+            "--network",
+            self.network,
+            "--network-alias",
+            _HARNESS_ALIAS,
+            "--memory",
+            _VALIDATOR_SANDBOX_MEMORY,
+            "--cpus",
+            _VALIDATOR_SANDBOX_CPUS,
+            "--pids-limit",
+            _VALIDATOR_SANDBOX_PIDS,
+            "--ulimit",
+            "nofile=1024:1024",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--mount",
+            f"type=bind,src={self.state_dir}/ca-bundle.pem,"
+            f"dst={_OPENROUTER_SHIM_CA_BUNDLE_PATH},readonly",
+        ]
+        for key, value in env.items():
+            args += ["-e", f"{key}={value}"]
+        args.append(self.image)
+        code, out = _docker(args, timeout=300)
+        if code != 0:
+            raise SandboxError(f"harness start failed: {out[-500:]}")
+        deadline = time.monotonic() + health_timeout
+        while time.monotonic() < deadline:
+            status, _ = self._http("GET", "/health", None, timeout=5)
+            if status is not None and 200 <= status < 300:
+                return
+            code, state = _docker(
+                ["container", "inspect", "--format", "{{.State.Status}}", self.harness],
+                timeout=10,
+            )
+            if state.strip() in {"exited", "dead"}:
+                _, logs = _docker(["logs", "--tail", "40", self.harness], timeout=10)
+                raise SandboxError(f"harness exited before health: {logs[-1500:]}")
+            time.sleep(1)
+        raise SandboxError("harness never became healthy")
+
+    def restart_harness(self, *, health_timeout: float = 300.0) -> None:
+        """Fresh process and tmpfs: clears any seeded memory or run state."""
+        _docker(["rm", "-f", self.harness], timeout=60)
+        self._start_harness(health_timeout)
+
+    def stop(self) -> None:
+        _docker(["rm", "-f", self.harness, self.gateway], timeout=180)
+        _docker(["network", "rm", self.network], timeout=120)
+        self.started = False
+        self.save()
+
+    # -- probing -------------------------------------------------------------
+
+    def tool_endpoint(self, case_id: str, user_id: str) -> str:
+        return (
+            f"http://{_GATEWAY_ALIAS}:{_TOOL_GATEWAY_PORT}/v1/tools/{self.tool_route}"
+            f"/tool?cap={secrets.token_urlsafe(16)}&case_id={case_id}&user_id={user_id}"
+        )
+
+    def _http(
+        self, method: str, path: str, payload: Any, *, timeout: float
+    ) -> tuple[int | None, bytes]:
+        encoded = (
+            base64.b64encode(json.dumps(payload).encode()).decode()
+            if payload is not None
+            else ""
+        )
+        script = (
+            "import base64,sys,urllib.request,urllib.error\n"
+            "url,method,data,t=sys.argv[1:5]\n"
+            "body=base64.b64decode(data) if data else None\n"
+            "req=urllib.request.Request(url,data=body,"
+            "method=method,headers={'Content-Type':'application/json'})\n"
+            "try:\n r=urllib.request.urlopen(req,timeout=float(t))\n"
+            "except urllib.error.HTTPError as e:\n r=e\n"
+            "except Exception as e:\n"
+            " sys.stdout.write('ERR '+type(e).__name__);sys.exit(24)\n"
+            f"out=r.read({_MAX_RESPONSE_BYTES})\n"
+            "sys.stdout.write(str(r.status)+'\\n');sys.stdout.flush();sys.stdout.buffer.write(out)\n"
+        )
+        try:
+            completed = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    self.gateway,
+                    "python",
+                    "-c",
+                    script,
+                    f"http://{_HARNESS_ALIAS}:{_CONTAINER_PORT}{path}",
+                    method,
+                    encoded,
+                    str(timeout),
+                ],
+                capture_output=True,
+                timeout=timeout + 15,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return None, b"probe transport timeout"
+        if completed.returncode != 0:
+            return None, completed.stdout + completed.stderr
+        head, _, body = completed.stdout.partition(b"\n")
+        try:
+            return int(head), body
+        except ValueError:
+            return None, completed.stdout
+
+    def _transcript_offset(self) -> int:
+        return (self.state_dir / "transcript.jsonl").stat().st_size
+
+    def _transcript_since(self, offset: int) -> list[dict[str, Any]]:
+        with (self.state_dir / "transcript.jsonl").open("rb") as handle:
+            handle.seek(offset)
+            data = handle.read()
+        entries = []
+        for line in data.splitlines():
+            try:
+                entries.append(json.loads(line))
+            except ValueError:
+                continue
+        return entries
+
+    def probe(
+        self,
+        request: dict[str, Any],
+        *,
+        script: dict[str, Any] | None = None,
+        path: str = "/run",
+        timeout: float = 120.0,
+        label: str = "",
+    ) -> ProbeRecord:
+        """POST one request with a dictated model script; return the transcript."""
+        script = dict(script or {})
+        self.probe_count += 1
+        probe_id = f"p{self.probe_count:03d}-{secrets.token_hex(3)}"
+        # The epoch key forces the gateway to reset its cursor even when the
+        # reviewer reuses an identical script for a replay.
+        (self.state_dir / "script.json").write_text(
+            json.dumps({**script, "_epoch": probe_id})
+        )
+        offset = self._transcript_offset()
+        started = time.monotonic()
+        status, body = self._http("POST", path, request, timeout=timeout)
+        elapsed = round((time.monotonic() - started) * 1000)
+        time.sleep(0.05)
+        transcript = self._transcript_since(offset)
+        try:
+            response: Any = json.loads(body) if body else None
+        except (ValueError, UnicodeError):
+            response = body[:4096].decode("utf-8", "replace")
+        record = ProbeRecord(
+            probe_id=probe_id,
+            path=path,
+            request=request,
+            script=script,
+            http_status=status,
+            response=response,
+            elapsed_ms=elapsed,
+            transcript=transcript,
+            label=label,
+            error="" if status is not None else body[:500].decode("utf-8", "replace"),
+        )
+        (self.probes_dir / f"{probe_id}.json").write_text(
+            json.dumps(record.to_json(), indent=1)
+        )
+        self.save()
+        return record
