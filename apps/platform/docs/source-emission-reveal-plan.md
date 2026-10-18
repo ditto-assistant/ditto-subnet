@@ -47,13 +47,17 @@ So:
    reveal period, controls or v2 commits at a probed block) returns the
    full-scan plan.
 
-The one assumption no read can rule out: commit-reveal being turned off and
-back on *between* probed blocks inside one range. That is an owner/sudo
-action, and it is checked at both ends and at every payout.
+Controls are read at the ends and at every payout, not at every block. A
+subnet owner cannot switch commit-reveal or the mechanism count off and back
+on between those points: each owner change is rate-limited to one per
+`Tempo × OwnerHyperparamRateLimit` blocks (360 × 2 = 720 on Finney), longer
+than a range spans. The planner requires that at both ends, or falls back.
+The one case no read rules out is **root** toggling it twice inside a range.
 
-Measured on Finney (public archive, 2026-10-18): six 720-block ranges across
-v472, v473, v475, v477 and v479 planned every payout and SN118 write block
-that the per-block events showed, with zero misses, in 81–140 calls per range.
+Measured on Finney (public archive, 2026-10-18): seven 720-block ranges
+across v472, v473, v475, v477 and v479 planned every payout and SN118 write
+block that the per-block events showed, with zero misses, in 81–140 calls per
+range.
 Two ranges added three blocks in total where the queue shrank with no reveal
 event (a dropped commit). That costs reads but never correctness.
 
@@ -70,7 +74,9 @@ plan. The running summary is on Backroom `get_source_release_policy` →
 - `fallback` / `error`: it asked for a full scan, or couldn't be planned.
 - `calls` / `blocks`: its cost per block.
 
-The shadow runs under its own 90 s budget and never blocks the sweep.
+The shadow runs last in a sweep, after payout resolution, within what is left
+of the sweep budget (at most 90 s, keeping a 15 s reserve), and is skipped when
+less than 10 s remain. It never fails the sweep.
 
 **Promote** (`_REVEAL_PLAN_MODE = "primary"`) only after at least 100 shadowed
 ranges with `missed == 0` and errors explained. In primary mode the sparse

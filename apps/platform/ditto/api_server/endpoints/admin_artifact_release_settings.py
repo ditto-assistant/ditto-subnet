@@ -78,11 +78,10 @@ def _reveal_plan_shadow(cursor: Any) -> RevealPlanShadowStatus | None:
     from ditto.api_server.source_emission_collector import _REVEAL_PLAN_MODE
 
     summary = getattr(cursor, "reveal_plan_shadow", None) if cursor else None
-    if not summary and _REVEAL_PLAN_MODE != "primary":
+    if not summary:
+        # No comparison has run: zero counters would read as zero misses.
         return None
-    return RevealPlanShadowStatus.model_validate(
-        {**(summary or {}), "mode": _REVEAL_PLAN_MODE}
-    )
+    return RevealPlanShadowStatus.model_validate({**summary, "mode": _REVEAL_PLAN_MODE})
 
 
 @router.get("", response_model=AdminArtifactReleaseSettingsResponse)

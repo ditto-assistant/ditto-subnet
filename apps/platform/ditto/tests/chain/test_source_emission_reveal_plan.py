@@ -53,6 +53,8 @@ class RevealChain:
     v2_commit_at: set[int] = field(default_factory=set)
     reveal_period: dict[int, int] = field(default_factory=dict)
     epoch_shift: tuple[int, int] | None = None
+    owner_limit: int = 2
+    malformed_hash_at: int | None = None
     calls: list[str] = field(default_factory=list)
 
     @staticmethod
@@ -100,6 +102,8 @@ class RevealChain:
             block = self.block_of(at)
             if key == "0x3a636f6465":
                 return {"result": CODE}
+            if block == self.malformed_hash_at:
+                return {"error": "provider returned no result"}
             name = bytes.fromhex(key[2:]).decode()
             assert name.startswith("TimelockedWeightCommits:")
             epoch = int(name.split(":")[1])
@@ -144,6 +148,8 @@ class RevealChain:
             "RevealPeriodEpochs": self.reveal_period.get(block, 1),
             "LastMechansimStepBlock": self.step(block),
             "SubnetEpochIndex": self.epoch(block),
+            "Tempo": 360,
+            "OwnerHyperparamRateLimit": self.owner_limit,
         }[storage_function]
 
     async def query_map(self, *, storage_function: str, block_hash: str, **_: Any):
@@ -236,10 +242,26 @@ async def test_range_starting_on_a_payout_includes_its_own_reveals() -> None:
         lambda c: c.v2_commit_at.add(1460),
         lambda c: c.reveal_period.update({LAST: 2}),
         lambda c: setattr(c, "epoch_shift", (1300, 1460)),
+        # One owner change per 360 blocks would allow off-then-on inside 720.
+        lambda c: setattr(c, "owner_limit", 1),
     ],
-    ids=["v2-commit-store-in-use", "reveal-period-changed", "epoch-without-payout"],
+    ids=[
+        "v2-commit-store-in-use",
+        "reveal-period-changed",
+        "epoch-without-payout",
+        "owner-could-toggle-controls-inside-the-range",
+    ],
 )
 async def test_unsupported_shapes_fall_back_to_the_full_scan(mutate) -> None:
     chain = _chain()
     mutate(chain)
     assert (await _plan(chain)).full_scan
+
+
+async def test_malformed_storage_hash_is_not_read_as_unchanged() -> None:
+    chain = _chain()
+    # The reveal key is absent at the range end, so a malformed answer at the
+    # start would otherwise compare equal to it and hide the reveals.
+    chain.malformed_hash_at = FIRST - 1
+    with pytest.raises(ValueError, match="missing storage hash"):
+        await _plan(chain)

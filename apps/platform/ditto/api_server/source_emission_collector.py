@@ -78,8 +78,11 @@ _RECEIPT_REFETCH_LIMIT = 5
 # planner drives it. Promote only after a long run of shadowed ranges with no
 # miss; docs/source-runtime-interface.md has the criterion.
 _REVEAL_PLAN_MODE = "shadow"
-# A shadow comparison must never starve the sweep that hosts it.
+# A shadow comparison must never starve the sweep that hosts it: it runs after
+# payout resolution, inside what is left of the sweep budget minus a reserve.
 _REVEAL_PLAN_SHADOW_SECONDS = 90.0
+_REVEAL_PLAN_SHADOW_RESERVE_SECONDS = 15.0
+_REVEAL_PLAN_SHADOW_MIN_SECONDS = 10.0
 # Sparse replay reads one storage call per quiet block and the full reader only
 # for the few blocks that can matter, so a catch-up range can span two tempos.
 _SWEEP_SPARSE_BATCH_BLOCKS = 720
@@ -167,6 +170,9 @@ class SourceEmissionCollector:
         # Set at the start of each provider sweep; a deep backlog widens the
         # scan batch and its timeout, then decays back to steady state.
         self._backlog_deep = False
+        # (first, last, blocks the full reader acted on) of the last sparse
+        # range, compared once payouts for the sweep have been resolved.
+        self._pending_shadow: tuple[int, int, list[int]] | None = None
 
     @property
     def netuid(self) -> int:
@@ -292,6 +298,32 @@ class SourceEmissionCollector:
                 logger.exception("source emission payout resolution failed")
             raise
         await self.resolve_pending_payouts(substrate)
+        # Last, and only with budget to spare: payouts and the cursor never
+        # wait on the optional comparison.
+        await self._run_pending_shadow(substrate, budget)
+
+    async def _run_pending_shadow(
+        self, substrate: Any, budget: asyncio.Timeout | None
+    ) -> None:
+        pending, self._pending_shadow = self._pending_shadow, None
+        if pending is None:
+            return
+        seconds = _REVEAL_PLAN_SHADOW_SECONDS
+        deadline = budget.when() if budget is not None else None
+        if deadline is not None:
+            remaining = deadline - asyncio.get_running_loop().time()
+            seconds = min(seconds, remaining - _REVEAL_PLAN_SHADOW_RESERVE_SECONDS)
+        if seconds < _REVEAL_PLAN_SHADOW_MIN_SECONDS:
+            logger.info("reveal plan shadow skipped: sweep budget exhausted")
+            return
+        first_block, last_block, acted = pending
+        await self._shadow_reveal_plan(
+            substrate,
+            first_block=first_block,
+            last_block=last_block,
+            acted=acted,
+            seconds=seconds,
+        )
 
     async def _sweep_sparse(
         self,
@@ -392,13 +424,17 @@ class SourceEmissionCollector:
                 acted.append(stop)
             cursor_block, cursor_hash = stop, plan.hashes[stop]
         if _REVEAL_PLAN_MODE == "shadow":
-            await self._shadow_reveal_plan(
-                substrate, first_block=current + 1, last_block=end, acted=acted
-            )
+            self._pending_shadow = (current + 1, end, acted)
         return True
 
     async def _shadow_reveal_plan(
-        self, substrate: Any, *, first_block: int, last_block: int, acted: list[int]
+        self,
+        substrate: Any,
+        *,
+        first_block: int,
+        last_block: int,
+        acted: list[int],
+        seconds: float = 90.0,
     ) -> None:
         """Check the reveal-anchored planner against an already-replayed range.
 
@@ -409,7 +445,7 @@ class SourceEmissionCollector:
         counted = _CallCounter(substrate)
         outcome, missed, detail = "error", [], None
         try:
-            async with asyncio.timeout(_REVEAL_PLAN_SHADOW_SECONDS):
+            async with asyncio.timeout(seconds):
                 plan = await plan_source_emission_range_by_reveals(
                     counted,
                     netuid=self.netuid,

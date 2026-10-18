@@ -994,6 +994,29 @@ async def plan_source_emission_range_by_reveals(
         return full()
     reveal_period = reveal_periods.pop()
 
+    # The controls are read at the ends and at every payout, not every block.
+    # A subnet owner cannot switch commit-reveal or the mechanism count off and
+    # back on between them: each change is rate-limited to one per
+    # tempo * OwnerHyperparamRateLimit blocks, longer than the range. Only root
+    # can, and root can also change that limit, so it must hold at both ends.
+    async def owner_change_interval(block: int) -> int:
+        async with gate:
+            limit = _unwrap(
+                await substrate.query(
+                    module="SubtensorModule",
+                    storage_function="OwnerHyperparamRateLimit",
+                    params=[],
+                    block_hash=hashes[block],
+                )
+            )
+        return _uint(await read("Tempo", block)) * _uint(limit)
+
+    intervals = {
+        await owner_change_interval(block) for block in (first_block - 1, last_block)
+    }
+    if len(intervals) != 1 or intervals.pop() <= last_block - first_block:
+        return full()
+
     # Payouts, newest first: each payout's parent state names the previous one.
     payouts: list[int] = []
     step = _uint(await read("LastMechansimStepBlock", last_block))
@@ -1032,7 +1055,11 @@ async def plan_source_emission_range_by_reveals(
                 result = await substrate.rpc_request(
                     "state_getStorageHash", [key_hex, hashes[block]]
                 )
-            memo[block] = result.get("result") if isinstance(result, dict) else None
+            # ``result: null`` is absent storage, a valid answer; a response
+            # without it is not, and must not read as "unchanged".
+            if not isinstance(result, dict) or "result" not in result:
+                raise ValueError(f"missing storage hash at block {block}")
+            memo[block] = result["result"]
         return memo[block]
 
     async def changes(key_hex: str, low: int, high: int, memo: dict) -> list[int]:

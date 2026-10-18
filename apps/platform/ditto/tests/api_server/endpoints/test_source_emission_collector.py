@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -1320,6 +1321,44 @@ async def test_reveal_plan_shadow_failure_never_blocks_the_sweep(
     assert summary[failure] == 1 and summary["last_outcome"] == failure
     if failure == "error":
         assert "archive throttled" in summary["last_error"]
+
+
+async def test_reveal_plan_shadow_runs_after_payouts_within_the_budget(
+    app, session_maker, monkeypatch
+):
+    """Resolution comes first; a nearly spent budget skips the shadow."""
+    from ditto.api_server import source_emission_collector as module
+
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    order: list[str] = []
+
+    async def shadow_plan(*_args, **_kwargs):
+        order.append("shadow")
+        return _sparse_plan(100, end, (150, 151))
+
+    async def resolve(_substrate):
+        order.append("resolve")
+        return 0
+
+    original = module.SourceEmissionCollector._sweep_provider
+
+    async def sweep_with(self, substrate, *, budget=None):
+        monkeypatch.setattr(self, "resolve_pending_payouts", resolve)
+        await original(self, substrate, budget=budget)
+
+    monkeypatch.setattr(module.SourceEmissionCollector, "_sweep_provider", sweep_with)
+    await _shadowed_sweep(app, session_maker, monkeypatch, shadow_plan)
+    assert order[-2:] == ["resolve", "shadow"]
+
+    # With almost no budget left after the replay, no comparison runs.
+    collector = _collector(app, session_maker)
+    collector._pending_shadow = (101, end, [150])
+    planner = AsyncMock()
+    monkeypatch.setattr(module, "plan_source_emission_range_by_reveals", planner)
+    async with asyncio.timeout(5) as budget:
+        await collector._run_pending_shadow(SimpleNamespace(), budget)
+    planner.assert_not_awaited()
+    assert collector._pending_shadow is None
 
 
 async def test_primary_mode_plans_with_the_reveal_planner_only(

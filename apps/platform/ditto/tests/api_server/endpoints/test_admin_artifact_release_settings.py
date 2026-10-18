@@ -439,13 +439,18 @@ async def test_release_gate_reports_the_reveal_plan_shadow(
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
+    from ditto.api_server import source_emission_collector
     from ditto.db.models import SourceEmissionCollectorCursor
 
     _install(app, session_maker)
-    response = await client.get(
-        "/api/v1/admin/artifact-release-settings", headers=_HEADERS
-    )
-    assert response.json()["release_gate"]["reveal_plan_shadow"] is None
+    for mode in ("shadow", "primary"):
+        # No comparison yet: no status, never a zero-miss summary.
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(source_emission_collector, "_REVEAL_PLAN_MODE", mode)
+            response = await client.get(
+                "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+            )
+        assert response.json()["release_gate"]["reveal_plan_shadow"] is None
     async with session_maker() as session, session.begin():
         session.add(
             SourceEmissionCollectorCursor(
