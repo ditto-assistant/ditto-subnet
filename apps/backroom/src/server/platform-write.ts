@@ -59,7 +59,9 @@ export async function platformAdminWrite<T>(
     parse: (payload: unknown) => T | null
     readBack: () => Promise<ReadBack<T>>
     refusedBeforeWrite?: (error: PlatformAdminError) => boolean
-    /** Appended to a definite refusal: how to retry safely. */
+    /** Appended to a refusal before any write: how to retry safely. A
+     * superseded write is not retried, so its error names what holds the
+     * target instead. */
     retryHint: string
   },
 ): Promise<WriteOutcome<T>> {

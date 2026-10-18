@@ -153,7 +153,7 @@ const cases: Case[] = [
     path: `/api/v1/admin/bounties/slots/${SLOT}/cancel`,
     body: { kind: 'team', reason },
     committed: { bounty_id: BOUNTY, claims_paused: false },
-    applied: [Response.json(operator({ audit: [audit('slot_cancelled', { slot_id: SLOT })] }))],
+    applied: [Response.json(operator({ audit: [audit('slot_cancelled', { slot_id: SLOT, detail: 'round 1 slot 1, was claimed (team)' })] }))],
     absent: [Response.json(operator({ audit: [audit('slot_reopened', { slot_id: SLOT })] }))],
   },
   {
@@ -402,7 +402,7 @@ describe('bounty read-backs find this write, not the latest state', () => {
       }))))
     await expect(reviewBountySubmission(ACTOR, {
       claimId: CLAIM, submissionId: SUBMISSION, decision: 'changes_requested', reworkDays: 3, reason,
-      confirmation: `REQUEST CHANGES BOUNTY CLAIM ${REPO}#2942 ${CLAIM}`,
+      confirmation: `REQUEST CHANGES ON BOUNTY CLAIM ${REPO}#2942 ${CLAIM}`,
     })).rejects.toThrow('may have committed')
   })
 
@@ -460,7 +460,7 @@ describe('bounty read-backs find this write, not the latest state', () => {
   ])('reports a slot cancel whose earlier identical cancel was %s as unknown, never applied', async (_name, at) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator({
       audit: [
-        audit('slot_cancelled', { slot_id: SLOT, recorded_at: '2026-10-16T01:00:00Z' }),
+        audit('slot_cancelled', { slot_id: SLOT, detail: 'round 1 slot 1, was claimed (team)', recorded_at: '2026-10-16T01:00:00Z' }),
         audit('slot_reopened', { slot_id: SLOT, actor: 'other@example.com', recorded_at: at }),
       ],
     }))))
@@ -470,11 +470,20 @@ describe('bounty read-backs find this write, not the latest state', () => {
   it('reads a slot cancel by its own slot, whatever other slots record', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator({
       audit: [
-        audit('slot_cancelled', { slot_id: SLOT, recorded_at: '2026-10-16T01:00:00Z' }),
+        audit('slot_cancelled', { slot_id: SLOT, detail: 'round 1 slot 1, was claimed (team)', recorded_at: '2026-10-16T01:00:00Z' }),
         audit('slot_reopened', { slot_id: '00000000-0000-4000-8000-0000000000d2', actor: 'other@example.com', recorded_at: '2026-10-16T02:00:00Z' }),
       ],
     }))))
     await expect(cancel()).resolves.toMatchObject({ bounty_id: BOUNTY })
+  })
+
+  it('never reads an earlier cancel of another kind as a refused cancel applied', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(envelope('a cancelled slot cannot be cancelled', 409))
+      .mockResolvedValueOnce(Response.json(operator({
+        audit: [audit('slot_cancelled', { slot_id: SLOT, detail: 'round 1 slot 1, was claimed (system_fault)' })],
+      }))))
+    await expect(cancel()).rejects.toThrow('a cancelled slot cannot be cancelled')
   })
 
   it('reports a pause tied in time with another control as unknown', async () => {

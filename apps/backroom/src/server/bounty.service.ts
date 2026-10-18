@@ -296,7 +296,11 @@ export async function controlBountySlot(actor: string, rawInput: unknown) {
     readBack: async () => {
       const view = await fetchBounty({ bountyId: input.bountyId })
       const control = inForce(view, ['slot_cancelled', 'slot_reopened'], (entry) => entry.slot_id === input.slotId)
-      if (control !== 'tied' && control?.kind === kind && control.actor === actor.trim() && control.reason === input.reason) {
+      // Platform records a cancel's kind at the end of its detail: "... (team)".
+      if (
+        control !== 'tied' && control?.kind === kind && control.actor === actor.trim() && control.reason === input.reason &&
+        (input.kind === undefined || control.detail.endsWith(` (${input.kind})`))
+      ) {
         return { state: 'applied', value: bountySummarySchema.parse(view.detail.summary) }
       }
       return { state: 'absent' }
