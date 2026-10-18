@@ -38,6 +38,7 @@ import secrets
 import ssl
 import time
 from pathlib import Path
+from typing import Any
 
 _MAX_HEADER_BYTES = 64 * 1024
 _MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -291,10 +292,10 @@ class ScriptedGateway:
         usage["total_tokens"] = usage["prompt_tokens"] + 8
         cid = f"chatcmpl-{secrets.token_hex(12)}"
         if request.get("stream"):
-            delta = {"role": "assistant", "content": content or ""}
+            delta: dict[str, Any] = {"role": "assistant", "content": content or ""}
             if calls:
                 delta["tool_calls"] = [{"index": i, **c} for i, c in enumerate(calls)]
-            chunks = [
+            chunks: list[dict[str, Any]] = [
                 {
                     "id": cid,
                     "object": "chat.completion.chunk",
@@ -436,12 +437,8 @@ class ScriptedGateway:
     async def _handle(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        status, payload, ctype, surface = (
-            400,
-            {"error": "bad request"},
-            "application/json",
-            "invalid",
-        )
+        payload: dict[str, Any] | bytes = {"error": "bad request"}
+        status, ctype, surface = 400, "application/json", "invalid"
         method, raw_path, body = "", "", b""
         try:
             raw_headers = await asyncio.wait_for(

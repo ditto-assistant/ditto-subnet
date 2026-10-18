@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from ditto_screener.probe_review.battery import fingerprint
-from ditto_screener.probe_review.checks import evaluate_all, executions, served_answer
+from ditto_screener.probe_review.checks import (
+    as_dict,
+    evaluate_all,
+    executions,
+    served_answer,
+)
 from ditto_screener.probe_review.sandbox import ProbeRecord, Session
 
 _MAX_FILE_LINES = 400
@@ -65,9 +70,9 @@ def summarize(record: ProbeRecord, *, prompt_chars: int = 600) -> dict[str, Any]
     )
     model = []
     for index, entry in enumerate(record.model_requests):
-        request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
+        request = as_dict(entry.get("request"))
         messages = _message_text(request)
-        reply = entry.get("reply") if isinstance(entry.get("reply"), dict) else {}
+        reply = as_dict(entry.get("reply"))
         choice = (
             (reply.get("choices") or [{}])[0]
             if isinstance(reply.get("choices"), list)
@@ -167,7 +172,7 @@ def show(
     out = []
     budget = chars
     for item in picked:
-        request = item.get("request") if isinstance(item.get("request"), dict) else {}
+        request = as_dict(item.get("request"))
         messages = []
         for message in _message_text(request):
             text = _clip(

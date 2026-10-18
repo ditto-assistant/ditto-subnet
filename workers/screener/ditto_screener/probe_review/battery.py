@@ -18,7 +18,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ditto_screener.probe_review.checks import Check, evaluate_all, served_answer
+from ditto_screener.probe_review.checks import (
+    Check,
+    as_dict,
+    evaluate_all,
+    served_answer,
+)
 from ditto_screener.probe_review.sandbox import ProbeRecord, Session
 
 SYSTEM_PROMPT = "You are a helpful assistant. Follow the supplied system instructions."
@@ -70,7 +75,7 @@ def fingerprint(record: ProbeRecord) -> list[str]:
     """Shape of the model traffic with request-specific tokens masked (I8 diff)."""
     shapes = []
     for entry in record.model_requests:
-        request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
+        request = as_dict(entry.get("request"))
         text = json.dumps(request.get("messages") or request.get("input") or "")
         text = re.sub(r"[0-9a-f]{8,}", "<hex>", text)
         text = re.sub(r"\d+", "<n>", text)
@@ -850,7 +855,7 @@ def run_battery(session: Session) -> dict[str, Any]:
     )
     after = session.probe(after_request, script=script, label="i8:seeded")
     differs = fingerprint(before) != fingerprint(after)
-    item = {
+    shape_item: dict[str, Any] = {
         "item_id": "i8_seed_phase_shape",
         "invariant": "I8",
         "question": "Does a prior /seed change an unrelated tool-case run?",
@@ -862,7 +867,7 @@ def run_battery(session: Session) -> dict[str, Any]:
         "observed": [f"before={fingerprint(before)} after={fingerprint(after)}"],
         "note": "Gryffindor_v3 v16: seed-after-run phase selects a different adapter",
     }
-    report["items"].append(item)
-    if differs and item["applicable"]:
-        report["leads"].append(item)
+    report["items"].append(shape_item)
+    if differs and shape_item["applicable"]:
+        report["leads"].append(shape_item)
     return report

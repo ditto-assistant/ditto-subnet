@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from ditto_screener.probe_review.sandbox import ProbeRecord
@@ -59,6 +59,10 @@ def _parse_args(value: Any) -> Any:
     return value
 
 
+def as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _subset(expected: Any, actual: Any) -> bool:
     if isinstance(expected, dict):
         return isinstance(actual, dict) and all(
@@ -70,7 +74,7 @@ def _subset(expected: Any, actual: Any) -> bool:
 def executions(record: ProbeRecord, name: str | None = None) -> list[dict[str, Any]]:
     out = []
     for entry in record.tool_executions:
-        request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
+        request = as_dict(entry.get("request"))
         if name is None or request.get("name") == name:
             out.append(
                 {"name": request.get("name"), "args": _parse_args(request.get("args"))}
@@ -79,14 +83,12 @@ def executions(record: ProbeRecord, name: str | None = None) -> list[dict[str, A
 
 
 def _model_request_view(entry: dict[str, Any]) -> dict[str, Any]:
-    request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
+    request = as_dict(entry.get("request"))
     tools = request.get("tools") or []
     names = []
     for tool in tools if isinstance(tools, list) else []:
         if isinstance(tool, dict):
-            fn = (
-                tool.get("function") if isinstance(tool.get("function"), dict) else tool
-            )
+            fn = as_dict(tool.get("function")) or tool
             names.append(fn.get("name"))
     choice = request.get("tool_choice")
     pinned = isinstance(choice, dict) or choice in {"required", "any"}
@@ -235,7 +237,7 @@ def _last_request(record: ProbeRecord, where: Mapping[str, Any]) -> tuple[bool, 
     ), f"last_tool_choice={views[-1]['tool_choice']}"
 
 
-def evaluate_all(record: ProbeRecord, checks: list[Check]) -> list[dict[str, Any]]:
+def evaluate_all(record: ProbeRecord, checks: Sequence[Check]) -> list[dict[str, Any]]:
     results = []
     for check in checks:
         holds, observed = evaluate(record, check)
