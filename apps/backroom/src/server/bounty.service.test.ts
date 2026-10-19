@@ -219,8 +219,8 @@ const cases: Case[] = [
     body: { round: 1, rehearsal_outcome: 'confirmed' },
     committed: obligation({ transfers: [transfer('confirmed')] }),
     applied: [
-      Response.json(claim({ obligations: [obligation({ transfers: [transfer('uncertain')] })] })),
-      Response.json(operator({ audit: [audit('transfer_dispatched', { obligation_id: OBLIGATION, reason: null, detail: 'round 1 via simulated: uncertain' })] })),
+      Response.json(claim({ obligations: [obligation({ transfers: [transfer('confirmed')] })] })),
+      Response.json(operator({ audit: [audit('transfer_dispatched', { obligation_id: OBLIGATION, reason: null, detail: 'round 1 via simulated: confirmed' })] })),
     ],
     absent: [Response.json(claim({ obligations: [obligation()] }))],
     // The round's one transfer was sent by another operator.
@@ -422,6 +422,40 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(dispatchBountyObligation(ACTOR, {
       claimId: CLAIM, obligationId: OBLIGATION, round: 1, rehearsalOutcome: 'confirmed', confirmation: `DISPATCH BOUNTY OBLIGATION ${OBLIGATION} ROUND 1`,
     })).rejects.toThrow('may have committed')
+  })
+
+  const dispatch = (rehearsalOutcome: string) => dispatchBountyObligation(ACTOR, {
+    claimId: CLAIM, obligationId: OBLIGATION, round: 1, rehearsalOutcome, confirmation: `DISPATCH BOUNTY OBLIGATION ${OBLIGATION} ROUND 1`,
+  })
+  // This operator dispatched round 1, and its transfer is now in `state`.
+  const dispatchedBefore = (answer: Response, state: string) => vi.fn().mockResolvedValueOnce(answer)
+    .mockResolvedValueOnce(Response.json(claim({ obligations: [obligation({ transfers: [transfer(state)] })] })))
+    .mockResolvedValueOnce(Response.json(operator({
+      audit: [audit('transfer_dispatched', { obligation_id: OBLIGATION, reason: null, detail: `round 1 via simulated: ${state}` })],
+    })))
+
+  it.each([
+    ['confirmed', 'confirmed'],
+    ['failed', 'failed'],
+    ['unknown', 'uncertain'],
+  ])('reads a dispatch asking %s back from a transfer left %s', async (outcome, state) => {
+    vi.stubGlobal('fetch', dispatchedBefore(outage(), state))
+    await expect(dispatch(outcome)).resolves.toMatchObject({ obligation_id: OBLIGATION })
+  })
+
+  it("keeps Platform's refusal when this operator's earlier dispatch asked another outcome", async () => {
+    vi.stubGlobal('fetch', dispatchedBefore(envelope('only an approved obligation is dispatched; it is confirmed', 409), 'confirmed'))
+    const error = await dispatch('failed').catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(PlatformAdminError)
+    expect((error as PlatformAdminError).status).toBe(409)
+  })
+
+  it.each([
+    ['an earlier dispatch asking another outcome', 'failed', 'confirmed'],
+    ['this dispatch, faulted to uncertain', 'confirmed', 'uncertain'],
+  ])('reports a dispatch as unknown when its transfer may be %s', async (_name, outcome, state) => {
+    vi.stubGlobal('fetch', dispatchedBefore(outage(), state))
+    await expect(dispatch(outcome)).rejects.toThrow('may have committed')
   })
 
   it('never takes an audit entry without a readable time as the latest', async () => {

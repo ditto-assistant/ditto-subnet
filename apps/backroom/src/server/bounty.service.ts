@@ -406,6 +406,9 @@ export async function setBountyPayoutPolicy(actor: string, rawInput: unknown) {
   return settled(outcome, `Payout policy revision ${target}`)
 }
 
+// The transfer state a rehearsal dispatch records for the outcome it asks.
+const DISPATCHED_STATE = { confirmed: 'confirmed', failed: 'failed', unknown: 'uncertain' } as const
+
 function obligationOf(claim: Claim, obligationId: string): Obligation | undefined {
   return claim.obligations.find((item) => item.obligation_id === obligationId)
 }
@@ -450,15 +453,23 @@ export async function dispatchBountyObligation(actor: string, rawInput: unknown)
     readBack: async () => {
       const claim = await fetchBountyClaim({ claimId: input.claimId })
       const owed = obligationOf(claim, input.obligationId)
-      if (!owed?.transfers.some((transfer) => transfer.round === input.round)) return { state: 'absent' }
+      const transfer = owed?.transfers.find((item) => item.round === input.round)
+      if (!owed || !transfer) return { state: 'absent' }
       // A round has one transfer, ever; it is this dispatch only if this
       // operator sent it, which the audit records.
       const dispatched = latest(await fetchBounty({ bountyId: claim.bounty_id }), ['transfer_dispatched'], (entry) =>
         entry.obligation_id === input.obligationId && entry.detail.startsWith(`round ${input.round} via `))
       // Without the audit entry, who dispatched it is unknown.
       if (!dispatched) return { state: 'absent' }
-      if (dispatched.actor === actor.trim()) return { state: 'applied', value: owed }
-      return { state: 'superseded', detail: `Round ${input.round} was already dispatched by ${dispatched.actor}` }
+      if (dispatched.actor !== actor.trim()) {
+        return { state: 'superseded', detail: `Round ${input.round} was already dispatched by ${dispatched.actor}` }
+      }
+      // This write is always a rehearsal, which leaves the state its outcome
+      // names. Platform records no outcome asked, so a transfer in another
+      // state may be this operator's earlier dispatch asking another one, or
+      // this one, faulted or reconciled since: neither proves this write.
+      if (transfer.state === DISPATCHED_STATE[input.rehearsalOutcome]) return { state: 'applied', value: owed }
+      return { state: 'absent' }
     },
     retryHint: 'read the claim first: a recorded transfer must be reconciled, never sent again.',
   })
