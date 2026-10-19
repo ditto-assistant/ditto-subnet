@@ -457,18 +457,26 @@ export async function dispatchBountyObligation(actor: string, rawInput: unknown)
       if (!owed || !transfer) return { state: 'absent' }
       // A round has one transfer, ever; it is this dispatch only if this
       // operator sent it, which the audit records.
-      const dispatched = latest(await fetchBounty({ bountyId: claim.bounty_id }), ['transfer_dispatched'], (entry) =>
+      const view = await fetchBounty({ bountyId: claim.bounty_id })
+      const dispatched = latest(view, ['transfer_dispatched'], (entry) =>
         entry.obligation_id === input.obligationId && entry.detail.startsWith(`round ${input.round} via `))
       // Without the audit entry, who dispatched it is unknown.
       if (!dispatched) return { state: 'absent' }
       if (dispatched.actor !== actor.trim()) {
         return { state: 'superseded', detail: `Round ${input.round} was already dispatched by ${dispatched.actor}` }
       }
-      // This write is always a rehearsal, which leaves the state its outcome
-      // names. Platform records no outcome asked, so a transfer in another
-      // state may be this operator's earlier dispatch asking another one, or
-      // this one, faulted or reconciled since: neither proves this write.
-      if (transfer.state === DISPATCHED_STATE[input.rehearsalOutcome]) return { state: 'applied', value: owed }
+      // Only its dispatch and a reconciliation set a transfer's state, and
+      // every reconciliation is audited. Unreconciled, a rehearsal transfer is
+      // in the state its dispatch asked for, so one in the state this write
+      // asks for is this write or an identical earlier attempt. Platform
+      // records no outcome asked, so any other transfer may be this
+      // operator's earlier dispatch asking another one, or this one, faulted
+      // or reconciled since: none of those proves this write.
+      const reconciled = view.audit.some((entry) =>
+        entry.kind === 'transfer_reconciled' && entry.detail.startsWith(`transfer ${transfer.transfer_id} `))
+      if (!reconciled && transfer.state === DISPATCHED_STATE[input.rehearsalOutcome]) {
+        return { state: 'applied', value: owed }
+      }
       return { state: 'absent' }
     },
     retryHint: 'read the claim first: a recorded transfer must be reconciled, never sent again.',

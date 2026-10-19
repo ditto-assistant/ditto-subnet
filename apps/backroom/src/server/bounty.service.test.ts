@@ -428,10 +428,11 @@ describe('bounty read-backs find this write, not the latest state', () => {
     claimId: CLAIM, obligationId: OBLIGATION, round: 1, rehearsalOutcome, confirmation: `DISPATCH BOUNTY OBLIGATION ${OBLIGATION} ROUND 1`,
   })
   // This operator dispatched round 1, and its transfer is now in `state`.
-  const dispatchedBefore = (answer: Response, state: string) => vi.fn().mockResolvedValueOnce(answer)
+  const dispatchedBefore = (answer: Response, state: string, ...later: ReturnType<typeof audit>[]) => vi.fn()
+    .mockResolvedValueOnce(answer)
     .mockResolvedValueOnce(Response.json(claim({ obligations: [obligation({ transfers: [transfer(state)] })] })))
     .mockResolvedValueOnce(Response.json(operator({
-      audit: [audit('transfer_dispatched', { obligation_id: OBLIGATION, reason: null, detail: `round 1 via simulated: ${state}` })],
+      audit: [audit('transfer_dispatched', { obligation_id: OBLIGATION, reason: null, detail: `round 1 via simulated: ${state}` }), ...later],
     })))
 
   it.each([
@@ -456,6 +457,21 @@ describe('bounty read-backs find this write, not the latest state', () => {
   ])('reports a dispatch as unknown when its transfer may be %s', async (_name, outcome, state) => {
     vi.stubGlobal('fetch', dispatchedBefore(outage(), state))
     await expect(dispatch(outcome)).rejects.toThrow('may have committed')
+  })
+
+  // An earlier dispatch left the transfer uncertain; a reconciliation then set
+  // the state this dispatch asks for, which no dispatch recorded.
+  const reconciledTo = (answer: Response) => dispatchedBefore(answer, 'confirmed', audit('transfer_reconciled', {
+    obligation_id: OBLIGATION, reason: null, detail: `transfer ${TRANSFER} round 1: confirmed (asked confirmed)`,
+  }))
+
+  it("never reads a reconciled transfer as this dispatch's outcome", async () => {
+    vi.stubGlobal('fetch', reconciledTo(envelope('only an approved obligation is dispatched; it is confirmed', 409)))
+    const error = await dispatch('confirmed').catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(PlatformAdminError)
+    expect((error as PlatformAdminError).status).toBe(409)
+    vi.stubGlobal('fetch', reconciledTo(outage()))
+    await expect(dispatch('confirmed')).rejects.toThrow('may have committed')
   })
 
   it('never takes an audit entry without a readable time as the latest', async () => {
