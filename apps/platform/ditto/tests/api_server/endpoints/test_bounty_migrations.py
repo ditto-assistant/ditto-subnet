@@ -27,7 +27,7 @@ from ditto.tests.api_server.endpoints.test_bounty_claims import (
     REPO,
     World,
 )
-from ditto.tests.api_server.endpoints.test_bounty_reviews import ADMIN
+from ditto.tests.api_server.endpoints.test_bounty_reviews import ADMIN, claimed
 from ditto.tests.api_server.endpoints.test_bounty_settlement import accepted
 
 BEFORE_BOUNTIES = "dc41b7a6e205"
@@ -102,6 +102,26 @@ async def test_an_accepted_refund_blocks_the_settlement_downgrade(world):
     # Accepting work owes its fee back with a reason the older check forbids;
     # no policy, approval, transfer or fact exists.
     await accepted(world, ALICE)
+    refused(P3)
+    assert await count(world, BountyObligation) == 1
+
+
+async def test_a_linked_refund_event_blocks_the_settlement_downgrade(world):
+    await world.start(ALICE)
+    claim = await claimed(world, ALICE)
+    # A team cancellation owes the fee back for a reason, and with event kinds,
+    # the older checks allow; only the refund event's obligation is newer.
+    cancelled = await world.client.post(
+        f"{ADMIN}/slots/{claim['slot_id']}/cancel",
+        headers=_HEADERS,
+        json={
+            "kind": "team",
+            "reason": "fixture cancellation",
+            "confirmation": f"CANCEL BOUNTY SLOT {REPO}#{ISSUE} ROUND 1 SLOT "
+            f"{claim['position']}",
+        },
+    )
+    assert cancelled.status_code == 200, cancelled.text
     refused(P3)
     assert await count(world, BountyObligation) == 1
 

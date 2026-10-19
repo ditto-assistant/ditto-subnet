@@ -323,6 +323,8 @@ def downgrade() -> None:
         "SELECT 1 FROM bounty_obligation_approvals",
         "SELECT 1 FROM bounty_payout_policies",
         f"SELECT 1 FROM bounty_events WHERE kind NOT IN ({_quoted(P3_EVENT_KINDS)})",
+        # A refund owed since this revision links its event to the obligation.
+        "SELECT 1 FROM bounty_events WHERE obligation_id IS NOT NULL",
         "SELECT 1 FROM bounty_obligations WHERE kind <> 'fee_refund' "
         f"OR reason NOT IN ({_quoted(P3_REASONS)})",
     ):
