@@ -856,6 +856,29 @@ async def test_claim_history_is_append_only(world):
         await session.rollback()
 
 
+async def test_an_obligation_belongs_to_its_claims_bounty(world):
+    await world.start(ALICE)
+    claim = (await world.hold(ALICE)).json()
+    assert (await world.confirm(claim)).status_code == 200
+    other = await publish_bounty(world.client, issue=ISSUE + 1)
+    assert other.status_code == 200, other.text
+    # A refund of the claim's own fee, recorded under the bounty with `issue`.
+    refund = text(
+        "INSERT INTO bounty_obligations (obligation_id, bounty_id, claim_id, kind,"
+        " reason, payee_coldkey, amount_alpha_rao, block_hash, extrinsic_index,"
+        " simulated, created_at) SELECT gen_random_uuid(), b.bounty_id, p.claim_id,"
+        " 'fee_refund', 'system_fault', p.payer_coldkey, p.amount_alpha_rao,"
+        " p.block_hash, p.extrinsic_index, p.simulated, now()"
+        " FROM bounty_fee_payments p JOIN bounties b ON b.issue_number = :issue"
+    )
+    async with world.maker() as session:
+        with pytest.raises(DBAPIError, match="violates foreign key"):
+            await session.execute(refund, {"issue": ISSUE + 1})
+        await session.rollback()
+    async with world.maker() as session, session.begin():
+        await session.execute(refund, {"issue": ISSUE})
+
+
 async def test_claim_routes_declare_their_errors(app):
     paths = app.openapi()["paths"]
     assert {"400", "403", "404", "409", "429", "503"} <= set(

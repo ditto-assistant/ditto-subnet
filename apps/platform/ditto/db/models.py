@@ -12451,7 +12451,11 @@ class BountyObligation(Base):
         # The target of an event's reference to an obligation of its claim.
         UniqueConstraint("claim_id", "obligation_id"),
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
-        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        # An obligation's claim belongs to the obligation's own bounty.
+        ForeignKeyConstraint(
+            ["claim_id", "bounty_id"],
+            ["bounty_claims.claim_id", "bounty_claims.bounty_id"],
+        ),
         # A fee obligation is the payment of its own claim, owed to its payer.
         ForeignKeyConstraint(
             ["claim_id", "block_hash", "extrinsic_index", "payee_coldkey"],
