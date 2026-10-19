@@ -9697,6 +9697,14 @@ ALTER TABLE ONLY public.bounty_claims
 
 
 --
+-- Name: bounty_claims uq_bounty_claims_slot_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_claims
+    ADD CONSTRAINT uq_bounty_claims_slot_id UNIQUE (slot_id, claim_id);
+
+
+--
 -- Name: bounty_delivery_facts uq_bounty_delivery_facts_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12981,6 +12989,14 @@ ALTER TABLE ONLY public.bounty_events
 
 
 --
+-- Name: bounty_events fk_bounty_events_slot_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_events
+    ADD CONSTRAINT fk_bounty_events_slot_id_bounty_claims FOREIGN KEY (slot_id, claim_id) REFERENCES public.bounty_claims(slot_id, claim_id);
+
+
+--
 -- Name: bounty_events fk_bounty_events_slot_id_bounty_slots; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -13033,7 +13049,7 @@ ALTER TABLE ONLY public.bounty_obligations
 --
 
 ALTER TABLE ONLY public.bounty_obligations
-    ADD CONSTRAINT fk_bounty_obligations_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+    ADD CONSTRAINT fk_bounty_obligations_claim_id_bounty_claims FOREIGN KEY (claim_id, bounty_id) REFERENCES public.bounty_claims(claim_id, bounty_id);
 
 
 --
@@ -13122,6 +13138,14 @@ ALTER TABLE ONLY public.bounty_slots
 
 ALTER TABLE ONLY public.bounty_slots
     ADD CONSTRAINT fk_bounty_slots_claim_id_bounty_claims FOREIGN KEY (claim_id, bounty_id) REFERENCES public.bounty_claims(claim_id, bounty_id);
+
+
+--
+-- Name: bounty_slots fk_bounty_slots_slot_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_slots
+    ADD CONSTRAINT fk_bounty_slots_slot_id_bounty_claims FOREIGN KEY (slot_id, claim_id) REFERENCES public.bounty_claims(slot_id, claim_id);
 
 
 --
