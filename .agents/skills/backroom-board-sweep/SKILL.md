@@ -124,7 +124,7 @@ front-load artifact downloads.
   (`workers/screener/docs/policy-v13.md`, I2 clarification). Every scored v13
   `/run` carries only the validator's tool-discipline system prompt, and
   `/seed` carries none. A preliminary model stage without the system prompt is
-  a lead, not a finding. On 2026-10-19 thirteen I2 rejects charged that shape
+  a lead, not a finding. On 2026-10-19 ten I2 rejects charged that shape
   without naming an applicable instruction. They were withdrawn as precedent
   and queued for reversal, so check the proof bar before porting a charge
   across a lineage.
