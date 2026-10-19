@@ -1118,6 +1118,29 @@ async def test_an_event_about_a_claim_names_it(world):
             await session.rollback()
 
 
+async def test_a_slot_action_names_only_the_claim_of_its_slot(world):
+    await world.start(ALICE, BOB)
+    alice = await claimed(world, ALICE)
+    bob = await claimed(world, BOB)
+    assert alice["slot_id"] != bob["slot_id"]
+    # A cancellation of the slot in `slot`, recorded against Alice's claim.
+    cancel = text(
+        "INSERT INTO bounty_slot_actions (slot_id, claim_id, action, cancel_kind,"
+        " prior_status, actor, reason, recorded_at) VALUES (:slot, :claim,"
+        " 'cancel', 'team', 'claimed', 'fixture', 'fixture', now())"
+    )
+    async with world.maker() as session:
+        with pytest.raises(DBAPIError, match="violates foreign key"):
+            await session.execute(
+                cancel, {"slot": bob["slot_id"], "claim": alice["claim_id"]}
+            )
+        await session.rollback()
+    async with world.maker() as session, session.begin():
+        await session.execute(
+            cancel, {"slot": alice["slot_id"], "claim": alice["claim_id"]}
+        )
+
+
 async def test_review_routes_declare_their_errors(app):
     paths = app.openapi()["paths"]
     for route in ("submissions", "withdraw", "appeals"):

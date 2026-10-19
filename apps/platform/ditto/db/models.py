@@ -12699,7 +12699,10 @@ class BountySlotAction(Base):
     )
     __table_args__ = (
         ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
-        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        # The claim an action names is the claim of that slot.
+        ForeignKeyConstraint(
+            ["slot_id", "claim_id"], ["bounty_claims.slot_id", "bounty_claims.claim_id"]
+        ),
         CheckConstraint(
             "action IN ('cancel','reopen')"
             " AND (action = 'cancel') = (cancel_kind IS NOT NULL)"

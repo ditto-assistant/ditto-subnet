@@ -288,7 +288,10 @@ def upgrade() -> None:
         sa.Column("reason", sa.Text(), nullable=False),
         sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
-        sa.ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        # The claim an action names is the claim of that slot.
+        sa.ForeignKeyConstraint(
+            ["slot_id", "claim_id"], ["bounty_claims.slot_id", "bounty_claims.claim_id"]
+        ),
         sa.CheckConstraint(
             "action IN ('cancel','reopen')"
             " AND (action = 'cancel') = (cancel_kind IS NOT NULL)"

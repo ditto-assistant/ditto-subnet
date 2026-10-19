@@ -13112,11 +13112,11 @@ ALTER TABLE ONLY public.bounty_rounds
 
 
 --
--- Name: bounty_slot_actions fk_bounty_slot_actions_claim_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: bounty_slot_actions fk_bounty_slot_actions_slot_id_bounty_claims; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.bounty_slot_actions
-    ADD CONSTRAINT fk_bounty_slot_actions_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+    ADD CONSTRAINT fk_bounty_slot_actions_slot_id_bounty_claims FOREIGN KEY (slot_id, claim_id) REFERENCES public.bounty_claims(slot_id, claim_id);
 
 
 --
