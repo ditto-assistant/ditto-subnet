@@ -2160,6 +2160,13 @@ export interface paths {
          *     finalization; and the candidate composite is the median score row, equal
          *     to the finalization ``statistics.median`` for an odd score count such as
          *     the three-validator quorum.
+         *
+         *     Per-axis evidence is replayed the same way from the ledger row's
+         *     ``tool_mean`` / ``memory_mean`` against the other rows' axes. Those are
+         *     the representative score row's axes, while finalization takes each axis's
+         *     own quorum median, so a row whose validators disagree per axis can differ.
+         *     Rows with a per-axis outlier the replayed policy would not hold are listed
+         *     under ``axis_evidence`` -- what the live gate records as evidence only.
          */
         get: operations["get_outlier_escalation_dry_run_api_v1_admin_outlier_escalation_dry_run_get"];
         put?: never;
@@ -11632,6 +11639,22 @@ export interface components {
          *     and changes no setting.
          */
         AdminOutlierEscalationDryRunResponse: {
+            /**
+             * Axis Evidence
+             * @description Highest composite first, at most limit rows.
+             */
+            axis_evidence?: components["schemas"]["OutlierEscalationDryRunEntryView"][];
+            /**
+             * Axis Evidence Count
+             * @description Rows with a per-axis outlier that the replayed policy would NOT hold (recorded as evidence only by the live gate).
+             * @default 0
+             */
+            axis_evidence_count: number;
+            /**
+             * Axis Evidence Truncated
+             * @default false
+             */
+            axis_evidence_truncated: boolean;
             /** Bench Version */
             bench_version: number;
             /**
@@ -11669,7 +11692,7 @@ export interface components {
             /** Limit */
             limit: number;
             /** Overridden Fields */
-            overridden_fields: ("mode" | "min_bench_version" | "min_cohort_size" | "modified_z_threshold" | "min_composite_floor")[];
+            overridden_fields: ("mode" | "min_bench_version" | "min_cohort_size" | "modified_z_threshold" | "min_composite_floor" | "per_axis_enforce")[];
             /** @description The policy replayed: the effective settings with any override applied. mode is reported, not applied. */
             settings: components["schemas"]["OutlierEscalationSettingsView"];
             /**
@@ -11707,7 +11730,7 @@ export interface components {
              */
             generated_at: string;
             /** Invalid Env Fields */
-            invalid_env_fields: ("mode" | "min_bench_version" | "min_cohort_size" | "modified_z_threshold" | "min_composite_floor")[];
+            invalid_env_fields: ("mode" | "min_bench_version" | "min_cohort_size" | "modified_z_threshold" | "min_composite_floor" | "per_axis_enforce")[];
             /**
              * Pending Review Count
              * @description Pending ATH reviews opened as anomalous_score.
@@ -26316,6 +26339,17 @@ export interface components {
         };
         /** OutlierEscalationActivityView */
         OutlierEscalationActivityView: {
+            /**
+             * Axis Evidence In Window
+             * @default 0
+             */
+            axis_evidence_in_window: number;
+            /**
+             * Axis Evidence Total
+             * @description Evidence-only per-axis outlier entries (audit_kind anomalous_score_axis): an axis out of band while the policy held nothing. Never counted as observed or enforced.
+             * @default 0
+             */
+            axis_evidence_total: number;
             /** Enforced In Window */
             enforced_in_window: number;
             /** Enforced Total */
@@ -26328,6 +26362,16 @@ export interface components {
             observed_total: number;
             /** Recent */
             recent: components["schemas"]["OutlierEscalationEntryView"][];
+            /**
+             * Recent Axis Evidence
+             * @description Newest evidence-only per-axis entries, at most recent_limit rows. enforced is always false.
+             */
+            recent_axis_evidence?: components["schemas"]["OutlierEscalationEntryView"][];
+            /**
+             * Recent Axis Evidence Truncated
+             * @default false
+             */
+            recent_axis_evidence_truncated: boolean;
             /** Recent Limit */
             recent_limit: number;
             /**
@@ -26342,6 +26386,42 @@ export interface components {
              * Format: date-time
              */
             window_started_at: string;
+        };
+        /**
+         * OutlierEscalationAxisEvidence
+         * @description One score axis's robust z against its cohort; null when absent.
+         */
+        OutlierEscalationAxisEvidence: {
+            /**
+             * Anomaly Unavailable
+             * @description cohort_too_small when the axis failed closed.
+             */
+            anomaly_unavailable?: string | null;
+            /**
+             * Axis
+             * @description Score axis, e.g. tool_mean.
+             */
+            axis: string;
+            /** Cohort Mad */
+            cohort_mad?: number | null;
+            /** Cohort Median */
+            cohort_median?: number | null;
+            /** Cohort Size */
+            cohort_size?: number | null;
+            /**
+             * Modified Z
+             * @description Null for a zero-MAD or too-small axis cohort.
+             */
+            modified_z?: number | null;
+            /**
+             * Outlier
+             * @description Strict upward deviation at or beyond modified_z_threshold. Always false when the axis cohort is too small.
+             */
+            outlier?: boolean | null;
+            /** Upward */
+            upward?: boolean | null;
+            /** Value */
+            value?: number | null;
         };
         /** OutlierEscalationDryRunEntryView */
         OutlierEscalationDryRunEntryView: {
@@ -26408,6 +26488,20 @@ export interface components {
             modified_z?: number | null;
             /** Modified Z Threshold */
             modified_z_threshold?: number | null;
+            /**
+             * Per Axis
+             * @description Per-axis robust z evidence (outlier-escalation-v2+). Null on entries recorded before per-axis evidence existed. Audit-chain entries are public and record only axis and outlier; their statistics are null (the dry run reports them in full).
+             */
+            per_axis?: components["schemas"]["OutlierEscalationAxisEvidence"][] | null;
+            /** Per Axis Enforce */
+            per_axis_enforce?: boolean | null;
+            /** Per Axis Outlier Axes */
+            per_axis_outlier_axes?: string[] | null;
+            /**
+             * Trigger
+             * @description What held (or would hold) the row. Null for evidence-only per-axis entries and for pre-v2 entries.
+             */
+            trigger?: ("composite" | "per_axis") | null;
             /** Upward */
             upward?: boolean | null;
         };
@@ -26439,6 +26533,11 @@ export interface components {
              * @enum {string}
              */
             modified_z_threshold: "env" | "default" | "default_invalid_env";
+            /**
+             * Per Axis Enforce
+             * @enum {string}
+             */
+            per_axis_enforce: "env" | "default" | "default_invalid_env";
         };
         /** OutlierEscalationSettingsView */
         OutlierEscalationSettingsView: {
@@ -26461,6 +26560,11 @@ export interface components {
              * @description Null only when the environment set a non-finite value (nan/inf), which the loader accepts and JSON cannot carry. Scoring is using that value.
              */
             modified_z_threshold: number | null;
+            /**
+             * Per Axis Enforce
+             * @description Whether a single-axis outlier may hold on its own (only in enforce mode, and only with the composite at or above min_composite_floor). Off: per-axis results are evidence only.
+             */
+            per_axis_enforce: boolean;
         };
         /**
          * OwnerLinkProof
@@ -45156,6 +45260,7 @@ export interface operations {
                 min_cohort_size?: number | null;
                 modified_z_threshold?: number | null;
                 min_composite_floor?: number | null;
+                per_axis_enforce?: boolean | null;
                 limit?: number;
             };
             header?: {

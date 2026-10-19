@@ -4149,6 +4149,17 @@ async def build_public_leaderboard(
                     if held_representatives:
                         heir = provisional_incumbent = held_representatives[0]
                 emission_incumbent_id = heir.agent_id if heir is not None else None
+    if (
+        crown_incumbent_active
+        and emission_incumbent_id is None
+        and eligibility_pin is not None
+    ):
+        # The pin's champion generation can leave the pool without being
+        # withheld: its family promotes a newer upload as representative. The
+        # next pin still carries the crown through the owner family, so the
+        # projection must too, or it opens a classic first-seen walk and names
+        # a senior rival the fleet will never crown.
+        emission_incumbent_id = _pin_crown_heir(eligibility_pin, emission_rows)
     entries = []
     for i, row in enumerate(finalized_rows, start=1):
         settled, rolling, rolling_count = rollout_states.get(
@@ -4426,6 +4437,27 @@ def _ledger_pin_model(
         champion_agent_id=row.champion_agent_id,
         incumbent_agent_id=row.incumbent_agent_id,
         crown_mode=served.get("crown_mode") if isinstance(served, dict) else None,
+    )
+
+
+def _pin_crown_heir(pin: LedgerEpochSnapshot, rows: Sequence[LedgerRow]) -> UUID | None:
+    """The row the next pin hands ``pin``'s crown to, as ``build_pin_draft`` does.
+
+    The owner family's representative in ``rows`` inherits the crown; a legacy
+    pin without an owner root only carries it to the exact same agent.
+    """
+    if pin.champion_owner_root is not None:
+        return next(
+            (
+                row.agent_id
+                for row in rows
+                if row.emission_owner_root == pin.champion_owner_root
+            ),
+            None,
+        )
+    return next(
+        (row.agent_id for row in rows if row.agent_id == pin.champion_agent_id),
+        None,
     )
 
 

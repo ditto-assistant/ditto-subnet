@@ -1812,6 +1812,9 @@ export async function fetchOutlierEscalationDryRun(rawInput: unknown = {}) {
   if (input.minCompositeFloor !== undefined) {
     params.set('min_composite_floor', String(input.minCompositeFloor))
   }
+  if (input.perAxisEnforce !== undefined) {
+    params.set('per_axis_enforce', String(input.perAxisEnforce))
+  }
   const payload = await platformAdminRequest(
     `/api/v1/admin/outlier-escalation/dry-run?${params.toString()}`,
     { retries: 1 },

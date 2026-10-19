@@ -9775,6 +9775,8 @@ type GeneratedOutlierEscalationSources =
   PlatformComponents['schemas']['OutlierEscalationSettingSourcesView']
 type GeneratedOutlierEscalationEvidence =
   PlatformComponents['schemas']['OutlierEscalationEvidence']
+type GeneratedOutlierEscalationAxisEvidence =
+  PlatformComponents['schemas']['OutlierEscalationAxisEvidence']
 type GeneratedOutlierEscalationEntry =
   PlatformComponents['schemas']['OutlierEscalationEntryView']
 type GeneratedOutlierEscalationActivity =
@@ -9788,6 +9790,7 @@ const outlierSettingFieldSchema = z.enum([
   'min_cohort_size',
   'modified_z_threshold',
   'min_composite_floor',
+  'per_axis_enforce',
 ])
 const outlierSettingSourceSchema = z.enum(['env', 'default', 'default_invalid_env'])
 
@@ -9798,6 +9801,9 @@ const outlierEscalationSettingsSchema = z.object({
   // Null only for a non-finite env value (nan/inf) that scoring IS using.
   modified_z_threshold: z.number().nullable(),
   min_composite_floor: z.number().nullable(),
+  // Off by default: a single-axis outlier is evidence only. Defaulted so a
+  // Platform that predates the setting still parses.
+  per_axis_enforce: z.boolean().default(false),
 } satisfies PlatformResponseShape<GeneratedOutlierEscalationSettings>)
 
 const outlierEscalationSourcesSchema = z.object({
@@ -9806,7 +9812,22 @@ const outlierEscalationSourcesSchema = z.object({
   min_cohort_size: outlierSettingSourceSchema,
   modified_z_threshold: outlierSettingSourceSchema,
   min_composite_floor: outlierSettingSourceSchema,
+  per_axis_enforce: outlierSettingSourceSchema.default('default'),
 } satisfies PlatformResponseShape<GeneratedOutlierEscalationSources>)
+
+// Audit-chain entries are public, so they carry only axis + outlier; the
+// statistics are null there and present only in the dry-run replay.
+const outlierEscalationAxisEvidenceSchema = z.object({
+  axis: z.string(),
+  value: z.number().nullish(),
+  cohort_size: z.number().int().nullish(),
+  cohort_median: z.number().nullish(),
+  cohort_mad: z.number().nullish(),
+  modified_z: z.number().nullish(),
+  upward: z.boolean().nullish(),
+  outlier: z.boolean().nullish(),
+  anomaly_unavailable: z.string().nullish(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationAxisEvidence>)
 
 const outlierEscalationEvidenceSchema = z.object({
   composite: z.number().nullish(),
@@ -9819,6 +9840,10 @@ const outlierEscalationEvidenceSchema = z.object({
   min_composite_floor: z.number().nullish(),
   upward: z.boolean().nullish(),
   above_floor: z.boolean().nullish(),
+  per_axis: z.array(outlierEscalationAxisEvidenceSchema).max(8).nullish(),
+  per_axis_outlier_axes: z.array(z.string()).max(8).nullish(),
+  per_axis_enforce: z.boolean().nullish(),
+  trigger: z.enum(['composite', 'per_axis']).nullish(),
 } satisfies PlatformResponseShape<GeneratedOutlierEscalationEvidence>)
 
 const outlierEscalationEntrySchema = z.object({
@@ -9838,10 +9863,14 @@ const outlierEscalationActivitySchema = z.object({
   enforced_total: z.number().int().nonnegative(),
   observed_in_window: z.number().int().nonnegative(),
   enforced_in_window: z.number().int().nonnegative(),
+  axis_evidence_total: z.number().int().nonnegative().default(0),
+  axis_evidence_in_window: z.number().int().nonnegative().default(0),
   latest_recorded_at: z.string().nullish(),
   recent_limit: z.number().int().positive(),
   recent: z.array(outlierEscalationEntrySchema).max(100),
   recent_truncated: z.boolean(),
+  recent_axis_evidence: z.array(outlierEscalationEntrySchema).max(100).default([]),
+  recent_axis_evidence_truncated: z.boolean().default(false),
 } satisfies PlatformResponseShape<GeneratedOutlierEscalationActivity>)
 
 export const outlierEscalationSchema = z.object({
@@ -9851,7 +9880,7 @@ export const outlierEscalationSchema = z.object({
   defaults: outlierEscalationSettingsSchema,
   sources: outlierEscalationSourcesSchema,
   env_vars: z.record(z.string(), z.string()),
-  invalid_env_fields: z.array(outlierSettingFieldSchema).max(5),
+  invalid_env_fields: z.array(outlierSettingFieldSchema).max(6),
   review_kind: z.string(),
   algorithm_version: z.string(),
   pending_review_count: z.number().int().nonnegative(),
@@ -10004,7 +10033,7 @@ export const outlierEscalationDryRunSchema = z.object({
   bench_version: z.number().int(),
   bench_version_in_scope: z.boolean(),
   settings: outlierEscalationSettingsSchema,
-  overridden_fields: z.array(outlierSettingFieldSchema).max(5),
+  overridden_fields: z.array(outlierSettingFieldSchema).max(6),
   ledger_size: z.number().int().nonnegative(),
   cohort_size: z.number().int().nonnegative(),
   cohort_too_small: z.boolean(),
@@ -10014,6 +10043,9 @@ export const outlierEscalationDryRunSchema = z.object({
   limit: z.number().int().positive(),
   would_trigger: z.array(outlierEscalationDryRunEntrySchema).max(100),
   truncated: z.boolean(),
+  axis_evidence_count: z.number().int().nonnegative().default(0),
+  axis_evidence: z.array(outlierEscalationDryRunEntrySchema).max(100).default([]),
+  axis_evidence_truncated: z.boolean().default(false),
 } satisfies PlatformResponseShape<GeneratedOutlierEscalationDryRunResponse>)
 
 export const outlierEscalationDryRunInputSchema = z.object({
@@ -10021,6 +10053,7 @@ export const outlierEscalationDryRunInputSchema = z.object({
   minCohortSize: z.number().int().min(1).max(1000).optional(),
   modifiedZThreshold: z.number().positive().max(1000).optional(),
   minCompositeFloor: z.number().min(0).max(1).optional(),
+  perAxisEnforce: z.boolean().optional(),
   limit: z.number().int().min(1).max(100).default(20),
 })
 
