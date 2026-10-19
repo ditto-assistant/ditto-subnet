@@ -1333,6 +1333,14 @@ and the two-location evidence bar before citing anything:
   answers the canary shape, so a fixture keyed to the request user is cleared
   even at high density.
 
+The review_leads inventory reports item_selection and fingerprint_selection:
+truncated, omitted_count and omitted_by_kind describe candidates dropped after
+per-rule/file bounds. scan_truncated separately means the archive scan hit its
+file/byte budget. Selection favors high severity, then kind diversity.
+fingerprint_selection.saturation_leads points to repeated raw-scan kinds that
+can be padded with comments or strings. Inspect these as leads, never proof of
+evasion; use source search to follow omitted kinds when needed.
+
 The inventory also carries "emulation_fingerprints": bench-v12 anti-emulation
 leads over served/executable source, each naming a matched fingerprint kind, a
 severity, and location-only path:line roles. They automate the greppable bypass
@@ -1773,6 +1781,14 @@ and the two-location evidence bar before citing anything:
   harness retrieves for the request user. v7 deliberately gives user-owned
   answers the canary shape, so a fixture keyed to the request user is cleared
   even at high density.
+
+The review_leads inventory reports item_selection and fingerprint_selection:
+truncated, omitted_count and omitted_by_kind describe candidates dropped after
+per-rule/file bounds. scan_truncated separately means the archive scan hit its
+file/byte budget. Selection favors high severity, then kind diversity.
+fingerprint_selection.saturation_leads points to repeated raw-scan kinds that
+can be padded with comments or strings. Inspect these as leads, never proof of
+evasion; use source search to follow omitted kinds when needed.
 
 The inventory also carries "emulation_fingerprints": bench-v12 anti-emulation
 leads over served/executable source, each naming a matched fingerprint kind, a
@@ -2835,13 +2851,19 @@ class TarSourceRepository:
                 }
                 for item in static_v2.advisory[:16]
             ]
+        item_selection: dict[str, object] = {}
+        fingerprint_selection: dict[str, object] = {}
+        items = find_source_review_leads(
+            miner_readable, selection_report=item_selection
+        )
+        fingerprints = find_benchmark_emulation_fingerprints(
+            miner_readable, selection_report=fingerprint_selection
+        )
         return {
-            "items": [*find_source_review_leads(miner_readable), *static_advisories][
-                :_MAX_LEAD_SCAN_FILES
-            ],
-            "emulation_fingerprints": find_benchmark_emulation_fingerprints(
-                miner_readable
-            ),
+            "items": [*items, *static_advisories],
+            "item_selection": item_selection,
+            "emulation_fingerprints": fingerprints,
+            "fingerprint_selection": fingerprint_selection,
             "unmatchable_category_guards": guard_report(
                 find_unmatchable_category_guards(
                     (path, mask_lead_comments(text, path)) for path, text in readable
@@ -2856,7 +2878,10 @@ class TarSourceRepository:
             "members_considered": members_considered,
             "bytes_scanned": bytes_scanned,
             "nontext": nontext,
-            "truncated": truncated,
+            "scan_truncated": truncated,
+            "truncated": truncated
+            or bool(item_selection["truncated"])
+            or bool(fingerprint_selection["truncated"]),
         }
 
     def _starter_manifests(self, override: tuple[str, ...] | None) -> tuple[str, ...]:

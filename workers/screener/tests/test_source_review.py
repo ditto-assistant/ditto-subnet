@@ -4843,7 +4843,7 @@ def test_review_leads_skip_exact_starter_files(tmp_path: Path) -> None:
         "review_adaptive_model_routing",
         "files_scanned",
         "bytes_scanned",
-        "truncated",
+        "scan_truncated",
     ):
         assert leads[key] == untrusted[key], key
 
@@ -4941,6 +4941,56 @@ def test_review_leads_not_starved_by_non_source_noise(
             {"path": path, "line": 3, "role": "retrieval-override"},
         ],
     } in leads["items"]
+
+
+def test_review_lead_dossier_reports_padding_and_omissions(tmp_path: Path) -> None:
+    from tests.test_emulation_fingerprints import _RUST_EMULATOR
+
+    files = {
+        f"src/a{index}.py": b"# phrasing probe-selected over trial N\n" * 4
+        for index in range(6)
+    }
+    files["src/zz.rs"] = _RUST_EMULATOR.encode()
+    leads = TarSourceRepository(str(_archive_files(tmp_path, files))).review_leads(())
+
+    assert leads["files_scanned"] == 7
+    assert leads["scan_truncated"] is False
+    assert leads["truncated"] is True
+    assert leads["fingerprint_selection"]["omitted_by_kind"] == {
+        "self-reported-benchmark-fitting": 18
+    }
+    assert leads["fingerprint_selection"]["saturation_leads"][0]["kind"] == (
+        "raw-fingerprint-kind-saturation"
+    )
+    assert {"bench-version-equality-gate", "zero-token-answer-constructor"} <= {
+        finding["kind"] for finding in leads["emulation_fingerprints"]
+    }
+
+
+def test_review_lead_kind_padding_cannot_hide_later_distinct_kind(
+    tmp_path: Path,
+) -> None:
+    decoy = (
+        b"def route(question, memories):\n"
+        b'    if contains(question, "canary"):\n'
+        b"        memories.inject(question)\n"
+        b"    return memories\n"
+    )
+    files = {f"src/a{index:02}.py": decoy for index in range(40)}
+    files["src/zz.rs"] = (
+        b"fn temporal_template(question: &str) -> String {\n"
+        b"    return resolve(question);\n}\n"
+    )
+    leads = TarSourceRepository(str(_archive_files(tmp_path, files))).review_leads(())
+
+    assert len(leads["items"]) <= 32
+    assert leads["item_selection"]["truncated"] is True
+    assert any(
+        lead["kind"] == "deterministic-challenge-resolver"
+        and location["path"] == "src/zz.rs"
+        for lead in leads["items"]
+        for location in lead["locations"]
+    )
 
 
 @pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
