@@ -1,0 +1,11 @@
+---
+- name: Validate the complete screener SSH configuration
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: false
+  listen: reload screener logs ssh
+
+- name: Reload SSH without restarting screener workloads
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: reloaded
+  listen: reload screener logs ssh

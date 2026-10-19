@@ -9,8 +9,8 @@
     "Cargo.toml": "8ca23cba81af784f738594962d8ee2cab5f1e8c7be359339501b969d04c882ac",
     "Dockerfile": "d3a1a2a1e5d43b0465c28712457d95432942ac8f017fd10d538859a901a54641",
     "LICENSE": "31930afa24e664ca57a2fa3e6ab4cea9307c55a8f9e6c0c9818340ea3181eac1",
-    "PROTOCOL.md": "2264466bc1a3818c459b663a93fa6e2615397ccb92ee0070f451936bd27d6dfa",
-    "README.md": "dcfb2a4a3ee1e5fe8bf4c88c4cb5a0b0246e65244b7879fe7dd95c44f81363ab",
+    "PROTOCOL.md": "5352b64acab76ec3499a3a10fb2a52310181a1114db373460812ee637627a585",
+    "README.md": "680429c88e7d02688c2bc273e96a02575b1a7d8f10d395164430bfc31c79e1d8",
     "SETUP.md": "16fa641d6ee6bc41cf30b6a8a9ca5d59f40d29b370c43b233bfc77028ed8bb57",
     "UPSTREAM.md": "be89588e1f1182b888dfee48a55806a343067bcb1c43243ceccaa81381d21392",
     "fixtures/models/README.md": "193c8621bfe782733a4a4c0ff2ad37d98179c3ef5186348107cfa71dc3226a32",
@@ -51,6 +51,6 @@
     "tests/store_concurrency.rs": "7cf956ffa08d2632ecb400f1f5aa7580df6e684fa831861beca8ba947c8578cd"
   },
   "origin": "ditto-assistant/ditto-subnet/miners/dittobench-starter-kit",
-  "revision": "2b6e78105af3890cf242bb37fc0c8dedb6aa21a4",
+  "revision": "2ecdb78962c3d8c980a6315b9689eb09461114e5",
   "version": 1
 }

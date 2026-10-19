@@ -476,7 +476,7 @@ async def test_release_gate_reports_the_reveal_plan_shadow(
         "/api/v1/admin/artifact-release-settings", headers=_HEADERS
     )
     shadow = response.json()["release_gate"]["reveal_plan_shadow"]
-    assert shadow["mode"] == "shadow"
+    assert shadow["mode"] == "primary"
     assert (shadow["ranges"], shadow["agreed"], shadow["missed"]) == (3, 2, 1)
     assert shadow["recent_misses"] == [
         {"first_block": 1, "last_block": 720, "blocks": [42]}

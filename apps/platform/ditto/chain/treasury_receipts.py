@@ -158,21 +158,38 @@ async def finalized_block(
         raise ValueError("receipt is on a different chain")
     at = await substrate.get_block_hash(block)
     parent = await substrate.get_block_hash(block - 1)
-    hashes = []
-    for pinned in (parent, at):
+
+    async def admitted(pinned: Any) -> tuple[str, bool]:
         if not pinned:
             raise ValueError("historical receipt block missing")
         response = await substrate.rpc_request(
             "state_getStorageHash", ["0x3a636f6465", pinned]
         )
-        code, epoch_gated = await _admit_receipt_runtime(
+        return await _admit_receipt_runtime(
             substrate,
             response.get("result") if isinstance(response, dict) else None,
             pinned,
         )
+
+    runtimes = [await admitted(parent), await admitted(at)]
+    hashes = [code for code, _ in runtimes]
+    for pinned, (_, epoch_gated), writer in (
+        (parent, runtimes[0], None),
+        (at, runtimes[1], runtimes[0]),
+    ):
+        if not epoch_gated:
+            continue
+        # A state was written by the runtime stored at its parent. The first
+        # block storing an upgrade's code was still executed by the previous
+        # runtime; one without SubnetEpochConsensus (before v475) runs Yuma
+        # only, and the library decodes that state with its metadata, where
+        # the item is "not found".
+        if writer is None:
+            writer = await admitted(await substrate.get_block_hash(block - 2))
+        if not writer[1]:
+            continue
         if (
-            epoch_gated
-            and value(
+            value(
                 await substrate.query(
                     module="SubtensorModule",
                     storage_function="SubnetEpochConsensus",
@@ -183,7 +200,6 @@ async def finalized_block(
             != "Yuma"
         ):
             raise ValueError("receipt requires audited Yuma consensus")
-        hashes.append(code)
     if all(code in AUDITED_COLLECTOR_RECEIPT_HASHES for code in hashes):
         return at, parent, collector_receipt_runtime(*hashes)
     # An interface-admitted runtime has no place in the reviewed order, so the

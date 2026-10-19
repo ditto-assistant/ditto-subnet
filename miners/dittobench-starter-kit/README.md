@@ -908,7 +908,7 @@ why it passes.
 | **LLM tool-router** — a first completion picks the tool subset, a second completion acts | catalog-present, cost factor | The deciding completion still offers a catalog (the router's output), so restraint and expected-tool credit are the model's; the extra completion sits inside the published cost budget (3 completion-equivalents on single-tool cases, 5 on chains). |
 | **JSON-mode / structured output** — the model returns `{"answer": …, "final_text": …}` | claim-span provenance, causal | Structured-output fields are completion spans; the graded value is contained in them, and the model derived it. Pass. |
 | **`final_answer` tool delivery** — the model emits a `final_answer{value}` call you turn into the response | claim-span provenance, causal | Tool-call arguments are completion spans. Pass — as long as you do not execute it through `tool_endpoint` as a non-memory action (it is not in the catalog, so it is not a swallowed catalog call either). |
-| **Formatter post-processor** — render `4110.67 dollars` as `$4,110.67`, `**Answer:** …` as plain text | claim-span provenance | The public normaliser (`scoregates.NormalizeSpan` + `ValueTokenHashes`) folds every honest rendering of the model's value to one claim token before containment, so a uniform, content-independent rendering passes. Rescaling (`/100`), unit changes and word→word maps produce a token the model never emitted and do not. |
+| **Formatter post-processor** — render `4110.67 dollars` as `$4,110.67`, `**Answer:** …` as plain text | claim-span provenance | The public normaliser (`scoregates.NormalizeSpan` + `SpanTokens`, rules in [PROTOCOL.md](PROTOCOL.md#the-gates-their-notes-and-their-posture)) folds every honest rendering of the model's value to one claim token before containment, so a uniform, content-independent rendering passes. Rescaling (`/100`), unit changes and word→word maps produce a token the model never emitted and do not. |
 | **Reply in the user's language** | grader reply-language policy | Answers are accepted in the question's language or English through the published lexicons; values stay canonical in every language. |
 | **Plain ReAct with tool results quoted into the next prompt** | causal | Delivered records and tool results are hash-exempt from the harness-authored span set, so quoting them is fine; only a value *you* computed that appears in no record or result trips `answer_in_prompt`. |
 | **Grounded abstention and clarifying questions authored by the model** | `AnswerAbsence`, `AnswerClarify` | Let the model write the decline citing what it searched, or the question naming the missing slot. A templated "I don't have that" or "what would you like?" scores 0. |
@@ -1013,8 +1013,9 @@ rehearses it; `local-rehearsal.py` follows (`LIVE_SCORING_BENCH_VERSION` 12,
   on end state through a follow-up read.
 - **Free-text tool arguments accept paraphrase** (#1847).
 - **Staged `/seed` waves are live and your 2xx is the ingest acknowledgement**
-  (#1844); point-in-time anchors arrive inside `user_input` as `as_of_twin`
-  pairs.
+  (#1844); same-turn corrections: point-in-time `as of <date>` anchors arrive
+  inside `user_input` as `as_of_twin` pairs, so keep superseded records with
+  their seed timestamps.
 - **Grounded abstention** (#1530): 25 unanswerable cases per run, each paired
   with an answerable twin; decline and cite what you searched.
 - **Memory mix rebalanced** (#1848, #1529): money falls from 50.9% to ≤ 12%

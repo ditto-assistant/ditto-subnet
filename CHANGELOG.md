@@ -2,6 +2,42 @@
 
 <!-- version list -->
 
+## v0.374.1 (2026-10-18)
+
+### Performance Improvements
+
+- **platform**: Bound payout resolution per catch-up sweep
+  ([#3012](https://github.com/ditto-assistant/ditto-subnet/pull/3012),
+  [`b198707`](https://github.com/ditto-assistant/ditto-subnet/commit/b198707de8c1f1a1153f26a043c23bcf0d5a95c9))
+
+
+## v0.374.0 (2026-10-18)
+
+### Features
+
+- **platform**: Plan catch-up by reveals and read planned blocks concurrently
+  ([#3011](https://github.com/ditto-assistant/ditto-subnet/pull/3011),
+  [`99c0d2e`](https://github.com/ditto-assistant/ditto-subnet/commit/99c0d2e62176ce045dc090865a891a85330d2d3b))
+
+
+## v0.373.1 (2026-10-18)
+
+### Bug Fixes
+
+- **platform**: Read epoch consensus under the runtime that wrote the state
+  ([#3008](https://github.com/ditto-assistant/ditto-subnet/pull/3008),
+  [`430a634`](https://github.com/ditto-assistant/ditto-subnet/commit/430a634edca57b6a9c67a02b8465b7d697bd02e5))
+
+
+## v0.373.0 (2026-10-18)
+
+### Features
+
+- **screening**: Enforce per-file source limits with a vendored upstream allowlist
+  ([#3002](https://github.com/ditto-assistant/ditto-subnet/pull/3002),
+  [`b4d0cf7`](https://github.com/ditto-assistant/ditto-subnet/commit/b4d0cf76562df6c34dc9a7f219aeb5d3876cccce))
+
+
 ## v0.372.3 (2026-10-18)
 
 ### Bug Fixes

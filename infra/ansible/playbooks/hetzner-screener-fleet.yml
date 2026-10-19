@@ -54,4 +54,5 @@
 
   roles:
     - base
+    - screener_logs_access
     - hetzner_screener_fleet
