@@ -1245,3 +1245,35 @@ def test_v473_historical_receipt_does_not_require_new_consensus_storage():
         c.guard_runtime(policy(), "historical", historical=True)
         == V473_COLLECTOR_CODE_HASH
     )
+
+
+@pytest.mark.parametrize("release", ["v478", "v479"])
+def test_old_runtime_is_read_only_under_new_v481_policy(release):
+    from ditto_screening_protocol.collector_receipts import (
+        AUDITED_COLLECTOR_RECEIPT_HASHES,
+        V478_COLLECTOR_CODE_HASH,
+        V479_READONLY_CODE_HASH,
+    )
+
+    code = {"v478": V478_COLLECTOR_CODE_HASH, "v479": V479_READONLY_CODE_HASH}[release]
+    c, filters = runtime_adapter(code)
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(policy(), "current")
+    assert c.guard_runtime(policy(), "historical", historical=True) == code
+    # An old signature cannot bind a new current or historical read context.
+    with pytest.raises(ValueError, match="runtime policy"):
+        c.guard_runtime(policy(runtime_code_hash=code), "historical", historical=True)
+    filters[1]["filter_mode"]["Allow"].append(
+        {"pallet_name": "Utility", "call_name": "batch", "constraint": None}
+    )
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(policy(), "historical", historical=True)
+    assert V479_READONLY_CODE_HASH not in AUDITED_COLLECTOR_RECEIPT_HASHES
+
+
+def test_v481_is_the_exact_current_published_artifact():
+    assert AUDITED_CODE_HASH == (
+        "0x5fb504c1c793a3ddb5456f189ddef98b5146853aea6ff998501f1b6c6eb720bc"
+    )
+    c, _ = runtime_adapter(AUDITED_CODE_HASH)
+    assert c.guard_runtime(policy(), "current") == AUDITED_CODE_HASH

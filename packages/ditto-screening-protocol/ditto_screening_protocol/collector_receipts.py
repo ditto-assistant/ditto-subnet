@@ -31,20 +31,36 @@ V476_COLLECTOR_CODE_HASH = (
 V477_COLLECTOR_CODE_HASH = (
     "0x18b52484d9c5d7523f704c86b17b2ab959fffbc6edb6766a77e9877f0ad19387"
 )
-AUDITED_COLLECTOR_CODE_HASH = (
+V478_COLLECTOR_CODE_HASH = (
     "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1"
 )
-# Official artifacts/source reviewed in docs/audits/collector-finney-v478.
-# No official v474 fingerprint was established; unknown states still refuse.
+# Untagged v479 is admitted for historical effect reading only: its consumed
+# receipt interface was measured against audited v478 (see the v481 manifest).
+# No v479 artifact/source equivalence or signing authority is inferred.
+V479_READONLY_CODE_HASH = (
+    "0x44e952fd1cebe9bd15c0c55cee6e1d7c6c97b44d941b79127343118dbbd342bc"
+)
+AUDITED_COLLECTOR_CODE_HASH = (
+    "0x5fb504c1c793a3ddb5456f189ddef98b5146853aea6ff998501f1b6c6eb720bc"
+)
+# Official current artifact/source: docs/audits/collector-finney-v481.
+# No v474/v480 fingerprint is inferred; unknown/reverse states still refuse.
 COLLECTOR_RUNTIME_ORDER = (
     HISTORICAL_COLLECTOR_CODE_HASH,
     V473_COLLECTOR_CODE_HASH,
     V475_COLLECTOR_CODE_HASH,
     V476_COLLECTOR_CODE_HASH,
     V477_COLLECTOR_CODE_HASH,
+    V478_COLLECTOR_CODE_HASH,
+    V479_READONLY_CODE_HASH,
     AUDITED_COLLECTOR_CODE_HASH,
 )
-AUDITED_COLLECTOR_RECEIPT_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER)
+COLLECTOR_READABLE_RUNTIME_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER)
+# Keep Platform's artifact admission distinct from its measured interface
+# admission. In particular, never report v479 as a verified official artifact.
+AUDITED_COLLECTOR_RECEIPT_HASHES = COLLECTOR_READABLE_RUNTIME_HASHES - {
+    V479_READONLY_CODE_HASH
+}
 COLLECTOR_POW_REGISTRATION_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER[2:])
 
 
@@ -56,8 +72,8 @@ def collector_receipt_runtime(parent: str, post: str) -> str:
     This is read-only receipt interpretation, never signing authorization.
     """
     if (
-        parent not in AUDITED_COLLECTOR_RECEIPT_HASHES
-        or post not in AUDITED_COLLECTOR_RECEIPT_HASHES
+        parent not in COLLECTOR_READABLE_RUNTIME_HASHES
+        or post not in COLLECTOR_READABLE_RUNTIME_HASHES
     ):
         raise ValueError("receipt runtime is not audited")
     if COLLECTOR_RUNTIME_ORDER.index(parent) > COLLECTOR_RUNTIME_ORDER.index(post):

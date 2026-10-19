@@ -25,8 +25,8 @@ from ditto.treasury.collector import (
 from ditto.treasury.service_allocation import ServiceDestination
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
-    AUDITED_COLLECTOR_RECEIPT_HASHES,
     COLLECTOR_POW_REGISTRATION_HASHES,
+    COLLECTOR_READABLE_RUNTIME_HASHES,
     FINNEY_GENESIS,
     collector_gross_incentive,
     collector_receipt_runtime,
@@ -34,7 +34,7 @@ from ditto_screening_protocol.collector_receipts import (
     liquid_collector_credit,
 )
 
-# Exact v478 official artifact and reviewed source. Historical receipt hashes
+# Exact v481 official artifact and reviewed source. Historical receipt hashes
 # are accepted only on the observation path, never for preparation/broadcast.
 AUDITED_CODE_HASH = AUDITED_COLLECTOR_CODE_HASH
 
@@ -149,7 +149,7 @@ class PublicCollectorChain:
             "state_getStorageHash", ["0x3a636f6465", block_hash]
         ).get("result")
         allowed = (
-            AUDITED_COLLECTOR_RECEIPT_HASHES
+            COLLECTOR_READABLE_RUNTIME_HASHES
             if historical
             else {policy.runtime_code_hash}
         )

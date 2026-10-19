@@ -20,6 +20,7 @@ from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
     HISTORICAL_COLLECTOR_CODE_HASH,
     V473_COLLECTOR_CODE_HASH,
+    V478_COLLECTOR_CODE_HASH,
 )
 
 SCHEMA = {
@@ -64,8 +65,11 @@ def policy_transition(old: CollectorPolicy, new: CollectorPolicy) -> None:
         and (old.runtime_code_hash, new.runtime_code_hash)
         in {
             (HISTORICAL_COLLECTOR_CODE_HASH, V473_COLLECTOR_CODE_HASH),
+            (HISTORICAL_COLLECTOR_CODE_HASH, V478_COLLECTOR_CODE_HASH),
+            (V473_COLLECTOR_CODE_HASH, V478_COLLECTOR_CODE_HASH),
             (HISTORICAL_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH),
             (V473_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH),
+            (V478_COLLECTOR_CODE_HASH, AUDITED_COLLECTOR_CODE_HASH),
         }
         and all(
             getattr(new, role + "_service_account")
