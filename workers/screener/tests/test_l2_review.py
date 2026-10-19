@@ -7831,6 +7831,32 @@ async def test_stock_kit_dossier_analyzers_are_complete() -> None:
         assert not l2_review._contains_truncation(json.loads(output)), command
 
 
+@pytest.mark.parametrize(
+    ("report", "requires_correction"),
+    [
+        ({"truncated": True, "counts_after_per_rule_file_bounds": True}, False),
+        ({"truncated": True}, True),
+        (
+            {
+                "truncated": True,
+                "counts_after_per_rule_file_bounds": True,
+                "analysis_failed": True,
+            },
+            True,
+        ),
+    ],
+)
+def test_lead_selection_omissions_are_not_retryable_scan_gaps(
+    report: dict[str, object], requires_correction: bool
+) -> None:
+    inventory = {"review_leads": {"fingerprint_selection": report}}
+    assert l2_review._analysis_requires_correction(json.dumps(inventory)) is (
+        requires_correction
+    )
+    inventory["review_leads"]["scan_truncated"] = True
+    assert l2_review._analysis_requires_correction(json.dumps(inventory)) is True
+
+
 async def test_stock_kit_dossier_is_complete_in_every_section(tmp_path: Path) -> None:
     starter = ROOT.parent.parent / "miners/dittobench-starter-kit"
     archive_path = tmp_path / "starter.tar.gz"

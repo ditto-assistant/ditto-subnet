@@ -754,6 +754,17 @@ def _contains_truncation(value: object) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
             if (
+                key in {"item_selection", "fingerprint_selection"}
+                and isinstance(item, dict)
+                and item.get("counts_after_per_rule_file_bounds") is True
+            ):
+                # Lead selection is an attention budget, not an incomplete
+                # analyzer read that retrying the same tool can repair. Keep
+                # every other nested error/scan-truncation marker authoritative.
+                item = {
+                    name: part for name, part in item.items() if name != "truncated"
+                }
+            if (
                 key in {"truncated", "analysis_failed"} or key.endswith("_truncated")
             ) and item is True:
                 return True

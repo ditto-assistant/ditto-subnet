@@ -4843,6 +4843,7 @@ def test_review_leads_skip_exact_starter_files(tmp_path: Path) -> None:
         "review_adaptive_model_routing",
         "files_scanned",
         "bytes_scanned",
+        "truncated",
         "scan_truncated",
     ):
         assert leads[key] == untrusted[key], key
@@ -4955,7 +4956,8 @@ def test_review_lead_dossier_reports_padding_and_omissions(tmp_path: Path) -> No
 
     assert leads["files_scanned"] == 7
     assert leads["scan_truncated"] is False
-    assert leads["truncated"] is True
+    assert leads["truncated"] is False
+    assert leads["fingerprint_selection"]["truncated"] is True
     assert leads["fingerprint_selection"]["omitted_by_kind"] == {
         "self-reported-benchmark-fitting": 18
     }

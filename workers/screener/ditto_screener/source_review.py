@@ -2879,9 +2879,7 @@ class TarSourceRepository:
             "bytes_scanned": bytes_scanned,
             "nontext": nontext,
             "scan_truncated": truncated,
-            "truncated": truncated
-            or bool(item_selection["truncated"])
-            or bool(fingerprint_selection["truncated"]),
+            "truncated": truncated,
         }
 
     def _starter_manifests(self, override: tuple[str, ...] | None) -> tuple[str, ...]:
