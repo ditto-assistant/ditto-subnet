@@ -116,10 +116,22 @@ front-load artifact downloads.
   recipe is I5 (Harry v14 `30d854e5`).
 - **Ported constructs cross hotkeys and languages.** Once a mechanism is
   charged, grep its prompt text (not identifiers) with `search_screening_source`
-  across every ranked and evaluating row. On 2026-10-19 one
-  preliminary-reader I2 stage turned up in Python, Rust, C++ and a renamed
-  Python port on five hotkeys. Building on a publicly released king is allowed;
-  shipping its charged stage is not.
+  across every ranked and evaluating row. A stage can be ported into Python,
+  Rust, C++ or renamed copies across several hotkeys. Building on a publicly
+  released king is allowed; shipping a proven charged stage is not.
+- **Before charging I2, check the request the agent actually receives.**
+  Quote the exact instruction from the served request and show it applies
+  (`workers/screener/docs/policy-v13.md`, I2 clarification). Every scored v13
+  `/run` carries only the validator's tool-discipline system prompt, and
+  `/seed` carries none. A preliminary model stage without the system prompt is
+  a lead, not a finding. On 2026-10-19 thirteen I2 rejects charged that shape
+  without naming an applicable instruction. They were withdrawn as precedent
+  and queued for reversal, so check the proof bar before porting a charge
+  across a lineage.
+- **Reward reality-bearing innovation.** The subnet wants harness ideas that
+  would work for any real user: model-written notes at `/seed`, memory graphs,
+  deliberation and auditable tools. Reject only what the policy proves.
+  Novelty, complexity and departing from the starter kit are never grounds.
 
 ## Report
 

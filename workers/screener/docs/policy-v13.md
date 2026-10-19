@@ -549,6 +549,45 @@ The proof also names the reachable path. Ordinary relevance ranking, an
 isolated miss, or a hypothetical retrieval miss is insufficient. A controlled
 exact-artifact reproduction is sufficient.
 
+#### Clarification: which instructions I2 protects (2026-10-19)
+
+I2 protects instructions that the served request actually carries. It is
+not a requirement that every model call repeat the system prompt.
+
+- **Name the instruction.** An I2 trusted-instruction finding quotes the exact
+  instruction text from the request being served and shows why it applies to
+  the stage that lost it. Naming a category of instruction that a request
+  could carry ("scope, disclosure, temporal, authorization or output") is
+  hypothetical, the same as a hypothetical retrieval miss, and is
+  insufficient.
+- **The deciding input decides the question.** W2 requires the instruction at
+  every deciding answer-producing call. A model stage before that call (a
+  draft, reading, ordering, extraction or lookup pass) whose output reaches a
+  deciding call that still carries the instruction breaches I2 only when the
+  proof shows a material alternative that the deciding call can no longer
+  evaluate. Show that the named instruction would have changed that stage's
+  output, or reproduce the change on the exact artifact. Labelling the stage
+  "advisory" is neither a defense nor a breach.
+- **What the request carries.** In Bench v13, every scored `/run` carries the
+  validator-authored system prompt "You are Ditto, a helpful assistant with
+  access to tools. Call a tool only when it is the right action for the
+  user's request." A tool-less model stage cannot breach that instruction's
+  tool rule. Confirmation lanes can carry other system prompts, such as the
+  LongMemEval current date. Cite the lane and text that apply.
+- **`/seed` is out of scope for this clause.** The seed request carries no
+  system prompt, so seed-time processing cannot lose a trusted instruction.
+  Model-written notes, extraction, indexing and summaries built during
+  `/seed` are permitted on this axis. They remain subject to I2's evidence
+  bullets (a derived interpretation shown while its support or contradiction
+  is removed), W3, I5 and the other conditions.
+
+Passing the request system prompt to every `/run`-time model stage remains
+good practice. Omitting it is a lead to examine, not a finding.
+
+The 2026-10 board holdings that charged I2 for a preliminary model stage
+without naming an applicable instruction from the served request do not meet
+this standard. They are withdrawn as precedent.
+
 ### I3: model-dissent suppression
 
 Reject when host processing semantically chooses, retries, replaces, or
