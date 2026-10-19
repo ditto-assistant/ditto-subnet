@@ -1,6 +1,6 @@
 ---
 name: backroom-board-sweep
-description: Run a rolling top-5 board sweep of the live SN118 leaderboard. Review the top five, every emission recipient and every unruled high scorer. Then re-read the board after each batch of rulings and review whatever rolls up, until the top five and the paid slots are all decided. Use for "rolling top 5", "sweep the board", "review every emission recipient", or sibling re-entry after a reject. The per-row bar, precedents and rulings court live in backroom-review.
+description: Run a rolling top-5 board sweep of the live SN118 leaderboard. Review the top five, every emission recipient and every unruled high scorer. Then re-read the board after each batch of rulings and review whatever rolls up, until the top five and the paid slots are all decided. Use for "rolling top 5", "sweep the board", "review every emission recipient", or sibling re-entry after a reject. Every sweep also files screener and Ditto core improvement tickets from what the reviewed submissions teach. The per-row bar, precedents and rulings court live in backroom-review.
 ---
 
 # Rolling top-5 board sweep
@@ -63,6 +63,26 @@ front-load artifact downloads.
    each sibling on its own bytes.
 10. **Close.** For every touched hotkey, run `search_submissions` again and check
     that every remaining `scored` row is either ruled or listed in the report.
+11. **File tickets.** Do this every sweep, not only when asked. Reading each
+    submission closely is the cheapest time to capture what it teaches. Before
+    filing, search Jira for duplicates, then file:
+    - **Screener improvements** (Jira `SN`, label `screener-gap`). File one for
+      every mechanism the screener admitted that board review then charged. It
+      names the passed agents (UUIDs), why no lead fired, and a detection
+      suggestion that fingerprints the construct, not the artifact. File one too
+      for any review gap you hit, such as missing visibility or a lead-cap
+      blind spot.
+    - **Ditto core product improvements** (Jira `DITTO`, label `from-sn118`):
+      real innovations in a cleared or attested harness that the Ditto assistant
+      backend or other Ditto repos should adopt. Examples are prompt-injection
+      guards, idempotent tool execution and memory-ordering techniques. Say what
+      the technique does, why it helps Ditto users, a scope, and the reference
+      file in the miner artifact. Don't propose adopting a mechanism that was
+      charged under I1–I8.
+
+    Keep unfixed evasions in Jira only: don't mirror them to public GitHub and
+    don't share them with contributors who mine. Never put Jira keys in code,
+    commits or PR bodies.
 
 ## Gotchas
 
@@ -94,9 +114,17 @@ front-load artifact downloads.
   `eb13f315`). Timestamps kept with no recency recipe is the lets_637 clear
   (`8b3f0b57`); hidden timestamps plus an order disclaimer plus a change-wins
   recipe is I5 (Harry v14 `30d854e5`).
+- **Ported constructs cross hotkeys and languages.** Once a mechanism is
+  charged, grep its prompt text (not identifiers) with `search_screening_source`
+  across every ranked and evaluating row. On 2026-10-19 one
+  preliminary-reader I2 stage turned up in Python, Rust, C++ and a renamed
+  Python port on five hotkeys. Building on a publicly released king is allowed;
+  shipping its charged stage is not.
 
 ## Report
 
 Table: agent, version/UUID, hotkey, SHA (short), policy, finding or precedent,
 decision, decisive file:line. Then executed counts (batch ids), rows left and
 why, and the final champion and paid slots from a fresh `get_leaderboard`.
+Finish with the tickets filed this sweep, screener and Ditto core, as linked
+keys with one line each.

@@ -372,6 +372,7 @@ from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enable
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+    nonce_expires_at,
 )
 from ditto.db.queries.weight_receipts import (
     WeightReceiptConflict,
@@ -2047,9 +2048,9 @@ _ARTIFACT_URL_TTL = timedelta(minutes=5)
 # rationale in ``ditto.api_models.scoring_lease_settings``) governs until an
 # operator writes one and on any failure to read it.
 
-# Signed job claims outside this window are stale. A consumed nonce remains in
-# the database for the same window, making replay rejection consistent across
-# every API replica without introducing another secret.
+# Signed job claims outside this window are stale. A consumed nonce is kept
+# until that window closes, including when the stamp is in the future, so a
+# replica cannot forget the nonce while the signature is still acceptable.
 _JOB_REQUEST_MAX_AGE = timedelta(minutes=2)
 # A leased seed of ``None`` is meaningful (a legacy bundle lease), so "this
 # validator holds no lease" needs a sentinel distinct from it.
@@ -3583,7 +3584,11 @@ async def request_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -5497,7 +5502,11 @@ async def request_top5_confirmation_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -6392,7 +6401,11 @@ async def fail_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -6723,7 +6736,11 @@ async def agent_artifact(
                 nonce=x_validator_artifact_nonce,
                 validator_hotkey=x_validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=x_validator_artifact_requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(

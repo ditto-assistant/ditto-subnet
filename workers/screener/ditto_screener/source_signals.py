@@ -9,6 +9,7 @@ never leave the archive through this module.
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import cast
@@ -26,6 +27,7 @@ _MAX_LEADS = 32
 _MAX_LEADS_PER_RULE_FILE = 4
 _WINDOW_LINES = 18
 _MAX_STATIC_FINDINGS = 16
+_MAX_REVIEW_FINDINGS_PER_KIND = 6
 _COMMAND_EXECUTION_EFFECT = re.compile(
     r"\b(?:Command::new|subprocess\.|os\.system|child_process\.|execFile|spawn|"
     r"ProcessBuilder|Process\.(?:run|start|Start)|Runtime(?:\.getRuntime\(\))?\.exec)\b"
@@ -1937,15 +1939,15 @@ _EMULATION_FINGERPRINTS = (
 
 def find_source_review_leads(
     files: Iterable[tuple[str, str]],
+    *,
+    selection_report: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """Return bounded location-only review leads from readable source files."""
     leads: list[dict[str, object]] = []
-    # The lead cap is spent on executable and build files first. Docs and data
-    # fixtures keep their leads (a fixture can still be compiled in or read as
-    # an answer table), but only in the capacity the executable surface
-    # leaves, so they cannot starve a miner source file that sorts after them.
-    # Test-named modules count as executable: whether they are served cannot
-    # be proved from source text.
+    # Within each kind, executable and build files get the first examples.
+    # Docs and data fixtures keep their leads (they can be compiled in or read
+    # as answer tables). Test-named modules count as executable: whether they
+    # are served cannot be proved from source text. Select only after scanning.
     for path, text in sorted(files, key=lambda item: _lead_path_priority(item[0])):
         lines = text.splitlines()
         if not lines:
@@ -2008,11 +2010,54 @@ def find_source_review_leads(
                         continue
                     seen.add(normalized)
                     leads.append({"kind": rule.kind, "locations": locations})
-                    if len(leads) >= _MAX_LEADS:
-                        return leads
                     if len(seen) >= _MAX_LEADS_PER_RULE_FILE:
                         break
-    return leads
+    return _select_review_findings(leads, _MAX_LEADS, selection_report)
+
+
+def _select_review_findings(
+    findings: list[dict[str, object]],
+    limit: int,
+    report: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    """Spend the output budget only after scanning, by severity and kind.
+
+    Preserve input path priority within each kind, but take one of every kind
+    before a second example. A flooded kind cannot consume another kind's slots.
+    Counts describe candidates after the existing per-rule/file safety bounds.
+    """
+    groups: dict[tuple[int, str], list[dict[str, object]]] = defaultdict(list)
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    for finding in findings:
+        severity = severity_order.get(str(finding.get("severity", "medium")), 1)
+        groups[severity, str(finding["kind"])].append(finding)
+    selected: list[dict[str, object]] = []
+    selected_by_kind: Counter[str] = Counter()
+    for severity in sorted({key[0] for key in groups}):
+        kinds = sorted(kind for level, kind in groups if level == severity)
+        for index in range(_MAX_REVIEW_FINDINGS_PER_KIND):
+            for kind in kinds:
+                candidates = groups[severity, kind]
+                if (
+                    index < len(candidates)
+                    and selected_by_kind[kind] < _MAX_REVIEW_FINDINGS_PER_KIND
+                    and len(selected) < limit
+                ):
+                    selected.append(candidates[index])
+                    selected_by_kind[kind] += 1
+    if report is not None:
+        counts = Counter(str(finding["kind"]) for finding in findings)
+        omitted = counts - selected_by_kind
+        report.update(
+            truncated=bool(omitted),
+            candidate_count=len(findings),
+            selected_count=len(selected),
+            omitted_count=sum(omitted.values()),
+            omitted_by_kind=dict(sorted(omitted.items())),
+            per_kind_limit=_MAX_REVIEW_FINDINGS_PER_KIND,
+            counts_after_per_rule_file_bounds=True,
+        )
+    return selected
 
 
 def find_decisive_malicious_source(
@@ -2154,6 +2199,8 @@ def _fingerprint_language(path: str) -> str | None:
 
 def find_benchmark_emulation_fingerprints(
     files: Iterable[tuple[str, str]],
+    *,
+    selection_report: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """Return bench-v12 anti-emulation fingerprints as location-only review leads.
 
@@ -2201,9 +2248,29 @@ def find_benchmark_emulation_fingerprints(
                         fingerprint, path, scan_lines, fingerprint_raw_lines
                     )
                 )
-            if len(findings) >= _MAX_FINGERPRINT_FINDINGS:
-                return findings[:_MAX_FINGERPRINT_FINDINGS]
-    return findings
+    selected = _select_review_findings(
+        findings, _MAX_FINGERPRINT_FINDINGS, selection_report
+    )
+    if selection_report is not None:
+        raw_kinds = {
+            item.kind for item in _EMULATION_FINGERPRINTS if item.scan == "raw"
+        }
+        counts = Counter(str(item["kind"]) for item in findings)
+        # One location-only routing lead per saturated raw-scan kind. Comments
+        # and strings can create these matches: saturation is never a verdict.
+        selection_report["saturation_leads"] = [
+            {
+                "kind": "raw-fingerprint-kind-saturation",
+                "saturated_kind": kind,
+                "candidate_count": counts[kind],
+                "locations": next(
+                    item["locations"] for item in findings if item["kind"] == kind
+                ),
+            }
+            for kind in sorted(raw_kinds)
+            if counts[kind] > _MAX_REVIEW_FINDINGS_PER_KIND
+        ]
+    return selected
 
 
 def _rust_test_item_lines(code_lines: list[str]) -> frozenset[int]:

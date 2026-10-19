@@ -31,7 +31,10 @@ from ditto.db.models import (
     CodingPrivateV2Release,
     CodingPrivateV2ReleaseEvent,
 )
-from ditto.db.queries.validator_auth import consume_validator_nonce
+from ditto.db.queries.validator_auth import (
+    VALIDATOR_NONCE_EXPIRY_MARGIN,
+    consume_validator_nonce,
+)
 
 
 class HostedAdmissionError(ValueError):
@@ -208,12 +211,18 @@ async def admit_hosted_request(
             raise HostedAdmissionError("hosted terminal acknowledgement differs")
     if request.operation == "evaluate" and row.expires_at <= now:
         raise HostedAdmissionError("hosted assignment expired")
+    # Acceptance uses the database clock and stops at expires_at_unix. The
+    # janitor uses the app clock, so keep the nonce through one sweep of skew
+    # past the signed expiry.
     await consume_validator_nonce(
         session,
         nonce=request.nonce,
         validator_hotkey=authenticated_validator,
         now=now,
-        expires_at=datetime.fromtimestamp(request.expires_at_unix, UTC),
+        expires_at=(
+            datetime.fromtimestamp(request.expires_at_unix, UTC)
+            + VALIDATOR_NONCE_EXPIRY_MARGIN
+        ),
     )
     newly_admitted = request.operation == "evaluate" and row.admitted_at is None
     if (

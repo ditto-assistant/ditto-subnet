@@ -14,6 +14,7 @@ from ditto.db.queries.private_benchmark_datasets import (
     PrivateDatasetIdentity,
     find_private_dataset,
 )
+from ditto.db.queries.validator_auth import nonce_expires_at
 
 router = APIRouter(prefix="/validator", tags=["validator"])
 
@@ -46,7 +47,11 @@ async def download_private_dataset(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + v._JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=v._JOB_REQUEST_MAX_AGE,
+                ),
             )
         except v.ValidatorRequestReplayError:
             raise HTTPException(409, "private dataset nonce already used") from None

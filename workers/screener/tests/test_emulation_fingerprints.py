@@ -17,6 +17,38 @@ import pytest
 
 from ditto_screener.source_signals import find_benchmark_emulation_fingerprints
 
+
+@pytest.mark.parametrize("decoy_count", [6, 60])
+def test_comment_padding_cannot_hide_late_high_fingerprints(decoy_count: int) -> None:
+    files = [
+        (f"src/a{index:03}.py", "# phrasing probe-selected over trial N\n" * 4)
+        for index in range(decoy_count)
+    ] + [("src/zz.rs", _RUST_EMULATOR)]
+    report: dict[str, object] = {}
+
+    findings = find_benchmark_emulation_fingerprints(files, selection_report=report)
+
+    kinds = [finding["kind"] for finding in findings]
+    assert {"bench-version-equality-gate", "zero-token-answer-constructor"} <= set(
+        kinds
+    )
+    assert kinds.count("self-reported-benchmark-fitting") == 6
+    assert len(findings) <= 24
+    severities = [finding["severity"] for finding in findings]
+    assert severities == sorted(severities, key={"high": 0, "medium": 1, "low": 2}.get)
+    assert report["truncated"] is True
+    assert report["omitted_count"] == report["candidate_count"] - len(findings)
+    assert report["omitted_by_kind"]["self-reported-benchmark-fitting"] == (
+        4 * decoy_count - 6
+    )
+    assert [lead["saturated_kind"] for lead in report["saturation_leads"]] == [
+        "self-reported-benchmark-fitting"
+    ]
+    # Input order cannot affect the selected dossier, and no source is exposed.
+    assert findings == find_benchmark_emulation_fingerprints(reversed(files))
+    assert "phrasing" not in json.dumps(report)
+
+
 _RUST_EMULATOR = """\
 // Ported from universe/world.go and the conversational.go generator so we
 // mirror the world-canary and world-injection-resistance families.

@@ -103,6 +103,7 @@ from ditto.db.queries.confirmation_ticket_recovery import (
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+    nonce_expires_at,
 )
 from ditto.db.queries.validator_slot_occupancy import (
     live_v9_confirmation_slot_ticket,
@@ -465,7 +466,11 @@ async def request_v9_confirmation_job(
                     nonce=payload.nonce,
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
-                    expires_at=now + _JOB_REQUEST_MAX_AGE,
+                    expires_at=nonce_expires_at(
+                        now=now,
+                        requested_at=payload.requested_at,
+                        max_age=_JOB_REQUEST_MAX_AGE,
+                    ),
                 )
             except ValidatorRequestReplayError as error:
                 raise HTTPException(
@@ -773,7 +778,11 @@ async def get_v9_confirmation_artifact(
                 nonce=x_confirmation_nonce,
                 validator_hotkey=x_validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=x_confirmation_requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as error:
             raise HTTPException(
@@ -898,7 +907,11 @@ async def prepare_v9_confirmation_report(
                     nonce=payload.nonce,
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
-                    expires_at=now + _JOB_REQUEST_MAX_AGE,
+                    expires_at=nonce_expires_at(
+                        now=now,
+                        requested_at=payload.requested_at,
+                        max_age=_JOB_REQUEST_MAX_AGE,
+                    ),
                 )
             except ValidatorRequestReplayError as error:
                 raise HTTPException(
@@ -1051,7 +1064,11 @@ async def fail_v9_confirmation_job(
                     nonce=payload.nonce,
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
-                    expires_at=now + _JOB_REQUEST_MAX_AGE,
+                    expires_at=nonce_expires_at(
+                        now=now,
+                        requested_at=payload.requested_at,
+                        max_age=_JOB_REQUEST_MAX_AGE,
+                    ),
                 )
             except ValidatorRequestReplayError as error:
                 raise HTTPException(
