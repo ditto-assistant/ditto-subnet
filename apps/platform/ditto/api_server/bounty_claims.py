@@ -503,12 +503,20 @@ async def confirm_claim(
         fee.amount_alpha_rao != claim.fee_alpha_rao
     ):
         raise HTTPException(402, "the receipt does not pay this claim's exact fee")
-    try:
-        owner_coldkey: str | None = (await finalized_owner(chain, claim.hotkey)).coldkey
-    except ContributorProofRejected:
-        owner_coldkey = None
-    except ChainError:
-        raise HTTPException(503, "finalized ownership unavailable; retry") from None
+    async with maker() as session:
+        recorded = await session.get(
+            BountyFeePayment, (fee.block_hash, fee.extrinsic_index)
+        )
+    owner_coldkey: str | None = None
+    # A recorded receipt returns its outcome below, which needs no owner: an
+    # exact retry must not fail on a chain read.
+    if recorded is None:
+        try:
+            owner_coldkey = (await finalized_owner(chain, claim.hotkey)).coldkey
+        except ContributorProofRejected:
+            owner_coldkey = None
+        except ChainError:
+            raise HTTPException(503, "finalized ownership unavailable; retry") from None
     await settle_deadlines(maker, claim.bounty_id, now=(clock or utcnow)())
     async with maker() as session, session.begin():
         await locked_bounty(session, claim.bounty_id)

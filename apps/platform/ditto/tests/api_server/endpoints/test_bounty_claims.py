@@ -289,6 +289,24 @@ async def test_an_exact_retry_of_a_hold_returns_the_original(world):
     assert (await world.counts())["bounty_claims"] == 1
 
 
+async def test_an_exact_receipt_retry_needs_no_chain_read(world):
+    await world.start(ALICE, BOB)
+    alice = (await world.hold(ALICE)).json()
+    bob = (await world.hold(BOB)).json()
+    paid = await world.confirm(alice)
+    assert paid.status_code == 200, paid.text
+    world.app.state.chain.get_finalized_block = AsyncMock(
+        side_effect=ChainConnectionError("fixture outage")
+    )
+    # A recorded receipt returns its outcome while finalized ownership is down;
+    # a receipt not yet recorded still needs it.
+    again = await world.confirm(alice)
+    assert again.status_code == 200 and again.json() == paid.json()
+    unpaid = await world.confirm(bob)
+    assert unpaid.status_code == 503 and "finalized ownership" in unpaid.text
+    assert (await world.counts())["bounty_fee_payments"] == 1
+
+
 async def test_concurrent_identical_holds_record_one_claim(world):
     await world.start(ALICE)
     body = world.body(ALICE)
