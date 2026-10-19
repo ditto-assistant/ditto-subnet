@@ -1014,6 +1014,27 @@ async def test_settlement_history_is_append_only(world):
         await session.rollback()
 
 
+async def test_an_uncertain_transfer_only_records_its_outcome_forward(world):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    await policy(world)
+    refund = obligation(claim, "fee_refund")
+    await approve(world, refund)
+    unknown = (await dispatch(world, refund, "unknown")).json()
+    assert [t["state"] for t in unknown["transfers"]] == ["uncertain"]
+    async with world.maker() as session:
+        with pytest.raises(DBAPIError, match="cannot return to dispatched"):
+            await session.execute(
+                text("UPDATE bounty_transfers SET state = 'dispatched'")
+            )
+        await session.rollback()
+    # Settling it is still an outcome recorded forward.
+    async with world.maker() as session, session.begin():
+        await session.execute(
+            text("UPDATE bounty_transfers SET state = 'failed', settled_at = now()")
+        )
+
+
 async def test_settlement_routes_declare_their_errors(app):
     paths = app.openapi()["paths"]
     for route, statuses in (

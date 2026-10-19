@@ -100,6 +100,9 @@ CREATE FUNCTION public.bounty_transfer_outcome_only() RETURNS trigger
           IF OLD.state NOT IN ('dispatched', 'uncertain') THEN
             RAISE EXCEPTION 'a settled bounty transfer cannot change';
           END IF;
+          IF OLD.state = 'uncertain' AND NEW.state = 'dispatched' THEN
+            RAISE EXCEPTION 'an uncertain bounty transfer cannot return to dispatched';
+          END IF;
           IF to_jsonb(NEW) - 'state' - 'block_hash' - 'block_number'
                - 'extrinsic_index' - 'settled_at'
              IS DISTINCT FROM to_jsonb(OLD) - 'state' - 'block_hash'
