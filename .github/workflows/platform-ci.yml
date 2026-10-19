@@ -38,6 +38,9 @@ on:
       # endpoint consumes; a producer-only change must run the consumer tests.
       - workers/screener/ditto_screener/policy.py
       - workers/screener/ditto_screener/worker.py
+      # The fingerprint language inventory mirrors the screener's language
+      # table; test_source_languages.py pins the mirror.
+      - workers/screener/ditto_screener/source_masking.py
       - .github/workflows/platform-ci.yml
       - .github/workflows/platform-verify.yml
 permissions:

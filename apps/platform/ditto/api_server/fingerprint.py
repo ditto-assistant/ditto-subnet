@@ -65,6 +65,13 @@ the copy gate (:func:`ditto.api_server.scoring_gate._lexical_strength`) reads
 it beside the window channel on its own bar. It never feeds the same-owner
 resubmission rule, whose near-identity question the window channel answers.
 
+**The language inventory.** The canonicalizations above are Rust-shaped (C-style
+comments, Rust string literals), so the stored fingerprint also records which
+languages its members were written in (:mod:`ditto.api_server.source_languages`):
+per-language file and byte counts over the fingerprinted members, keyed by a
+closed label set. Reviewers read it to tell when a channel had little it could
+canonicalize. It is provenance only and feeds no comparison.
+
 Computed here because ``/upload/agent`` already holds the whole tarball in memory
 (streamed for the size cap + sha256), so the platform gets the signal without a
 second unpack. Everything is pure + deterministic: the same tarball always yields
@@ -390,12 +397,15 @@ def _excluded_from_fingerprints(path: str, raw: bytes) -> bool:
 def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
     """Return a MinHash shingle sketch of the tarball's source, or ``None``.
 
-    The returned dict is ``{"v", "corpus", "k", "card", "m", "lines"}`` —
-    algorithm version, canonical reference-corpus identity, sketch budget, true
-    residual cardinality, the sorted bottom-``k`` residual hashes, and the
-    same-shaped ``lines`` sub-sketch (:func:`_line_shingles`) — JSON-serializable
-    for the ``agents.content_fingerprint`` column and consumed by
-    :func:`content_similarity`.
+    The returned dict is ``{"v", "corpus", "k", "card", "m", "lines",
+    "languages"}`` — algorithm version, canonical reference-corpus identity,
+    sketch budget, true residual cardinality, the sorted bottom-``k`` residual
+    hashes, the same-shaped ``lines`` sub-sketch (:func:`_line_shingles`), and
+    the private language inventory of the fingerprinted members
+    (:mod:`ditto.api_server.source_languages`) — JSON-serializable for the
+    ``agents.content_fingerprint`` column and consumed by
+    :func:`content_similarity`. The inventory is provenance only: no
+    comparison reads it, so it never changes a sketch or a verdict.
 
     Members carrying no miner-authored evidence — published kit files at any
     known revision, and generated lockfiles — are dropped whole before shingling
@@ -410,10 +420,16 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
     never raises into the upload path: a hostile or corrupt tarball simply gets no
     content signal (the validator/screener still reject a broken harness downstream).
     """
+    # Imported here, not at module level: ``scripts/build_reference_fingerprints.py``
+    # loads this file standalone, without the ``ditto`` package, to reach the
+    # pure shingling helpers, so the module's top level stays stdlib-only.
+    from ditto.api_server.source_languages import LanguageInventory
+
     shingles: set[str] = set()
     lines: set[str] = set()
     lines_overflowed = False
     excluded_any = False
+    languages = LanguageInventory()
     total = 0
     members = 0
     try:
@@ -440,7 +456,9 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
                     return None
                 if _excluded_from_fingerprints(member.name, raw):
                     excluded_any = True
+                    languages.exclude(raw)
                     continue
+                languages.add(member.name, raw)
                 for shingle in _file_shingles(raw):
                     shingles.add(shingle)
                     if len(shingles) > _MAX_SHINGLES:
@@ -472,6 +490,7 @@ def compute_content_fingerprint(tar_gz_bytes: bytes) -> dict | None:
             _without_reference(lines, "line"),
             floor=_MIN_LINE_SHINGLES,
         ),
+        "languages": languages.to_json(),
     }
 
 
