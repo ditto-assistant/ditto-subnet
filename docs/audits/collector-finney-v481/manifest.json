@@ -269,5 +269,107 @@
     "runtime_code_hash:v478->v481"
   ],
   "manual_max_alpha": 2500,
-  "recurring_enabled": false
+  "recurring_enabled": false,
+  "native_historical_v479": {
+    "block": 9305652,
+    "block_hash": "0xfdaadfafdcdf5be5a01c0b0ce9753cc253b11e55cb85abbd58665220154e3934",
+    "runtime_code_hash": "0x44e952fd1cebe9bd15c0c55cee6e1d7c6c97b44d941b79127343118dbbd342bc",
+    "proxy_filters": [
+      {
+        "proxy_type": 9,
+        "name": "Registration",
+        "deprecated": false,
+        "filter_mode": {
+          "Allow": [
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "pow_register",
+              "call_index": 152,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "register",
+              "call_index": 6,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "register_limit",
+              "call_index": 134,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "burned_register",
+              "call_index": 7,
+              "constraint": null
+            }
+          ]
+        }
+      },
+      {
+        "proxy_type": 10,
+        "name": "Transfer",
+        "deprecated": false,
+        "filter_mode": {
+          "Allow": [
+            {
+              "pallet_name": "Balances",
+              "pallet_index": 5,
+              "call_name": "transfer_keep_alive",
+              "call_index": 3,
+              "constraint": null
+            },
+            {
+              "pallet_name": "Balances",
+              "pallet_index": 5,
+              "call_name": "transfer_allow_death",
+              "call_index": 0,
+              "constraint": null
+            },
+            {
+              "pallet_name": "Balances",
+              "pallet_index": 5,
+              "call_name": "transfer_all",
+              "call_index": 4,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "transfer_stake",
+              "call_index": 86,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "transfer_stake_and_hotkey",
+              "call_index": 143,
+              "constraint": null
+            }
+          ]
+        }
+      }
+    ],
+    "reads": {
+      "SubnetEpochConsensus": "Yuma",
+      "Owner": "5Fhnko5TCPtR1hyD8aua6n23XRM8cxcBM6TgNEqqUhcxWs1t",
+      "Uids": 21,
+      "SubnetOwner": "5HGXqHbQjEmwnQsnnMa8pm13VUv9PP2jB4Vuv9nw7NwUYiAN",
+      "AutoStakeDestination": "5H93a8uVJC6ve2bNVZu9jAGEuBHDFspct3UbHRYGsxUNpA1e",
+      "SubnetEmissionWeights": {
+        "error_type": "StorageFunctionNotFound"
+      },
+      "AccountFlags": 0,
+      "StakingHotkeys": [
+        "5H93a8uVJC6ve2bNVZu9jAGEuBHDFspct3UbHRYGsxUNpA1e"
+      ]
+    }
+  }
 }
