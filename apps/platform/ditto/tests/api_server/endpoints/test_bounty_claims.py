@@ -879,6 +879,34 @@ async def test_an_obligation_belongs_to_its_claims_bounty(world):
         await session.execute(refund, {"issue": ISSUE})
 
 
+async def test_events_and_slots_name_a_claim_only_with_its_own_slot(world):
+    await world.start(ALICE, BOB)
+    alice = (await world.hold(ALICE)).json()
+    bob = (await world.hold(BOB)).json()
+    assert alice["slot_id"] != bob["slot_id"]
+    # Alice's hold event, recorded again against the slot in `slot`.
+    event = text(
+        "INSERT INTO bounty_events (bounty_id, kind, revision, round, slot_id,"
+        " claim_id, recorded_at) SELECT bounty_id, kind, revision, round, :slot,"
+        " claim_id, recorded_at FROM bounty_events"
+        " WHERE claim_id = :claim AND kind = 'slot_held'"
+    )
+    # The slot in `slot` held by the claim in `claim`.
+    holder = text("UPDATE bounty_slots SET claim_id = :claim WHERE slot_id = :slot")
+    for statement, claim in ((event, alice), (holder, alice)):
+        async with world.maker() as session:
+            with pytest.raises(DBAPIError, match="violates foreign key"):
+                await session.execute(
+                    statement, {"claim": claim["claim_id"], "slot": bob["slot_id"]}
+                )
+            await session.rollback()
+    for statement, claim in ((event, alice), (holder, bob)):
+        async with world.maker() as session, session.begin():
+            await session.execute(
+                statement, {"claim": claim["claim_id"], "slot": claim["slot_id"]}
+            )
+
+
 async def test_claim_routes_declare_their_errors(app):
     paths = app.openapi()["paths"]
     assert {"400", "403", "404", "409", "429", "503"} <= set(

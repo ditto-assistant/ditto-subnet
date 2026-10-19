@@ -128,6 +128,8 @@ def upgrade() -> None:
         sa.UniqueConstraint("nonce"),
         # The target of references that must stay within the claim's bounty.
         sa.UniqueConstraint("claim_id", "bounty_id"),
+        # The target of references to a claim together with the slot it holds.
+        sa.UniqueConstraint("slot_id", "claim_id"),
         sa.ForeignKeyConstraint(
             ["bounty_id", "revision"],
             ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
@@ -160,6 +162,14 @@ def upgrade() -> None:
         "bounty_claims",
         ["claim_id", "bounty_id"],
         ["claim_id", "bounty_id"],
+    )
+    # A slot's claim is a claim of that slot.
+    op.create_foreign_key(
+        op.f("fk_bounty_slots_slot_id_bounty_claims"),
+        "bounty_slots",
+        "bounty_claims",
+        ["slot_id", "claim_id"],
+        ["slot_id", "claim_id"],
     )
     op.create_check_constraint(
         op.f("ck_bounty_slots_claim"),
@@ -248,6 +258,14 @@ def upgrade() -> None:
         ["claim_id", "bounty_id"],
         ["claim_id", "bounty_id"],
     )
+    # An event naming a claim and a slot names the slot that claim holds.
+    op.create_foreign_key(
+        op.f("fk_bounty_events_slot_id_bounty_claims"),
+        "bounty_events",
+        "bounty_claims",
+        ["slot_id", "claim_id"],
+        ["slot_id", "claim_id"],
+    )
     op.drop_constraint(op.f("ck_bounty_events_kind"), "bounty_events", type_="check")
     op.create_check_constraint(
         op.f("ck_bounty_events_kind"),
@@ -296,21 +314,21 @@ def downgrade() -> None:
     op.drop_constraint(
         op.f("ck_bounty_events_claim_scope"), "bounty_events", type_="check"
     )
-    op.drop_constraint(
-        op.f("fk_bounty_events_claim_id_bounty_claims"),
-        "bounty_events",
-        type_="foreignkey",
-    )
+    for constraint in (
+        "fk_bounty_events_slot_id_bounty_claims",
+        "fk_bounty_events_claim_id_bounty_claims",
+    ):
+        op.drop_constraint(op.f(constraint), "bounty_events", type_="foreignkey")
     op.drop_column("bounty_events", "claim_id")
     op.drop_table("bounty_obligations")
     op.drop_table("bounty_fee_payments")
     op.execute(_slot_trigger("status", "status_changed_at"))
     op.drop_constraint(op.f("ck_bounty_slots_claim"), "bounty_slots", type_="check")
-    op.drop_constraint(
-        op.f("fk_bounty_slots_claim_id_bounty_claims"),
-        "bounty_slots",
-        type_="foreignkey",
-    )
+    for constraint in (
+        "fk_bounty_slots_slot_id_bounty_claims",
+        "fk_bounty_slots_claim_id_bounty_claims",
+    ):
+        op.drop_constraint(op.f(constraint), "bounty_slots", type_="foreignkey")
     op.drop_column("bounty_slots", "deadline_at")
     op.drop_column("bounty_slots", "claim_id")
     op.drop_table("bounty_claims")

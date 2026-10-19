@@ -12176,6 +12176,12 @@ class BountySlot(Base):
             ["bounty_claims.claim_id", "bounty_claims.bounty_id"],
             use_alter=True,
         ),
+        # A slot's claim is a claim of that slot.
+        ForeignKeyConstraint(
+            ["slot_id", "claim_id"],
+            ["bounty_claims.slot_id", "bounty_claims.claim_id"],
+            use_alter=True,
+        ),
         CheckConstraint("position > 0", name="position"),
         CheckConstraint(
             "status IN (" + ",".join(f"'{s}'" for s in BOUNTY_SLOT_STATUSES) + ")",
@@ -12232,6 +12238,10 @@ class BountyEvent(Base):
         ForeignKeyConstraint(
             ["claim_id", "bounty_id"],
             ["bounty_claims.claim_id", "bounty_claims.bounty_id"],
+        ),
+        # An event naming a claim and a slot names the slot that claim holds.
+        ForeignKeyConstraint(
+            ["slot_id", "claim_id"], ["bounty_claims.slot_id", "bounty_claims.claim_id"]
         ),
         # The target of an appeal's reference to an event of its own claim.
         UniqueConstraint("event_id", "claim_id"),
@@ -12359,6 +12369,8 @@ class BountyClaim(Base):
         UniqueConstraint("nonce"),
         # The target of references that must stay within the claim's bounty.
         UniqueConstraint("claim_id", "bounty_id"),
+        # The target of references to a claim together with the slot it holds.
+        UniqueConstraint("slot_id", "claim_id"),
         ForeignKeyConstraint(
             ["bounty_id", "revision"],
             ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
