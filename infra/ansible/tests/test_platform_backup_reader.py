@@ -19,7 +19,9 @@ def render_case(reader_enabled, avatars_enabled):
     source = (
         ROOT / "infra/ansible/roles/platform_app/templates/platform.env.j2"
     ).read_text()
-    env = Environment(loader=FileSystemLoader(ROOT / "infra/ansible/roles/platform_app/templates"))
+    env = Environment(
+        loader=FileSystemLoader(ROOT / "infra/ansible/roles/platform_app/templates")
+    )
     env.filters.update(bool=bool, quote=str)
     context: dict[str, object] = dict.fromkeys(
         meta.find_undeclared_variables(env.parse(source)), ""
