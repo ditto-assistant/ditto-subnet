@@ -14,10 +14,10 @@ from ditto.chain.runtime_interface import RuntimeInterface
 AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
     # v473: runtime 0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08
     # at Finney block 9220000.
-    "bc4ec062abdadc29a4e44d302013703cc6392a4d42997e88d710b3ff4e9c18ea": (
+    "d3f7e66fbd59f567e3330576a3c7404dec046c30be22a739489dddb4547234ef": (
         "v473",
         RuntimeInterface(
-            digest="bc4ec062abdadc29a4e44d302013703cc6392a4d42997e88d710b3ff4e9c18ea",
+            digest="d3f7e66fbd59f567e3330576a3c7404dec046c30be22a739489dddb4547234ef",
             has_epoch_consensus=False,
             entries={
                 "call:SubtensorModule.commit_timelocked_mechanism_weights": (
@@ -50,6 +50,9 @@ AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
                 "storage:SubtensorModule.Active": (
                     "b2f990cb7406d7e31486ce8ee723321022e0dd706a605ee9d1aa7de9ab1a7a5d"
                 ),
+                "storage:SubtensorModule.BlockAtRegistration": (
+                    "f870f528c6f0237bcfff72d9c20ebff200841cb692f0ab048a90889fe20e8a15"
+                ),
                 "storage:SubtensorModule.CommitRevealWeightsEnabled": (
                     "1a2cbe2f87685f3b803085369edc26b75112c94bcafee8e96e0edcaf12c2e45c"
                 ),
@@ -68,6 +71,12 @@ AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
                 "storage:SubtensorModule.OwnedHotkeys": (
                     "206aeda4b3eb7a62a8d1de1deda94dfa37a769944729347e5a14658a31dc0239"
                 ),
+                "storage:SubtensorModule.OwnerHyperparamRateLimit": (
+                    "2a42fd028d12103e7c09a3650ebc06d391aaa1584156cffbe1e0a7896fe7ab5b"
+                ),
+                "storage:SubtensorModule.RevealPeriodEpochs": (
+                    "5d2d1c4bc5f023af1a28c8cdd244b8dc91b4569f2a66b2555cdd2381f273cafb"
+                ),
                 "storage:SubtensorModule.StakeWeight": (
                     "a80d79a96b89b46442b895b378e7f8b67291557baa8419c5efbae1ff2092a578"
                 ),
@@ -83,11 +92,17 @@ AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
                 "storage:SubtensorModule.SubnetOwnerHotkey": (
                     "6649622c6caec6dd208fde3933fd2ad844a5ee62236c4ba4c6a3c3ac67196080"
                 ),
+                "storage:SubtensorModule.Tempo": (
+                    "c8203b69ea6faf8cc2240d9c1de539a7d44082bd047ec294f7e5d1a155beb71a"
+                ),
                 "storage:SubtensorModule.TimelockedWeightCommits": (
                     "8349584c697b2d0321522b1b6a8d173bed7197052e61b8305b72259b55e012e1"
                 ),
                 "storage:SubtensorModule.ValidatorPermit": (
                     "b2f990cb7406d7e31486ce8ee723321022e0dd706a605ee9d1aa7de9ab1a7a5d"
+                ),
+                "storage:SubtensorModule.WeightCommits": (
+                    "f864d99457aea84499ccefa157a0b3b69f1e2592062d75e5b464237246ff2a25"
                 ),
                 "storage:SubtensorModule.Weights": (
                     "3fae3bb6599b45c2b8bbc8b1e104b2fa35112649b41ebfed46b46f26c946c47e"
@@ -100,10 +115,10 @@ AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
     ),
     # v478: runtime 0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1
     # at Finney block 9280000.
-    "31145be1ffd082d3d266128f56041ddae09311f507024bfef7cfc44f228d3291": (
+    "fc28727e4cd4b95f4bfe5164159274a03f3763c4d580bee213490d5827bc9a8e": (
         "v478",
         RuntimeInterface(
-            digest="31145be1ffd082d3d266128f56041ddae09311f507024bfef7cfc44f228d3291",
+            digest="fc28727e4cd4b95f4bfe5164159274a03f3763c4d580bee213490d5827bc9a8e",
             has_epoch_consensus=True,
             entries={
                 "call:SubtensorModule.commit_timelocked_mechanism_weights": (
@@ -136,6 +151,9 @@ AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
                 "storage:SubtensorModule.Active": (
                     "b2f990cb7406d7e31486ce8ee723321022e0dd706a605ee9d1aa7de9ab1a7a5d"
                 ),
+                "storage:SubtensorModule.BlockAtRegistration": (
+                    "f870f528c6f0237bcfff72d9c20ebff200841cb692f0ab048a90889fe20e8a15"
+                ),
                 "storage:SubtensorModule.CommitRevealWeightsEnabled": (
                     "1a2cbe2f87685f3b803085369edc26b75112c94bcafee8e96e0edcaf12c2e45c"
                 ),
@@ -154,6 +172,12 @@ AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
                 "storage:SubtensorModule.OwnedHotkeys": (
                     "206aeda4b3eb7a62a8d1de1deda94dfa37a769944729347e5a14658a31dc0239"
                 ),
+                "storage:SubtensorModule.OwnerHyperparamRateLimit": (
+                    "2a42fd028d12103e7c09a3650ebc06d391aaa1584156cffbe1e0a7896fe7ab5b"
+                ),
+                "storage:SubtensorModule.RevealPeriodEpochs": (
+                    "5d2d1c4bc5f023af1a28c8cdd244b8dc91b4569f2a66b2555cdd2381f273cafb"
+                ),
                 "storage:SubtensorModule.StakeWeight": (
                     "a80d79a96b89b46442b895b378e7f8b67291557baa8419c5efbae1ff2092a578"
                 ),
@@ -169,11 +193,17 @@ AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
                 "storage:SubtensorModule.SubnetOwnerHotkey": (
                     "6649622c6caec6dd208fde3933fd2ad844a5ee62236c4ba4c6a3c3ac67196080"
                 ),
+                "storage:SubtensorModule.Tempo": (
+                    "c8203b69ea6faf8cc2240d9c1de539a7d44082bd047ec294f7e5d1a155beb71a"
+                ),
                 "storage:SubtensorModule.TimelockedWeightCommits": (
                     "8349584c697b2d0321522b1b6a8d173bed7197052e61b8305b72259b55e012e1"
                 ),
                 "storage:SubtensorModule.ValidatorPermit": (
                     "b2f990cb7406d7e31486ce8ee723321022e0dd706a605ee9d1aa7de9ab1a7a5d"
+                ),
+                "storage:SubtensorModule.WeightCommits": (
+                    "f864d99457aea84499ccefa157a0b3b69f1e2592062d75e5b464237246ff2a25"
                 ),
                 "storage:SubtensorModule.Weights": (
                     "3fae3bb6599b45c2b8bbc8b1e104b2fa35112649b41ebfed46b46f26c946c47e"

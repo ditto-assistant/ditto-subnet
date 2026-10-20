@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from ditto.chain.runtime_interface import SOURCE_EMISSION_SURFACE
 from ditto.chain.source_emission_verifier import (
     AUDITED_RUNTIME_CODE_HASHES,
     plan_source_emission_range,
@@ -389,6 +390,33 @@ async def test_a_failed_bisection_leaves_no_reads_running() -> None:
     with pytest.raises(ValueError, match="missing storage hash"):
         await _plan(chain)
     assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def test_every_storage_item_a_planner_reads_is_in_the_pinned_surface(
+    monkeypatch,
+) -> None:
+    # A runtime admitted on its interface alone must not change, unseen, the
+    # shape of anything a planner decodes.
+    chain = _chain()
+    chain.registrations = {2: [(1333, "newminer")]}
+    chain.swaps = {1: [(1400, "validator2")]}
+    create = chain.create_storage_key
+    keyed: list[str] = []
+
+    async def recording(pallet: str, name: str, params: list[Any], **kw: Any) -> _Key:
+        keyed.append(name)
+        return await create(pallet, name, params, **kw)
+
+    monkeypatch.setattr(chain, "create_storage_key", recording)
+    for planner in (plan_source_emission_range, plan_source_emission_range_by_reveals):
+        await planner(chain, netuid=NETUID, first_block=FIRST, last_block=LAST)
+    # System.Events is pinned by its consumed variants, never whole.
+    read = {
+        name
+        for name in (*chain.calls, *keyed)
+        if not name.startswith(("chain_", "state_")) and name != "Events"
+    }
+    assert read - {name for _, name in SOURCE_EMISSION_SURFACE.storage} == set()
 
 
 async def test_a_failed_storage_key_leaves_no_reads_running(monkeypatch) -> None:

@@ -42,24 +42,30 @@ class RuntimeSurface:
     calls: tuple[tuple[str, str], ...]
 
 
-# Storage the verifier (source_emission_verifier) and the payout receipt reader
-# (ChainClient.get_miner_emission_receipt) decode. ``SubnetEpochConsensus`` is
-# absent before v475; its absence is part of the fingerprint.
+# Storage the verifier (source_emission_verifier), its catch-up range planners
+# and the payout receipt reader (ChainClient.get_miner_emission_receipt) decode.
+# ``SubnetEpochConsensus`` is absent before v475; its absence is part of the
+# fingerprint.
 CONSUMED_STORAGE: tuple[tuple[str, str], ...] = (
     ("SubtensorModule", "Active"),
+    ("SubtensorModule", "BlockAtRegistration"),
     ("SubtensorModule", "CommitRevealWeightsEnabled"),
     ("SubtensorModule", "Keys"),
     ("SubtensorModule", "LastMechansimStepBlock"),
     ("SubtensorModule", "LastUpdate"),
     ("SubtensorModule", "MechanismCountCurrent"),
     ("SubtensorModule", "OwnedHotkeys"),
+    ("SubtensorModule", "OwnerHyperparamRateLimit"),
+    ("SubtensorModule", "RevealPeriodEpochs"),
     ("SubtensorModule", "StakeWeight"),
     ("SubtensorModule", "SubnetEpochConsensus"),
     ("SubtensorModule", "SubnetEpochIndex"),
     ("SubtensorModule", "SubnetOwner"),
     ("SubtensorModule", "SubnetOwnerHotkey"),
+    ("SubtensorModule", "Tempo"),
     ("SubtensorModule", "TimelockedWeightCommits"),
     ("SubtensorModule", "ValidatorPermit"),
+    ("SubtensorModule", "WeightCommits"),
     ("SubtensorModule", "Weights"),
     ("Timestamp", "Now"),
 )

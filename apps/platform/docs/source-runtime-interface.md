@@ -18,12 +18,13 @@ interface** matches an audited runtime's:
 
 - `ditto/chain/runtime_interface.py` reads the runtime's own metadata
   (`init_runtime(block_hash=…)`) and hashes the SCALE shape of exactly the
-  storage items, event variants and calls the verifier and the payout receipt
-  reader decode (`SOURCE_EMISSION_SURFACE`). Storage modifiers, hashers and
-  defaults are included; docs and type names are not. `System.Events` is not
-  hashed whole, since it embeds every pallet's events; the consumed variants
-  are hashed by name instead. The outer `RuntimeCall`/`RuntimeEvent` enums
-  are hashed by path only for the same reason.
+  storage items, event variants and calls the verifier, its catch-up range
+  planners and the payout receipt reader decode (`SOURCE_EMISSION_SURFACE`).
+  Storage modifiers, hashers and defaults are included; docs and type names
+  are not. `System.Events` is not hashed whole, since it embeds every pallet's
+  events; the consumed variants are hashed by name instead. The outer
+  `RuntimeCall`/`RuntimeEvent` enums are hashed by path only for the same
+  reason.
 - `ditto/chain/audited_runtime_interfaces.py` pins the audited digests,
   derived from live metadata of audited v473 (no epoch consensus) and v478
   (with `SubnetEpochConsensus`).
@@ -36,6 +37,11 @@ interface** matches an audited runtime's:
 Measured on Finney 2026-10-17, the consumed interface is identical for every
 runtime from v448 to v479 except at v475, where `SubnetEpochConsensus` was
 added. That is the only upgrade in that window that needed a human audit.
+On 2026-10-20 the planners' storage (`BlockAtRegistration`, `RevealPeriodEpochs`,
+`Tempo`, `OwnerHyperparamRateLimit`, `WeightCommits`) joined the surface, and
+every runtime from block 9,100,000 to 9,321,735 was still admitted, including
+the three admitted on their interface alone (`0x43bc67be…`, `0x44e952fd…`,
+`0x5fb504c1…`).
 
 ## When the collector stops
 
