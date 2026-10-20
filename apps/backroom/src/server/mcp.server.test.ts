@@ -4065,6 +4065,7 @@ describe('Backroom MCP tools', () => {
       relay_delay_fingerprint_mode: 'off' as const,
       relay_delay_fingerprint_min_ms: 25,
       relay_delay_fingerprint_max_ms: 250,
+      sandbox_memory_limit_mib: 6144,
     },
   }
 

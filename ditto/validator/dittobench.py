@@ -240,6 +240,11 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # bounded 600-second lock wait. The harness never ran, so consuming the
     # miner's attempt would charge them for shared scorer infrastructure.
     "seed_store_lock_timeout",
+    # The harness died on SIGILL before it ever became healthy: this host's CPU
+    # lacks an instruction the screened image uses, and the same image starts on
+    # other validators. Platform parks the ticket for this validator only, so it
+    # is not re-leased here without bound.
+    "sandbox_cpu_unsupported",
 }
 
 

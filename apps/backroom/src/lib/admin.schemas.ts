@@ -2887,6 +2887,9 @@ export const MAX_EMBEDDING_CONCURRENCY = 512
 export const MAX_REQUESTS_PER_MINUTE = 100_000
 export const MAX_BENCHMARK_CASE_CONCURRENCY = 64
 export const MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
+export const MIN_SANDBOX_MEMORY_LIMIT_MIB = 512
+export const MAX_SANDBOX_MEMORY_LIMIT_MIB = 32_768
+export const DEFAULT_SANDBOX_MEMORY_LIMIT_MIB = 6_144
 
 export const benchmarkRuntimeSettingsSchema = z
   .object({
@@ -2894,6 +2897,14 @@ export const benchmarkRuntimeSettingsSchema = z
     relay_delay_fingerprint_mode: z.enum(['off', 'shadow']),
     relay_delay_fingerprint_min_ms: z.number().int().min(0).max(MAX_RELAY_DELAY_FINGERPRINT_MS),
     relay_delay_fingerprint_max_ms: z.number().int().min(0).max(MAX_RELAY_DELAY_FINGERPRINT_MS),
+    // The harness memory cap every validator applies. Defaults so a Platform
+    // that predates the field still parses.
+    sandbox_memory_limit_mib: z
+      .number()
+      .int()
+      .min(MIN_SANDBOX_MEMORY_LIMIT_MIB)
+      .max(MAX_SANDBOX_MEMORY_LIMIT_MIB)
+      .default(DEFAULT_SANDBOX_MEMORY_LIMIT_MIB),
   })
   .refine(
     (value) => value.relay_delay_fingerprint_min_ms <= value.relay_delay_fingerprint_max_ms,
@@ -2908,6 +2919,7 @@ export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
   relay_delay_fingerprint_mode: 'off' as const,
   relay_delay_fingerprint_min_ms: 25,
   relay_delay_fingerprint_max_ms: 250,
+  sandbox_memory_limit_mib: DEFAULT_SANDBOX_MEMORY_LIMIT_MIB,
 }
 
 const inferenceConcurrencySettingsBaseSchema = z.object({

@@ -15770,7 +15770,8 @@ export interface components {
          *
          *     These defaults overlap four /run calls per ticket. Relay delay fingerprinting
          *     stays off. The object is additive on both the settings JSON and validator
-         *     job wire. Backroom can raise case_concurrency up to 64.
+         *     job wire. Backroom can raise case_concurrency up to 64 and sets the harness
+         *     memory cap every validator applies (sandbox_memory_limit_mib).
          */
         BenchmarkRuntimeSettings: {
             /**
@@ -15794,6 +15795,11 @@ export interface components {
              * @enum {string}
              */
             relay_delay_fingerprint_mode: "off" | "shadow";
+            /**
+             * Sandbox Memory Limit Mib
+             * @default 6144
+             */
+            sandbox_memory_limit_mib: number;
         };
         /** Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post */
         Body_accept_link_decide_api_v1_miner_auth_ditto_accept_post: {
@@ -39240,6 +39246,11 @@ export interface components {
             require_screened_image: boolean;
             /** Sandbox Egress Restricted */
             sandbox_egress_restricted: boolean;
+            /**
+             * Sandbox Memory Limit
+             * @default false
+             */
+            sandbox_memory_limit: boolean;
             scorer_benchmarks?: components["schemas"]["ScorerBenchmarkCapability"] | null;
             /** Screened Images */
             screened_images: boolean;

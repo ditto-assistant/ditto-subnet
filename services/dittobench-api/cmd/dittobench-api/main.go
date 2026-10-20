@@ -772,6 +772,23 @@ type benchmarkRuntimeSettings struct {
 	RelayDelayFingerprintMode  delayFingerprintMode `json:"relay_delay_fingerprint_mode"`
 	RelayDelayFingerprintMinMS int                  `json:"relay_delay_fingerprint_min_ms"`
 	RelayDelayFingerprintMaxMS int                  `json:"relay_delay_fingerprint_max_ms"`
+	// SandboxMemoryLimitMiB is the Platform-issued harness memory cap. Zero
+	// means an older Platform issued none and the host default applies.
+	SandboxMemoryLimitMiB int `json:"sandbox_memory_limit_mib,omitempty"`
+}
+
+const (
+	minSandboxMemoryLimitMiB = 512
+	maxSandboxMemoryLimitMiB = 32768
+)
+
+// sandboxContext applies the ticket's memory cap to the harness started with
+// the returned context.
+func (r *benchmarkRuntimeSettings) sandboxContext(ctx context.Context) context.Context {
+	if r == nil {
+		return ctx
+	}
+	return sandbox.WithMemoryLimitMiB(ctx, r.SandboxMemoryLimitMiB)
 }
 
 func (r *benchmarkRuntimeSettings) validate(benchVersion int) error {
@@ -792,6 +809,14 @@ func (r *benchmarkRuntimeSettings) validate(benchVersion int) error {
 		r.RelayDelayFingerprintMinMS > r.RelayDelayFingerprintMaxMS ||
 		r.RelayDelayFingerprintMaxMS > 5000 {
 		return fmt.Errorf("benchmark_runtime relay delay range must satisfy 0 <= min <= max <= 5000")
+	}
+	if r.SandboxMemoryLimitMiB != 0 &&
+		(r.SandboxMemoryLimitMiB < minSandboxMemoryLimitMiB ||
+			r.SandboxMemoryLimitMiB > maxSandboxMemoryLimitMiB) {
+		return fmt.Errorf(
+			"benchmark_runtime.sandbox_memory_limit_mib must be between %d and %d",
+			minSandboxMemoryLimitMiB, maxSandboxMemoryLimitMiB,
+		)
 	}
 	return nil
 }
@@ -1671,7 +1696,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			s.broker.setHarnessBase(inferenceSessionID, env["DITTOBENCH_INFERENCE_BASE_URL"])
 		}
 		harnessInferenceGateway = env["DITTOBENCH_INFERENCE_BASE_URL"]
-		handle, runErr = s.sandbox.Run(ctx, image, env)
+		handle, runErr = s.sandbox.Run(req.BenchmarkRuntime.sandboxContext(ctx), image, env)
 		if runErr != nil {
 			if sourceCapability != "" {
 				_ = s.broker.revokeSourceCapability(inferenceSessionID, runID, sourceCapability)
@@ -1814,7 +1839,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				s.store.Fail(runID, "compatibility inference capability is unavailable")
 				return
 			}
-			replacement, err := s.sandbox.Run(ctx, image, compatEnv)
+			replacement, err := s.sandbox.Run(req.BenchmarkRuntime.sandboxContext(ctx), image, compatEnv)
 			if err != nil {
 				_ = s.broker.revokeSourceCapability(inferenceSessionID, runID, sourceCapability)
 				sourceCapability = ""
@@ -2650,6 +2675,19 @@ func (s *server) finishSandboxRun(runID string, handle *sandbox.Handle) {
 			log.Printf(
 				"run %s validator infrastructure failure code=%s oom=%t exit=%d",
 				runID, code, diagnostics.OOMKilled, diagnostics.ExitCode,
+			)
+		} else if job.Failure == nil && strings.Contains(job.Error, "harness never became healthy") &&
+			sandbox.StartupIllegalInstruction(diagnostics.ExitCode, logTail) {
+			// The harness died on an instruction this host's CPU lacks before it
+			// ever served. The same screened image starts on other validators, so
+			// this is the host's envelope, not the agent's attempt.
+			failure.Kind = "validator_infrastructure"
+			failure.Code = "sandbox_cpu_unsupported"
+			failure.Retryable = true
+			message = "validator host CPU cannot execute the screened harness"
+			log.Printf(
+				"run %s validator infrastructure failure code=%s exit=%d",
+				runID, failure.Code, diagnostics.ExitCode,
 			)
 		} else if prior := job.Failure; prior != nil && prior.Kind != "" {
 			// The scored path already reached a verdict. Keep it, and keep the

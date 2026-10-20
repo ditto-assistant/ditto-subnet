@@ -330,6 +330,8 @@ class BenchmarkRuntimeSettings(BaseModel):
     relay_delay_fingerprint_mode: Literal["off", "shadow"] = "off"
     relay_delay_fingerprint_min_ms: Annotated[int, Field(ge=0, le=5_000)] = 25
     relay_delay_fingerprint_max_ms: Annotated[int, Field(ge=0, le=5_000)] = 250
+    # Platform-issued harness memory cap, applied identically by every scorer.
+    sandbox_memory_limit_mib: Annotated[int, Field(ge=512, le=32_768)] = 6_144
 
     @model_validator(mode="after")
     def _delay_range_is_ordered(self) -> BenchmarkRuntimeSettings:

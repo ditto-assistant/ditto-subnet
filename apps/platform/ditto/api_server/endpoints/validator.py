@@ -3638,6 +3638,12 @@ async def request_job(
                 heartbeat is None
                 or heartbeat.protocol_version < (11 if target_version >= 7 else 10)
                 or not heartbeat_capabilities.ticket_inference
+                # v13+ scores must come from the Platform-issued sandbox memory
+                # cap, not each host's own default.
+                or (
+                    target_version >= 13
+                    and not heartbeat_capabilities.sandbox_memory_limit
+                )
                 or (
                     target_version == 7
                     and (
@@ -5645,6 +5651,14 @@ async def request_top5_confirmation_job(
                     detail=(
                         f"fresh benchmark v{canonical_version} inference capability "
                         "is required"
+                    ),
+                )
+            if canonical_version >= 13 and not capabilities.sandbox_memory_limit:
+                raise HTTPException(
+                    status_code=428,
+                    detail=(
+                        f"benchmark v{canonical_version} requires the Platform-issued "
+                        "sandbox memory cap; update ditto-subnet"
                     ),
                 )
         (

@@ -1756,6 +1756,7 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
         "embedding_provider_unavailable",
         "screened_image_unavailable",
         "seed_store_lock_timeout",
+        "sandbox_cpu_unsupported",
     ],
 )
 async def test_sandbox_resource_failure_is_retryable_infrastructure(

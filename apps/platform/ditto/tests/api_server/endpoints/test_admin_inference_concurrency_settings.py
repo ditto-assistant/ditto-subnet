@@ -148,6 +148,7 @@ class TestRead:
                 "relay_delay_fingerprint_mode": "off",
                 "relay_delay_fingerprint_min_ms": 25,
                 "relay_delay_fingerprint_max_ms": 250,
+                "sandbox_memory_limit_mib": 6_144,
             },
         }
 
@@ -183,6 +184,8 @@ class TestWrite:
             "relay_delay_fingerprint_mode": "shadow",
             "relay_delay_fingerprint_min_ms": 40,
             "relay_delay_fingerprint_max_ms": 160,
+            # A non-default cap proves a legacy write carries it forward.
+            "sandbox_memory_limit_mib": 8_192,
         }
         first = await client.post(
             _URL,

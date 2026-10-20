@@ -111,3 +111,45 @@ func TestContainerLogTailSurvivesThePriorVerdictMerge(t *testing.T) {
 		t.Fatalf("evidence lost through the merge: %+v", job.Failure.Diagnostics)
 	}
 }
+
+// A harness supervisord keeps respawning after SIGILL never serves on this host,
+// while the same screened image starts elsewhere. That is the host CPU's
+// envelope, so it must reach the validator as retryable infrastructure rather
+// than spend the miner's attempt.
+func TestFinishSandboxRunClassifiesStartupSIGILLAsHostCPU(t *testing.T) {
+	backend := &diagnosticSandbox{
+		diagnostics: sandbox.RuntimeDiagnostics{StateKnown: true, Running: true},
+		logs: "INFO spawned: 'dittobench_miner' with pid 306\n" +
+			"WARN exited: dittobench_miner (terminated by SIGILL; not expected)",
+	}
+	s := &server{store: store.New(), sandbox: backend}
+	s.store.Create("run-sigill", "sandbox", store.StatusRunning, 13, 283)
+	s.store.Fail("run-sigill", "harness never became healthy: harness not healthy after 3m0s")
+
+	s.finishSandboxRun("run-sigill", &sandbox.Handle{ContainerID: "private"})
+
+	job, _ := s.store.Get("run-sigill")
+	if job.Failure == nil || job.Failure.Kind != "validator_infrastructure" ||
+		job.Failure.Code != "sandbox_cpu_unsupported" || !job.Failure.Retryable {
+		t.Fatalf("startup SIGILL not classified as host CPU: %+v", job.Failure)
+	}
+}
+
+// SIGILL after the harness served is the agent's own runtime, not a startup
+// envelope mismatch, and keeps the ordinary agent-failure path.
+func TestFinishSandboxRunKeepsMidRunSIGILLOnTheAgent(t *testing.T) {
+	backend := &diagnosticSandbox{
+		diagnostics: sandbox.RuntimeDiagnostics{StateKnown: true, ExitCode: 132},
+		logs:        "WARN exited: dittobench_miner (terminated by SIGILL; not expected)",
+	}
+	s := &server{store: store.New(), sandbox: backend}
+	s.store.Create("run-midrun", "sandbox", store.StatusRunning, 13, 283)
+	s.store.Fail("run-midrun", "case 17 /run failed: connection reset by peer")
+
+	s.finishSandboxRun("run-midrun", &sandbox.Handle{ContainerID: "private"})
+
+	job, _ := s.store.Get("run-midrun")
+	if job.Failure == nil || job.Failure.Kind == "validator_infrastructure" {
+		t.Fatalf("mid-run SIGILL must stay the agent's failure: %+v", job.Failure)
+	}
+}
