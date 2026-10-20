@@ -58,20 +58,22 @@ func TestRunKeepsHostDefaultWithoutTicketLimit(t *testing.T) {
 
 func TestStartupIllegalInstruction(t *testing.T) {
 	cases := []struct {
-		name     string
-		exitCode int
-		logTail  string
-		want     bool
+		name         string
+		exitCode     int
+		logTail      string
+		want         bool
+		wantEvidence string
 	}{
-		{"supervisord respawn loop", 0, "WARN exited: dittobench_miner (terminated by SIGILL; not expected)", true},
-		{"shell report", 1, "/app/start.sh: line 3:    17 Illegal instruction (core dumped) ./miner", true},
-		{"direct process exit", 132, "", true},
-		{"ordinary crash", 1, "panic: index out of range", false},
-		{"oom kill", 137, "terminated by SIGKILL; not expected", false},
+		{"supervisord respawn loop", 0, "WARN exited: dittobench_miner (terminated by SIGILL; not expected)", true, IllegalInstructionEvidenceLogTail},
+		{"shell report", 1, "/app/start.sh: line 3:    17 Illegal instruction (core dumped) ./miner", true, IllegalInstructionEvidenceLogTail},
+		{"runtime exit code wins over output", 132, "anything", true, IllegalInstructionEvidenceExitCode},
+		{"ordinary crash", 1, "panic: index out of range", false, ""},
+		{"oom kill", 137, "terminated by SIGKILL; not expected", false, ""},
 	}
 	for _, tc := range cases {
-		if got := StartupIllegalInstruction(tc.exitCode, tc.logTail); got != tc.want {
-			t.Errorf("%s: StartupIllegalInstruction = %t, want %t", tc.name, got, tc.want)
+		got, evidence := StartupIllegalInstruction(tc.exitCode, tc.logTail)
+		if got != tc.want || evidence != tc.wantEvidence {
+			t.Errorf("%s: StartupIllegalInstruction = (%t, %q), want (%t, %q)", tc.name, got, evidence, tc.want, tc.wantEvidence)
 		}
 	}
 }

@@ -210,13 +210,28 @@ var illegalInstructionPattern = regexp.MustCompile(
 	`terminated by SIGILL|Illegal instruction|signal: illegal instruction|SIGILL: illegal instruction`,
 )
 
+// SIGILL evidence sources, recorded on the failure so an operator can tell the
+// runtime's own report from a match in miner-controlled output.
+const (
+	IllegalInstructionEvidenceExitCode = "exit_code"
+	IllegalInstructionEvidenceLogTail  = "log_tail"
+)
+
 // StartupIllegalInstruction reports a harness that died on an instruction the
-// validator host's CPU does not implement before it ever became healthy. The
-// same screened image starts on other hosts, so the failure belongs to the
-// host's CPU feature set, not to the agent. The log tail is miner output, so a
-// match only moves the attempt to validator-owned parking; it can never score.
-func StartupIllegalInstruction(exitCode int, logTail string) bool {
-	return exitCode == 128+4 || illegalInstructionPattern.MatchString(logTail)
+// validator host's CPU does not implement before it ever became healthy, and
+// which evidence showed it. Exit code 132 is the container runtime's own report
+// for PID 1. A supervisord-managed harness never exits, so its SIGILL appears
+// only in the log tail, which is miner output and therefore unauthenticated. A
+// forged line can only move a failed attempt into validator-owned parking that
+// needs an operator grant to retry; it never produces a score.
+func StartupIllegalInstruction(exitCode int, logTail string) (bool, string) {
+	if exitCode == 128+4 {
+		return true, IllegalInstructionEvidenceExitCode
+	}
+	if illegalInstructionPattern.MatchString(logTail) {
+		return true, IllegalInstructionEvidenceLogTail
+	}
+	return false, ""
 }
 
 // LocalDocker runs submissions on the host Docker daemon via the `docker` CLI.

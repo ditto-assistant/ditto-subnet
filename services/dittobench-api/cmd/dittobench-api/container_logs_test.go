@@ -133,6 +133,30 @@ func TestFinishSandboxRunClassifiesStartupSIGILLAsHostCPU(t *testing.T) {
 		job.Failure.Code != "sandbox_cpu_unsupported" || !job.Failure.Retryable {
 		t.Fatalf("startup SIGILL not classified as host CPU: %+v", job.Failure)
 	}
+	// Miner output is unauthenticated; the envelope must say so.
+	if got := job.Failure.Diagnostics["illegal_instruction_evidence"]; got != sandbox.IllegalInstructionEvidenceLogTail {
+		t.Fatalf("evidence = %v, want log_tail", got)
+	}
+}
+
+// The runtime's own exit status for PID 1 is trusted evidence and is recorded as such.
+func TestFinishSandboxRunRecordsTrustedSIGILLExitCode(t *testing.T) {
+	backend := &diagnosticSandbox{
+		diagnostics: sandbox.RuntimeDiagnostics{StateKnown: true, ExitCode: 132},
+	}
+	s := &server{store: store.New(), sandbox: backend}
+	s.store.Create("run-sigill-exit", "sandbox", store.StatusRunning, 13, 283)
+	s.store.Fail("run-sigill-exit", "harness never became healthy: harness exited before health: exit_code=132")
+
+	s.finishSandboxRun("run-sigill-exit", &sandbox.Handle{ContainerID: "private"})
+
+	job, _ := s.store.Get("run-sigill-exit")
+	if job.Failure == nil || job.Failure.Code != "sandbox_cpu_unsupported" {
+		t.Fatalf("exit 132 at startup not classified as host CPU: %+v", job.Failure)
+	}
+	if got := job.Failure.Diagnostics["illegal_instruction_evidence"]; got != sandbox.IllegalInstructionEvidenceExitCode {
+		t.Fatalf("evidence = %v, want exit_code", got)
+	}
 }
 
 // SIGILL after the harness served is the agent's own runtime, not a startup

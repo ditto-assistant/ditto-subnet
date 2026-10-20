@@ -2676,18 +2676,19 @@ func (s *server) finishSandboxRun(runID string, handle *sandbox.Handle) {
 				"run %s validator infrastructure failure code=%s oom=%t exit=%d",
 				runID, code, diagnostics.OOMKilled, diagnostics.ExitCode,
 			)
-		} else if job.Failure == nil && strings.Contains(job.Error, "harness never became healthy") &&
-			sandbox.StartupIllegalInstruction(diagnostics.ExitCode, logTail) {
+		} else if sigill, evidence := sandbox.StartupIllegalInstruction(diagnostics.ExitCode, logTail); job.Failure == nil &&
+			strings.Contains(job.Error, "harness never became healthy") && sigill {
 			// The harness died on an instruction this host's CPU lacks before it
 			// ever served. The same screened image starts on other validators, so
 			// this is the host's envelope, not the agent's attempt.
 			failure.Kind = "validator_infrastructure"
 			failure.Code = "sandbox_cpu_unsupported"
 			failure.Retryable = true
+			failure.Diagnostics["illegal_instruction_evidence"] = evidence
 			message = "validator host CPU cannot execute the screened harness"
 			log.Printf(
-				"run %s validator infrastructure failure code=%s exit=%d",
-				runID, failure.Code, diagnostics.ExitCode,
+				"run %s validator infrastructure failure code=%s evidence=%s exit=%d",
+				runID, failure.Code, evidence, diagnostics.ExitCode,
 			)
 		} else if prior := job.Failure; prior != nil && prior.Kind != "" {
 			// The scored path already reached a verdict. Keep it, and keep the
