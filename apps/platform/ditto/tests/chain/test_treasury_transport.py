@@ -51,11 +51,30 @@ def test_treasury_uses_existing_archive_order_without_caching_authority(
 
     monkeypatch.setattr("ditto.chain.client._treasury_substrate", substrate)
     chain = ChainClient(replace(make_chain_config(), **overrides))
-    assert chain._new_treasury_substrate() is marker
-    assert chain._new_treasury_substrate() is marker
+    assert chain._new_treasury_substrate(archive=True) is marker
+    assert chain._new_treasury_substrate(archive=True) is marker
     assert [url for url, _ in calls] == [expected, expected]
     # Only decoded metadata shares the existing cache. Every call constructs a
     # fresh request-local substrate; no identity or permission result is stored.
     assert calls[0][1] is calls[1][1]
-    ChainClient(replace(make_chain_config(), **overrides))._new_treasury_substrate()
+    ChainClient(replace(make_chain_config(), **overrides))._new_treasury_substrate(
+        archive=True
+    )
     assert calls[2][1] is not calls[0][1]
+
+
+def test_general_epoch_transport_still_uses_live_network(monkeypatch):
+    calls = []
+    marker = object()
+
+    def substrate(url, *, runtime_cache):
+        assert runtime_cache is not None
+        calls.append(url)
+        return marker
+
+    monkeypatch.setattr("ditto.chain.client._treasury_substrate", substrate)
+    config = replace(
+        make_chain_config(), public_archive_rpc_urls=("wss://archive.example",)
+    )
+    assert ChainClient(config)._new_treasury_substrate() is marker
+    assert calls == ["wss://entrypoint-finney.opentensor.ai:443"]

@@ -190,7 +190,7 @@ class ChainClient:
         self._recent_neurons_flights: dict[int, asyncio.Task[list[NeuronInfo]]] = {}
         self._clock = time.monotonic
 
-    def _new_treasury_substrate(self) -> Any:
+    def _new_treasury_substrate(self, *, archive: bool = False) -> Any:
         cache = getattr(self, "_treasury_runtime_cache", None)
         if cache is None:
             cache = self._treasury_runtime_cache = TreasuryRuntimeCache()
@@ -200,9 +200,9 @@ class ChainClient:
         # identity and permission evidence. This selects transport only: each
         # request retains its exact-hash reads, genesis/identity validation and
         # existing eight-second windows; no observed authority is cached.
-        return _treasury_substrate(
-            self._historical_substrate_urls()[0], runtime_cache=cache
-        )
+        # General epoch scheduling shares this factory but keeps its live route.
+        url = self._historical_substrate_urls()[0] if archive else self._substrate_url()
+        return _treasury_substrate(url, runtime_cache=cache)
 
     async def __aenter__(self) -> ChainClient:
         """Open the underlying Pylon client connection."""
@@ -422,7 +422,7 @@ class ChainClient:
         try:
             async with (
                 asyncio.timeout(8),
-                self._new_treasury_substrate() as substrate,
+                self._new_treasury_substrate(archive=True) as substrate,
             ):
                 trace.client = substrate
                 yield trace
@@ -532,7 +532,7 @@ class ChainClient:
         try:
             async with (
                 asyncio.timeout(8) as deadline,
-                self._new_treasury_substrate() as substrate,
+                self._new_treasury_substrate(archive=True) as substrate,
             ):
                 trace.client = substrate
                 observed = await read_treasury_dispatch_observation(trace, policy)
