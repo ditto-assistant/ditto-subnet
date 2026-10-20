@@ -13,6 +13,7 @@ from ditto.chain.errors import (
     ChainAuthError,
     ChainConnectionError,
     ChainEmissionReceiptUnavailable,
+    ChainError,
     ChainTimeoutError,
     ChainTreasuryActivationReadError,
     ChainTreasuryReadTimeoutError,
@@ -1281,6 +1282,14 @@ class ChainClient:
             raise ChainTimeoutError(
                 f"read_epoch_schedule({netuid}) timed out: {summary}"
             )
+        # One provider's typed refusal (a rejected archive key) still fails over;
+        # only a type every provider agreed on reaches the caller unchanged. Each
+        # provider's failure is already logged above.
+        last = failures[-1][1]
+        if isinstance(last, ChainError) and all(
+            type(error) is type(last) for _, error in failures
+        ):
+            raise last
         raise ChainConnectionError(f"read_epoch_schedule({netuid}) failed: {summary}")
 
     async def _read_epoch_schedule_from(self, url: str, netuid: int) -> EpochSchedule:

@@ -6,7 +6,11 @@ from dataclasses import replace
 import pytest
 
 from ditto.chain.client import ChainClient
-from ditto.chain.errors import ChainConnectionError, ChainTimeoutError
+from ditto.chain.errors import (
+    ChainAuthError,
+    ChainConnectionError,
+    ChainTimeoutError,
+)
 from ditto.chain.models import ChainConfig
 
 
@@ -138,4 +142,35 @@ async def test_epoch_schedule_bounds_each_provider_and_reports_timeouts(monkeypa
         archive_rpc_timeout_seconds=0.01,
     )
     with pytest.raises(ChainTimeoutError):
+        await ChainClient(config).read_epoch_schedule(118)
+
+
+@pytest.mark.asyncio
+async def test_epoch_schedule_fails_over_from_one_providers_typed_refusal(monkeypatch):
+    schedule = object()
+
+    async def read(_self, url, _netuid):
+        if url == "wss://archive.example":
+            raise ChainAuthError("synthetic rejected archive key")
+        return schedule
+
+    monkeypatch.setattr(ChainClient, "_read_epoch_schedule_from", read)
+    config = replace(
+        make_chain_config(), public_archive_rpc_urls=("wss://archive.example",)
+    )
+    assert await ChainClient(config).read_epoch_schedule(118) is schedule
+
+
+@pytest.mark.asyncio
+async def test_epoch_schedule_keeps_a_typed_error_every_provider_agreed_on(
+    monkeypatch,
+):
+    async def read(_self, url, _netuid):
+        raise ChainAuthError(f"synthetic refusal from {url}")
+
+    monkeypatch.setattr(ChainClient, "_read_epoch_schedule_from", read)
+    config = replace(
+        make_chain_config(), public_archive_rpc_urls=("wss://archive.example",)
+    )
+    with pytest.raises(ChainAuthError, match="entrypoint-finney"):
         await ChainClient(config).read_epoch_schedule(118)
