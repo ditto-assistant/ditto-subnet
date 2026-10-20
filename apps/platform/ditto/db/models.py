@@ -12252,6 +12252,11 @@ class BountyEvent(Base):
     obligation_id: Mapped[UUID | None] = mapped_column(
         SaUUID(as_uuid=True), nullable=True
     )
+    # A deadline transition is stamped at its deadline; this is when a request
+    # or sweep wrote it, which can be later. Unset for every other event.
+    noticed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     __table_args__ = (
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         # Every reference stays within the event's own bounty.
@@ -12309,6 +12314,10 @@ class BountyEvent(Base):
         CheckConstraint(
             "kind IN (" + ",".join(f"'{k}'" for k in BOUNTY_EVENT_KINDS) + ")",
             name="kind",
+        ),
+        CheckConstraint(
+            "noticed_at IS NULL OR noticed_at >= recorded_at",
+            name="noticed_after_recorded",
         ),
         Index("bounty_events_bounty_idx", "bounty_id", "event_id"),
     )

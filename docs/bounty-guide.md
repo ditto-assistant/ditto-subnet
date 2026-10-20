@@ -129,10 +129,12 @@ is never judged by the reviewer who rejected it. An upheld appeal restores
 your claim with a new delivery deadline. While an appeal is pending, the slot
 cannot be reopened for someone else.
 
-Appeal within 3 days to be sure it is heard. For 3 days after a rejection or
-a missed deadline, the slot cannot be reopened for someone else. After that
-you can still appeal until an operator reopens the slot, which makes the
-outcome final.
+Appeal within 3 days to be sure it is heard. For 3 days after a rejection, or
+after a missed deadline is recorded, the slot cannot be reopened for someone
+else. A missed deadline is recorded by the next request or sweep, which can be
+after the deadline itself; its event id appears in the bounty's history once
+it is. After that you can still appeal until an operator reopens the slot,
+which makes the outcome final.
 
 ## Fees, awards and payments
 

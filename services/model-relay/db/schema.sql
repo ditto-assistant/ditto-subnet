@@ -1835,8 +1835,10 @@ CREATE TABLE public.bounty_events (
     submission_id uuid,
     appeal_id uuid,
     obligation_id uuid,
+    noticed_at timestamp with time zone,
     CONSTRAINT ck_bounty_events_claim_scope CHECK (((claim_id IS NOT NULL) OR (kind = ANY (ARRAY['revision_published'::text, 'round_opened'::text, 'claims_paused'::text, 'claims_resumed'::text, 'reviewer_reassigned'::text, 'slot_cancelled'::text, 'slot_reopened'::text])))),
     CONSTRAINT ck_bounty_events_kind CHECK ((kind = ANY (ARRAY['revision_published'::text, 'round_opened'::text, 'slot_held'::text, 'hold_expired'::text, 'hold_released'::text, 'slot_claimed'::text, 'fee_refund_owed'::text, 'claims_paused'::text, 'claims_resumed'::text, 'submitted'::text, 'withdrawn'::text, 'deadline_missed'::text, 'review_overdue'::text, 'rework_requested'::text, 'accepted'::text, 'rejected'::text, 'reviewer_reassigned'::text, 'appeal_filed'::text, 'appeal_upheld'::text, 'appeal_denied'::text, 'slot_cancelled'::text, 'slot_reopened'::text, 'fee_retained'::text, 'award_recorded'::text, 'obligation_approved'::text, 'transfer_dispatched'::text, 'transfer_confirmed'::text, 'transfer_failed'::text, 'transfer_uncertain'::text, 'fact_recorded'::text]))),
+    CONSTRAINT ck_bounty_events_noticed_after_recorded CHECK (((noticed_at IS NULL) OR (noticed_at >= recorded_at))),
     CONSTRAINT ck_bounty_events_obligation_ref CHECK (((obligation_id IS NULL) OR (claim_id IS NOT NULL))),
     CONSTRAINT ck_bounty_events_review_refs CHECK ((((submission_id IS NULL) OR (claim_id IS NOT NULL)) AND ((appeal_id IS NULL) OR (claim_id IS NOT NULL))))
 );

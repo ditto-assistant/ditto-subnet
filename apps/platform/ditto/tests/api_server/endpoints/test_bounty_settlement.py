@@ -252,8 +252,9 @@ async def test_reopening_a_closed_slot_retains_its_fee(world, monkeypatch, outco
         early = await reopen(world, claim)
         assert early.status_code == 409 and "3-day appeal window" in early.text
         assert (await claim_of(world, claim))["obligations"] == []
-        # Three days after the rejection, or after the day-five deadline.
-        later = 3 if outcome == "rejected" else 8
+        # Three days after the rejection, or after the day-six reopen recorded
+        # the day-five missed deadline.
+        later = 3 if outcome == "rejected" else 9
         travel(monkeypatch, timedelta(days=later, minutes=1))
     reopened = await reopen(world, claim)
     assert reopened.status_code == 200, reopened.text

@@ -176,9 +176,9 @@ Notes:
 - **Reopening.** Operators reopen closed slots one at a time; nothing reopens
   automatically. Reopening is refused while the slot's claim has a pending
   appeal. A rejected or expired slot is also refused with `409` until 3 days
-  after the rejection or the missed deadline (its appeal window), unless the
-  claimant's appeal of that outcome has already been decided; the refusal
-  names when the window ends. A withdrawn or cancelled slot has nothing to
+  after the rejection, or after the missed deadline was recorded (its appeal
+  window), unless the claimant's appeal of that outcome has already been
+  decided; the refusal names when the window ends. A withdrawn or cancelled slot has nothing to
   appeal and can be reopened at once. A reopened claim keeps its own outcome
   on its record.
 
@@ -198,9 +198,11 @@ Notes:
 
 A claimant can appeal a rejection or a missed deadline, once per decision,
 while the slot still shows that outcome. The slot can't be reopened for 3
-days after the rejection or the missed deadline, so an appeal filed within
-that window is always heard; after it, an appeal is still possible until an
-operator reopens the slot. The statement is private; only its digest is
+days after the rejection, so an appeal filed within that window is always
+heard; after it, an appeal is still possible until an operator reopens the
+slot. A missed deadline is stamped at the deadline, but it can be appealed only
+once a request or the sweeper records it, which can be later. Its window runs
+from that recording (`noticed_at`), so a stalled sweeper never shortens it. The statement is private; only its digest is
 public. An operator decides, and a rejection is never judged by the
 reviewer who rejected the work. Nor is a missed deadline judged by whoever set
 it: the reviewer who requested changes, or the operator whose upheld appeal

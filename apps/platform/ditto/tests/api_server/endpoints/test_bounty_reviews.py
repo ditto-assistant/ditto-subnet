@@ -944,12 +944,40 @@ async def test_a_later_outcome_has_its_own_appeal_window(world, monkeypatch):
         },
     )
     assert upheld.json()["slot_status"] == "claimed", upheld.text
-    # The restored deadline (day eight) passes too. Deciding the first appeal
-    # does not end the window of the second missed deadline.
+    # The restored deadline (day eight) passes too, and the day-nine reopen
+    # records it. Deciding the first appeal does not end the window of the
+    # second missed deadline, which runs from day nine.
     travel(monkeypatch, timedelta(days=9))
     early = await reopen(world, claim)
     assert early.status_code == 409 and "3-day appeal window" in early.text
     travel(monkeypatch, timedelta(days=11, minutes=1))
+    assert (await reopen(world, claim)).status_code == 409
+    travel(monkeypatch, timedelta(days=12, minutes=1))
+    assert (await reopen(world, claim)).status_code == 200
+
+
+async def test_a_missed_deadline_recorded_late_keeps_its_whole_window(
+    world, monkeypatch
+):
+    # Nothing touched the bounty for days after its delivery deadline (a
+    # stalled sweeper), so this reopen is what records the miss. The claimant
+    # had no event to appeal before it, so the window starts there.
+    await world.start(ALICE)
+    claim = await claimed(world, ALICE)
+    travel(monkeypatch, timedelta(days=10))
+    noticed = bounty_claims.utcnow()
+    ends = noticed + timedelta(days=3)
+    early = await reopen(world, claim)
+    assert early.status_code == 409, early.text
+    assert f"expired outcome until {ends.isoformat()}" in early.json()["message"]
+    missed = next(e for e in await events(world) if e["kind"] == "deadline_missed")
+    # The miss is still stamped at the deadline it passed.
+    assert datetime.fromisoformat(missed["recorded_at"]) < ends - timedelta(days=7)
+    monkeypatch.setattr(
+        bounty_claims, "utcnow", lambda: ends - timedelta(microseconds=1)
+    )
+    assert (await reopen(world, claim)).status_code == 409
+    monkeypatch.setattr(bounty_claims, "utcnow", lambda: ends)
     assert (await reopen(world, claim)).status_code == 200
 
 

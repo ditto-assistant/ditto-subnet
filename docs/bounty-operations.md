@@ -55,9 +55,10 @@ capped pilot needs before any of that changes.
   as `team` or `system_fault`) or reopens a closed one for a new claim
   (retaining a rejected, expired or withdrawn fee). Reopening waits for a
   pending appeal. A rejected or expired slot also waits out its claimant's
-  3-day appeal window, counted from the rejection or the missed deadline,
-  unless the appeal of it was already decided; the refusal names when the
-  window ends. Withdrawn and cancelled slots reopen at once.
+  3-day appeal window, counted from the rejection, or from when the missed
+  deadline was recorded (which can be after the deadline if no request or
+  sweep ran), unless the appeal of it was already decided; the refusal names
+  when the window ends. Withdrawn and cancelled slots reopen at once.
 
 ## Settle
 

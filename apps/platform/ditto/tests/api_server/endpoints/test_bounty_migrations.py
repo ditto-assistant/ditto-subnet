@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select
@@ -19,6 +20,7 @@ from ditto.db.models import (
     BountyClaimControl,
     BountyEvaluationDecision,
     BountyEvaluationEntry,
+    BountyEvent,
     BountyObligation,
     BountyReviewerAssignment,
 )
@@ -29,12 +31,18 @@ from ditto.tests.api_server.endpoints.test_bounty_claims import (
     REPO,
     World,
 )
-from ditto.tests.api_server.endpoints.test_bounty_reviews import ADMIN, claimed
+from ditto.tests.api_server.endpoints.test_bounty_reviews import (
+    ADMIN,
+    claimed,
+    submit,
+    travel,
+)
 from ditto.tests.api_server.endpoints.test_bounty_settlement import accepted
 
 BEFORE_BOUNTIES = "dc41b7a6e205"
 P1, P2, P3 = "bb24cc6f573b", "c5f81d2a9e47", "d7a3e9b2c641"
 SETTLEMENT = "e1b8c4f7a209"
+EVALUATION = "5de80b078e1c"
 
 
 def alembic(*args: str) -> subprocess.CompletedProcess[str]:
@@ -158,6 +166,24 @@ async def test_a_recorded_evaluation_blocks_the_evaluation_downgrade(world, reco
     refused(SETTLEMENT)
     model = BountyEvaluationEntry if record == "entries" else BountyEvaluationDecision
     assert await count(world, model) == 1
+
+
+async def test_a_noticed_missed_deadline_blocks_the_notice_downgrade(
+    world, monkeypatch
+):
+    await world.start(ALICE)
+    claim = await claimed(world, ALICE)
+    travel(monkeypatch, timedelta(days=6))
+    # A refused submission records the missed deadline, and when it did.
+    assert (await submit(world, ALICE, claim)).status_code == 409
+    refused(EVALUATION)
+    async with world.maker() as session:
+        noticed = await session.scalar(
+            select(func.count())
+            .select_from(BountyEvent)
+            .where(BountyEvent.noticed_at.is_not(None))
+        )
+    assert noticed == 1
 
 
 async def test_an_empty_bounty_schema_round_trips(world):

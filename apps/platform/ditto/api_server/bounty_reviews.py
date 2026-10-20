@@ -992,6 +992,10 @@ async def appeal_window_end(
 ) -> datetime | None:
     """When the appeal window of a claim's rejection or missed deadline ends.
 
+    The window runs from the event, or from when it was written if that was
+    later: a missed deadline is stamped at the deadline, but the claimant
+    has nothing to appeal until a request or sweep records it.
+
     ``None`` when nothing holds the slot: the outcome is not appealable, or
     the claimant's appeal of the event that produced it was decided.
     """
@@ -1015,7 +1019,8 @@ async def appeal_window_end(
         .where(BountyAppeal.subject_event_id == subject.event_id)
     ):
         return None
-    return subject.recorded_at + BOUNTY_APPEAL_WINDOW
+    # noticed_at is never before recorded_at (ck_bounty_events_noticed_after_recorded).
+    return (subject.noticed_at or subject.recorded_at) + BOUNTY_APPEAL_WINDOW
 
 
 async def reopen_slot(
