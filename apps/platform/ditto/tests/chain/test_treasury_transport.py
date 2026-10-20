@@ -1,10 +1,12 @@
 """Treasury transport selection does not cache observed chain authority."""
 
+import asyncio
 from dataclasses import replace
 
 import pytest
 
 from ditto.chain.client import ChainClient
+from ditto.chain.errors import ChainConnectionError, ChainTimeoutError
 from ditto.chain.models import ChainConfig
 
 
@@ -63,7 +65,7 @@ def test_treasury_uses_existing_archive_order_without_caching_authority(
     assert calls[2][1] is not calls[0][1]
 
 
-def test_general_epoch_transport_still_uses_live_network(monkeypatch):
+def test_default_treasury_transport_still_uses_live_network(monkeypatch):
     calls = []
     marker = object()
 
@@ -78,3 +80,62 @@ def test_general_epoch_transport_still_uses_live_network(monkeypatch):
     )
     assert ChainClient(config)._new_treasury_substrate() is marker
     assert calls == ["wss://entrypoint-finney.opentensor.ai:443"]
+
+
+@pytest.mark.asyncio
+async def test_epoch_schedule_fails_over_from_refused_archive_to_next_provider(
+    monkeypatch,
+):
+    attempts = []
+    schedule = object()
+
+    async def read(_self, url, _netuid):
+        attempts.append(url)
+        if url == "wss://archive.example":
+            raise ConnectionError("server rejected WebSocket connection: HTTP 429")
+        return schedule
+
+    monkeypatch.setattr(ChainClient, "_read_epoch_schedule_from", read)
+    config = replace(
+        make_chain_config(),
+        public_archive_rpc_urls=("wss://archive.example", "wss://other.example"),
+    )
+    assert await ChainClient(config).read_epoch_schedule(118) is schedule
+    assert attempts == ["wss://archive.example", "wss://other.example"]
+
+
+@pytest.mark.asyncio
+async def test_epoch_schedule_reaches_live_route_after_every_archive_fails(
+    monkeypatch,
+):
+    attempts = []
+
+    async def read(_self, url, _netuid):
+        attempts.append(url)
+        raise ConnectionError(f"synthetic refusal from {url}")
+
+    monkeypatch.setattr(ChainClient, "_read_epoch_schedule_from", read)
+    config = replace(
+        make_chain_config(), public_archive_rpc_urls=("wss://archive.example",)
+    )
+    with pytest.raises(ChainConnectionError, match="archive.example.*entrypoint"):
+        await ChainClient(config).read_epoch_schedule(118)
+    assert attempts == [
+        "wss://archive.example",
+        "wss://entrypoint-finney.opentensor.ai:443",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_epoch_schedule_bounds_each_provider_and_reports_timeouts(monkeypatch):
+    async def read(_self, _url, _netuid):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(ChainClient, "_read_epoch_schedule_from", read)
+    config = replace(
+        make_chain_config(),
+        public_archive_rpc_urls=("wss://archive.example",),
+        archive_rpc_timeout_seconds=0.01,
+    )
+    with pytest.raises(ChainTimeoutError):
+        await ChainClient(config).read_epoch_schedule(118)
