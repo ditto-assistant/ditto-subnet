@@ -1876,7 +1876,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('decide_bounty_evaluation', {
     title: 'Decide bounty evaluation',
-    description: 'Record the decision to expand, revise or stop a bounty pilot (#2944) with its integrationStatus (not_integrated, integrating, integrated, adopted or not_adopted) and non-blank reasons (DECIDE BOUNTY EVALUATION {repo}#{issue} {DECISION}). expectedDecisionId names the current decision, which this one supersedes (0 before the first); a stale one is refused. The history stays; the latest is current, and the report shows it with its reasons but not its operator. Requires backroom:write.',
+    description: 'Record the decision to expand, revise or stop a bounty pilot (#2944) with its integrationStatus (not_integrated, integrating, integrated, adopted or not_adopted) and non-blank reasons (DECIDE BOUNTY EVALUATION {repo}#{issue} {DECISION}). expectedDecisionId names the current decision, which this one supersedes (0 before the first); a stale one is refused. The history stays; the latest is current, and the public report shows it with its reasons verbatim, but not its operator. Requires backroom:write.',
     inputSchema: bountyCatalogInputs.evaluationDecision, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => recordBountyEvaluationDecision(props.session.email, input)))
 

@@ -97,7 +97,8 @@ append-only:
   `revise` or `stop` the pilot, with its `integrationStatus`
   (`not_integrated`, `integrating`, `integrated`, `adopted` or `not_adopted`)
   and non-blank reasons. The phrase is
-  `DECIDE BOUNTY EVALUATION {repo}#{issue} {DECISION}`.
+  `DECIDE BOUNTY EVALUATION {repo}#{issue} {DECISION}`. The report publishes
+  the current decision's reasons verbatim, so write them as public text.
 
 Each write names the record it supersedes: `expectedEntryId` is the current
 entry of the same kind and metric, and `expectedDecisionId` the current
@@ -115,7 +116,8 @@ and reason under `evaluation` and in the audit.
 - **Stop a round.** Pause claims, then cancel open and live slots with
   `control_bounty_slot` (`team`). Each paid fee is owed back in full.
 - **Change the terms.** Publish a new revision. It applies to new claims only;
-  existing claims keep the terms they signed.
+  existing claims keep the terms they signed. A revision cannot name as
+  reviewer anyone who holds a live claim on the bounty.
 - **Code rollback.** Bounty history is append-only, and each bounty migration
   refuses to downgrade while records it would drop exist. Roll forward
   instead.

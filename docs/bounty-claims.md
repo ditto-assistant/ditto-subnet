@@ -90,7 +90,9 @@ existing slots or claims.
   hold one live slot per bounty.
 - **Not the reviewer.** A claim whose `github_login` is the revision's
   `reviewer_login` is refused with `403`. GitHub logins are case-insensitive,
-  so the two are compared without regard to letter case.
+  so the two are compared without regard to letter case. The reverse holds
+  too: a new revision whose `reviewer_login` holds a live claim on the bounty
+  is refused with `409`, and its preview lists the refusal.
 - **Teams.** v1 claims are solo. The claim still signs a `team_digest`, the
   digest of a one-member team, so team claims can be added without a new
   signature domain.
@@ -200,11 +202,11 @@ A claimant can appeal a rejection or a missed deadline, once per decision,
 while the slot still shows that outcome. The slot can't be reopened for 3
 days after the rejection, so an appeal filed within that window is always
 heard; after it, an appeal is still possible until an operator reopens the
-slot. A missed deadline is stamped at the deadline, but it can be appealed only
-once a request or the sweeper records it, which can be later. Its window runs
-from that recording (`noticed_at`), so a stalled sweeper never shortens it. The statement is private; only its digest is
-public. An operator decides, and a rejection is never judged by the
-reviewer who rejected the work. Nor is a missed deadline judged by whoever set
+slot. A missed deadline is stamped at the deadline, but it can be appealed
+only once a request or the sweeper records it, which can be later. Its window
+runs from that recording (`noticed_at`), so a stalled sweeper never shortens
+it. The statement is private; only its digest is public. An operator decides,
+and a rejection is never judged by the reviewer who rejected the work. Nor is a missed deadline judged by whoever set
 it: the reviewer who requested changes, or the operator whose upheld appeal
 restored it. Upholding restores the claim to claimed with a new delivery
 deadline; denying leaves the outcome in place.
@@ -255,9 +257,11 @@ The public board (`/api/v1/public/bounties`) and claim records
 - obligations, approval counts, transfers and delivery facts;
 - a public event trail with ids, which appeals cite.
 
-Operator identities, appeal statements, the pilot's evaluation records, and
-the reasons for pausing, cancelling, reopening and awarding are private.
-Backroom shows them to operators.
+Operator identities, appeal statements, the pilot's evaluation history
+(superseded records, and every entry's note and reason), and the reasons for
+pausing, cancelling, reopening and awarding are private. Backroom shows them
+to operators. The source-safe report publishes the current estimates and
+actuals and the current decision, including its reasons verbatim.
 
 ## Threat model
 
@@ -268,7 +272,7 @@ Backroom shows them to operators.
 | Terms changed after work began | The claim binds `spec_digest`. New revisions apply to new claims only |
 | Someone else confirms a held claim and starts its deadline | Only the payee can pay a live fee. A rehearsal receipt derives from the claim's own signature, which no view shows, and only the hold's response carries it |
 | Squatting on slots | A short unpaid hold, a fee to claim, a fixed delivery deadline with no renewals, and one live slot per GitHub account and payee |
-| The reviewer claims the work they review | A claim signed with the revision's `reviewer_login`, in any letter case, is refused before anything is recorded |
+| The reviewer claims the work they review | A claim signed with the revision's `reviewer_login`, in any letter case, is refused before anything is recorded; a revision naming a live claimant as reviewer is refused |
 | Placeholder pull requests | A submission names an exact commit, and the reviewer decides on that commit within the review target |
 | A pull request is rewritten after review | `submit` binds `head_sha`. New commits need a new signed submission |
 | A hotkey leaks, is sold, or changes owner | The new holder can make new claims but can't act on or redirect existing ones. A changed owner before fee confirmation refunds the fee, and afterwards an award's payout holds until the owner is the payee again |
