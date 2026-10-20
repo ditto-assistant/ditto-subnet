@@ -5,7 +5,9 @@ Each scenario is one 720-block catch-up range of a deterministic chain
 the full reader, both range planners and the payout receipt. The range is
 replayed twice from the same durable state, once through ``_sweep_sparse``
 and once block by block through ``_scan_block``, and the cursor, every vector
-binding and every payout snapshot must come out identical.
+binding and every payout snapshot must come out identical. Every scenario
+runs under a pre-v475 runtime and under a Yuma-gated one, whose
+``SubnetEpochConsensus`` both read paths check.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from ditto.tests.api_server.endpoints.test_source_emission_collector import (
 )
 from ditto.tests.chain.source_emission_chain import (
     CODE,
+    GATED_CODE,
     HOTKEY_SWAP_INTERVAL,
     NETUID,
     SubtensorTimeline,
@@ -166,6 +169,21 @@ SCENARIOS = [
         acted=(1100, 1250, 1300, 1460),
         bindings={"validator-a": (1300, 1050), "validator-b": (1250, RESET)},
         payouts={1100: None, 1460: None},
+    ),
+    Scenario(
+        "two-registrations-of-one-uid",
+        # The second registration replaces a hotkey the first one installed;
+        # BlockAtRegistration differs at the ends, and bisecting it finds both.
+        lambda: (
+            _history()
+            .register(1200, 3, "miner-c")
+            .commit(1250, "validator-a")
+            .reveal(1500, "validator-a", A_NEW)
+            .register(1600, 3, "miner-d")
+        ),
+        acted=(1100, 1200, 1460, 1500, 1600),
+        bindings={"validator-a": (1600, RESET), "validator-b": (1200, RESET)},
+        payouts={1100: None, 1460: "no_verified_reveal_provenance"},
     ),
     Scenario(
         "hotkey-swap",
@@ -361,16 +379,17 @@ def _outcome(state: dict[str, Any]) -> tuple[dict, dict]:
     return bindings, payouts
 
 
+@pytest.mark.parametrize("runtime", [CODE, GATED_CODE], ids=["v473", "yuma-gated"])
 @pytest.mark.parametrize("mode", ["primary", "shadow"])
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=[s.name for s in SCENARIOS])
 async def test_sparse_replay_commits_what_the_per_block_scan_commits(
-    app, session_maker, monkeypatch, full_reads, scenario, mode
+    app, session_maker, monkeypatch, full_reads, scenario, mode, runtime
 ):
     assert LAST - FIRST + 1 == module._SWEEP_SPARSE_BATCH_BLOCKS
     monkeypatch.setattr(module, "_REVEAL_PLAN_MODE", mode)
     # The audit re-reads the first quiet blocks instead of a random sample.
     monkeypatch.setattr(module.random, "sample", lambda seq, k: list(seq)[:k])
-    chain = scenario.timeline().build()
+    chain = scenario.timeline().build(runtime)
     app.state.chain = SimpleNamespace(
         get_miner_emission_receipt=chain.get_miner_emission_receipt,
         _safe_rpc_error=str,
@@ -406,7 +425,7 @@ async def test_sparse_replay_commits_what_the_per_block_scan_commits(
     assert start["cursor"] == {
         "block": FIRST - 1,
         "block_hash": hash_of(FIRST - 1),
-        "runtime_code_hash": CODE,
+        "runtime_code_hash": runtime,
         "last_blocked_reason": None,
     }
     assert acted == scenario.acted
@@ -449,3 +468,14 @@ async def test_a_swap_cooldown_shorter_than_the_range_is_planned_in_full(planner
     assert chain.state(FIRST - 1).keys == chain.state(LAST).keys
     plan = await planner(chain, netuid=NETUID, first_block=FIRST, last_block=LAST)
     assert (plan.full_scan, plan.full_scan_reason) == (True, "hotkey_swap_interval")
+
+
+@pytest.mark.parametrize(
+    "planner", [plan_source_emission_range, plan_source_emission_range_by_reveals]
+)
+async def test_a_runtime_upgrade_inside_the_range_is_planned_in_full(planner):
+    # v473 to a Yuma-gated runtime: the per-block scan alone reads the
+    # boundary, where the new runtime's state is first written.
+    chain = _history().upgrade(1300, GATED_CODE).build()
+    plan = await planner(chain, netuid=NETUID, first_block=FIRST, last_block=LAST)
+    assert (plan.full_scan, plan.full_scan_reason) == (True, "runtime_changed")

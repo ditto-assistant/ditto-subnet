@@ -50,13 +50,15 @@ from ditto.chain.models import (
 
 NETUID = 118
 FOREIGN_NETUID = 7
-# An audited artifact outside the Yuma-gated set: admission needs no metadata
-# and no SubnetEpochConsensus read.
+# Audited artifacts, so admission needs no metadata. CODE is outside the
+# Yuma-gated set (no SubnetEpochConsensus read); GATED_CODE is a v475+ artifact,
+# read only while SubnetEpochConsensus is Yuma.
 CODE = next(
     code
     for code in sorted(verifier.AUDITED_RUNTIME_CODE_HASHES)
     if code not in verifier._YUMA_GATED_RUNTIME_CODE_HASHES
 )
+GATED_CODE = sorted(verifier._YUMA_GATED_RUNTIME_CODE_HASHES)[0]
 CODE_KEY = "0x" + b":code".hex()
 OWNER = "owner"
 TEMPO = 360
@@ -105,6 +107,7 @@ _KNOWN_STORAGE = {
             "OwnerHyperparamRateLimit",
             "RevealPeriodEpochs",
             "StakeWeight",
+            "SubnetEpochConsensus",
             "SubnetEpochIndex",
             "SubnetOwnerHotkey",
             "Tempo",
@@ -183,6 +186,8 @@ class BlockState:
     events: tuple[dict[str, Any], ...]
     # Coldkey -> block of its last hotkey swap on SN118.
     swap_records: dict[str, int]
+    # The runtime's ``:code`` hash stored after this block.
+    code: str
 
     def map_storage(self) -> dict[str, dict[Any, Any]]:
         """``netuid``-prefixed maps, as ``query_map`` iterates them."""
@@ -209,6 +214,7 @@ class BlockState:
             "Tempo": TEMPO,
             "LastMechansimStepBlock": self.step,
             "SubnetEpochIndex": self.epoch,
+            "SubnetEpochConsensus": "Yuma",
             "SubnetOwnerHotkey": OWNER,
             "StakeWeight": [STAKE_WEIGHT[uid] for uid in uids],
             "Active": [True for _ in uids],
@@ -254,12 +260,16 @@ class SubtensorTimeline:
     def coldkey_swap(self, block: int, old: str, new: str) -> SubtensorTimeline:
         return self._add(block, "coldkey_swap", old, new)
 
+    def upgrade(self, block: int, code: str) -> SubtensorTimeline:
+        """``set_code`` in ``block``: the state after it stores ``code``."""
+        return self._add(block, "upgrade", code)
+
     def noise(self, block: int, *events: dict[str, Any]) -> SubtensorTimeline:
         for event in events:
             self._add(block, "noise", event)
         return self
 
-    def build(self) -> SourceEmissionChain:
+    def build(self, code: str = CODE) -> SourceEmissionChain:
         keys = dict(GENESIS_KEYS)
         registered = dict(GENESIS_REGISTERED)
         weights: dict[int, Vector] = dict(GENESIS_WEIGHTS)
@@ -270,7 +280,15 @@ class SubtensorTimeline:
         interval = self.swap_interval
         states = {
             GENESIS_BLOCK: BlockState(
-                dict(keys), dict(registered), dict(weights), {}, step, epoch, (), {}
+                dict(keys),
+                dict(registered),
+                dict(weights),
+                {},
+                step,
+                epoch,
+                (),
+                {},
+                code,
             )
         }
         for block in range(GENESIS_BLOCK + 1, self.head + 1):
@@ -381,6 +399,13 @@ class SubtensorTimeline:
                             phase="ApplyExtrinsic",
                         )
                     )
+                elif kind == "upgrade":
+                    (code,) = args
+                    extrinsics.append(
+                        _event(
+                            "CodeUpdated", {}, phase="ApplyExtrinsic", module="System"
+                        )
+                    )
                 elif kind == "coldkey_swap":
                     old, new = args
                     if new in owners.values():
@@ -419,6 +444,7 @@ class SubtensorTimeline:
                 epoch,
                 (*initialization, *extrinsics),
                 dict(swap_records),
+                code,
             )
         return SourceEmissionChain(states, self.head, interval)
 
@@ -565,7 +591,7 @@ class SourceEmissionChain:
             key, at = params
             block = self._block(at)
             if key == CODE_KEY:
-                return {"result": CODE}
+                return {"result": self.state(block).code}
             storage = StorageKey.from_hex(key)
             value = self.storage(storage.pallet, storage.name, storage.params, block)
             return {"result": _storage_hash(value)}
