@@ -1003,10 +1003,13 @@ async def _range_endpoints(
     # registration sets it to the current block, so per UID it only increases
     # and never repeats. That catches A -> B -> A, which equal Keys at the
     # ends would hide (SN118's 300-block immunity is shorter than a range),
-    # and bisecting it finds every registration exactly. Keys is bisected too
-    # for a hotkey swap, which registers nothing; a UID's hotkey can be
-    # swapped at most once per HotkeySwapOnSubnetInterval (a day), so its
-    # value cannot flip back inside one range either.
+    # and bisecting it finds every registration exactly. A hotkey swap
+    # registers nothing, so Keys is bisected for it, but only between
+    # registrations: a registration can restore the hotkey a swap moved away,
+    # or a swap the hotkey a registration replaced, and Keys would then read
+    # the same across both. Between registrations only a swap changes Keys,
+    # and a UID's hotkey can be swapped at most once per
+    # HotkeySwapOnSubnetInterval (a day), so there it cannot flip back.
     registered = await _gather_or_cancel(
         *(mapping_at("BlockAtRegistration", at) for at in (start, end))
     )
@@ -1022,24 +1025,37 @@ async def _range_endpoints(
         return full(code[0])
     gate = asyncio.Semaphore(8)
 
-    async def bisect(uid: int, storage: str) -> list[int]:
-        key = await substrate.create_storage_key(
-            "SubtensorModule", storage, [netuid, uid], block_hash=end
-        )
-        return await _storage_change_blocks(
-            substrate, key.to_hex(), hashes, first_block - 1, last_block, gate
-        )
-
-    found = await _gather_or_cancel(
-        *(
-            bisect(uid, storage)
-            for uid in changed
+    async def identity_change_blocks(uid: int) -> set[int]:
+        registration_key, keys_key = [
+            (
+                await substrate.create_storage_key(
+                    "SubtensorModule", storage, [netuid, uid], block_hash=end
+                )
+            ).to_hex()
             for storage in ("BlockAtRegistration", "Keys")
+        ]
+        registrations = await _storage_change_blocks(
+            substrate, registration_key, hashes, first_block - 1, last_block, gate
         )
-    )
+        # Keys is bisected in each stretch that ends before a registration.
+        stretches = zip(
+            [first_block - 1, *registrations],
+            [*(block - 1 for block in registrations), last_block],
+            strict=True,
+        )
+        swaps = await _gather_or_cancel(
+            *(
+                _storage_change_blocks(substrate, keys_key, hashes, low, high, gate)
+                for low, high in stretches
+                if high > low
+            )
+        )
+        return {*registrations, *(block for found in swaps for block in found)}
+
     identity_changes: set[int] = set()
-    for registrations, swaps in zip(found[::2], found[1::2], strict=True):
-        blocks = {*registrations, *swaps}
+    for blocks in await _gather_or_cancel(
+        *(identity_change_blocks(uid) for uid in changed)
+    ):
         if not blocks:
             return full(code[0])  # the endpoints disagree but no change found
         identity_changes.update(blocks)

@@ -351,6 +351,29 @@ async def test_a_uid_that_returns_to_its_old_hotkey_is_still_found() -> None:
     assert {1200, 1550} <= set(plan.interesting)
 
 
+@pytest.mark.parametrize(
+    "planner", [plan_source_emission_range, plan_source_emission_range_by_reveals]
+)
+@pytest.mark.parametrize(
+    ("registrations", "swaps"),
+    [
+        # A registration replaces the miner; a swap then restores its hotkey.
+        ({2: [(1200, "intruder")]}, {2: [(1550, "miner")]}),
+        # A swap moves the miner away; a registration then restores its hotkey.
+        ({2: [(1550, "miner")]}, {2: [(1200, "swapped")]}),
+    ],
+)
+async def test_a_registration_and_a_swap_that_restore_a_hotkey_are_both_found(
+    planner, registrations, swaps
+) -> None:
+    chain = _chain()
+    chain.registrations, chain.swaps = registrations, swaps
+    assert chain.keys_at(FIRST - 1) == chain.keys_at(LAST)
+    plan = await planner(chain, netuid=NETUID, first_block=FIRST, last_block=LAST)
+    assert not plan.full_scan
+    assert {1200, 1550} <= set(plan.interesting)
+
+
 async def test_a_hotkey_swap_is_found_without_a_registration() -> None:
     chain = _chain()
     chain.swaps = {1: [(1400, "validator2")]}
