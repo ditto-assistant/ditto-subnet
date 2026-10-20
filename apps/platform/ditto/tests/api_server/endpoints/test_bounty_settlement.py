@@ -471,6 +471,7 @@ async def test_policy_publication_waits_for_dispatch_commit_but_not_execution(
         assert not sending.done()
         recorded = obligation(await claim_of(world, claim), "fee_refund")
         assert recorded["state"] == "dispatched"
+        assert (recorded["approvals"], recorded["approvals_required"]) == (1, 1)
     finally:
         record.set()
         finish.set()
@@ -481,6 +482,41 @@ async def test_policy_publication_waits_for_dispatch_commit_but_not_execution(
         )
     result = sending.result()
     assert result.status_code == 200 and result.json()["state"] == "confirmed"
+    assert (result.json()["approvals"], result.json()["approvals_required"]) == (1, 1)
+
+
+async def test_dispatched_approvals_keep_the_authorizing_revision(world):
+    await world.start(ALICE)
+    claim = await accepted(world, ALICE)
+    refund = obligation(claim, "fee_refund")
+    assert (await policy(world)).status_code == 200
+    assert (await approve(world, refund)).json()["state"] == "approved"
+    # The old revision's approval cannot authorize dispatch under revision 2.
+    assert (await policy(world, expected=1, single=1)).status_code == 200
+    assert (await dispatch(world, refund)).status_code == 409
+    assert (await approve(world, refund, policy_revision=2)).json()[
+        "state"
+    ] == "awaiting_approval"
+    approved = (await approve(world, refund, headers=TWO, policy_revision=2)).json()
+    assert (approved["approvals"], approved["approvals_required"]) == (2, 2)
+    sent = (await dispatch(world, refund, "unknown")).json()
+    assert sent["state"] == "uncertain"
+    # Publishing an unapprovable policy cannot erase an existing transfer's
+    # two approvals or substitute the earlier one-approver revision.
+    assert (await policy(world, expected=2, single=1, dual=FEE - 1)).status_code == 200
+    pending = obligation(await claim_of(world, claim), "fee_refund")
+    assert (pending["state"], pending["approvals"], pending["approvals_required"]) == (
+        "uncertain",
+        2,
+        2,
+    )
+    assert (await approve(world, refund, policy_revision=3)).status_code == 409
+    confirmed = (await reconcile(world, sent["transfers"][0]["transfer_id"])).json()
+    assert (
+        confirmed["state"],
+        confirmed["approvals"],
+        confirmed["approvals_required"],
+    ) == ("confirmed", 2, 2)
 
 
 @pytest.mark.parametrize("action", ["approve", "dispatch"])

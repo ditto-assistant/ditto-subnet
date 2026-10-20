@@ -222,6 +222,11 @@ and reconciled against its receipt; a failed or expired transfer needs fresh
 approvals. Merge, deployment and adoption facts are recorded publicly and
 never gate payment.
 
+Once a round is dispatched, its approval count and requirement retain the
+policy revision that authorized it, including while uncertain and after
+confirmation. New policies apply to undispatched rounds and fresh retry
+rounds; they do not rewrite a transfer's authorization history.
+
 ## Public visibility
 
 The public board (`/api/v1/public/bounties`) and claim records

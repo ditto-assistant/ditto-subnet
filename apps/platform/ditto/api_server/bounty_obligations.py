@@ -93,8 +93,10 @@ async def obligation_states(
     """Each obligation's state, in two reads however many obligations there are."""
     settled = [o.obligation_id for o in obligations if o.kind != "fee_retained"]
     transfers: dict[UUID, list[BountyTransfer]] = {}
-    # Distinct operators who approved each round under the policy in force.
-    approvals: dict[tuple[UUID, int], int] = {}
+    # Keep every revision: a dispatched round's authorizing policy is history,
+    # while an undispatched round must use the policy currently in force.
+    approvals: dict[tuple[UUID, int], dict[int, int]] = {}
+    policies: dict[int, BountyPayoutPolicy] = {}
     if settled:
         for transfer in await session.scalars(
             select(BountyTransfer)
@@ -102,28 +104,39 @@ async def obligation_states(
             .order_by(BountyTransfer.round)
         ):
             transfers.setdefault(transfer.obligation_id, []).append(transfer)
-    if settled and policy is not None:
-        approvals = {
-            (obligation_id, round_number): int(count)
-            for obligation_id, round_number, count in await session.execute(
-                select(
-                    BountyObligationApproval.obligation_id,
-                    BountyObligationApproval.round,
-                    func.count(func.distinct(BountyObligationApproval.actor)),
-                )
-                .where(
-                    BountyObligationApproval.obligation_id.in_(settled),
-                    BountyObligationApproval.policy_revision == policy.revision,
-                )
-                .group_by(
-                    BountyObligationApproval.obligation_id,
-                    BountyObligationApproval.round,
-                )
+    if settled:
+        for (
+            obligation_id,
+            round_number,
+            approved_policy,
+            count,
+        ) in await session.execute(
+            select(
+                BountyObligationApproval.obligation_id,
+                BountyObligationApproval.round,
+                BountyPayoutPolicy,
+                func.count(func.distinct(BountyObligationApproval.actor)),
             )
-        }
+            .join(
+                BountyPayoutPolicy,
+                BountyPayoutPolicy.revision == BountyObligationApproval.policy_revision,
+            )
+            .where(
+                BountyObligationApproval.obligation_id.in_(settled),
+            )
+            .group_by(
+                BountyObligationApproval.obligation_id,
+                BountyObligationApproval.round,
+                BountyPayoutPolicy.revision,
+            )
+        ):
+            policies[approved_policy.revision] = approved_policy
+            approvals.setdefault((obligation_id, round_number), {})[
+                approved_policy.revision
+            ] = int(count)
     return {
         o.obligation_id: _derive(
-            o, transfers.get(o.obligation_id, []), approvals, policy
+            o, transfers.get(o.obligation_id, []), approvals, policy, policies
         )
         for o in obligations
     }
@@ -132,22 +145,38 @@ async def obligation_states(
 def _derive(
     obligation: BountyObligation,
     transfers: list[BountyTransfer],
-    approved: dict[tuple[UUID, int], int],
+    approved: dict[tuple[UUID, int], dict[int, int]],
     policy: BountyPayoutPolicy | None,
+    policies: dict[int, BountyPayoutPolicy],
 ) -> ObligationState:
     if obligation.kind == "fee_retained":
         return ObligationState("retained", 0, 0, 0, [])
     latest = transfers[-1] if transfers else None
     if latest is not None and latest.state in LIVE_TRANSFER_STATES:
+        # Approvals are append-only. Dispatch checks the current revision while
+        # holding the policy/claim locks, and no approval is permitted after
+        # dispatch. Thus the last approved revision in this round is exactly
+        # the revision that authorized its durable transfer, even if a newer
+        # policy was published during execution or after confirmation.
+        revisions = approved.get((obligation.obligation_id, latest.round), {})
+        revision = max(revisions, default=None)
         return ObligationState(
             latest.state,
             latest.round,
-            approved.get((obligation.obligation_id, latest.round), 0),
-            required_approvals(obligation.amount_alpha_rao, policy),
+            revisions.get(revision, 0) if revision is not None else 0,
+            required_approvals(obligation.amount_alpha_rao, policies.get(revision))
+            if revision is not None
+            else None,
             transfers,
         )
     round_number = latest.round + 1 if latest is not None else 1
-    approvals = approved.get((obligation.obligation_id, round_number), 0)
+    approvals = (
+        approved.get((obligation.obligation_id, round_number), {}).get(
+            policy.revision, 0
+        )
+        if policy is not None
+        else 0
+    )
     required = required_approvals(obligation.amount_alpha_rao, policy)
     if policy is not None and required is None:
         state = "over_policy_limit"
