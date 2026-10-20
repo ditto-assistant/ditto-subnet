@@ -386,20 +386,19 @@ def _catalog_gate(**overrides: object) -> dict[str, object]:
     return GATES.evaluate_catalog_gate(**values)  # type: ignore[arg-type]
 
 
-# Published vectors copied from services/dittobench-api/internal/scoregates/
+# The shared cross-language normaliser fixture: the Go scorer pins
+# NormalizeSpan and SpanTokens over one input list (TestNormalizeSpanVectors,
+# the honest/rewritten renderings, the diacritic and non-Latin vectors, and the
+# Unicode defaults a Python port gets wrong) in this file, and the kit's port
+# must reproduce it exactly. Regenerated on the Go side with
+# SCOREGATES_UPDATE_GOLDEN=1 (span_normaliser_vectors_test.go).
+SPAN_NORMALISER_VECTORS_PATH = (
+    LOCAL.REPO_ROOT
+    / "services/dittobench-api/internal/scoregates/testdata"
+    / "v13_span_normaliser_vectors.json"
+)
+# Vectors copied from services/dittobench-api/internal/scoregates/
 # text_provenance_test.go so the Python port and the Go rule cannot drift.
-NORMALIZE_SPAN_VECTORS = {
-    "$4,110.67": "$4,110.67",
-    "**Answer:** $4,110.67": "$4,110.67",
-    "ANSWER: 4110.67 dollars": "4110.67 dollars",
-    "Final answer — 4110.67": "4110.67",
-    "- $4,110.67\n- based on the ledger": "$4,110.67 based on the ledger",
-    "1. Lisbon\n2. Porto": "lisbon porto",
-    "`4110.67`": "4110.67",
-    "４１１０.６７": "4110.67",
-    "Lisbon,  since\t2019.": "lisbon, since 2019.",
-    "": "",
-}
 HONEST_RENDERINGS = (
     "$4,110.67",
     "4110.67",
@@ -757,11 +756,64 @@ class ProvenanceNormaliserTest(unittest.TestCase):
         ):
             self.assertEqual(GATES.canonical_number(raw), want, raw)
 
-    def test_normalize_span_matches_the_published_vectors(self) -> None:
-        for raw, want in NORMALIZE_SPAN_VECTORS.items():
-            got = GATES.normalize_span(raw)
-            self.assertEqual(got, want, raw)
-            self.assertEqual(GATES.normalize_span(got), got, f"not idempotent: {raw!r}")
+    def test_normaliser_reproduces_the_go_scorer_fixture(self) -> None:
+        fixture = json.loads(SPAN_NORMALISER_VECTORS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(fixture["min_string_token_len"], GATES.MIN_STRING_TOKEN_LEN)
+        self.assertEqual(fixture["max_value_token_len"], GATES.MAX_VALUE_TOKEN_LEN)
+        self.assertGreater(len(fixture["vectors"]), 40)
+        for vector in fixture["vectors"]:
+            raw = vector["in"]
+            with self.subTest(raw=raw):
+                got = GATES.normalize_span(raw)
+                self.assertEqual(got, vector["normalized"])
+                self.assertEqual(GATES.normalize_span(got), got, "not idempotent")
+                tokens, truncated = GATES.span_tokens(raw)
+                self.assertFalse(truncated)
+                self.assertEqual(sorted(tokens), vector["tokens"])
+
+    def test_span_tokens_fold_diacritics_and_keep_non_latin(self) -> None:
+        # TestSpanTokensFoldDiacriticsAndKeepNonLatin: diacritic variants fold
+        # to ONE token, non-Latin values tokenize to a claim, and the floor
+        # counts runes.
+        for accented, plain in (
+            ("José", "Jose"),
+            ("Ōsaka", "Osaka"),
+            ("Zürich", "Zurich"),
+            ("Ｔｏｋｙｏ", "tokyo"),
+        ):
+            tokens = GATES.value_tokens(accented)
+            self.assertEqual(len(tokens), 1, accented)
+            self.assertEqual(tokens, GATES.value_tokens(plain), accented)
+        self.assertEqual(GATES.value_tokens("Москва"), {"москва"})
+        self.assertEqual(len(GATES.value_tokens("東京都新宿区")), 1)
+        self.assertEqual(GATES.value_tokens("Ōsa"), set())
+        # A diacritic served value is a checkable claim the model's plain
+        # rendering satisfies, not claim_not_applicable.
+        claim, ok = GATES.served_claim_tokens("The capital is São Paulo.", ["São Paulo"])
+        self.assertTrue(ok)
+        self.assertEqual(claim, {"paulo"})
+        self.assertTrue(GATES.text_provenance(claim, GATES.value_tokens("Sao Paulo")))
+        claim, ok = GATES.served_claim_tokens("Столица — Москва.", ["Москва"])
+        self.assertTrue(ok)
+        self.assertFalse(GATES.text_provenance(claim, GATES.value_tokens("Moscow")))
+
+    def test_span_tokens_mirror_go_byte_and_digit_rules(self) -> None:
+        # MaxValueTokenLen counts UTF-8 bytes: 32 Cyrillic runes are 64 bytes
+        # (kept), 33 are 66 (dropped).
+        self.assertEqual(GATES.value_tokens("д" * 32), {"д" * 32})
+        self.assertEqual(GATES.value_tokens("д" * 33), set())
+        # Only ASCII digit runs are left to the number pass; other scripts'
+        # digits are an ordinary token (str.isdigit would drop them).
+        self.assertEqual(GATES.value_tokens("٣٤٥٦"), {"٣٤٥٦"})
+        # RE2 (?i) does not fold dotless i to i (Python's IGNORECASE does).
+        self.assertEqual(
+            GATES.normalize_span("fınal answer: 4110.67"), "fınal answer 4110.67"
+        )
+        # Simple lowercase mapping: dotted capital I lowercases to one rune.
+        self.assertEqual(GATES.normalize_span("İstanbul"), "istanbul")
+        # Go's strings.TrimSpace does not trim U+001C..U+001F.
+        self.assertEqual(GATES.canonical_number("\x1c12"), "")
+        self.assertEqual(GATES.canonical_number("\u3000$12.50\u3000"), "12.5")
 
     def test_span_tokens_fold_every_honest_rendering_to_one_claim_token(self) -> None:
         for rendering in HONEST_RENDERINGS:

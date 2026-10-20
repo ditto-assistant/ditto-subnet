@@ -5,6 +5,10 @@ on:
   pull_request:
     paths:
       - miners/dittobench-starter-kit/**
+      # scripts/rehearsal_gates.py ports the claim-span normaliser and replays
+      # the Go fixture, so a scorer-side rule change must rerun the kit tests.
+      - services/dittobench-api/internal/scoregates/text_provenance.go
+      - services/dittobench-api/internal/scoregates/testdata/v13_span_normaliser_vectors.json
       - .github/workflows/starter-kit-ci.yml
 permissions:
   contents: read
