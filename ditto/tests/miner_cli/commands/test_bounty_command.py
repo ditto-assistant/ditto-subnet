@@ -536,6 +536,22 @@ def test_submit_signs_the_exact_commit_after_typed_consent(capsys):
     assert "exact commit" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "pr,sha",
+    [("0", SHA), ("-61", SHA), ("61", SHA[:12]), ("61", "g" * 40), ("61", f"{SHA}\n")],
+)
+def test_a_malformed_pull_request_or_commit_is_refused_before_signing(pr, sha):
+    client, view = acting_api()
+    handle, live = wallet()
+    phrase = f"SUBMIT BOUNTY CLAIM {view.claim_id} PR {pr} {sha.lower()}"
+    argv = ["submit", str(view.claim_id), "--pr", pr, "--head-sha", sha]
+    with pytest.raises(SystemExit):
+        run([*argv, "--confirmation", phrase], client, live)
+    client.get_bounty_claim.assert_not_called()
+    live.hotkey.sign.assert_not_called()
+    client.submit_bounty_work.assert_not_called()
+
+
 def test_withdraw_states_the_retained_fee_and_needs_its_phrase(capsys):
     client, view = acting_api()
     assert run(["withdraw", str(view.claim_id), "--confirmation", "yes"], client) == 1

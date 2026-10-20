@@ -57,6 +57,7 @@ from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
 _ISSUE_REF = re.compile(
     r"^(?P<repo>[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100})#(?P<issue>[1-9][0-9]{0,9})$"
 )
+_HEAD_SHA = re.compile(r"[0-9a-fA-F]{40}")
 _RAO_PER_ALPHA = Decimal(1_000_000_000)
 _RETRY_DELAYS = (1.0, 2.0, 4.0)
 
@@ -115,8 +116,10 @@ def add_subparser(
         sub.add_argument("claim_id", type=UUID)
         _signing_options(sub)
         if name == "submit":
-            sub.add_argument("--pr", type=int, required=True, dest="pr_number")
-            sub.add_argument("--head-sha", required=True, help="Full 40-hex commit")
+            sub.add_argument("--pr", type=_pr_number, required=True, dest="pr_number")
+            sub.add_argument(
+                "--head-sha", type=_head_sha, required=True, help="Full 40-hex commit"
+            )
         if name == "appeal":
             sub.add_argument(
                 "--event", type=int, required=True, help="The decision's event id"
@@ -131,6 +134,24 @@ def add_subparser(
     for sub in subs.choices.values():
         sub.set_defaults(func=run)
     return parser
+
+
+# Refused while parsing, before the claim is read, consent is asked or a key
+# signs: the request would refuse the same values only after signing.
+def _pr_number(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if not 1 <= number <= 2_147_483_647:
+        raise argparse.ArgumentTypeError("expected a positive pull request number")
+    return number
+
+
+def _head_sha(value: str) -> str:
+    if _HEAD_SHA.fullmatch(value) is None:
+        raise argparse.ArgumentTypeError("expected a full 40-hex commit")
+    return value.lower()
 
 
 def _signing_options(
@@ -622,7 +643,7 @@ def _act(client: ApiClient, args: argparse.Namespace) -> BountyClaimView:
     reason = ""
     head_sha = ""
     if command == "submit":
-        head_sha = args.head_sha.lower()
+        head_sha = args.head_sha
         phrase = f"SUBMIT BOUNTY CLAIM {claim_id} PR {args.pr_number} {head_sha}"
         print(
             f"Submitting {view.repo}#{args.pr_number} at commit {head_sha} for "
