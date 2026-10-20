@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -923,6 +924,44 @@ async def test_events_and_slots_name_a_claim_only_with_its_own_slot(world):
             await session.execute(
                 statement, {"claim": claim["claim_id"], "slot": claim["slot_id"]}
             )
+
+
+async def test_a_claim_carries_the_terms_of_the_revision_it_signed(world):
+    await world.start(ALICE)
+    assert (await world.hold(ALICE)).status_code == 200
+    # Alice's claim again, under a new id and nonce, with `changed` applied.
+    nonce = text(
+        "INSERT INTO bounty_action_nonces (nonce, action, recorded_at)"
+        " VALUES (:nonce, 'claim', now())"
+    )
+    copy = text(
+        "INSERT INTO bounty_claims SELECT (jsonb_populate_record("
+        "NULL::bounty_claims, to_jsonb(c) || jsonb_build_object('claim_id',"
+        " gen_random_uuid(), 'nonce', CAST(:nonce AS uuid))"
+        " || CAST(:changed AS jsonb))).* FROM bounty_claims c"
+    )
+    for changed in (
+        {"spec_digest": "0" * 64},
+        {"funding_mode": "live"},
+        {"fee_alpha_rao": 1},
+        {"fee_escrow_coldkey": BOB.coldkey.ss58_address},
+        {"fee_escrow_hotkey": BOB.hotkey.ss58_address},
+    ):
+        async with world.maker() as session:
+            fresh = uuid4()
+            await session.execute(nonce, {"nonce": fresh})
+            with pytest.raises(
+                DBAPIError, match="fk_bounty_claims_bounty_id_bounty_revisions"
+            ):
+                await session.execute(
+                    copy, {"nonce": fresh, "changed": json.dumps(changed)}
+                )
+            await session.rollback()
+    async with world.maker() as session:
+        fresh = uuid4()
+        await session.execute(nonce, {"nonce": fresh})
+        await session.execute(copy, {"nonce": fresh, "changed": "{}"})
+        await session.rollback()
 
 
 async def test_claim_routes_declare_their_errors(app):

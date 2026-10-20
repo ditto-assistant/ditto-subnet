@@ -12105,6 +12105,16 @@ class BountyRevision(Base):
     )
     __table_args__ = (
         PrimaryKeyConstraint("bounty_id", "revision"),
+        # The target of a claim's reference to the terms it signed.
+        UniqueConstraint(
+            "bounty_id",
+            "revision",
+            "spec_digest",
+            "funding_mode",
+            "entry_fee_alpha_rao",
+            "fee_escrow_coldkey",
+            "fee_escrow_hotkey",
+        ),
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         CheckConstraint(
             "revision > 0 AND spec_digest ~ '^[0-9a-f]{64}$'"
@@ -12372,9 +12382,26 @@ class BountyClaim(Base):
         UniqueConstraint("claim_id", "bounty_id"),
         # The target of references to a claim together with the slot it holds.
         UniqueConstraint("slot_id", "claim_id"),
+        # A claim carries the exact terms of the revision it signed.
         ForeignKeyConstraint(
-            ["bounty_id", "revision"],
-            ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
+            [
+                "bounty_id",
+                "revision",
+                "spec_digest",
+                "funding_mode",
+                "fee_alpha_rao",
+                "fee_escrow_coldkey",
+                "fee_escrow_hotkey",
+            ],
+            [
+                "bounty_revisions.bounty_id",
+                "bounty_revisions.revision",
+                "bounty_revisions.spec_digest",
+                "bounty_revisions.funding_mode",
+                "bounty_revisions.entry_fee_alpha_rao",
+                "bounty_revisions.fee_escrow_coldkey",
+                "bounty_revisions.fee_escrow_hotkey",
+            ],
         ),
         ForeignKeyConstraint(
             ["slot_id", "bounty_id"], ["bounty_slots.slot_id", "bounty_slots.bounty_id"]

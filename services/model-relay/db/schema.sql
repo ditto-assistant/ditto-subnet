@@ -9757,6 +9757,14 @@ ALTER TABLE ONLY public.bounty_obligations
 
 
 --
+-- Name: bounty_revisions uq_bounty_revisions_bounty_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_revisions
+    ADD CONSTRAINT uq_bounty_revisions_bounty_id UNIQUE (bounty_id, revision, spec_digest, funding_mode, entry_fee_alpha_rao, fee_escrow_coldkey, fee_escrow_hotkey);
+
+
+--
 -- Name: bounty_slots uq_bounty_slots_bounty_id; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12877,7 +12885,7 @@ ALTER TABLE ONLY public.bounty_claim_controls
 --
 
 ALTER TABLE ONLY public.bounty_claims
-    ADD CONSTRAINT fk_bounty_claims_bounty_id_bounty_revisions FOREIGN KEY (bounty_id, revision) REFERENCES public.bounty_revisions(bounty_id, revision);
+    ADD CONSTRAINT fk_bounty_claims_bounty_id_bounty_revisions FOREIGN KEY (bounty_id, revision, spec_digest, funding_mode, fee_alpha_rao, fee_escrow_coldkey, fee_escrow_hotkey) REFERENCES public.bounty_revisions(bounty_id, revision, spec_digest, funding_mode, entry_fee_alpha_rao, fee_escrow_coldkey, fee_escrow_hotkey);
 
 
 --

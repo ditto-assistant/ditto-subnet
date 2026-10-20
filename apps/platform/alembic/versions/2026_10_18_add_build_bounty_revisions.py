@@ -73,6 +73,16 @@ def upgrade() -> None:
         sa.Column("reason", sa.Text(), nullable=False),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("bounty_id", "revision"),
+        # The target of a claim's reference to the terms it signed.
+        sa.UniqueConstraint(
+            "bounty_id",
+            "revision",
+            "spec_digest",
+            "funding_mode",
+            "entry_fee_alpha_rao",
+            "fee_escrow_coldkey",
+            "fee_escrow_hotkey",
+        ),
         sa.ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         sa.CheckConstraint(
             "revision > 0 AND spec_digest ~ '^[0-9a-f]{64}$'"

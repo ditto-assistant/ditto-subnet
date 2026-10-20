@@ -130,9 +130,26 @@ def upgrade() -> None:
         sa.UniqueConstraint("claim_id", "bounty_id"),
         # The target of references to a claim together with the slot it holds.
         sa.UniqueConstraint("slot_id", "claim_id"),
+        # A claim carries the exact terms of the revision it signed.
         sa.ForeignKeyConstraint(
-            ["bounty_id", "revision"],
-            ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
+            [
+                "bounty_id",
+                "revision",
+                "spec_digest",
+                "funding_mode",
+                "fee_alpha_rao",
+                "fee_escrow_coldkey",
+                "fee_escrow_hotkey",
+            ],
+            [
+                "bounty_revisions.bounty_id",
+                "bounty_revisions.revision",
+                "bounty_revisions.spec_digest",
+                "bounty_revisions.funding_mode",
+                "bounty_revisions.entry_fee_alpha_rao",
+                "bounty_revisions.fee_escrow_coldkey",
+                "bounty_revisions.fee_escrow_hotkey",
+            ],
         ),
         sa.ForeignKeyConstraint(
             ["slot_id", "bounty_id"], ["bounty_slots.slot_id", "bounty_slots.bounty_id"]
