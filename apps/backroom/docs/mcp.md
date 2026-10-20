@@ -559,7 +559,7 @@ rehearsal funding only: fees and transfers are simulated, and no funds move.
 | `set_bounty_claims_paused` | pause or resume new holds; paid holds still complete |
 | `review_bounty_submission` | the reviewer in force decides one exact submission |
 | `reassign_bounty_reviewer` | a new reviewer; overdue reviews get one more window |
-| `control_bounty_slot` | cancel (refunds a paid fee) or reopen (retains a final one) |
+| `control_bounty_slot` | cancel (refunds a paid fee) or reopen (retains a final one; a rejected or expired slot after its 3-day appeal window) |
 | `decide_bounty_appeal` | uphold (fresh delivery window) or deny; never by its reviewer |
 | `award_bounty_claim` | an award on accepted work, within the pool its claim signed |
 | `set_bounty_payout_policy` | a new revision of the approval thresholds |

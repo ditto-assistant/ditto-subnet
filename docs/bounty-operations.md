@@ -49,7 +49,10 @@ proof of a distinct operator (see [Deferred](bounty-claims.md#deferred)).
 - **Slots.** `control_bounty_slot` cancels a slot (refunding a paid fee in full,
   as `team` or `system_fault`) or reopens a closed one for a new claim
   (retaining a rejected, expired or withdrawn fee). Reopening waits for a
-  pending appeal.
+  pending appeal. A rejected or expired slot also waits out its claimant's
+  3-day appeal window, counted from the rejection or the missed deadline,
+  unless the appeal of it was already decided; the refusal names when the
+  window ends. Withdrawn and cancelled slots reopen at once.
 
 ## Settle
 

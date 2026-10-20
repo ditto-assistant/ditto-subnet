@@ -1816,7 +1816,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('control_bounty_slot', {
     title: 'Cancel or reopen bounty slot',
-    description: 'action=cancel (CANCEL BOUNTY SLOT {repo}#{issue} ROUND {r} SLOT {p}; kind team or system_fault) cancels an open, claimed, submitted or rework slot and refunds a paid fee in full; a held slot is refused. action=reopen (REOPEN BOUNTY SLOT ...) reopens an expired, withdrawn, rejected or cancelled slot for a new claim, records a retained fee for a rejected, expired or withdrawn claim, and is refused while an appeal is pending. Requires backroom:write.',
+    description: 'action=cancel (CANCEL BOUNTY SLOT {repo}#{issue} ROUND {r} SLOT {p}; kind team or system_fault) cancels an open, claimed, submitted or rework slot and refunds a paid fee in full; a held slot is refused. action=reopen (REOPEN BOUNTY SLOT ...) reopens an expired, withdrawn, rejected or cancelled slot for a new claim, records a retained fee for a rejected, expired or withdrawn claim, and is refused while an appeal is pending or, for a rejected or expired slot, until 3 days after the rejection or missed deadline unless its appeal was decided (the 409 names when). Requires backroom:write.',
     inputSchema: bountyCatalogInputs.slot, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => controlBountySlot(props.session.email, input)))
 

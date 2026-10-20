@@ -214,6 +214,39 @@ async def review(
     )
 
 
+async def reopen(world, claim: dict):
+    return await world.client.post(
+        f"{ADMIN}/slots/{claim['slot_id']}/reopen",
+        headers=_HEADERS,
+        json={
+            "reason": "fixture reopen",
+            "confirmation": f"REOPEN BOUNTY SLOT {REPO}#{ISSUE} ROUND 1 SLOT "
+            f"{claim['position']}",
+        },
+    )
+
+
+async def deny(world, claim: dict, event_id: int) -> None:
+    """The claimant appeals one event, and an operator denies it."""
+    filed = await appeal(world, ALICE, claim, event_id, "Fixture appeal.")
+    assert filed.status_code == 200, filed.text
+    appeal_id = next(
+        a["appeal_id"]
+        for a in filed.json()["appeals"]
+        if a["subject_event_id"] == event_id
+    )
+    denied = await world.client.post(
+        f"{ADMIN}/appeals/{appeal_id}/decision",
+        headers=_HEADERS,
+        json={
+            "upheld": False,
+            "reason": "fixture appeal review",
+            "confirmation": f"DENY BOUNTY APPEAL {appeal_id}",
+        },
+    )
+    assert denied.status_code == 200, denied.text
+
+
 async def events(world) -> list[dict]:
     return (await world.refresh())["events"]
 
@@ -842,6 +875,82 @@ async def test_reopening_is_explicit_and_admits_a_new_claim(world):
     async with world.maker() as session:
         actions = (await session.scalars(select(BountySlotAction))).all()
     assert [(a.action, a.prior_status) for a in actions] == [("reopen", "withdrawn")]
+
+
+async def test_reopening_waits_out_the_appeal_window_to_the_instant(world, monkeypatch):
+    await world.start(ALICE)
+    claim = (await submit(world, ALICE, await claimed(world, ALICE))).json()
+    assert (await review(world, claim, "reject")).status_code == 200
+    rejection = next(e for e in await events(world) if e["kind"] == "rejected")
+    ends = datetime.fromisoformat(rejection["recorded_at"]) + timedelta(days=3)
+    monkeypatch.setattr(
+        bounty_claims, "utcnow", lambda: ends - timedelta(microseconds=1)
+    )
+    early = await reopen(world, claim)
+    assert early.status_code == 409, early.text
+    assert (
+        f"appeal this rejected outcome until {ends.isoformat()}: reopen after the "
+        "3-day appeal window" in early.json()["message"]
+    )
+    assert slot_of(await world.refresh(), claim)["status"] == "rejected"
+    # The window ends at its instant; an appeal filed after it still counts
+    # until the slot is reopened.
+    monkeypatch.setattr(bounty_claims, "utcnow", lambda: ends)
+    late = await appeal(world, ALICE, claim, rejection["event_id"], "Fixture appeal.")
+    assert late.status_code == 200, late.text
+    pending = await reopen(world, claim)
+    assert pending.status_code == 409 and "pending appeal" in pending.text
+
+
+@pytest.mark.parametrize("outcome", ["rejected", "expired"])
+async def test_a_decided_appeal_ends_the_appeal_window(world, monkeypatch, outcome):
+    await world.start(ALICE)
+    claim = await claimed(world, ALICE)
+    if outcome == "rejected":
+        claim = (await submit(world, ALICE, claim)).json()
+        assert (await review(world, claim, "reject")).status_code == 200
+        kind = "rejected"
+    else:
+        travel(monkeypatch, timedelta(days=6))
+        # A refused submission records the missed deadline.
+        assert (await submit(world, ALICE, claim)).status_code == 409
+        kind = "deadline_missed"
+    subject = next(e for e in await events(world) if e["kind"] == kind)
+    await deny(world, claim, subject["event_id"])
+    reopened = await reopen(world, claim)
+    assert reopened.status_code == 200, reopened.text
+    view = (await world.client.get(f"{CLAIMS}/{claim['claim_id']}")).json()
+    assert [(o["kind"], o["reason"]) for o in view["obligations"]] == [
+        ("fee_retained", outcome)
+    ]
+
+
+async def test_a_later_outcome_has_its_own_appeal_window(world, monkeypatch):
+    await world.start(ALICE)
+    claim = await claimed(world, ALICE)
+    travel(monkeypatch, timedelta(days=6))
+    assert (await submit(world, ALICE, claim)).status_code == 409
+    first = next(e for e in await events(world) if e["kind"] == "deadline_missed")
+    filed = (await appeal(world, ALICE, claim, first["event_id"], "Outage.")).json()
+    appeal_id = filed["appeals"][0]["appeal_id"]
+    upheld = await world.client.post(
+        f"{ADMIN}/appeals/{appeal_id}/decision",
+        headers=_HEADERS,
+        json={
+            "upheld": True,
+            "restore_days": 2,
+            "reason": "fixture appeal review",
+            "confirmation": f"UPHOLD BOUNTY APPEAL {appeal_id}",
+        },
+    )
+    assert upheld.json()["slot_status"] == "claimed", upheld.text
+    # The restored deadline (day eight) passes too. Deciding the first appeal
+    # does not end the window of the second missed deadline.
+    travel(monkeypatch, timedelta(days=9))
+    early = await reopen(world, claim)
+    assert early.status_code == 409 and "3-day appeal window" in early.text
+    travel(monkeypatch, timedelta(days=11, minutes=1))
+    assert (await reopen(world, claim)).status_code == 200
 
 
 async def test_reassignment_moves_review_authority_and_extends_overdue(

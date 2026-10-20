@@ -119,6 +119,11 @@ is never judged by the reviewer who rejected it. An upheld appeal restores
 your claim with a new delivery deadline. While an appeal is pending, the slot
 cannot be reopened for someone else.
 
+Appeal within 3 days to be sure it is heard. For 3 days after a rejection or
+a missed deadline, the slot cannot be reopened for someone else. After that
+you can still appeal until an operator reopens the slot, which makes the
+outcome final.
+
 ## Fees, awards and payments
 
 Every confirmed entry fee ends in exactly one outcome:

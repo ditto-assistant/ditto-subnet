@@ -18,7 +18,8 @@ Operator actions name the actor and need typed confirmations:
 - an operator other than the one who decided **upholds** or **denies** an
   appeal. Upholding restores the claim with a fresh delivery window;
 - an operator **cancels** a slot (a paid fee is refunded in full) or
-  **reopens** a closed one for a new claim.
+  **reopens** a closed one for a new claim. A rejected or expired slot is
+  reopened only after its appeal window, unless its appeal was decided.
 
 Every action first applies the bounty's due deadlines under its lock.
 Awards and fee obligations for decisions follow in P4.
@@ -92,6 +93,12 @@ DELIVERING = ("claimed", "rework")
 APPEALABLE = {"rejected": "rejected", "deadline_missed": "expired"}
 CANCELLABLE = ("open", "claimed", "submitted", "rework")
 REOPENABLE = ("expired", "withdrawn", "rejected", "cancelled")
+# How long after a rejection or a missed deadline its claimant has to appeal
+# before the slot can be reopened. An appeal filed later still counts until
+# the slot is reopened; a decided appeal ends the wait at once.
+BOUNTY_APPEAL_WINDOW = timedelta(days=3)
+# The outcome each appealable event leaves on the slot, and back again.
+APPEALED_EVENT = {status: kind for kind, status in APPEALABLE.items()}
 
 
 def _now(clock: Callable[[], datetime] | None) -> datetime:
@@ -980,6 +987,37 @@ async def cancel_slot(
         return slot.bounty_id
 
 
+async def appeal_window_end(
+    session: AsyncSession, claim: BountyClaim, outcome: str
+) -> datetime | None:
+    """When the appeal window of a claim's rejection or missed deadline ends.
+
+    ``None`` when nothing holds the slot: the outcome is not appealable, or
+    the claimant's appeal of the event that produced it was decided.
+    """
+    kind = APPEALED_EVENT.get(outcome)
+    if kind is None:
+        return None
+    # The latest such event produced the outcome: an upheld appeal restores
+    # the claim, which can then be rejected or miss a deadline again.
+    subject = await session.scalar(
+        select(BountyEvent)
+        .where(BountyEvent.claim_id == claim.claim_id, BountyEvent.kind == kind)
+        .order_by(BountyEvent.event_id.desc())
+        .limit(1)
+    )
+    if subject is None or await session.scalar(
+        select(BountyAppeal.appeal_id)
+        .join(
+            BountyAppealDecision,
+            BountyAppealDecision.appeal_id == BountyAppeal.appeal_id,
+        )
+        .where(BountyAppeal.subject_event_id == subject.event_id)
+    ):
+        return None
+    return subject.recorded_at + BOUNTY_APPEAL_WINDOW
+
+
 async def reopen_slot(
     maker: async_sessionmaker[AsyncSession],
     *,
@@ -988,7 +1026,12 @@ async def reopen_slot(
     actor: str,
     clock: Callable[[], datetime] | None = None,
 ) -> UUID:
-    """Reopen a closed slot for a new claim. Never automatic."""
+    """Reopen a closed slot for a new claim. Never automatic.
+
+    A rejected or expired slot waits out its claimant's appeal window first,
+    unless the appeal of that outcome was already decided; a pending appeal
+    always has to be decided first.
+    """
     _check_reason(body.reason)
     now = _now(clock)
     await _settle_for_slot(maker, slot_id, now=now)
@@ -1025,6 +1068,16 @@ async def reopen_slot(
             )
         ):
             raise HTTPException(409, "decide the claim's pending appeal first")
+        if claim is not None:
+            ends = await appeal_window_end(session, claim, slot.status)
+            if ends is not None and now < ends:
+                raise HTTPException(
+                    409,
+                    f"the claimant can appeal this {slot.status} outcome until "
+                    f"{ends.isoformat()}: reopen after the "
+                    f"{BOUNTY_APPEAL_WINDOW.days}-day appeal window, or once an "
+                    "appeal of it is decided",
+                )
         session.add(
             BountySlotAction(
                 slot_id=slot.slot_id,

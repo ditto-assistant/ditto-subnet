@@ -40,6 +40,7 @@ from ditto.tests.api_server.endpoints.test_bounty_reviews import (
     AS_REVIEWER,
     claimed,
     events,
+    reopen,
     review,
     submit,
     travel,
@@ -246,14 +247,15 @@ async def test_reopening_a_closed_slot_retains_its_fee(world, monkeypatch, outco
         travel(monkeypatch, timedelta(days=6))
     # Until reopening, the outcome may still be appealed: no disposition yet.
     assert (await claim_of(world, claim))["obligations"] == []
-    reopened = await world.client.post(
-        f"{ADMIN}/slots/{claim['slot_id']}/reopen",
-        headers=_HEADERS,
-        json={
-            "reason": "fixture reopen",
-            "confirmation": f"REOPEN BOUNTY SLOT {REPO}#2942 ROUND 1 SLOT 1",
-        },
-    )
+    if outcome != "withdrawn":
+        # A rejection or a missed deadline first waits out its appeal window.
+        early = await reopen(world, claim)
+        assert early.status_code == 409 and "3-day appeal window" in early.text
+        assert (await claim_of(world, claim))["obligations"] == []
+        # Three days after the rejection, or after the day-five deadline.
+        later = 3 if outcome == "rejected" else 8
+        travel(monkeypatch, timedelta(days=later, minutes=1))
+    reopened = await reopen(world, claim)
     assert reopened.status_code == 200, reopened.text
     view = await claim_of(world, claim)
     [kept] = view["obligations"]

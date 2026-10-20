@@ -527,6 +527,20 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(cancel()).resolves.toMatchObject({ bounty_id: BOUNTY })
   })
 
+  it("keeps Platform's appeal-window refusal of a reopen", async () => {
+    const refusal = 'the claimant can appeal this rejected outcome until 2026-10-19T00:00:00+00:00: ' +
+      'reopen after the 3-day appeal window, or once an appeal of it is decided'
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(envelope(refusal, 409))
+      .mockResolvedValueOnce(Response.json(operator())))
+    const error = await controlBountySlot(ACTOR, {
+      bountyId: BOUNTY, slotId: SLOT, action: 'reopen', reason, confirmation: `REOPEN BOUNTY SLOT ${REPO}#2942 ROUND 1 SLOT 1`,
+    }).catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(PlatformAdminError)
+    expect((error as PlatformAdminError).status).toBe(409)
+    expect((error as Error).message).toContain('3-day appeal window')
+  })
+
   it('never reads an earlier cancel of another kind as a refused cancel applied', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(envelope('a cancelled slot cannot be cancelled', 409))
