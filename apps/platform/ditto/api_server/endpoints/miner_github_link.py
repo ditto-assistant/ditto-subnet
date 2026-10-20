@@ -710,20 +710,20 @@ async def confirm(
     session: SessionDep,
     _authorization: Annotated[str | None, Header(alias="authorization")] = None,
 ) -> GithubLinkView:
-    # Disabling linking stops new links, including already approved attempts.
-    # Ditto-derived attempts do not use the legacy direct GitHub OAuth app.
+    # Each OAuth source owns its enable gate, including approved attempts.
+    # GITHUB_LINK_ENABLED controls direct GitHub OAuth, while Ditto-derived
+    # proofs require DITTO_LINK_ENABLED and never use the direct OAuth app.
     # The exact attempt and miner signature are still verified in both phases.
     github = getattr(request.app.state, "github_link", None)
-    if github is None or not github.config.enabled:
-        _client(request)
     ditto = getattr(request.app.state, "ditto_link", None)
-    if ditto is None or not ditto.enabled:
+    if (github is None or not github.enabled) and (ditto is None or not ditto.enabled):
         _client(request)
-    else:
-        paired = await session.get(MinerDittoLinkAttempt, body.link_attempt_id)
-        await session.rollback()
-        if paired is None:
-            _client(request)
+    paired = await session.get(MinerDittoLinkAttempt, body.link_attempt_id)
+    await session.rollback()
+    if paired is None:
+        _client(request)
+    elif ditto is None or not ditto.enabled:
+        raise HTTPException(503, "Ditto linking is not configured on this deployment")
     now = datetime.now(UTC)
     try:
         async with session.begin():

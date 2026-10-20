@@ -68,6 +68,13 @@ Register the callback origin on the app first (`heyditto apps origins verify
 --app <id> https://dittobench.ai`), then set the four `DITTO_LINK_*` values
 and restart. `check_config` refuses a half-configured deployment.
 
+The enable gates follow the identity source. `DITTO_LINK_ENABLED=false` stops
+confirmation of Ditto-derived GitHub proofs, even after browser approval.
+`GITHUB_LINK_ENABLED=false` stops direct GitHub OAuth proofs. Connect Ditto
+does not require the direct GitHub OAuth app or its credentials; disabling
+direct OAuth leaves an enabled Connect Ditto flow available. Disable both
+features to stop every source of new links. Existing proof history is retained.
+
 ## What the link is used for
 
 Connect Ditto is the main onboarding flow. GitHub must already be connected in
