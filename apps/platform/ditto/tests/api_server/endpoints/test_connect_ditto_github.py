@@ -1,13 +1,18 @@
 """Connect Ditto reuses provider consent without changing signed miner proofs."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 import bittensor
 import pytest
+from fastapi import HTTPException, Request
 
+from ditto.api_models.contributor_identity import GithubLinkRequest
 from ditto.api_server.ditto_link import DittoLinkClient
+from ditto.api_server.endpoints.miner_github_link import confirm
 from ditto.chain.models import BlockInfo
 from ditto.tests.api_server.endpoints.test_miner_ditto_link import (
     FakeProvider,
@@ -22,12 +27,35 @@ from ditto.tests.api_server.endpoints.test_miner_github_link import signed_link
 pytestmark = pytest.mark.asyncio
 
 
+async def test_disabled_github_gate_blocks_ditto_proofs_before_database_access():
+    state = SimpleNamespace(
+        github_link=SimpleNamespace(
+            enabled=False, config=SimpleNamespace(enabled=False)
+        ),
+        ditto_link=SimpleNamespace(enabled=True),
+    )
+    request = Request({"type": "http", "app": SimpleNamespace(state=state)})
+    database = AsyncMock()
+    key = bittensor.Keypair.create_from_uri("//Alice")
+    body = GithubLinkRequest.model_validate(signed_link(key, str(uuid4())))
+    with pytest.raises(HTTPException) as rejected:
+        await confirm(body, request, database)
+    assert rejected.value.status_code == 503
+    database.get.assert_not_awaited()
+
+
+@pytest.mark.parametrize("github_link_enabled", [True, False])
 async def test_connect_ditto_then_sign_the_same_github_proof(
-    app, client, session_maker
+    app, client, session_maker, github_link_enabled
 ):
     _install(app, session_maker)
     provider = FakeProvider()
     app.state.ditto_link = DittoLinkClient(_config(), transport=provider.transport())
+    # The product gate remains authoritative without requiring credentials for
+    # the legacy direct GitHub OAuth app on the Ditto path.
+    app.state.github_link.config = replace(
+        app.state.github_link.config, enabled=github_link_enabled
+    )
     owner = bittensor.Keypair.create_from_uri("//Bob").ss58_address
     app.state.chain = SimpleNamespace(
         get_finalized_block=AsyncMock(
@@ -50,12 +78,12 @@ async def test_connect_ditto_then_sign_the_same_github_proof(
     )
     body = signed_link(key, attempt, user_id=123, login="miner")
     early = await client.post("/api/v1/me/github-link/confirm", headers=auth, json=body)
-    assert early.status_code == 409
+    assert early.status_code == (409 if github_link_enabled else 503)
     assert (
         await _decide(client, _accept_params(callback), "accept")
     ).status_code == 303
     early = await client.post("/api/v1/me/github-link/confirm", headers=auth, json=body)
-    assert early.status_code == 409
+    assert early.status_code == (409 if github_link_enabled else 503)
     linked = await client.post(
         f"/api/v1/me/ditto-link/attempts/{attempt}/confirm", headers=auth
     )
@@ -64,6 +92,11 @@ async def test_connect_ditto_then_sign_the_same_github_proof(
     signed = await client.post(
         "/api/v1/me/github-link/confirm", headers=auth, json=body
     )
+    if not github_link_enabled:
+        assert signed.status_code == 503
+        status = await client.get("/api/v1/me/github-link", headers=auth)
+        assert status.json()["link"] is None
+        return
     assert signed.status_code == 200, signed.text
     assert signed.json()["github_user_id"] == 123
     assert signed.json()["signature"] == body["proof"]["signature"]
