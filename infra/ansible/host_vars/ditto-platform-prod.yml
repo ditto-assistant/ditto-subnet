@@ -83,3 +83,9 @@ platform_treasury_manual_report_subscription: sn118-manual-reports
 
 # SN-49: separate read-only backup credentials; dev retains the disabled default.
 platform_database_backup_reader_enabled: true
+
+# Dedicated public-profile-only OAuth app, owned by ditto-assistant.
+platform_github_link_enabled: true
+platform_github_link_client_id: "Ov23lilTsAripA4MWrWS"
+platform_github_link_redirect_url: "https://dittobench.ai/api/v1/miner-auth/github/callback"
+secret_github_link_client_secret: "platform-github-link-client-secret"

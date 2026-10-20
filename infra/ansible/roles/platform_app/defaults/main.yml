@@ -331,6 +331,13 @@ platform_ditto_link_return_url: "https://dittobench.ai/#/reviews"
 platform_ditto_callback_challenge_token: ""
 # Secret Manager id holding the DittoBench app's OIDC client secret; empty = not read.
 secret_ditto_link_client_secret: ""
+
+# GitHub contributor identity. Values stay empty/off outside activated hosts.
+platform_github_link_enabled: false
+platform_github_link_client_id: ""
+platform_github_link_redirect_url: ""
+platform_github_link_timeout_seconds: 10
+secret_github_link_client_secret: ""
 # Relay pool -> Ditto Router. The competition lane additionally needs the exact
 # ack the relay demands (memories-off-locked-model); see services/model-relay/README.md.
 platform_ditto_router_upstream_enabled: false

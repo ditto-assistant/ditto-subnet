@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import yaml
-from jinja2 import Environment, meta
+from jinja2 import Environment, FileSystemLoader, meta
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -19,12 +19,16 @@ def render_case(reader_enabled, avatars_enabled):
     source = (
         ROOT / "infra/ansible/roles/platform_app/templates/platform.env.j2"
     ).read_text()
-    env = Environment()
+    env = Environment(loader=FileSystemLoader(ROOT / "infra/ansible/roles/platform_app/templates"))
     env.filters.update(bool=bool, quote=str)
     context: dict[str, object] = dict.fromkeys(
         meta.find_undeclared_variables(env.parse(source)), ""
     )
     context.update(
+        platform_github_link_enabled=False,
+        platform_github_link_client_id="",
+        platform_github_link_redirect_url="",
+        platform_github_link_timeout_seconds=10,
         platform_database_backup_reader_enabled=reader_enabled,
         platform_hippius_bucket="synthetic-avatars" if avatars_enabled else "",
         platform_secrets=defaultdict(

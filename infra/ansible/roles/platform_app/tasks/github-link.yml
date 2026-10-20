@@ -1,0 +1,26 @@
+---
+# Day-two activation updates only this block. Full convergence uses the same
+# fragment, so it cannot erase the activated settings on a later run.
+- name: Load and validate GitHub linking configuration
+  ansible.builtin.import_tasks: github-link-config.yml
+
+- name: Require an already provisioned Platform environment
+  ansible.builtin.stat:
+    path: "{{ platform_root }}/.env"
+  register: platform_github_link_env
+
+- name: Refuse to create a partial Platform environment
+  ansible.builtin.assert:
+    that:
+      - platform_github_link_env.stat.exists
+      - platform_github_link_env.stat.isreg
+    quiet: true
+
+- name: Update only the managed GitHub linking environment block
+  ansible.builtin.blockinfile:
+    path: "{{ platform_root }}/.env"
+    marker: "# {mark} ANSIBLE MANAGED GITHUB LINK"
+    block: "{{ lookup('ansible.builtin.template', 'github-link.env.j2') }}"
+    backup: true
+  register: platform_github_link_update
+  no_log: true

@@ -75,6 +75,30 @@ Keep the secret in the deployment's secret store, never GitHub variables, URLs
 or the CLI. Linking defaults off and fails clearly until configured; existing
 verified links remain readable when the OAuth client is disabled.
 
+Ansible owns these settings in `platform_app`; dev remains disabled. Terraform
+owns `platform-github-link-client-secret` and grants only the attached Platform
+runtime identity access. Add the OAuth secret payload directly to Secret Manager
+after the reviewed infrastructure plan is applied; never put it in Terraform
+variables or state. The production OAuth app is **DittoBench Contributor Identity**,
+owned by `ditto-assistant` (application id `3947441`).
+
+For day-two activation, run from `infra/ansible`:
+
+```bash
+GCP_OSLOGIN_USER=YOUR_OS_LOGIN ansible-playbook -i inventory/gcp.yml \
+  playbooks/gcp-platform-github-link.yml --limit ditto-platform-prod --check
+GCP_OSLOGIN_USER=YOUR_OS_LOGIN ansible-playbook -i inventory/gcp.yml \
+  playbooks/gcp-platform-github-link.yml --limit ditto-platform-prod
+```
+
+This playbook requires an existing `.env`, backs it up, and changes only the
+managed GitHub linking block. It does not restart services. Deploy the exact
+reviewed revision through `platform-deploy.yml` after convergence; confirm its
+SHA at `/health` and complete an OAuth consent + wallet signature link from the
+CLI. A successful callback/configuration check alone is not a completed link.
+To roll back activation, set `platform_github_link_enabled: false`, converge
+the same playbook, and redeploy. Existing links remain readable.
+
 The web flow requests an empty scope and uses S256 PKCE. A returned token with
 broader historical scopes is refused; use a dedicated app rather than reusing
 an app that requested repository or private-profile access. See GitHub's
