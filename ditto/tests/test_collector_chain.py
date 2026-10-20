@@ -1260,6 +1260,17 @@ def test_old_runtime_is_read_only_under_new_v481_policy(release):
     with pytest.raises(ValueError, match="runtime changed"):
         c.guard_runtime(policy(), "current")
     assert c.guard_runtime(policy(), "historical", historical=True) == code
+    # Historical admission still validates the observed native shape/consensus.
+    c.query = lambda *_: "Null"
+    with pytest.raises(ValueError, match="Yuma"):
+        c.guard_runtime(policy(), "historical", historical=True)
+    c.query = lambda *_: "Yuma"
+    calls = filters[0]["filter_mode"]["Allow"]
+    pow_call = next(x for x in calls if x["call_name"] == "pow_register")
+    calls.remove(pow_call)
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(policy(), "historical", historical=True)
+    calls.append(pow_call)
     # An old signature cannot bind a new current or historical read context.
     with pytest.raises(ValueError, match="runtime policy"):
         c.guard_runtime(policy(runtime_code_hash=code), "historical", historical=True)

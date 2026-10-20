@@ -61,6 +61,11 @@ COLLECTOR_READABLE_RUNTIME_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER)
 AUDITED_COLLECTOR_RECEIPT_HASHES = COLLECTOR_READABLE_RUNTIME_HASHES - {
     V479_READONLY_CODE_HASH
 }
+# Native filter shape for exact historical observations, NOT signing authority.
+# The observed v479 Registration filter includes pow_register and its consensus
+# is Yuma (v481 audit manifest); omitting it would expect the wrong 3-call filter.
+# guard_runtime independently requires an audited v481 policy and, for current
+# signing, the exact same v481 chain hash before consulting this shape set.
 COLLECTOR_POW_REGISTRATION_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER[2:])
 
 
