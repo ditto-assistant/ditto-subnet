@@ -247,7 +247,8 @@ def write_worker_config(
     worker_root = root / "worker"
     worker_root.mkdir(mode=0o700)
     value = {
-        **wire.host.model_dump(),
+        # router_expires_at_unix is written only in rootless-netns mode.
+        **wire.host.model_dump(exclude_none=True),
         "schema": "dittobench-coding-hosted-runtime-v2",
         "shadow_only": True,
         "weight_eligible": False,

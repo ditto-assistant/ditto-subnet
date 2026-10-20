@@ -1,0 +1,41 @@
+---
+# Compares the unit's coding_hosted_router_namespace with every attempt
+# configuration in coding_hosted_attempt_configs (already path, owner and mode
+# checked) and with coding_hosted_connectivity_profile. Only the Platform
+# runtime configuration's non-secret `host` settings are projected.
+- name: Read each attempt configuration without logging it
+  ansible.builtin.slurp:
+    path: "{{ item }}"
+  loop: "{{ coding_hosted_attempt_configs }}"
+  register: coding_hosted_attempt_bodies
+  no_log: true
+
+- name: Project the host router settings of each attempt configuration
+  ansible.builtin.set_fact:
+    coding_hosted_attempt_hosts: >-
+      {{ coding_hosted_attempt_bodies.results | map(attribute='content') | map('b64decode')
+      | map('from_json') | map(attribute='host') | list }}
+  no_log: true
+
+# In rootless-netns mode the router listens on the daemon's bridge gateway
+# inside RootlessKit's network namespace. Candidate traffic to it never reaches
+# host nftables, so a candidate_tcp grant for router_listen would authorize a
+# host address with no router behind it, and the worker enforces the profile's
+# expires_at_unix itself through router_expires_at_unix.
+- name: Require each attempt to match the unit's router namespace and profile
+  ansible.builtin.assert:
+    that:
+      - item.router_namespace | default('host') == coding_hosted_router_namespace
+      - >-
+        coding_hosted_router_namespace != 'rootless-netns'
+        or item.router_expires_at_unix | default(none) == coding_hosted_connectivity_profile.expires_at_unix
+      - >-
+        coding_hosted_router_namespace != 'rootless-netns'
+        or {'address': item.router_listen.rsplit(':', 1)[0], 'port': item.router_listen.rsplit(':', 1)[1] | int}
+        not in coding_hosted_connectivity_profile.candidate_tcp
+    fail_msg: >-
+      The worker configuration's router_namespace, router_expires_at_unix or
+      router grant differs from coding_hosted_router_namespace and the profile.
+  loop: "{{ coding_hosted_attempt_hosts }}"
+  loop_control:
+    label: "{{ item.router_listen | default('missing router_listen') }}"
