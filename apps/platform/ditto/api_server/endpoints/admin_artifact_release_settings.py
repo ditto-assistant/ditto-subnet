@@ -92,8 +92,10 @@ def _catch_up(cursor: Any) -> CatchUpStatus | None:
     summary = getattr(cursor, "catch_up", None) if cursor else None
     if not summary:
         return None
+    # A summary names the planner it counts; one written before it did is
+    # labelled with the planner running now.
     planner = "reveal" if _REVEAL_PLAN_MODE == "primary" else "event"
-    return CatchUpStatus.model_validate({**summary, "planner": planner})
+    return CatchUpStatus.model_validate({"planner": planner, **summary})
 
 
 @router.get("", response_model=AdminArtifactReleaseSettingsResponse)

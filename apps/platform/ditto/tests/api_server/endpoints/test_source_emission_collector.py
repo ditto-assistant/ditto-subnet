@@ -1305,6 +1305,7 @@ async def test_sparse_catchup_reads_only_planned_blocks_and_skips_the_rest(
         # Backroom's catch-up summary counts the range and what it read.
         summary = cursor.catch_up
     assert {k: summary[k] for k in summary if k != "updated_at"} == {
+        "planner": "event",
         "ranges": 1,
         "sparse": 1,
         "blocks_read": 2,
@@ -1582,6 +1583,45 @@ async def test_sparse_catchup_falls_back_to_the_per_block_scan(
     assert summary["last_outcome"] == (
         "full_scan" if plan_outcome == "full_scan" else "error"
     )
+
+
+async def test_a_planner_change_starts_a_new_catch_up_summary(app, session_maker):
+    from ditto.db.models import SourceEmissionCollectorCursor
+    from ditto.db.queries.source_emission_collector import record_catch_up_range
+
+    a, _substrate = await _deep_backlog(app, session_maker, 100)
+    now = datetime(2026, 10, 20, tzinfo=UTC)
+    for planner, outcome in (
+        ("event", "sparse"),
+        ("event", "full_scan"),
+        ("reveal", "sparse"),
+    ):
+        async with session_maker() as session, session.begin():
+            await record_catch_up_range(
+                session,
+                netuid=a["netuid"],
+                first_block=101,
+                last_block=820,
+                outcome=outcome,
+                planner=planner,
+                read=2,
+                skipped=718,
+                detail="uid_mapping" if outcome == "full_scan" else None,
+                now=now,
+            )
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        summary = cursor.catch_up
+    # The event planner's ranges are not reported as the reveal planner's.
+    assert {k: summary[k] for k in summary if k != "updated_at"} == {
+        "planner": "reveal",
+        "ranges": 1,
+        "sparse": 1,
+        "blocks_read": 2,
+        "blocks_skipped": 718,
+        "last_range": [101, 820],
+        "last_outcome": "sparse",
+    }
 
 
 async def test_a_failed_catch_up_summary_write_never_blocks_the_sweep(

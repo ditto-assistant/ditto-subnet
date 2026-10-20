@@ -196,6 +196,7 @@ async def record_catch_up_range(
     first_block: int,
     last_block: int,
     outcome: str,
+    planner: str,
     read: int = 0,
     skipped: int = 0,
     detail: str | None = None,
@@ -207,7 +208,9 @@ async def record_catch_up_range(
     committed as quiet), ``full_scan`` (the planner asked for the per-block
     scan; ``detail`` is its reason) or ``error`` (no plan; ``detail`` is the
     provider error). A fallback costs throughput, never correctness, so this
-    only makes it visible.
+    only makes it visible. The summary covers one ``planner``: a range planned
+    by another one starts a new summary. Each planning attempt counts, so a
+    range retried after an error counts again.
     """
     cursor = await session.get(
         SourceEmissionCollectorCursor, netuid, with_for_update=True
@@ -215,6 +218,8 @@ async def record_catch_up_range(
     if cursor is None:
         return
     summary = dict(cursor.catch_up or {})
+    if summary.get("planner") != planner:
+        summary = {"planner": planner}
     summary["ranges"] = int(summary.get("ranges", 0)) + 1
     summary[outcome] = int(summary.get(outcome, 0)) + 1
     summary["blocks_read"] = int(summary.get("blocks_read", 0)) + read

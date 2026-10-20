@@ -107,7 +107,9 @@ class CatchUpStatus(BaseModel):
     ``blocks_skipped`` as quiet; ``full_scan`` ranges fell back to the per-block
     scan, counted by the planner's reason in ``full_scan_reasons``; ``error``
     ranges could not be planned (``last_error``). A fallback costs throughput,
-    never correctness.
+    never correctness. The counts cover ``planner`` only: switching planner
+    starts a new summary. Each planning attempt counts, so a range retried
+    after an error counts again.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True)

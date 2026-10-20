@@ -522,7 +522,19 @@ async def test_release_gate_reports_how_catch_up_ranges_replayed(
         "/api/v1/admin/artifact-release-settings", headers=_HEADERS
     )
     catch_up = response.json()["release_gate"]["catch_up"]
+    # Recorded before planners were named: the planner running now.
     assert catch_up["planner"] == "reveal"
     assert (catch_up["sparse"], catch_up["full_scan"], catch_up["error"]) == (2, 1, 1)
     assert catch_up["full_scan_reasons"] == {"uid_mapping": 1}
     assert (catch_up["blocks_read"], catch_up["blocks_skipped"]) == (9, 1431)
+    # A summary names the planner that replayed its ranges, whatever runs now.
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(
+            SourceEmissionCollectorCursor, app.state.config.chain.netuid
+        )
+        assert cursor is not None and cursor.catch_up is not None
+        cursor.catch_up = {**cursor.catch_up, "planner": "event"}
+    response = await client.get(
+        "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+    )
+    assert response.json()["release_gate"]["catch_up"]["planner"] == "event"

@@ -404,10 +404,10 @@ class SourceEmissionCollector:
         """
         if end <= current:
             return False
-        planner = (
-            plan_source_emission_range_by_reveals
+        planner, planner_name = (
+            (plan_source_emission_range_by_reveals, "reveal")
             if _REVEAL_PLAN_MODE == "primary"
-            else plan_source_emission_range
+            else (plan_source_emission_range, "event")
         )
         try:
             plan = await planner(
@@ -427,11 +427,17 @@ class SourceEmissionCollector:
                 "source emission sparse plan unavailable; scanning per block: %s",
                 detail,
             )
-            await self._record_catch_up(current + 1, end, "error", detail=detail)
+            await self._record_catch_up(
+                current + 1, end, "error", planner_name, detail=detail
+            )
             return False
         if plan.full_scan:
             await self._record_catch_up(
-                current + 1, end, "full_scan", detail=plan.full_scan_reason
+                current + 1,
+                end,
+                "full_scan",
+                planner_name,
+                detail=plan.full_scan_reason,
             )
             return False
         async with self.sessions() as session:
@@ -492,7 +498,12 @@ class SourceEmissionCollector:
                 task.cancel()
             await asyncio.gather(*audits, *ahead.values(), return_exceptions=True)
         await self._record_catch_up(
-            current + 1, end, "sparse", read=len(interesting), skipped=len(quiet)
+            current + 1,
+            end,
+            "sparse",
+            planner_name,
+            read=len(interesting),
+            skipped=len(quiet),
         )
         return replayed
 
@@ -501,6 +512,7 @@ class SourceEmissionCollector:
         first_block: int,
         last_block: int,
         outcome: str,
+        planner: str,
         *,
         read: int = 0,
         skipped: int = 0,
@@ -515,6 +527,7 @@ class SourceEmissionCollector:
                     first_block=first_block,
                     last_block=last_block,
                     outcome=outcome,
+                    planner=planner,
                     read=read,
                     skipped=skipped,
                     detail=detail,
