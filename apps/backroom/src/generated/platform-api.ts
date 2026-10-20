@@ -799,6 +799,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/bounties/queue/appeals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Appeal Queue
+         * @description Appeals awaiting a decision, the longest waiting first.
+         *
+         *     Each carries the appellant's private statement and the public event it
+         *     appeals, which is what deciding it needs.
+         */
+        get: operations["appeal_queue_api_v1_admin_bounties_queue_appeals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/bounties/queue/reviews": {
         parameters: {
             query?: never;
@@ -15912,6 +15935,74 @@ export interface components {
             restore_days?: number | null;
             /** Upheld */
             upheld: boolean;
+        };
+        /** BountyAppealQueue */
+        BountyAppealQueue: {
+            /** Items */
+            items: components["schemas"]["BountyAppealQueueItem"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * BountyAppealQueueItem
+         * @description One appeal awaiting a decision, with what an operator decides it on.
+         */
+        BountyAppealQueueItem: {
+            /**
+             * Appeal Id
+             * Format: uuid
+             */
+            appeal_id: string;
+            /**
+             * Bounty Id
+             * Format: uuid
+             */
+            bounty_id: string;
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /**
+             * Filed At
+             * Format: date-time
+             */
+            filed_at: string;
+            /** Github Login */
+            github_login: string;
+            /** Hotkey */
+            hotkey: string;
+            /** Issue */
+            issue: number;
+            /** Position */
+            position: number;
+            /** Reason Digest */
+            reason_digest: string;
+            /** Repo */
+            repo: string;
+            /** Round */
+            round: number;
+            /**
+             * Slot Id
+             * Format: uuid
+             */
+            slot_id: string;
+            /** Statement */
+            statement: string;
+            /** Subject Event Id */
+            subject_event_id: number;
+            /**
+             * Subject Kind
+             * @enum {string}
+             */
+            subject_kind: "rejected" | "deadline_missed";
+            /**
+             * Subject Recorded At
+             * Format: date-time
+             */
+            subject_recorded_at: string;
+            /** Title */
+            title: string;
         };
         /** BountyAppealRequest */
         BountyAppealRequest: {
@@ -42074,6 +42165,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BountyPublishPreview"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    appeal_queue_api_v1_admin_bounties_queue_appeals_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyAppealQueue"];
                 };
             };
             /** @description Unauthorized */

@@ -599,6 +599,8 @@ describe('bounty inputs are canonical before any request', () => {
   it.each([
     [{ queue: 'reviews', state: 'uncertain' }],
     [{ queue: 'settlement', overdueOnly: true }],
+    [{ queue: 'appeals', state: 'uncertain' }],
+    [{ queue: 'appeals', overdueOnly: true }],
   ])('refuses a filter queue %o cannot apply', async (input) => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -624,6 +626,7 @@ describe('bounty reads', () => {
     [{ queue: 'reviews', overdueOnly: true }, '/api/v1/admin/bounties/queue/reviews?overdue_only=true'],
     [{ queue: 'settlement', state: 'uncertain' }, '/api/v1/admin/bounties/queue/settlement?state=uncertain'],
     [{ queue: 'settlement' }, '/api/v1/admin/bounties/queue/settlement'],
+    [{ queue: 'appeals' }, '/api/v1/admin/bounties/queue/appeals'],
   ])('routes queue %o', async (input, path) => {
     const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ items: [], total: 0 }))
     vi.stubGlobal('fetch', fetchMock)

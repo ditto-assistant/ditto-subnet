@@ -899,7 +899,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_bounty_board: 'List build bounties: terms, slots, pause, awards.',
   get_bounty: 'Operator view of one bounty: claims, appeals, full private audit.',
   get_bounty_claim: 'Read one bounty claim: submissions, obligations, facts.',
-  get_bounty_queue: 'Review queue (overdue first) or settlement queue with approvers.',
+  get_bounty_queue: 'Review queue (overdue first), settlement queue with approvers, or pending appeals.',
   get_bounty_payout_policy: 'Read approval thresholds in force, or one exact revision; null when unset.',
   preview_bounty_revision: 'Digest, exact phrase and refusals for a revision; writes nothing.',
   publish_bounty_revision: 'Publish a previewed bounty revision. Write; see help.',
@@ -1774,7 +1774,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_bounty_queue', {
     title: 'Get bounty work queue',
-    description: 'queue=reviews lists submissions awaiting a decision, the most overdue first, with the reviewer in force; overdueOnly narrows it. queue=settlement lists obligations still needing an operator (awaiting_approval, over_policy_limit, approved, dispatched, uncertain, failed) with the operators who approved the current round; state narrows it, and state=confirmed shows paid ones. Requires backroom:read.',
+    description: 'queue=reviews lists submissions awaiting a decision, the most overdue first, with the reviewer in force; overdueOnly narrows it. queue=settlement lists obligations still needing an operator (awaiting_approval, over_policy_limit, approved, dispatched, uncertain, failed) with the operators who approved the current round; state narrows it, and state=confirmed shows paid ones. queue=appeals lists undecided appeals, the longest waiting first, each with its bounty, claim, the appealed event (rejected or deadline_missed) and the private statement; decide one with decide_bounty_appeal. Requires backroom:read.',
     inputSchema: bountyQueueInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchBountyQueue(input)))
 

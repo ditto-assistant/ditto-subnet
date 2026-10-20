@@ -40,7 +40,7 @@ export const bountyBoardInputSchema = z.object({
 export const bountyIdInputSchema = z.object({ bountyId: uuid })
 export const bountyClaimInputSchema = z.object({ claimId: uuid })
 export const bountyQueueInputSchema = z.object({
-  queue: z.enum(['reviews', 'settlement']),
+  queue: z.enum(['reviews', 'settlement', 'appeals']),
   overdueOnly: z.boolean().default(false),
   state: z.enum(['awaiting_approval', 'over_policy_limit', 'approved', 'dispatched', 'uncertain', 'confirmed', 'failed']).optional(),
 })

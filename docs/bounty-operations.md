@@ -35,13 +35,16 @@ proof of a distinct operator (see [Deferred](bounty-claims.md#deferred)).
 
 - **Watch the queues.** `get_bounty_queue` with `queue=reviews` lists
   submissions awaiting a decision, most overdue first. `queue=settlement` lists
-  obligations that still need an operator.
+  obligations that still need an operator. `queue=appeals` lists undecided
+  appeals, the longest waiting first, with the event each appeals and its
+  private statement.
 - **Review.** The reviewer in force calls `review_bounty_submission` on the
   exact submission: accept with attribution, request changes with a rework
   deadline, or reject. Every decision has a public reason.
 - **Overdue reviews.** `reassign_bounty_reviewer` names a new reviewer and gives
   overdue reviews one more window.
-- **Appeals.** `get_bounty` shows each appeal's private statement.
+- **Appeals.** `get_bounty_queue` with `queue=appeals`, and `get_bounty`, show
+  each appeal's private statement.
   `decide_bounty_appeal` upholds (restoring the claim with a new delivery
   deadline) or denies. A rejection's reviewer can't decide its appeal, and
   whoever set a missed deadline (by requesting changes, or by upholding an

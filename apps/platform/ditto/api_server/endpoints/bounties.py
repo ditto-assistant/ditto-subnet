@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.bounty import (
     REPO_PATTERN,
     BountyAppealDecisionRequest,
+    BountyAppealQueue,
     BountyAppealRequest,
     BountyApprovalRequest,
     BountyAwardRequest,
@@ -524,6 +525,18 @@ async def settlement_queue(
 ) -> BountySettlementQueue:
     """Obligations that still need an operator, with their approvers."""
     return await bounty_admin.settlement_queue(session, state=state)
+
+
+@admin_router.get(
+    "/queue/appeals", response_model=BountyAppealQueue, responses=_errors(401, 503)
+)
+async def appeal_queue(_admin: AdminDep, session: SessionDep) -> BountyAppealQueue:
+    """Appeals awaiting a decision, the longest waiting first.
+
+    Each carries the appellant's private statement and the public event it
+    appeals, which is what deciding it needs.
+    """
+    return await bounty_admin.appeal_queue(session)
 
 
 @admin_router.get(

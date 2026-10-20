@@ -10,7 +10,9 @@ These reads are admin-only and change nothing:
   chronological audit of every operator record with its actor and reason;
 - the review queue: submissions awaiting a decision, overdue first;
 - the settlement queue: obligations that still need an operator, with the
-  operators who approved their current round.
+  operators who approved their current round;
+- the appeal queue: appeals awaiting a decision, the longest waiting first,
+  each with its private statement and the public event it appeals.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from sqlalchemy import exists, select, tuple_
 from ditto.api_models.bounty import (
     BountyAdminAppealView,
     BountyAdminRevisionView,
+    BountyAppealQueue,
+    BountyAppealQueueItem,
     BountyAuditEntry,
     BountyOperatorView,
     BountyReviewQueue,
@@ -49,6 +53,7 @@ from ditto.db.models import (
     BountyClaim,
     BountyClaimControl,
     BountyDeliveryFact,
+    BountyEvent,
     BountyObligation,
     BountyObligationApproval,
     BountyReview,
@@ -545,6 +550,61 @@ async def settlement_queue(
             )
         )
     return BountySettlementQueue(items=items, total=len(items))
+
+
+async def appeal_queue(session: AsyncSession) -> BountyAppealQueue:
+    """Appeals awaiting a decision, the longest waiting first."""
+    rows = (
+        await session.execute(
+            select(
+                BountyAppeal,
+                BountyEvent,
+                BountyClaim,
+                BountySlot,
+                Bounty,
+                BountyRevision.title,
+            )
+            .join(BountyEvent, BountyEvent.event_id == BountyAppeal.subject_event_id)
+            .join(BountyClaim, BountyClaim.claim_id == BountyAppeal.claim_id)
+            .join(BountySlot, BountySlot.slot_id == BountyClaim.slot_id)
+            .join(Bounty, Bounty.bounty_id == BountyClaim.bounty_id)
+            # The title of the terms the claim signed.
+            .join(
+                BountyRevision,
+                (BountyRevision.bounty_id == BountyClaim.bounty_id)
+                & (BountyRevision.revision == BountyClaim.revision),
+            )
+            .where(
+                ~exists().where(
+                    BountyAppealDecision.appeal_id == BountyAppeal.appeal_id
+                )
+            )
+            .order_by(BountyAppeal.filed_at, BountyAppeal.appeal_id)
+        )
+    ).tuples()
+    items = [
+        BountyAppealQueueItem(
+            appeal_id=appeal.appeal_id,
+            claim_id=claim.claim_id,
+            bounty_id=owner.bounty_id,
+            repo=owner.repo,
+            issue=owner.issue_number,
+            title=title,
+            slot_id=slot.slot_id,
+            round=slot.round,
+            position=slot.position,
+            hotkey=claim.hotkey,
+            github_login=claim.github_login,
+            subject_event_id=subject.event_id,
+            subject_kind=subject.kind,  # type: ignore[arg-type]
+            subject_recorded_at=subject.recorded_at,
+            statement=appeal.reason,
+            reason_digest=appeal.reason_digest,
+            filed_at=appeal.filed_at,
+        )
+        for appeal, subject, claim, slot, owner, title in rows
+    ]
+    return BountyAppealQueue(items=items, total=len(items))
 
 
 async def require_bounty(session: AsyncSession, bounty_id: UUID) -> None:

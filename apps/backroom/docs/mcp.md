@@ -544,7 +544,9 @@ rehearsal funding only: fees and transfers are simulated, and no funds move.
   appeals, obligations (with derived settlement state and transfers) and facts.
 - `get_bounty_queue`: `queue=reviews` lists submissions awaiting a decision,
   most overdue first; `queue=settlement` lists obligations still needing an
-  operator, with who approved the current round.
+  operator, with who approved the current round; `queue=appeals` lists
+  undecided appeals, the longest waiting first, each with its bounty, claim,
+  the event it appeals and the appellant's private statement.
 - `get_bounty_payout_policy`: the approval thresholds in force, or `null`. Pass
   `revision` to read that exact revision; a write's read-back uses it to find
   its own revision however many followed it.

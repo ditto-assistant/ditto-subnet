@@ -153,6 +153,8 @@ BountyFactKind = Literal["merged", "deployed", "adopted"]
 BountyRehearsalOutcome = Literal["confirmed", "failed", "unknown"]
 BountyReconcileOutcome = Literal["confirmed", "failed", "expired", "unknown"]
 BountyReviewDecision = Literal["accept", "changes_requested", "reject"]
+# The public events a claimant can appeal: a rejection or a missed deadline.
+BountyAppealSubjectKind = Literal["rejected", "deadline_missed"]
 BountyCancelKind = Literal["team", "system_fault"]
 GitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 BlockHash = Annotated[str, Field(pattern=r"^0x[0-9a-f]{64}$")]
@@ -979,4 +981,33 @@ class BountySettlementItem(WireModel):
 
 class BountySettlementQueue(WireModel):
     items: list[BountySettlementItem]
+    total: int
+
+
+class BountyAppealQueueItem(WireModel):
+    """One appeal awaiting a decision, with what an operator decides it on."""
+
+    appeal_id: UUID
+    claim_id: UUID
+    bounty_id: UUID
+    repo: str
+    issue: int
+    title: str
+    slot_id: UUID
+    round: int
+    position: int
+    hotkey: str
+    github_login: str
+    # The appealed public event: a rejection or a missed deadline.
+    subject_event_id: int
+    subject_kind: BountyAppealSubjectKind
+    subject_recorded_at: datetime
+    # The appellant's statement; public views show only its digest.
+    statement: str
+    reason_digest: Digest
+    filed_at: datetime
+
+
+class BountyAppealQueue(WireModel):
+    items: list[BountyAppealQueueItem]
     total: int

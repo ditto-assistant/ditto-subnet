@@ -6,7 +6,7 @@ and reason so Backroom can run and audit the workflow without the UI.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -19,6 +19,7 @@ from ditto.tests.api_server.endpoints.test_bounty_claims import (
     ALICE,
     BOB,
     CAROL,
+    CLAIMS,
     DAVE,
     ISSUE,
     REPO,
@@ -300,12 +301,96 @@ async def test_the_settlement_queue_shows_what_needs_an_operator(world):
     assert invalid.status_code == 422
 
 
+async def test_the_appeal_queue_lists_pending_appeals_longest_waiting_first(
+    world, monkeypatch
+):
+    await world.start(ALICE, BOB, CAROL)
+    alice = (await submit(world, ALICE, await claimed(world, ALICE))).json()
+    bob = await claimed(world, BOB)
+    carol = (await submit(world, CAROL, await claimed(world, CAROL))).json()
+    await review(world, alice, "reject")
+    await review(world, carol, "reject")
+    trail = await events(world)
+
+    def subject(kind: str, claim: dict) -> dict:
+        return next(
+            e for e in trail if e["kind"] == kind and e["claim_id"] == claim["claim_id"]
+        )
+
+    # Filed in neither claim nor event order: Carol, then Bob, then Alice.
+    travel(monkeypatch, timedelta(hours=1))
+    lost = subject("rejected", carol)
+    filed = await appeal(world, CAROL, carol, lost["event_id"], "Carol's statement.")
+    assert filed.status_code == 200, filed.text
+    travel(monkeypatch, timedelta(days=6))
+    assert (await submit(world, BOB, bob)).status_code == 409  # records the miss
+    trail = await events(world)
+    missed = subject("deadline_missed", bob)
+    outage = await appeal(world, BOB, bob, missed["event_id"], "Outage.")
+    assert outage.status_code == 200, outage.text
+    travel(monkeypatch, timedelta(days=6, hours=1))
+    assert (
+        await appeal(
+            world, ALICE, alice, subject("rejected", alice)["event_id"], "Mine."
+        )
+    ).status_code == 200
+    # Bob's appeal is decided and leaves the queue.
+    [bobs] = (await world.client.get(f"{CLAIMS}/{bob['claim_id']}")).json()["appeals"]
+    denied = await world.client.post(
+        f"{ADMIN}/appeals/{bobs['appeal_id']}/decision",
+        headers=_HEADERS,
+        json={
+            "upheld": False,
+            "reason": "fixture appeal review",
+            "confirmation": f"DENY BOUNTY APPEAL {bobs['appeal_id']}",
+        },
+    )
+    assert denied.status_code == 200, denied.text
+
+    queue = await world.client.get(f"{ADMIN}/queue/appeals", headers=_HEADERS)
+    assert queue.status_code == 200, queue.text
+    assert queue.headers["cache-control"] == "no-store"
+    items = queue.json()["items"]
+    assert queue.json()["total"] == 2
+    assert [item["claim_id"] for item in items] == [
+        carol["claim_id"],
+        alice["claim_id"],
+    ]
+    first = items[0]
+    assert first["appeal_id"] == filed.json()["appeals"][0]["appeal_id"]
+    assert (first["repo"], first["issue"], first["title"]) == (
+        REPO,
+        ISSUE,
+        world.detail["summary"]["title"],
+    )
+    assert (first["slot_id"], first["round"], first["position"]) == (
+        carol["slot_id"],
+        1,
+        carol["position"],
+    )
+    assert (first["hotkey"], first["github_login"]) == (
+        CAROL.hotkey.ss58_address,
+        CAROL.login,
+    )
+    assert (
+        first["subject_event_id"],
+        first["subject_kind"],
+        first["subject_recorded_at"],
+    ) == (lost["event_id"], "rejected", lost["recorded_at"])
+    # Operators read the private statement, as the operator view shows it.
+    assert first["statement"] == "Carol's statement."
+    filed_at = [datetime.fromisoformat(item["filed_at"]) for item in items]
+    assert filed_at == sorted(filed_at)
+    assert all(item["appeal_id"] != bobs["appeal_id"] for item in items)
+
+
 # A fixed id: parametrized ids must match across test workers.
 @pytest.mark.parametrize(
     "path",
     [
         "/queue/reviews",
         "/queue/settlement",
+        "/queue/appeals",
         "/00000000-0000-4000-8000-000000000000",
         f"?repo={REPO}&issue={ISSUE}",
     ],
@@ -341,5 +426,5 @@ async def test_the_operator_view_is_found_by_issue_and_never_cached(world):
 async def test_operator_routes_declare_their_errors(app):
     paths = app.openapi()["paths"]
     assert "404" in paths[f"{ADMIN}/{{bounty_id}}"]["get"]["responses"]
-    for route in ("/queue/reviews", "/queue/settlement"):
+    for route in ("/queue/reviews", "/queue/settlement", "/queue/appeals"):
         assert "401" in paths[f"{ADMIN}{route}"]["get"]["responses"]
