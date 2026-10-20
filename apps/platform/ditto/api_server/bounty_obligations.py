@@ -73,6 +73,8 @@ class ObligationState:
     approvals: int
     required: int | None
     transfers: list[BountyTransfer]
+    # The payout policy revision ``approvals`` and ``required`` are read under.
+    revision: int | None
 
 
 async def obligation_state(
@@ -150,7 +152,7 @@ def _derive(
     policies: dict[int, BountyPayoutPolicy],
 ) -> ObligationState:
     if obligation.kind == "fee_retained":
-        return ObligationState("retained", 0, 0, 0, [])
+        return ObligationState("retained", 0, 0, 0, [], None)
     latest = transfers[-1] if transfers else None
     if latest is not None and latest.state in LIVE_TRANSFER_STATES:
         # Approvals are append-only. Dispatch checks the current revision while
@@ -168,6 +170,7 @@ def _derive(
             if revision is not None
             else None,
             transfers,
+            revision,
         )
     round_number = latest.round + 1 if latest is not None else 1
     approvals = (
@@ -187,7 +190,14 @@ def _derive(
         state = "failed"
     else:
         state = "awaiting_approval"
-    return ObligationState(state, round_number, approvals, required, transfers)
+    return ObligationState(
+        state,
+        round_number,
+        approvals,
+        required,
+        transfers,
+        policy.revision if policy is not None else None,
+    )
 
 
 def transfer_view(transfer: BountyTransfer) -> BountyTransferView:

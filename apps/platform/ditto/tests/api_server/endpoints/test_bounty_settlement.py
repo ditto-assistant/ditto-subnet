@@ -472,6 +472,16 @@ async def test_policy_publication_waits_for_dispatch_commit_but_not_execution(
         recorded = obligation(await claim_of(world, claim), "fee_refund")
         assert recorded["state"] == "dispatched"
         assert (recorded["approvals"], recorded["approvals_required"]) == (1, 1)
+        # The operators' queue lists the approvers of that same revision.
+        queue = (
+            await world.client.get(f"{ADMIN}/queue/settlement", headers=_HEADERS)
+        ).json()
+        [item] = [
+            i
+            for i in queue["items"]
+            if i["obligation"]["obligation_id"] == refund["obligation_id"]
+        ]
+        assert item["approvers"] == [ONE["X-Admin-Actor"]]
     finally:
         record.set()
         finish.set()

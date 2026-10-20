@@ -522,12 +522,14 @@ async def settlement_queue(
                         BountyObligationApproval.obligation_id
                         == obligation.obligation_id,
                         BountyObligationApproval.round == current.round,
-                        BountyObligationApproval.policy_revision == policy.revision,
+                        # A live transfer's approvers are those of the
+                        # revision that authorized it.
+                        BountyObligationApproval.policy_revision == current.revision,
                     )
                     .order_by(BountyObligationApproval.approved_at)
                 )
             )
-            if policy is not None
+            if current.revision is not None
             else []
         )
         items.append(
