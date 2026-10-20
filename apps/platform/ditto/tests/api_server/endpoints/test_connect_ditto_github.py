@@ -27,12 +27,12 @@ from ditto.tests.api_server.endpoints.test_miner_github_link import signed_link
 pytestmark = pytest.mark.asyncio
 
 
-async def test_disabled_github_gate_blocks_ditto_proofs_before_database_access():
+async def test_both_disabled_gates_block_proofs_before_database_access():
     state = SimpleNamespace(
         github_link=SimpleNamespace(
             enabled=False, config=SimpleNamespace(enabled=False)
         ),
-        ditto_link=SimpleNamespace(enabled=True),
+        ditto_link=SimpleNamespace(enabled=False),
     )
     request = Request({"type": "http", "app": SimpleNamespace(state=state)})
     database = AsyncMock()
@@ -44,15 +44,32 @@ async def test_disabled_github_gate_blocks_ditto_proofs_before_database_access()
     database.get.assert_not_awaited()
 
 
+async def test_enabled_ditto_does_not_bypass_a_disabled_direct_github_gate():
+    state = SimpleNamespace(
+        github_link=SimpleNamespace(enabled=False),
+        ditto_link=SimpleNamespace(enabled=True),
+    )
+    request = Request({"type": "http", "app": SimpleNamespace(state=state)})
+    database = AsyncMock()
+    database.get.return_value = None  # No server-created Ditto attempt.
+    key = bittensor.Keypair.create_from_uri("//Alice")
+    body = GithubLinkRequest.model_validate(signed_link(key, str(uuid4())))
+    with pytest.raises(HTTPException) as rejected:
+        await confirm(body, request, database)
+    assert rejected.value.status_code == 503
+    database.rollback.assert_awaited_once()
+
+
 @pytest.mark.parametrize("github_link_enabled", [True, False])
+@pytest.mark.parametrize("ditto_link_enabled", [True, False])
 async def test_connect_ditto_then_sign_the_same_github_proof(
-    app, client, session_maker, github_link_enabled
+    app, client, session_maker, github_link_enabled, ditto_link_enabled
 ):
     _install(app, session_maker)
     provider = FakeProvider()
     app.state.ditto_link = DittoLinkClient(_config(), transport=provider.transport())
-    # The product gate remains authoritative without requiring credentials for
-    # the legacy direct GitHub OAuth app on the Ditto path.
+    # The direct OAuth app can be disabled for the Ditto path. The Ditto gate
+    # remains authoritative if it is disabled after consent was approved.
     app.state.github_link.config = replace(
         app.state.github_link.config, enabled=github_link_enabled
     )
@@ -78,21 +95,24 @@ async def test_connect_ditto_then_sign_the_same_github_proof(
     )
     body = signed_link(key, attempt, user_id=123, login="miner")
     early = await client.post("/api/v1/me/github-link/confirm", headers=auth, json=body)
-    assert early.status_code == (409 if github_link_enabled else 503)
+    assert early.status_code == 409
     assert (
         await _decide(client, _accept_params(callback), "accept")
     ).status_code == 303
     early = await client.post("/api/v1/me/github-link/confirm", headers=auth, json=body)
-    assert early.status_code == (409 if github_link_enabled else 503)
+    assert early.status_code == 409
     linked = await client.post(
         f"/api/v1/me/ditto-link/attempts/{attempt}/confirm", headers=auth
     )
     assert linked.status_code == 200, linked.text
     assert linked.json()["github_proof_attempt_id"] == attempt
+    app.state.ditto_link.config = replace(
+        app.state.ditto_link.config, enabled=ditto_link_enabled
+    )
     signed = await client.post(
         "/api/v1/me/github-link/confirm", headers=auth, json=body
     )
-    if not github_link_enabled:
+    if not ditto_link_enabled:
         assert signed.status_code == 503
         status = await client.get("/api/v1/me/github-link", headers=auth)
         assert status.json()["link"] is None
