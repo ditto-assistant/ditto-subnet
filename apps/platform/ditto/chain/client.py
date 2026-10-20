@@ -400,21 +400,49 @@ class ChainClient:
         Payment proofs carry both identifiers because Pylon reads extrinsics by
         number while historical events and storage are read by hash. Callers
         must bind the pair before combining those two data sources.
+
+        Tries the archive providers before the public live entrypoint, which
+        refuses websocket handshakes with HTTP 429 under load; every upload
+        payment proof passes through here, so one rate-limited endpoint must
+        not 503 every upload. Not-found is reported only when every provider
+        answered and none knows the height.
         """
-        try:
-            async with header_substrate(self._substrate_url()) as substrate:
-                block_hash = await substrate.get_block_hash(block_number)
-        except TimeoutError as e:
-            raise ChainTimeoutError(f"get_block_hash({block_number}) timed out") from e
-        except Exception as e:
-            raise ChainConnectionError(
-                f"get_block_hash({block_number}) failed: {self._safe_rpc_error(e)}"
-            ) from e
-        if not block_hash:
+        failures: list[tuple[str, Exception]] = []
+        urls = tuple(
+            dict.fromkeys((*self._historical_substrate_urls(), self._substrate_url()))
+        )
+        for url in urls:
+            provider = urlsplit(url).hostname or "configured archive"
+            try:
+                async with (
+                    asyncio.timeout(self._config.archive_rpc_timeout_seconds),
+                    header_substrate(url) as substrate,
+                ):
+                    block_hash = await substrate.get_block_hash(block_number)
+            except Exception as error:
+                failures.append((provider, error))
+                logger.warning(
+                    "block hash read failed provider=%s block=%s error=%s",
+                    provider,
+                    block_number,
+                    self._safe_rpc_error(error),
+                )
+                continue
+            if block_hash:
+                return str(block_hash).lower()
+
+        if not failures:
             raise ExtrinsicNotFoundError(
                 f"no block hash found for block number {block_number}"
             )
-        return str(block_hash).lower()
+        summary = "; ".join(
+            f"{provider}: {self._safe_rpc_error(error)}" for provider, error in failures
+        )
+        if all(isinstance(error, TimeoutError) for _, error in failures):
+            raise ChainTimeoutError(
+                f"get_block_hash({block_number}) timed out: {summary}"
+            )
+        raise ChainConnectionError(f"get_block_hash({block_number}) failed: {summary}")
 
     @asynccontextmanager
     async def _treasury_reader(self, *, setters: bool = False):
