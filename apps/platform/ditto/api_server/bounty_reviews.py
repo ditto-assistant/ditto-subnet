@@ -529,8 +529,7 @@ async def review_submission(
             raise HTTPException(
                 409, f"explicit confirmation is required: type '{expected}'"
             )
-        if actor != await current_reviewer(session, claim.bounty_id):
-            raise HTTPException(403, "only the bounty's assigned reviewer may decide")
+        assigned = actor == await current_reviewer(session, claim.bounty_id)
         decided = await session.get(BountyReview, body.submission_id)
         if decided is not None:
             # An exact retry repeats every recorded field; the rework deadline
@@ -556,7 +555,13 @@ async def review_submission(
                 retry_deadline,
             ):
                 return await claim_view(session, claim, now=now)
+            if not assigned:
+                raise HTTPException(
+                    403, "only the bounty's assigned reviewer may decide"
+                )
             raise HTTPException(409, "this submission was already decided")
+        if not assigned:
+            raise HTTPException(403, "only the bounty's assigned reviewer may decide")
         await apply_deadlines(session, claim.bounty_id, now=now)
         slot = await _slot_of(session, claim)
         # The submission under review is the one without a decision: rework

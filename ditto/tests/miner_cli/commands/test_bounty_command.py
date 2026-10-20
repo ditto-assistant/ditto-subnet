@@ -292,6 +292,23 @@ def test_a_coldkey_proof_is_signed_by_the_payee():
     live.hotkey.sign.assert_not_called()
 
 
+def test_claim_refuses_mismatched_coldkey_public_file_before_signing(capsys):
+    client = api()
+    _handle, live = wallet()
+    live.coldkeypub.ss58_address = HOTKEY.ss58_address
+    assert (
+        run(
+            [*claim_args("--key-kind", "coldkey"), "--confirmation", PHRASE],
+            client,
+            live,
+        )
+        == 1
+    )
+    assert "does not match" in capsys.readouterr().err
+    live.coldkey.sign.assert_not_called()
+    client.hold_bounty_claim.assert_not_called()
+
+
 def test_transient_failures_resend_the_same_signed_claim(capsys):
     client = api()
     held = client.hold_bounty_claim.return_value

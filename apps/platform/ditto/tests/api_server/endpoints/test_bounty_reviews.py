@@ -880,6 +880,14 @@ async def test_reassignment_moves_review_authority_and_extends_overdue(
     assert back.status_code == 200, back.text
     repeated = await review(world, claim, "accept")
     assert repeated.status_code == 409 and "already decided" in repeated.text
+    # The original decider can repeat their exact completed request after
+    # reassignment, but cannot change it or decide any new submission.
+    original_actor = {**_ADMIN_TOKEN, "X-Admin-Actor": "second-reviewer@example.com"}
+    retried = await review(world, claim, "accept", headers=original_actor)
+    assert retried.status_code == 200
+    assert retried.json()["submissions"] == new.json()["submissions"]
+    changed = await review(world, claim, "reject", headers=original_actor)
+    assert changed.status_code == 403
 
 
 async def test_each_nonce_is_the_record_of_exactly_one_signed_action(world):

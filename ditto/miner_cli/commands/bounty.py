@@ -443,6 +443,10 @@ def _claim(client: ApiClient, args: argparse.Namespace, network_name: str) -> in
             f"cannot load or unlock the {args.key_kind} signing key; check the "
             "wallet keyfile and passphrase"
         ) from None
+    if args.key_kind == "coldkey" and signer != payee:
+        raise MinerCliError(
+            "the coldkey signing key does not match the claim's payee coldkey"
+        )
     nonce, issued = uuid4(), datetime.now(UTC)
     fields = {
         "netuid": netuid,

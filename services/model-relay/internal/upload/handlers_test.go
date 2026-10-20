@@ -353,7 +353,7 @@ func TestReusedReservationReturnsCurrentCooldownAndBoundPayment(t *testing.T) {
 		RETURNING revision`).Scan(&firstRevision); err != nil {
 		t.Fatal(err)
 	}
-	first, _, err := d.reserve(t.Context(), coldkey, hotkey, sha, now)
+	first, _, err := d.reserve(t.Context(), coldkey, hotkey, sha)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,17 +380,20 @@ func TestReservationIsAtomicReusableAndBlocksCompetingArchive(t *testing.T) {
 	q := postgres.New(pool)
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	d := &Deps{Pool: pool, Queries: q, Cfg: &config.Config{Upload: config.UploadConfig{PaymentAddress: fixtureAddress}}}
+	reservationNow := now
+	d.Now = func() time.Time { return reservationNow }
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO submission_settings_revisions
 		(parent_revision, cooldown_seconds, fee_amount_rao, reason, actor)
 		VALUES (0, 1800, 40000000, 'upload admission test', 'go-test')`); err != nil {
 		t.Fatal(err)
 	}
-	first, _, err := d.reserve(t.Context(), "5Coldkey", fixtureAddress, strings.Repeat("a", 64), now)
+	first, _, err := d.reserve(t.Context(), "5Coldkey", fixtureAddress, strings.Repeat("a", 64))
 	if err != nil {
 		t.Fatalf("first reserve: %v", err)
 	}
-	again, _, err := d.reserve(t.Context(), "5Coldkey", fixtureAddress, strings.Repeat("a", 64), now.Add(time.Minute))
+	reservationNow = now.Add(time.Minute)
+	again, _, err := d.reserve(t.Context(), "5Coldkey", fixtureAddress, strings.Repeat("a", 64))
 	if err != nil {
 		t.Fatalf("exact reserve: %v", err)
 	}
@@ -400,7 +403,8 @@ func TestReservationIsAtomicReusableAndBlocksCompetingArchive(t *testing.T) {
 	if first.feeAmount != 40_000_000 {
 		t.Fatalf("reservation did not bind live settings: %+v", first)
 	}
-	_, _, err = d.reserve(t.Context(), "5Coldkey", fixtureAddress, strings.Repeat("b", 64), now.Add(2*time.Minute))
+	reservationNow = now.Add(2 * time.Minute)
+	_, _, err = d.reserve(t.Context(), "5Coldkey", fixtureAddress, strings.Repeat("b", 64))
 	var blocked *cooldownError
 	if !errors.As(err, &blocked) {
 		t.Fatalf("competing archive error=%v", err)
@@ -431,7 +435,7 @@ func TestConcurrentReservationsSerializeFirstSubmission(t *testing.T) {
 	for _, sha := range []string{strings.Repeat("d", 64), strings.Repeat("e", 64)} {
 		go func(artifactSHA string) {
 			<-start
-			_, _, err := d.reserve(t.Context(), "5ConcurrentColdkey", fixtureAddress, artifactSHA, time.Now().UTC())
+			_, _, err := d.reserve(t.Context(), "5ConcurrentColdkey", fixtureAddress, artifactSHA)
 			results <- err
 		}(sha)
 	}
@@ -505,7 +509,7 @@ func TestCLAReservationsForDifferentColdkeysOverlap(t *testing.T) {
 	done := make(chan error, 2)
 	for _, coldkey := range []string{"5FirstOwner", "5SecondOwner"} {
 		go func() {
-			_, _, err := d.reserve(t.Context(), coldkey, fixtureAddress, strings.Repeat("b", 64), now)
+			_, _, err := d.reserve(t.Context(), coldkey, fixtureAddress, strings.Repeat("b", 64))
 			done <- err
 		}()
 	}
@@ -530,6 +534,74 @@ func TestCLAReservationsForDifferentColdkeysOverlap(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("concurrent reservations did not commit")
 		}
+	}
+}
+
+func TestReservationExpiryIsRefreshedAfterColdkeyWait(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	coldkey, hotkey, sha := "5ExpiringOwner", fixtureAddress, strings.Repeat("b", 64)
+	d := uploadDeps(pool, coldkey, now)
+	var mu sync.Mutex
+	clock := now
+	d.Now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return clock
+	}
+	first, _, err := d.reserve(ctx, coldkey, hotkey, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", coldkey); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		admission *admission
+		err       error
+	}
+	done := make(chan result, 1)
+	go func() {
+		reserved, _, err := d.reserve(ctx, coldkey, hotkey, sha)
+		done <- result{reserved, err}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted").Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the reservation never waited for the coldkey lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	afterWait := first.expiresAt.Add(time.Second)
+	mu.Lock()
+	clock = afterWait
+	mu.Unlock()
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if got.admission.token == first.token || !got.admission.expiresAt.Equal(afterWait.Add(admissionTTL)) {
+			t.Fatalf("returned stale admission after lock wait: first=%+v got=%+v", first, got.admission)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reservation did not finish")
 	}
 }
 
@@ -567,7 +639,7 @@ func TestCLAAgreementEffectiveDuringColdkeyWaitApplies(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := d.reserve(context.Background(), coldkey, hotkey, strings.Repeat("b", 64), now)
+		_, _, err := d.reserve(context.Background(), coldkey, hotkey, strings.Repeat("b", 64))
 		done <- err
 	}()
 	deadline := time.Now().Add(5 * time.Second)
@@ -653,7 +725,7 @@ func TestCLAReservationCoordinatesWithPlatformPolicyLock(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := d.reserve(t.Context(), "5Owner", fixtureAddress, strings.Repeat("b", 64), now)
+		_, _, err := d.reserve(t.Context(), "5Owner", fixtureAddress, strings.Repeat("b", 64))
 		done <- err
 	}()
 	deadline := time.Now().Add(5 * time.Second)

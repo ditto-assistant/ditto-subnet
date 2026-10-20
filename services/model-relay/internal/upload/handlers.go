@@ -283,7 +283,7 @@ func minTime(a, b time.Time) time.Time {
 	return b
 }
 
-func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now time.Time) (*admission, settings, error) {
+func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string) (*admission, settings, error) {
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
 		return nil, settings{}, err
@@ -306,9 +306,11 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 	}
 	// Evaluate the gate after the coldkey wait, at a fresh time: an agreement
 	// that became effective while this request waited applies to it.
+	// The same fresh time must govern admission expiry, cooldown and its TTL.
+	now := d.now()
 	consent, err := q.GetClaUploadGate(ctx, postgres.GetClaUploadGateParams{
 		Netuid: d.Cfg.Chain.NetuidInt32(), Hotkey: hotkey,
-		ObservedAt: pgtype.Timestamptz{Time: d.now(), Valid: true},
+		ObservedAt: pgtype.Timestamptz{Time: now, Valid: true},
 	})
 	if err != nil {
 		return nil, current, err
@@ -490,7 +492,7 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 	var reserved *admission
 	if len(codes) == 0 && payload.ReserveSubmissionSlot {
 		var boundSettings settings
-		reserved, boundSettings, err = d.reserve(r.Context(), ownerColdkey, *payload.Hotkey, *payload.SHA256, now)
+		reserved, boundSettings, err = d.reserve(r.Context(), ownerColdkey, *payload.Hotkey, *payload.SHA256)
 		// reserve resolves settings before every response-producing path. On an
 		// earlier infrastructure error the handler returns below, so assignment is
 		// unconditional and does not encode that invariant as a magic sentinel.
