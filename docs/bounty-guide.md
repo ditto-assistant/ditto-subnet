@@ -12,6 +12,13 @@ award as simulated. Live funding is a separate, later decision.
 
 The rules behind this guide are in [bounty-claims.md](bounty-claims.md).
 
+## Questions
+
+Ask about a bounty on its public GitHub issue, the `owner/repo#issue` the
+board names. A comment there does not claim a slot or keep one for you: only
+a signed claim (`ditto bounty claim`, below) does, and Platform records it.
+Labels and comments never create, change or approve a claim.
+
 ## What a bounty promises
 
 A bounty's current revision fixes, before anyone starts work:
@@ -61,7 +68,10 @@ Your delivery deadline starts when the fee is confirmed.
 If the command stops after the hold, finish with
 `uv run ditto bounty confirm CLAIM_ID` on the same machine: the rehearsal fee
 derives from your claim's signature, which `claim` saved there and nobody else
-has. Check a claim at any time with `uv run ditto bounty status CLAIM_ID`.
+has. Check a claim at any time with `uv run ditto bounty status CLAIM_ID`. It
+lists each submission with its decision, the reviewer's reason and any credit,
+each appeal's outcome (pending, upheld or denied), and your refunds, awards
+and their settlement.
 
 You never lose a fee to timing. A fee that arrives after its hold lapsed,
 after the slot went to someone else, after your link, CLA signature or owner
