@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -71,6 +72,108 @@ def test_the_recorded_round_reports_every_fee_and_award():
     assert made.transfers == {"confirmed": 1}
     assert made.decisions == {"accept": 1, "reject": 1}
     assert made.facts == {"merged": 1}
+
+
+def test_the_report_names_the_bounty_and_what_accepted_work_delivered():
+    made = report(DETAIL, CLAIMS)
+    summary = DETAIL["summary"]
+    assert (
+        made.repo,
+        made.issue,
+        made.title,
+        made.revision,
+        made.spec_digest,
+        made.published_at,
+    ) == (
+        summary["repo"],
+        summary["issue"],
+        summary["title"],
+        summary["current_revision"],
+        summary["spec_digest"],
+        datetime.fromisoformat(summary["published_at"]),
+    )
+    alice = by_login(CLAIMS, "alice-dev")
+    [submission] = alice["submissions"]
+    accepted_at = datetime.fromisoformat(submission["decided_at"])
+    claimed_at = datetime.fromisoformat(alice["claimed_at"])
+    published_at = datetime.fromisoformat(summary["published_at"])
+    assert made.publish_to_first_accept_seconds == round(
+        (accepted_at - published_at).total_seconds()
+    )
+    reported = {c.github_login: c.accepted for c in made.claims}
+    # Only accepted work has a delivery to report.
+    assert [login for login, accepted in reported.items() if accepted] == ["alice-dev"]
+    delivered = reported["alice-dev"]
+    assert delivered is not None
+    assert (delivered.pr_number, delivered.head_sha, delivered.accepted_at) == (
+        submission["pr_number"],
+        submission["head_sha"],
+        accepted_at,
+    )
+    assert delivered.claim_to_accept_seconds == round(
+        (accepted_at - claimed_at).total_seconds()
+    )
+    assert delivered.integration_status == "merged"
+    assert [(f.kind, f.reference) for f in delivered.facts] == [("merged", "cd" * 20)]
+    refund = next(o for o in alice["obligations"] if o["kind"] == "fee_refund")
+    [paid] = refund["transfers"]
+    assert [
+        (r.obligation_id, r.kind, r.amount_alpha_rao, r.round, r.receipt.block_hash)
+        for r in delivered.receipts
+    ] == [
+        (
+            UUID(refund["obligation_id"]),
+            "fee_refund",
+            FEE,
+            1,
+            paid["receipt"]["block_hash"],
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kinds", "status"),
+    [
+        ((), "pending"),
+        (("merged",), "merged"),
+        (("merged", "deployed"), "deployed"),
+        # Each fact is recorded on its own; the furthest one counts.
+        (("adopted",), "adopted"),
+        (("deployed", "merged"), "deployed"),
+    ],
+)
+def test_integration_is_the_furthest_delivery_fact(kinds, status):
+    claims = copy.deepcopy(CLAIMS)
+    alice = by_login(claims, "alice-dev")
+    alice["facts"] = [
+        {"kind": kind, "reference": "fixture", "recorded_at": alice["claimed_at"]}
+        for kind in kinds
+    ]
+    delivered = next(c for c in report(DETAIL, claims).claims if c.accepted)
+    assert delivered.accepted is not None
+    assert delivered.accepted.integration_status == status
+
+
+def test_only_confirmed_transfers_are_receipts():
+    claims = copy.deepcopy(CLAIMS)
+    refund = alice_refund({"claims": claims})
+    confirmed = refund["transfers"][0]
+    refund["transfers"] = [
+        {**confirmed, "round": 1, "state": "failed", "receipt": None},
+        {**confirmed, "round": 2},
+    ]
+    refund["round"] = 2
+    delivered = next(c for c in report(DETAIL, claims).claims if c.accepted)
+    assert delivered.accepted is not None
+    assert [r.round for r in delivered.accepted.receipts] == [2]
+
+
+def test_a_bounty_without_accepted_work_has_no_first_acceptance():
+    claims = copy.deepcopy(CLAIMS)
+    by_login(claims, "alice-dev")["slot_status"] = "rejected"
+    made = report(DETAIL, claims)
+    assert made.publish_to_first_accept_seconds is None
+    assert all(c.accepted is None for c in made.claims)
 
 
 def test_a_later_smaller_pool_never_fails_an_award_its_claim_signed_for():

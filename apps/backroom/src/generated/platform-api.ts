@@ -16709,21 +16709,65 @@ export interface components {
              * @enum {string}
              */
             funding_mode: "rehearsal" | "live";
+            /** Issue */
+            issue: number;
             /** Median Review Seconds */
             median_review_seconds: number | null;
             /** Operator Actions */
             operator_actions: number;
             payments_return_owed: components["schemas"]["BountyReportAmount"];
             payments_returned: components["schemas"]["BountyReportAmount"];
+            /** Publish To First Accept Seconds */
+            publish_to_first_accept_seconds: number | null;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+            /** Repo */
+            repo: string;
             /** Reviews Overdue */
             reviews_overdue: number;
+            /** Revision */
+            revision: number;
             /** Reward Pool Alpha Rao */
             reward_pool_alpha_rao: number;
             slots: components["schemas"]["BountySlotCounts"];
+            /** Spec Digest */
+            spec_digest: string;
+            /** Title */
+            title: string;
             /** Transfers */
             transfers: {
                 [key: string]: number;
             };
+        };
+        /**
+         * BountyReportAccepted
+         * @description What an accepted claim delivered, how far it was integrated, and what
+         *     it was paid.
+         */
+        BountyReportAccepted: {
+            /**
+             * Accepted At
+             * Format: date-time
+             */
+            accepted_at: string;
+            /** Claim To Accept Seconds */
+            claim_to_accept_seconds: number;
+            /** Facts */
+            facts: components["schemas"]["BountyFactView"][];
+            /** Head Sha */
+            head_sha: string;
+            /**
+             * Integration Status
+             * @enum {string}
+             */
+            integration_status: "pending" | "merged" | "deployed" | "adopted";
+            /** Pr Number */
+            pr_number: number;
+            /** Receipts */
+            receipts: components["schemas"]["BountyReportReceipt"][];
         };
         /** BountyReportAmount */
         BountyReportAmount: {
@@ -16746,6 +16790,7 @@ export interface components {
         };
         /** BountyReportClaim */
         BountyReportClaim: {
+            accepted: components["schemas"]["BountyReportAccepted"] | null;
             /** Attribution */
             attribution: string | null;
             /** Award Alpha Rao */
@@ -16809,6 +16854,31 @@ export interface components {
             reviewer_hours: number | null;
             /** Turnaround Days */
             turnaround_days: number | null;
+        };
+        /**
+         * BountyReportReceipt
+         * @description A confirmed transfer of one of a claim's obligations, with its receipt.
+         */
+        BountyReportReceipt: {
+            /** Amount Alpha Rao */
+            amount_alpha_rao: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "fee_refund" | "fee_retained" | "award";
+            /**
+             * Obligation Id
+             * Format: uuid
+             */
+            obligation_id: string;
+            receipt: components["schemas"]["BountyFeeReceipt"];
+            /** Round */
+            round: number;
+            /** Settled At */
+            settled_at: string | null;
+            /** Simulated */
+            simulated: boolean;
         };
         /** BountyReviewQueue */
         BountyReviewQueue: {

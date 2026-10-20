@@ -241,6 +241,35 @@ async def test_a_bounty_round_rehearses_every_outcome(
         "carol-dev": ("rejected", "retained", 0, None),
         "dave-dev": ("cancelled", "refunded", 0, None),
     }
+    # What each accepted claim delivered, how far it got, and what it was paid.
+    delivered = {c["github_login"]: c["accepted"] for c in report["claims"]}
+    assert delivered["carol-dev"] is None and delivered["dave-dev"] is None
+    alice_work, bob_work = delivered["alice-dev"], delivered["bob-dev"]
+    assert (
+        alice_work["pr_number"],
+        alice_work["head_sha"],
+        alice_work["integration_status"],
+        [(f["kind"], f["reference"]) for f in alice_work["facts"]],
+    ) == (7, "cd" * 20, "merged", [("merged", "cd" * 20)])
+    assert (bob_work["head_sha"], bob_work["integration_status"]) == (
+        "ef" * 20,
+        "pending",
+    )
+    # Each confirmed transfer once: Alice's award was paid in its second round.
+    assert sorted((r["kind"], r["round"]) for r in alice_work["receipts"]) == [
+        ("award", 2),
+        ("fee_refund", 1),
+    ]
+    assert sorted((r["kind"], r["round"]) for r in bob_work["receipts"]) == [
+        ("award", 1),
+        ("fee_refund", 1),
+    ]
+    assert all(r["receipt"] for r in alice_work["receipts"] + bob_work["receipts"])
+    # The bounty is named, and its first acceptance came six days in.
+    assert (report["repo"], report["issue"], report["revision"]) == (REPO, ISSUE, 1)
+    assert report["spec_digest"] == world.detail["summary"]["spec_digest"]
+    assert report["publish_to_first_accept_seconds"] >= 6 * 86_400
+    assert alice_work["claim_to_accept_seconds"] >= 6 * 86_400
     assert report["fees_paid"] == {"count": 4, "alpha_rao": 4 * FEE}
     assert report["fees_refunded"] == {"count": 3, "alpha_rao": 3 * FEE}
     assert report["fees_retained"] == {"count": 1, "alpha_rao": FEE}
@@ -404,6 +433,13 @@ async def test_a_bounty_round_rehearses_the_remaining_outcomes(
     assert report["awards_paid"] == {"count": 1, "alpha_rao": 60 * 10**9}
     assert report["transfers"] == {"confirmed": 4, "expired": 1, "failed": 1}
     assert report["decisions"] == {"accept": 1}
+    # Both of Alice's payments landed in their second rounds.
+    [work] = [c["accepted"] for c in report["claims"] if c["accepted"]]
+    assert (work["head_sha"], work["integration_status"]) == ("ab" * 20, "pending")
+    assert sorted((r["kind"], r["round"]) for r in work["receipts"]) == [
+        ("award", 2),
+        ("fee_refund", 2),
+    ]
     # The runbook's escrow balance: every fee received less every refund paid.
     received = sum(
         report[name]["alpha_rao"]

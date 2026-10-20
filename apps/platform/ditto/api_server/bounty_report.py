@@ -20,23 +20,33 @@ from statistics import median
 from ditto.api_models.bounty import (
     BountyAdminAppealView,
     BountyAuditEntry,
+    BountyClaimIntegration,
     BountyClaimView,
     BountyDetail,
     BountyEvaluationView,
     BountyObligationView,
     BountyReport,
+    BountyReportAccepted,
     BountyReportAmount,
     BountyReportCheck,
     BountyReportClaim,
     BountyReportEvaluation,
     BountyReportFee,
     BountyReportMetrics,
+    BountyReportReceipt,
 )
 
 # A fee refund for these reasons settles a paid fee. The other refund reasons
 # return payments that never won their slot.
 DISPOSITION_REFUNDS = ("accepted", "cancelled", "system_fault")
 LIVE_TRANSFERS = ("dispatched", "uncertain", "confirmed")
+# Delivery facts in the order integration reaches them.
+INTEGRATION_ORDER: tuple[BountyClaimIntegration, ...] = (
+    "pending",
+    "merged",
+    "deployed",
+    "adopted",
+)
 
 
 def _amount(obligations: list[BountyObligationView]) -> BountyReportAmount:
@@ -79,6 +89,51 @@ def _decided_at(claim: BountyClaimView) -> datetime | None:
     return max(decided) if decided else None
 
 
+def _seconds(start: datetime, end: datetime) -> int:
+    """An exact duration, rounded once to the nearest second."""
+    return round((end - start).total_seconds())
+
+
+def _integration(claim: BountyClaimView) -> BountyClaimIntegration:
+    """The furthest delivery fact recorded, or pending before any."""
+    reached = {fact.kind for fact in claim.facts}
+    return next(
+        (status for status in reversed(INTEGRATION_ORDER) if status in reached),
+        "pending",
+    )
+
+
+def _accepted(claim: BountyClaimView) -> BountyReportAccepted | None:
+    """An accepted claim's delivery, integration and confirmed payments."""
+    if claim.state != "claimed" or claim.slot_status != "accepted":
+        return None
+    submission = next((s for s in claim.submissions if s.decision == "accept"), None)
+    if submission is None or submission.decided_at is None or claim.claimed_at is None:
+        return None
+    return BountyReportAccepted(
+        pr_number=submission.pr_number,
+        head_sha=submission.head_sha,
+        accepted_at=submission.decided_at,
+        claim_to_accept_seconds=_seconds(claim.claimed_at, submission.decided_at),
+        integration_status=_integration(claim),
+        facts=claim.facts,
+        receipts=[
+            BountyReportReceipt(
+                obligation_id=owed.obligation_id,
+                kind=owed.kind,
+                amount_alpha_rao=owed.amount_alpha_rao,
+                round=transfer.round,
+                receipt=transfer.receipt,
+                simulated=transfer.simulated,
+                settled_at=transfer.settled_at,
+            )
+            for owed in claim.obligations
+            for transfer in owed.transfers
+            if transfer.state == "confirmed" and transfer.receipt is not None
+        ],
+    )
+
+
 def _claim(claim: BountyClaimView) -> BountyReportClaim:
     award = _award(claim)
     return BountyReportClaim(
@@ -94,6 +149,7 @@ def _claim(claim: BountyClaimView) -> BountyReportClaim:
         submissions=len(claim.submissions),
         claimed_at=claim.claimed_at,
         decided_at=_decided_at(claim),
+        accepted=_accepted(claim),
     )
 
 
@@ -252,10 +308,24 @@ def bounty_report(
         if s.decided_at is not None
     ]
     decided = [appeal.upheld for appeal in appeals if appeal.upheld is not None]
+    reported = [_claim(claim) for claim in claims]
+    first_accept = min(
+        (c.accepted.accepted_at for c in reported if c.accepted is not None),
+        default=None,
+    )
     return BountyReport(
+        repo=summary.repo,
+        issue=summary.issue,
+        title=summary.title,
+        revision=summary.current_revision,
+        spec_digest=summary.spec_digest,
+        published_at=summary.published_at,
+        publish_to_first_accept_seconds=(
+            _seconds(summary.published_at, first_accept) if first_accept else None
+        ),
         funding_mode=summary.funding_mode,
         slots=summary.slots,
-        claims=[_claim(claim) for claim in claims],
+        claims=reported,
         fees_paid=BountyReportAmount(
             count=len(paid), alpha_rao=sum(claim.fee_alpha_rao for claim in paid)
         ),

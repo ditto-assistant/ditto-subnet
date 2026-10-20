@@ -128,7 +128,10 @@ actions without naming operators, so it can be published as it is.
 
 | Field | What it counts |
 |---|---|
+| `repo`, `issue`, `title`, `revision`, `spec_digest`, `published_at` | The bounty: its issue, the current revision's title and digest, and when its first revision was published |
+| `publish_to_first_accept_seconds` | From that first publication to the first acceptance; `null` until work is accepted |
 | `claims` | Each claim's own outcome, what became of its fee, its award and credit, its submissions, and when it was claimed and decided |
+| `claims[].accepted` | For accepted work only: the accepted pull request and commit, the seconds from fee confirmation to acceptance, its delivery facts and `integration_status` (`pending`, then the furthest of `merged`, `deployed` and `adopted`), and the receipt of every confirmed transfer of its refund and award |
 | `fees_paid` | Entry fees that claimed a slot |
 | `fees_refunded`, `fees_refund_owed` | Paid fees refunded for accepted work or a cancellation, confirmed or still owed |
 | `fees_retained` | Paid fees retained once a rejected, expired or withdrawn slot was reopened |

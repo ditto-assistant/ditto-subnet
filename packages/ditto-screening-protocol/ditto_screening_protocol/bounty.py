@@ -149,6 +149,8 @@ BountyTransferState = Literal[
     "dispatched", "confirmed", "failed", "expired", "uncertain"
 ]
 BountyFactKind = Literal["merged", "deployed", "adopted"]
+# How far accepted work has been integrated: its furthest delivery fact.
+BountyClaimIntegration = Literal["pending", "merged", "deployed", "adopted"]
 # Rehearsal only: what the simulated executor reports. Live transfers have none.
 BountyRehearsalOutcome = Literal["confirmed", "failed", "unknown"]
 BountyReconcileOutcome = Literal["confirmed", "failed", "expired", "unknown"]
@@ -972,6 +974,33 @@ class BountyReportCheck(WireModel):
 BountyReportFee = Literal["unpaid", "undecided", "refund_owed", "refunded", "retained"]
 
 
+class BountyReportReceipt(WireModel):
+    """A confirmed transfer of one of a claim's obligations, with its receipt."""
+
+    obligation_id: UUID
+    kind: BountyObligationKind
+    amount_alpha_rao: int
+    round: int
+    receipt: BountyFeeReceipt
+    simulated: bool
+    settled_at: datetime | None
+
+
+class BountyReportAccepted(WireModel):
+    """What an accepted claim delivered, how far it was integrated, and what
+    it was paid."""
+
+    pr_number: int
+    head_sha: str
+    accepted_at: datetime
+    # From the fee's confirmation to the acceptance, rounded to the second.
+    claim_to_accept_seconds: int
+    # The furthest delivery fact recorded: merged, deployed or adopted.
+    integration_status: BountyClaimIntegration
+    facts: list[BountyFactView]
+    receipts: list[BountyReportReceipt]
+
+
 class BountyReportClaim(WireModel):
     claim_id: UUID
     github_login: str
@@ -986,6 +1015,8 @@ class BountyReportClaim(WireModel):
     submissions: int
     claimed_at: datetime | None
     decided_at: datetime | None
+    # Accepted claims only; null for every other outcome.
+    accepted: BountyReportAccepted | None
 
 
 class BountyReportMetrics(WireModel):
@@ -1018,6 +1049,17 @@ class BountyReport(WireModel):
     without naming operators, so it can be published as it is.
     """
 
+    # The bounty: its issue, the current revision's title and digest, and
+    # when its first revision was published.
+    repo: str
+    issue: int
+    title: str
+    revision: int
+    spec_digest: Digest
+    published_at: datetime
+    # From that first publication to the first acceptance, rounded to the
+    # second; null until work is accepted.
+    publish_to_first_accept_seconds: int | None
     funding_mode: FundingMode
     slots: BountySlotCounts
     claims: list[BountyReportClaim]
