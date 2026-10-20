@@ -1,11 +1,11 @@
 """``ditto link-ditto``: attach your Ditto account to this hotkey.
 
 Signing in with Ditto happens in a browser on dittobench.ai's OpenID flow; the
-CLI only starts the attempt under the miner session ``ditto login`` created
-(that session is the hotkey proof), opens the consent URL, and waits for the
-Platform to confirm the link. No key material, TAO, or Ditto credentials pass
-through this command, and the Ditto user id is whatever the Platform verified
-from Ditto's signed id_token — never something the CLI asserts.
+CLI starts the attempt under the miner session ``ditto login`` created, opens
+the consent URL, and confirms the Ditto pairing. It reuses the GitHub identity
+consented in Ditto and signs the existing miner proof locally when no matching
+proof exists. No TAO or provider credentials pass through this command. The
+Ditto user id comes from the verified id_token, never from the CLI.
 
 Subcommands:
 
@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import sys
 import time
 import webbrowser
@@ -49,8 +50,8 @@ def add_subparser(
         description=(
             "Start a Sign in with Ditto round trip for the hotkey of your saved "
             "miner session, open the consent page in a browser, and wait for the "
-            "Platform to record the verified link. Nothing is signed and no TAO "
-            "moves."
+            "Platform to record the verified link. Reuse your Ditto GitHub "
+            "connection and sign its miner proof locally if needed. No TAO moves."
         ),
         parents=parents or [],
     )
@@ -71,6 +72,23 @@ def add_subparser(
         ),
     )
     parser.add_argument("--json", action="store_true", help="Print the result as JSON.")
+    parser.add_argument(
+        "--wallet.name",
+        "--coldkey",
+        dest="coldkey_name",
+        default=os.environ.get("WALLET_NAME"),
+    )
+    parser.add_argument(
+        "--wallet.hotkey",
+        "--hotkey",
+        dest="hotkey_name",
+        default=os.environ.get("HOTKEY_NAME"),
+    )
+    parser.add_argument(
+        "--expect-github-id",
+        type=int,
+        help="Expected numeric GitHub id; required with --yes for the signed proof.",
+    )
     parser.add_argument(
         "--yes",
         action="store_true",
@@ -206,6 +224,51 @@ def run(args: argparse.Namespace) -> int:
                     )
                 if attempt.status == "linked":
                     _print_link(attempt.link, as_json=as_json)
+                    # The GitHub identity came from the same Ditto consent.
+                    # Keep the exact existing signed proof and uniqueness guard.
+                    from ditto.miner_cli.commands import link_github
+
+                    if attempt.github_proof_attempt_id is not None:
+                        proof = client.get_github_link_attempt(
+                            token=token, attempt_id=attempt.github_proof_attempt_id
+                        )
+                        existing = client.get_github_link(token=token).link
+                        if existing is not None and (
+                            existing.github_user_id,
+                            existing.github_login,
+                        ) == (proof.github_user_id, proof.github_login):
+                            print(
+                                "Your matching signed GitHub proof is retained.",
+                                file=sys.stderr,
+                            )
+                            return 0
+                        if proof.github_user_id is not None:
+                            assigned = client.get_github_account_link(
+                                token=token, github_user_id=proof.github_user_id
+                            ).link
+                            if assigned is not None and assigned.hotkey != hotkey:
+                                print(
+                                    "Ditto is linked for Router attribution. Your GitHub "
+                                    f"bounty identity remains on {assigned.hotkey}; "
+                                    "its existing proof is retained.",
+                                    file=sys.stderr,
+                                )
+                                return 0
+                        return link_github.run(
+                            argparse.Namespace(
+                                network=args.network,
+                                github_command="link",
+                                ditto_attempt=attempt.github_proof_attempt_id,
+                                coldkey_name=args.coldkey_name,
+                                hotkey_name=args.hotkey_name,
+                                key_kind="hotkey",
+                                no_browser=True,
+                                wait=600,
+                                yes=args.yes,
+                                expect_github_id=args.expect_github_id,
+                                json=as_json,
+                            )
+                        )
                     return 0
                 if attempt.status in ("failed", "expired"):
                     print(

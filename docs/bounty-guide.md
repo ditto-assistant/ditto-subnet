@@ -35,7 +35,10 @@ Platform changes the terms, and it applies to new claims only.
    The owner coldkey is your payee of record: any refund or award for this
    claim goes there. If the hotkey changes hands later, an award's payout
    waits until its owner is that coldkey again; refunds never wait.
-2. A verified GitHub link for that hotkey, from `uv run ditto link-github`.
+2. Connect your Ditto account with `uv run ditto link-ditto`. Ditto reuses its
+   GitHub connection and the CLI signs a miner proof if needed. A matching
+   existing proof is retained; `ditto link-github` remains available for legacy
+   direct linking and proof recovery.
    See [GitHub links](GITHUB-LINKS.md).
 3. A current contributor licence agreement signature, from
    `uv run ditto cla sign`. Bounty claims always need it, whatever the upload

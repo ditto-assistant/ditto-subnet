@@ -11,11 +11,12 @@ import time
 import webbrowser
 from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from ditto.api_models.contributor_identity import (
     ContributorProof,
     GithubLinkRequest,
+    GithubLinkStart,
     GithubUnlinkRequest,
     github_link_message,
     github_unlink_message,
@@ -53,6 +54,11 @@ def add_subparser(
     )
     parser.add_argument("--key-kind", choices=("hotkey", "coldkey"), default="hotkey")
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument(
+        "--ditto-attempt",
+        type=UUID,
+        help=("Finish the proof from Connect Ditto without another OAuth sign-in."),
+    )
     parser.add_argument(
         "--wait",
         type=int,
@@ -240,13 +246,23 @@ def run(args: argparse.Namespace) -> int:
                     "<numeric GitHub user id>"
                 )
             names = _wallet_names(args)
-            started = client.start_github_link(token=token)
-            print(
-                f"Approve the GitHub account and this hotkey in your browser: "
-                f"{started.authorize_url}",
-                file=sys.stderr,
-            )
-            if not args.no_browser:
+            ditto_attempt = getattr(args, "ditto_attempt", None)
+            if ditto_attempt is not None:
+                status = client.get_github_link(token=token)
+                started = GithubLinkStart(
+                    netuid=status.netuid,
+                    attempt_id=ditto_attempt,
+                    authorize_url="",
+                    expires_in=600,
+                )
+            else:
+                started = client.start_github_link(token=token)
+                print(
+                    f"Approve the GitHub account and this hotkey in your browser: "
+                    f"{started.authorize_url}",
+                    file=sys.stderr,
+                )
+            if not args.no_browser and not ditto_attempt:
                 with contextlib.suppress(Exception):
                     webbrowser.open(started.authorize_url, new=2)
             deadline = time.monotonic() + max(

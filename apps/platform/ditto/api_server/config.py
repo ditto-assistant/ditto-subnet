@@ -1066,7 +1066,9 @@ def parse_ditto_link_config_from_env() -> DittoLinkConfig:
         return_url=os.environ.get(
             "DITTO_LINK_RETURN_URL", "https://dittobench.ai/#/reviews"
         ).strip(),
-        scopes=os.environ.get("DITTO_LINK_SCOPES", "openid email").strip()
+        scopes=os.environ.get(
+            "DITTO_LINK_SCOPES", "openid email connection:github:read"
+        ).strip()
         or "openid email",
         timeout_seconds=timeout_seconds,
         callback_challenge_token=os.environ.get(
