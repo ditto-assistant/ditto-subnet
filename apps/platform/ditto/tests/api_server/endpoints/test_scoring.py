@@ -1080,8 +1080,8 @@ class TestScoringLedger:
 
         class _Clock(datetime):
             @classmethod
-            def now(cls, _tz: object = None) -> datetime:
-                return clock["now"]
+            def now(cls, _tz: object = None) -> _Clock:
+                return cls.fromtimestamp(clock["now"].timestamp(), UTC)
 
         monkeypatch.setattr(scoring_mod, "datetime", _Clock)
         _install_db(app, session_maker)
