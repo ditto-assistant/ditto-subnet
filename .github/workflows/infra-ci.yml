@@ -8,6 +8,7 @@ on:
       - workers/screener/scripts/bootstrap-screener.sh
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
+      - .github/workflows/platform-pg-restore-drill.yml
   push:
     branches: [main]
     paths:
@@ -16,6 +17,7 @@ on:
       - workers/screener/scripts/bootstrap-screener.sh
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
+      - .github/workflows/platform-pg-restore-drill.yml
 
 permissions:
   contents: read
@@ -49,7 +51,12 @@ jobs:
       fail-fast: false
       matrix:
         root:
+          - infra/terraform/stacks/gcp-collector-custody
+          - infra/terraform/stacks/gcp-gamma-custody
+          - infra/terraform/stacks/gcp-gamma-custody-bootstrap
           - infra/terraform/stacks/gcp-platform
+          - infra/terraform/stacks/gcp-subnet-bootstrap
+          - infra/terraform/stacks/gcp-subnet-recovery
           - infra/terraform/stacks/gcp-preview
           - infra/terraform/stacks/cloudflare-dittobench
     steps:
@@ -70,6 +77,10 @@ jobs:
       - name: Validate
         run: terraform -chdir=${{ matrix.root }} validate
 
+      - name: Test recovery project custody with mocked providers
+        if: matrix.root == 'infra/terraform/stacks/gcp-subnet-bootstrap' || matrix.root == 'infra/terraform/stacks/gcp-subnet-recovery'
+        run: terraform -chdir=${{ matrix.root }} test
+
       - name: Lint
         working-directory: ${{ matrix.root }}
         run: tflint --init && tflint
@@ -79,6 +90,18 @@ jobs:
         run: |
           terraform -chdir=infra/terraform/modules/coding-hosted-host init -backend=false -input=false -lockfile=readonly
           terraform -chdir=infra/terraform/modules/coding-hosted-host test
+
+      - name: Test shared compute deletion protection with mocked provider
+        if: matrix.root == 'infra/terraform/stacks/gcp-platform'
+        run: |
+          terraform -chdir=infra/terraform/modules/compute/gcp init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/terraform/modules/compute/gcp test
+
+      - name: Test optional compute snapshot attachments with mocked provider
+        if: matrix.root == 'infra/terraform/stacks/gcp-platform'
+        run: |
+          terraform -chdir=infra/tests/compute-snapshot init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/tests/compute-snapshot test
 
   ansible:
     runs-on: ubuntu-latest
@@ -90,14 +113,23 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Install pinned Ansible collections
         run: uvx --from ansible-core==2.21.2 ansible-galaxy collection install -r requirements.yml
 
+      - name: Test Caddy body caps against the deployed Caddy version
+        run: |
+          mkdir -p "$RUNNER_TEMP/caddy-bin"
+          GOBIN="$RUNNER_TEMP/caddy-bin" go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.11.4
+          PATH="$RUNNER_TEMP/caddy-bin:$PATH" uv run --no-project --with pytest --with jinja2 python -m pytest tests/test_caddy_request_body.py -q
+
+      - name: Verify read-only screener log key admission
+        run: uvx --from ansible-core==2.21.2 ansible-playbook -i localhost, tests/screener-logs-access.yml
+
       - name: Syntax-check subnet playbooks
         run: |
-          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml; do
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-pg-backup.yml playbooks/gcp-platform-app.yml playbooks/gcp-platform-backup-reader.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml playbooks/hetzner-screener-logs.yml; do
             uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
           done
 
@@ -106,6 +138,12 @@ jobs:
           python3 tests/test_screener_cache_gc.py
           uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/screener-cache-gc.yml
 
+      - name: Prove the screener checkout migrates only between repositories, without deleting it
+        run: python3 tests/test_screener_checkout_migration.py
+
+      - name: Prove the screener role converges in check mode on fresh, legacy, and converged hosts
+        run: uvx --from ansible-core==2.21.2 python3 tests/test_screener_worker_check_mode.py
+
       - name: Prove the PostgreSQL collector logs stay bounded and the data disk stays off
         run: |
           python3 tests/test_postgres_log_gc.py
@@ -113,6 +151,19 @@ jobs:
 
       - name: Prove every Docker apt key fetch is integrity-pinned
         run: python3 tests/test_docker_apt_key_pin.py
+
+      - name: Prove online backups fail closed and preserve credential custody
+        run: |
+          python3 tests/test_postgres_backup.py
+          uvx --from ansible-core==2.21.2 python3 tests/test_platform_backup_reader.py
+          uvx --from ansible-core==2.21.2 python3 tests/test_postgres_backup_missing_fetch.py
+          uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/postgres-backup.yml
+
+      - name: Check backup restore workflow
+        run: python3 ../scripts/test-platform-pg-backup-workflow.py
+
+      - name: Prove recovery collation preserves canonical key order
+        run: python3 ../scripts/test-platform-pg-restore-locale.py
 
       - name: Check native PostgreSQL admission rendering without host mutations
         run: >-
@@ -139,3 +190,14 @@ jobs:
         run: >-
           uvx --from ansible-core==2.21.2 ansible-playbook --check
           -i localhost, tests/coding-hosted-postgres-environment.yml
+
+      - name: Prove GCP inventory spans every Terraform zone and fails closed on empty groups
+        run: |
+          uvx --from ansible-core==2.21.2 ansible-playbook -i tests/gcp-inventory tests/gcp-inventory.yml
+          for args in "-e required_group=role_validator_prod" "-e required_group=role_screener --limit ditto-platform-prod"; do
+            if out=$(uvx --from ansible-core==2.21.2 ansible-playbook -i tests/gcp-inventory playbooks/require-hosts.yml $args 2>&1); then
+              echo "require-hosts.yml accepted an empty target ($args)" >&2
+              exit 1
+            fi
+            grep -F "resolved to no hosts" <<<"$out"
+          done

@@ -43,6 +43,7 @@ import { StatusChip } from "../ui/StatusChip";
 import { BenchmarkProgressView } from "../operations/progress";
 import type { ArtifactRelease } from "../pipeline/artifact-release";
 import {
+  admissionLaneLine,
   admissionRetryChip,
   admissionRetryLine,
   benchmarkVersionKey,
@@ -72,12 +73,15 @@ import { screeningAttemptLabel, screeningPolicySummary, validationAttemptView } 
 import { modelUseRows } from "./model-use";
 import type { ModelUse } from "./model-use";
 import { reviewPacket } from "./review-packet";
+import { confirmationSampleComposites } from "./confirmation-samples";
 
 type RankedEntry = LeaderboardEntry & { rank?: number | null };
 
 /** Board fields the confirmation-retest section reads (continual fold). */
 interface BoardConfirmationFields {
   confirmation_seed_depth?: number | null;
+  confirmation_seed_composites?: number[] | null;
+  completed_wave_composites?: number[] | null;
   completed_wave_count?: number | null;
   aggregate_method?: string | null;
   aggregate_sample_count?: number | null;
@@ -198,6 +202,41 @@ function ScoreHeadline(props: { pipeline: PipelineDetailPayload }): JSX.Element 
             );
           }}
         </For>
+      </section>
+    </Show>
+  );
+}
+
+/**
+ * Why a published score is not earning (#2041).
+ *
+ * Sits under the median rather than replacing it, because the contract is that
+ * the score stays visible and ranked while its review is open. The sentence is
+ * the platform's; this component decides placement and tone, not wording.
+ *
+ * Renders nothing when the artifact is earning or the gate is off. A shadow
+ * posture is labelled as a rehearsal, because in that posture the submission IS
+ * still being paid and saying otherwise would be false.
+ */
+function RewardEligibilityNote(props: { pipeline: PipelineDetailPayload }): JSX.Element {
+  const record = () => props.pipeline.reward_eligibility ?? null;
+  const withheld = (): boolean => record()?.posture_satisfied === false;
+  const enforcing = (): boolean => record()?.enforcement === "enforce";
+  return (
+    <Show when={withheld()}>
+      <section
+        class={"reward-eligibility-note" + (enforcing() ? "" : " rehearsal")}
+        aria-label="Reward eligibility"
+      >
+        <span class="reward-eligibility-label">
+          {enforcing() ? "Not earning emissions" : "Would not earn emissions"}
+        </span>
+        <span class="reward-eligibility-reason">{record()?.reason}</span>
+        <Show when={!enforcing()}>
+          <span class="reward-eligibility-reason">
+            The operator gate is in rehearsal, so this submission is still being paid.
+          </span>
+        </Show>
       </section>
     </Show>
   );
@@ -530,32 +569,19 @@ function ConfirmationScores(props: {
   );
   const activeVersion = () => Number(props.pipeline.active_bench_version);
   const benchBadge = () => benchmarkVersionLabel(benchmarkVersionKey(activeVersion()));
-  const confirmationSeedMedians = createMemo(() => {
-    const bySeed = new Map<string, number[]>();
-    for (const score of props.pipeline.confirmation_scores || []) {
-      if (Number(score.bench_version) !== activeVersion() || score.seed == null) continue;
-      const value = Number(score.composite);
-      if (!Number.isFinite(value)) continue;
-      const key = String(score.seed);
-      bySeed.set(key, [...(bySeed.get(key) || []), value]);
-    }
-    return [...bySeed.entries()]
-      .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
-      .map(([, values]): number => {
-        const sortedValues = [...values].sort((left, right) => left - right);
-        const middle = Math.floor(sortedValues.length / 2);
-        return sortedValues.length % 2
-          ? sortedValues[middle]!
-          : (sortedValues[middle - 1]! + sortedValues[middle]!) / 2;
-      });
-  });
+  // The leaderboard already publishes folded per-wave composites. Rebuilding
+  // these from public score rows would require exposing reusable seed IDs.
+  const confirmationSeedMedians = createMemo(() =>
+    confirmationSampleComposites(
+      boardEntry()?.confirmation_seed_composites,
+      props.pipeline.confirmation_sample_composites,
+    ),
+  );
   const completedWaves = createMemo(() => {
-    const count = Number(boardEntry()?.completed_wave_count) || 0;
     return boardEntry()?.aggregate_method === "continual_mean"
-      ? confirmationSeedMedians().slice(0, count)
+      ? (boardEntry()?.completed_wave_composites || []).filter(Number.isFinite)
       : [];
   });
-  const pendingSeeds = confirmationSeedMedians;
   const counts = createMemo(() =>
     retestAttemptCounts(
       (props.pipeline.validation_attempts || []).filter(
@@ -567,7 +593,7 @@ function ConfirmationScores(props: {
   // are append-only and were never deleted, they are merely waiting on a
   // cohort-wide shared seed. Keep the section when any exist.
   const pendingDepth = () =>
-    Math.max(Number(boardEntry()?.confirmation_seed_depth) || 0, pendingSeeds().length);
+    Math.max(Number(boardEntry()?.confirmation_seed_depth) || 0, confirmationSeedMedians().length);
   const aggregateDepth = () => Number(boardEntry()?.completed_wave_count) || 0;
   const excludedDepth = () => Math.max(0, pendingDepth() - aggregateDepth());
   const visible = () =>
@@ -585,7 +611,8 @@ function ConfirmationScores(props: {
     if (counts().expired) bits.push(counts().expired + " expired");
     return bits;
   };
-  const visibleSamples = () => (completedWaves().length ? completedWaves() : pendingSeeds());
+  const visibleSamples = () =>
+    completedWaves().length ? completedWaves() : confirmationSeedMedians();
   const sampleMean = () => {
     const samples = visibleSamples();
     return samples.length
@@ -1016,6 +1043,7 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
           {(detail) => (
             <>
               <ScoreHeadline pipeline={detail()} />
+              <RewardEligibilityNote pipeline={detail()} />
               <FamilyStanding pipeline={detail()} entries={entries} settledView={settled()} />
             </>
           )}
@@ -1030,6 +1058,9 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
               {(chip) => <StatusChip label={chip()[0]} tone={chip()[1]} />}
             </Show>
             <Show when={admissionRetryLine(loadedPipeline()?.admission_retry)}>
+              {(line) => <p class="pipeline-current-message">{line()}</p>}
+            </Show>
+            <Show when={admissionLaneLine(loadedPipeline()?.admission_retry)}>
               {(line) => <p class="pipeline-current-message">{line()}</p>}
             </Show>
             <For each={summaryBenchmarks()}>

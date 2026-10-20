@@ -783,9 +783,22 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
                       <EntityButton kind="agent" id={entry().agent_id} label={championName()} />
                     )}
                   </Show>
-                  {" (" + championRank() + ") receives "}
-                  {pct(championShare() as number)}
-                  {" of the miner pool."}
+                  <Show
+                    when={championRecipient()?.paid === false}
+                    fallback={
+                      <>
+                        {" (" + championRank() + ") receives "}
+                        {pct(championShare() as number)}
+                        {" of the miner pool."}
+                      </>
+                    }
+                  >
+                    {/* A provisional incumbent keeps the crown while its review
+                        is open; its slot burns rather than moving to anyone. */}
+                    {" (" + championRank() + ") holds the crown provisionally: its "}
+                    {pct(championShare() as number)}
+                    {" of the miner pool is unpaid while its review is open."}
+                  </Show>
                   <Show when={sharedSeedNote(championRecipient())}>
                     {(note) => (
                       <>
@@ -878,6 +891,7 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
                       {(e) => <EntityButton kind="agent" id={e().agent_id} label={label()} />}
                     </Show>{" "}
                     {pct(recipient.share_of_miner_pool as number)}
+                    {recipient.paid === false ? " unpaid" : ""}
                     <Show when={note()}>
                       {(n) => (
                         <>

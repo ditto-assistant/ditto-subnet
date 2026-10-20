@@ -29,9 +29,9 @@ func TestConfirmationBenchVersionSupportedAllowList(t *testing.T) {
 	// v9 plus a >= v12 floor bounded by the scorer's accepted set: v13 is an
 	// installable instrument epoch the moment scoregates accepts it, and the
 	// first version scoregates does not accept yet stays refused.
-	unaccepted := scoregates.BenchVersionV13 + 1
+	unaccepted := scoregates.BenchVersionV14 + 1
 	for version, want := range map[int]bool{
-		8: false, 9: true, 10: false, 11: false, 12: true, 13: true, unaccepted: false, 0: false,
+		8: false, 9: true, 10: false, 11: false, 12: true, 13: true, 14: true, unaccepted: false, 0: false,
 	} {
 		if got := ConfirmationBenchVersionSupported(version); got != want {
 			t.Fatalf("ConfirmationBenchVersionSupported(%d) = %v, want %v", version, got, want)
@@ -67,7 +67,7 @@ func TestFrozenProfileAcceptsV12AndRejectsUnbuiltVersions(t *testing.T) {
 	// v10 and v11 never had a confirmation ablation contract built; they must
 	// still fail closed even though the string contract name is unchanged, and
 	// so must the first version the scorer does not accept yet.
-	for _, version := range []int{8, 10, 11, scoregates.BenchVersionV13 + 1} {
+	for _, version := range []int{8, 10, 11, scoregates.BenchVersionV14 + 1} {
 		unbuilt := base
 		unbuilt.BenchVersion = version
 		if _, err := FrozenProfileSHA256(unbuilt); err == nil {

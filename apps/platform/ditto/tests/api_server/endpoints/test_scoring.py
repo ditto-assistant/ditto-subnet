@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
@@ -20,7 +20,7 @@ from uuid import UUID, uuid4
 import bittensor
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -30,8 +30,10 @@ from sqlalchemy.ext.asyncio import (
 import ditto.api_server.endpoints.scoring as scoring_mod
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+from ditto.api_models.validator import LedgerResponse
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATOR_AUTH
+from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import EpochSchedule, NeuronInfo
 from ditto.db.models import (
@@ -47,6 +49,7 @@ from ditto.db.queries.confirmation_scores import (
 )
 from ditto.db.queries.score_ranking import EfficiencyFactorRequesterNotReady
 from ditto.db.queries.scores import upsert_score
+from ditto.db.queries.validator_auth import VALIDATOR_NONCE_EXPIRY_MARGIN
 
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _BOB = bittensor.Keypair.create_from_uri("//Bob")
@@ -61,6 +64,30 @@ _AUTH_HEADER = {"X-Validator-Hotkey": _VALIDATOR_HOTKEY}
 # and the activated rollout that makes it the answer to "which version is
 # authoritative" is planted below.
 _BENCH_VERSION = 7
+
+
+@pytest.mark.asyncio
+async def test_protocol_28_requester_cannot_read_capped_pin() -> None:
+    now = datetime.now(UTC)
+    heartbeat_get = AsyncMock(
+        return_value=SimpleNamespace(protocol_version=28, seen_at=now)
+    )
+    session = cast(AsyncSession, SimpleNamespace(get=heartbeat_get))
+    ledger = LedgerResponse(entries=[], count=0, statistical_band_mode="capped")
+
+    with pytest.raises(HTTPException) as rejected:
+        await scoring_mod._require_statistical_cap_requester(
+            session, _VALIDATOR_HOTKEY, ledger, now=now
+        )
+    assert rejected.value.status_code == 428
+
+    heartbeat_get.return_value.protocol_version = 29
+    assert (
+        await scoring_mod._require_statistical_cap_requester(
+            session, _VALIDATOR_HOTKEY, ledger, now=now
+        )
+        is ledger
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -203,6 +230,270 @@ def test_v8_score_proof_omits_v9_base_evidence_field() -> None:
         )
     )
     assert proof.base_evidence_sha256 is None
+
+
+async def test_failed_registration_read_is_not_an_empty_metagraph() -> None:
+    hotkey = "5" + "A" * 47
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+        chain=SimpleNamespace(
+            get_recent_neurons=AsyncMock(side_effect=RuntimeError("rpc down"))
+        ),
+    )
+
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+    assert await scoring_mod._registered_miner_hotkeys(SimpleNamespace()) is None
+
+    state.chain.get_recent_neurons = AsyncMock(
+        return_value=[SimpleNamespace(hotkey=hotkey), SimpleNamespace(hotkey="")]
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) == {hotkey}
+
+    state.chain.get_recent_neurons = AsyncMock(return_value=[])
+    assert await scoring_mod._registered_miner_hotkeys(state) == set()
+
+
+async def test_boolean_netuid_does_not_read_another_subnet() -> None:
+    called = False
+
+    async def _read(_netuid: object) -> list[object]:
+        nonlocal called
+        called = True
+        return []
+
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=True)),
+        chain=SimpleNamespace(get_recent_neurons=_read),
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+    assert called is False
+
+
+async def test_stalled_registration_read_stays_score_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(scoring_mod, "_REGISTRATION_LOOKUP_TIMEOUT_SECONDS", 0.05)
+
+    async def _hang(_netuid: int) -> list[object]:
+        await asyncio.Event().wait()
+        return []
+
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+        chain=SimpleNamespace(get_recent_neurons=_hang),
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+
+
+async def test_withheld_pool_keeps_the_registered_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered_hotkey = "5" + "B" * 47
+    retired = SimpleNamespace(
+        agent_id=UUID("1" * 32),
+        miner_hotkey="5" + "A" * 47,
+        first_seen=datetime(2026, 1, 1, tzinfo=UTC),
+        composite=0.95,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        eligible=True,
+        v9_confirmation=None,
+    )
+    registered = SimpleNamespace(
+        agent_id=UUID("2" * 32),
+        miner_hotkey=registered_hotkey,
+        first_seen=datetime(2026, 1, 4, tzinfo=UTC),
+        composite=0.80,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        eligible=True,
+        v9_confirmation=None,
+    )
+    chosen: list[list[Any]] = []
+    real = scoring_mod.dedupe_owner_rows
+
+    def _observe(rows: Any, **kwargs: Any) -> list[Any]:
+        picked = real(rows, **kwargs)
+        chosen.append(picked)
+        return []
+
+    async def _empty(*_args: Any, **_kwargs: Any) -> dict[Any, Any]:
+        return {}
+
+    async def _no_adjustments(
+        *_args: Any, **_kwargs: Any
+    ) -> tuple[dict[Any, Any], dict[Any, Any], dict[Any, Any]]:
+        return {}, {}, {}
+
+    monkeypatch.setattr(scoring_mod, "dedupe_owner_rows", _observe)
+    monkeypatch.setattr(scoring_mod, "quorum_composites", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_history_by_agent", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_composites_by_seed", _empty)
+    monkeypatch.setattr(scoring_mod, "quorum_ledger_proof_rows", _empty)
+    monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", _no_adjustments)
+
+    async def _collapse(rows: list[Any]) -> None:
+        await scoring_mod._ledger_entries(
+            cast(Any, MagicMock()),
+            rows,
+            canonical_version=9,
+            continual_mean_active=False,
+            efficiency_config=cast(Any, SimpleNamespace()),
+            now=datetime(2026, 6, 1, tzinfo=UTC),
+            requesting_validator_hotkey=None,
+            emit=lambda _row: True,
+            registered_hotkeys={registered_hotkey},
+        )
+
+    await _collapse([retired, registered])
+    assert [row.agent_id for row in chosen[0]] == [registered.agent_id]
+
+    chosen.clear()
+    await _collapse([retired])
+    assert chosen[0] == []
+
+
+async def test_pin_passes_registration_into_the_withheld_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ditto.api_models.burn_settings import BurnSettings
+    from ditto.api_models.emission_eligibility import EmissionEligibilitySettings
+    from ditto.api_server.config import EfficiencyBonusConfig
+    from ditto.api_server.emission_eligibility import ResolvedEligibilityPolicy
+
+    @dataclass(frozen=True)
+    class _Row:
+        agent_id: UUID
+        miner_hotkey: str
+        first_seen: datetime
+        composite: float
+        bench_version: int
+        emission_owner_root: str
+        crown_first_seen: datetime
+        n: int = 20
+        sha256: str = "ab" * 32
+        size_bytes: int = 1
+        run_id: str = "run"
+        seed: int = 1
+        validator_hotkey: str = "5" + "V" * 47
+        signature: str | None = None
+        status: AgentStatus = AgentStatus.SCORED
+        eligible: bool = True
+        v9_confirmation: dict[str, int] | None = None
+        details: dict[str, object] | None = None
+
+        @property
+        def fold_first_seen(self) -> datetime:
+            return self.crown_first_seen or self.first_seen
+
+    registered_hotkey = "5" + "B" * 47
+    retired = _Row(
+        agent_id=UUID("1" * 32),
+        miner_hotkey="5" + "A" * 47,
+        first_seen=datetime(2026, 1, 1, tzinfo=UTC),
+        composite=0.95,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        crown_first_seen=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    registered = _Row(
+        agent_id=UUID("2" * 32),
+        miner_hotkey=registered_hotkey,
+        first_seen=datetime(2026, 1, 4, tzinfo=UTC),
+        composite=0.80,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        crown_first_seen=datetime(2026, 1, 4, tzinfo=UTC),
+    )
+
+    async def _ledger(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return [retired, registered]
+
+    async def _empty(*_args: Any, **_kwargs: Any) -> dict[Any, Any]:
+        return {}
+
+    async def _false(*_args: Any, **_kwargs: Any) -> bool:
+        return False
+
+    async def _none(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return []
+
+    async def _no_adjustments(
+        *_args: Any, **_kwargs: Any
+    ) -> tuple[dict[Any, Any], dict[Any, Any], dict[Any, Any]]:
+        return {}, {}, {}
+
+    class _Gate:
+        window_start = datetime(2026, 6, 1, tzinfo=UTC)
+        records: dict[UUID, Any] = {}
+        withheld: tuple[object, ...] = ()
+
+        def withholds(self, _agent_id: UUID) -> bool:
+            return True
+
+        def filter_rows(self, rows: list[Any]) -> list[Any]:
+            del rows
+            return []
+
+    def _evaluate(*_args: Any, **_kwargs: Any) -> _Gate:
+        return _Gate()
+
+    monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _ledger)
+    monkeypatch.setattr(scoring_mod, "v9_confirmation_enforcement_active", _false)
+    monkeypatch.setattr(scoring_mod, "load_review_postures", _empty)
+    monkeypatch.setattr(scoring_mod, "evaluate_ledger", _evaluate)
+    monkeypatch.setattr(scoring_mod, "list_reign_seed_anchors", _none)
+    monkeypatch.setattr(scoring_mod, "quorum_composites", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_history_by_agent", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_composites_by_seed", _empty)
+    monkeypatch.setattr(scoring_mod, "quorum_ledger_proof_rows", _empty)
+    monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", _no_adjustments)
+
+    async def _rehearsal(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(scoring_mod, "_record_eligibility_rehearsal", _rehearsal)
+
+    session = MagicMock()
+    session.in_transaction.return_value = False
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    snapshot = await scoring_mod.materialize_ledger_snapshot(
+        SimpleNamespace(
+            config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+            chain=SimpleNamespace(
+                get_recent_neurons=AsyncMock(
+                    return_value=[SimpleNamespace(hotkey=registered_hotkey)]
+                )
+            ),
+        ),
+        cast(Any, session),
+        context=scoring_mod._LedgerContext(
+            policy=scoring_mod._LedgerPolicy(
+                efficiency=EfficiencyBonusConfig(enabled=False),
+                continual_retest=ContinualRetestSettings(
+                    crown_incumbent_mode="fleet_ready"
+                ),
+                burn=BurnSettings(),
+                reward_eligibility=ResolvedEligibilityPolicy(
+                    settings=EmissionEligibilitySettings(enforcement="enforce"),
+                ),
+            ),
+            active_bench_version=9,
+            continual_fleet_ready=False,
+            tie_weighting_fleet_ready=False,
+            factor_fleet_ready=False,
+            crown_incumbent_fleet_ready=True,
+            reward_eligibility_fleet_ready=True,
+        ),
+        now=now,
+        requesting_validator_hotkey=None,
+    )
+
+    assert snapshot.entries == []
+    assert snapshot.withheld_entries is not None
+    assert [entry.agent_id for entry in snapshot.withheld_entries] == [
+        registered.agent_id
+    ]
 
 
 async def _seed_scored(
@@ -638,6 +929,69 @@ class TestScoringLedger:
         assert ready.status_code == 200
         assert ready.json()["tie_weighting_mode"] == "pool"
 
+    async def test_statistical_band_marker_requires_operator_and_protocol_29(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.55.0",
+                    protocol_version=29,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+
+        default = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert default.status_code == 200
+        assert default.json().get("statistical_band_mode") is None
+
+        settings = ContinualRetestSettings(
+            statistical_band_mode="fleet_ready"
+        ).model_dump(mode="json")
+        async with session_maker() as session, session.begin():
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=settings,
+                    checksum="ab" * 32,
+                    reason="prepare statistical band cap",
+                    actor="operator@example.com",
+                )
+            )
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 28
+        app.state.continual_retest_settings.invalidate()
+
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json().get("statistical_band_mode") is None
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 29
+        app.state.continual_retest_settings.invalidate()
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["statistical_band_mode"] == "capped"
+
     async def test_empty_ledger(
         self,
         app: FastAPI,
@@ -708,6 +1062,49 @@ class TestScoringLedger:
         replay = await client.get("/api/v1/scoring/scores", headers=headers)
         assert first.status_code == 200
         assert replay.status_code == 409
+
+    async def test_future_dated_ledger_nonce_survives_the_janitor(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A stamp at the future edge stays acceptable until requested_at +
+        # MAX_AGE. Sweep just after a wrongly anchored expiry (receipt +
+        # MAX_AGE + margin). That deletes a nonce stored from ``now`` and
+        # leaves one stored from ``requested_at``. The replay is still inside
+        # the signature window, so only the surviving row answers 409.
+        receipt = datetime(2026, 10, 16, 12, tzinfo=UTC)
+        clock = {"now": receipt}
+
+        class _Clock(datetime):
+            @classmethod
+            def now(cls, _tz: object = None) -> datetime:
+                return clock["now"]
+
+        monkeypatch.setattr(scoring_mod, "datetime", _Clock)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        requested_at = receipt + scoring_mod._LEDGER_REQUEST_MAX_AGE
+        headers = _ledger_headers(requested_at=requested_at)
+
+        first = await client.get("/api/v1/scoring/scores", headers=headers)
+        assert first.status_code == 200, first.text
+
+        clock["now"] = (
+            receipt
+            + scoring_mod._LEDGER_REQUEST_MAX_AGE
+            + VALIDATOR_NONCE_EXPIRY_MARGIN
+            + timedelta(seconds=1)
+        )
+        deleted = await ValidatorNonceJanitor(session_maker=session_maker).sweep(
+            now=clock["now"]
+        )
+        assert deleted == 0
+        replay = await client.get("/api/v1/scoring/scores", headers=headers)
+        assert replay.status_code == 409
+        assert "already been used" in replay.json()["message"]
 
     # The offset, not the timestamp. Parametrize arguments are evaluated once
     # at collection time, so a literal `datetime.now(UTC) + timedelta(minutes=3)`
@@ -1798,3 +2195,122 @@ class TestLedgerConfirmationSeedAnchors:
         resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert resp.status_code == 200, resp.text
         assert resp.json()["confirmation_seed_anchors"] == []
+
+
+class TestLedgerRankShares:
+    """The operator payout curve rides the ledger only to a protocol-31 fleet."""
+
+    async def test_curve_is_withheld_until_every_weight_setter_reports_v31(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.db.models import BurnSettingsRevision
+
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.55.0",
+                    protocol_version=30,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.burn_settings.invalidate()
+
+        default = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert default.status_code == 200
+        assert default.json().get("rank_shares") is None
+
+        async with session_maker() as session, session.begin():
+            session.add(
+                BurnSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={
+                        "burn_share": 0.0,
+                        "rank_shares": [0.5, 0.2, 0.13, 0.1, 0.07],
+                    },
+                    checksum="ab" * 32,
+                    reason="flatter payout curve",
+                    actor="operator@example.com",
+                )
+            )
+        app.state.burn_settings.invalidate()
+
+        # A v30 weight setter would ignore the field and fold the frozen curve.
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json().get("rank_shares") is None
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 31
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["rank_shares"] == [0.5, 0.2, 0.13, 0.1, 0.07]
+
+    @pytest.mark.parametrize(
+        ("protocol", "refused"), [(None, True), (30, True), (31, False)]
+    )
+    async def test_a_pinned_curve_refuses_a_sub_31_requester(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        protocol: int | None,
+        refused: bool,
+    ) -> None:
+        """A v30 rejoiner mid-epoch must not fold the frozen curve beside v31."""
+        from fastapi import HTTPException
+
+        from ditto.api_models.validator import LedgerResponse
+        from ditto.api_server.endpoints.scoring import (
+            _require_statistical_cap_requester,
+        )
+
+        now = datetime.now(UTC)
+        if protocol is not None:
+            async with session_maker() as session, session.begin():
+                session.add(
+                    ValidatorHeartbeat(
+                        validator_hotkey=_VALIDATOR_HOTKEY,
+                        software_version="0.55.0",
+                        protocol_version=protocol,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=now,
+                        seen_at=now,
+                        signature="cd" * 64,
+                        capabilities=_scorer_capabilities(
+                            now, versions=[_BENCH_VERSION]
+                        ),
+                    )
+                )
+        ledger = LedgerResponse(
+            entries=[], count=0, rank_shares=[0.5, 0.2, 0.13, 0.1, 0.07]
+        )
+        async with session_maker() as session:
+            if refused:
+                with pytest.raises(HTTPException) as caught:
+                    await _require_statistical_cap_requester(
+                        session, _VALIDATOR_HOTKEY, ledger, now=now
+                    )
+                assert caught.value.status_code == 428
+                assert "protocol 31" in str(caught.value.detail)
+            else:
+                served = await _require_statistical_cap_requester(
+                    session, _VALIDATOR_HOTKEY, ledger, now=now
+                )
+                assert served.rank_shares == [0.5, 0.2, 0.13, 0.1, 0.07]

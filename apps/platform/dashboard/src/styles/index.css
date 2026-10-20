@@ -20,6 +20,7 @@
 @import "./pages/reviews.css";
 @import "./pages/account.css";
 @import "./pages/activity.css";
+@import "./pages/gamma.css";
 
 /* the calm layer sits last so it wins every tie */
 @import "./calm.css";

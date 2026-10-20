@@ -15,7 +15,14 @@ from ditto.db.models import (
     ScreeningReviewEvent,
     ScreeningVerificationReceipt,
 )
-from ditto_screening_protocol import ScreenResultRequest
+from ditto.db.queries.moderation_audit import (
+    ACTION_QUARANTINE,
+    ACTION_TYPES,
+    latest_moderation_action_id,
+    public_status,
+    record_moderation_audit_if_enabled,
+)
+from ditto_screening_protocol import AgentStatus, ScreenResultRequest
 
 
 def _status(value: object) -> str:
@@ -115,6 +122,8 @@ async def append_automated_review_event(
             "adjudication": adjudication.model_dump(mode="json")
             if adjudication
             else None,
+            # Retained so a held v13 court clear can be re-verified on release.
+            "completion_receipt_signature": payload.completion_receipt_signature,
             "review_settings_revision": attempt.review_settings_revision,
             "review_settings_checksum": attempt.review_settings_checksum,
             "verification_receipts": await _receipts(session, attempt.attempt_id),
@@ -122,6 +131,21 @@ async def append_automated_review_event(
         created_at=datetime.now(UTC),
     )
     session.add(event)
+    if (
+        _status(prior_agent_status) != AgentStatus.QUARANTINED
+        and _status(next_agent_status) == AgentStatus.QUARANTINED
+    ):
+        await record_moderation_audit_if_enabled(
+            session,
+            action_type=ACTION_QUARANTINE,
+            agent_id=agent.agent_id,
+            miner_hotkey=agent.miner_hotkey,
+            artifact_sha256=attempt.artifact_sha256 or agent.sha256,
+            screened_image_sha256=agent.screened_image_sha256,
+            previous_status=_status(prior_agent_status),
+            resulting_status=_status(next_agent_status),
+            recorded_at=datetime.now(UTC),
+        )
     return event
 
 
@@ -163,6 +187,21 @@ async def append_platform_hold_event(
         created_at=created_at,
     )
     session.add(event)
+    if (
+        _status(prior_agent_status) != AgentStatus.QUARANTINED
+        and _status(agent.status) == AgentStatus.QUARANTINED
+    ):
+        await record_moderation_audit_if_enabled(
+            session,
+            action_type=ACTION_QUARANTINE,
+            agent_id=agent.agent_id,
+            miner_hotkey=agent.miner_hotkey,
+            artifact_sha256=agent.sha256,
+            screened_image_sha256=agent.screened_image_sha256,
+            previous_status=_status(prior_agent_status),
+            resulting_status=_status(agent.status),
+            recorded_at=created_at,
+        )
     return event
 
 
@@ -178,8 +217,17 @@ async def append_manual_review_event(
     prior_agent_status: object,
     next_agent_status: object,
     created_at: datetime,
+    verified_court_clear: dict[str, object] | None = None,
+    terminal_reconciliation: dict[str, object] | None = None,
 ) -> ScreeningReviewEvent:
-    """Snapshot an operator resolution before later rescreens change agent state."""
+    """Snapshot an operator resolution before later rescreens change agent state.
+
+    ``verified_court_clear`` records the re-verified signed court evidence a
+    held v13 clear was released on. ``terminal_reconciliation`` records the
+    terminal agent ruling an orphaned quarantine was closed behind; that
+    closure leaves the agent's public status unchanged, so it publishes no
+    moderation record of its own.
+    """
     attempt = await session.get(ScreeningAttempt, quarantine.attempt_id)
     if attempt is None:
         raise ValueError("quarantine has no screening attempt")
@@ -211,8 +259,39 @@ async def append_manual_review_event(
             "review_notes_digest": quarantine.review_notes_digest,
             "review_notes": quarantine.review_notes,
             "verification_receipts": await _receipts(session, attempt.attempt_id),
+            **(
+                {"verified_v13_court_clear": verified_court_clear}
+                if verified_court_clear is not None
+                else {}
+            ),
+            **(
+                {"terminal_reconciliation": terminal_reconciliation}
+                if terminal_reconciliation is not None
+                else {}
+            ),
         },
         created_at=created_at,
     )
     session.add(event)
+    if resolution in ACTION_TYPES and terminal_reconciliation is None:
+        related = None
+        if (
+            resolution == "release"
+            and _status(prior_agent_status) == AgentStatus.REJECTED
+        ):
+            related = await latest_moderation_action_id(
+                session, agent_id=agent.agent_id, action_type="reject"
+            )
+        await record_moderation_audit_if_enabled(
+            session,
+            action_type=resolution,
+            agent_id=agent.agent_id,
+            miner_hotkey=agent.miner_hotkey,
+            artifact_sha256=attempt.artifact_sha256 or agent.sha256,
+            screened_image_sha256=agent.screened_image_sha256,
+            previous_status=public_status(prior_agent_status),
+            resulting_status=public_status(next_agent_status),
+            recorded_at=created_at,
+            related_action_id=related,
+        )
     return event

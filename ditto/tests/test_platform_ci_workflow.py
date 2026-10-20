@@ -52,6 +52,14 @@ def test_backend_and_dashboard_workflows_own_disjoint_platform_paths() -> None:
         assert "push" not in triggers
 
 
+def test_backend_workflow_runs_on_screener_verdict_producer_changes() -> None:
+    backend_paths = set(_triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"])
+    assert {
+        "workers/screener/ditto_screener/policy.py",
+        "workers/screener/ditto_screener/worker.py",
+    } <= backend_paths
+
+
 def test_backend_workflow_owns_every_platform_coding_contract_vector() -> None:
     backend_paths = set(_triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"])
     assert {

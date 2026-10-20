@@ -21,13 +21,32 @@ parameter:
 | `copy` | the anti-copy gate at quorum, or a manual operator hold |
 | `benchmark_overfit` | the transform audit |
 | `deferred_source_review` | the score-qualified source review, in enforce mode, or the top-five integrity double-check (`algorithm_provenance.trigger = integrity_double_check`) |
-| `anomalous_score` | the out-of-band composite escalation at finalization (bench v12+), in enforce mode |
+| `anomalous_score` | the out-of-band composite escalation at finalization (bench v12+), in enforce mode; or, only with `DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE` on, a single-axis (`tool_mean` / `memory_mean`) outlier whose composite clears the floor (`original_evidence.trigger = per_axis`). A per-axis outlier that does not hold is recorded as evidence only, on audit kind `anomalous_score_axis`. The audit chain is public, so its per-axis evidence is only the axis name and outlier flag; per-axis statistics live on the hold's `original_evidence` and in the admin dry-run |
 
 `review_kind` postdates the holds it describes, so the oldest rows carry no key
 at all and both the projection and the filter treat a missing or unrecognized
 value as `copy`. Those two rules must stay in step: a filter matching only the
 literal string would drop legacy rows while every row it returned still said
 `copy`, which is an omission with nothing on its face to reveal it.
+
+### Per-axis outlier evidence
+
+- **What observe mode keeps.** Each per-axis entry on the public audit chain
+  (an `observe` would-be hold, or an `anomalous_score_axis` record) stores
+  only `{axis, outlier}`. The axis value, cohort median/MAD and modified z are
+  persisted only on an enforced hold's `original_evidence`, so observe mode
+  shows which axes were out of band, not their z distribution. Use the admin
+  dry-run (`GET /admin/outlier-escalation/dry-run`, or the Backroom
+  `get_outlier_escalation_dry_run` tool) to see those statistics for today's
+  ledger. A private store for observe-mode statistics is a follow-up.
+- **Zero-MAD cohorts.** When every peer on an axis has the same value, the MAD
+  is 0. The gate has no scale, so any value above that median counts as an
+  outlier on that axis, however small the gap. This is most likely early in a
+  benchmark version, when many agents saturate the same axis.
+- **Before enabling per-axis enforcement.** Run the dry-run with
+  `per_axis_enforce=true` (Backroom `perAxisEnforce: true`) and check every
+  row it would hold, especially rows with `cohort_mad: 0`. Only then set
+  `DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE`.
 
 ## The top-five integrity double-check
 
@@ -53,7 +72,11 @@ eval -> top five -> integrity double-check -> clear or reject
   with the double-check reason and `trigger: integrity_double_check`, and
   appends the enforced marker. Reason, actor
   (`platform:integrity-double-check`), and algorithm version
-  (`integrity-double-check-v1`) differ; the lifecycle does not.
+  (`integrity-double-check-v1`) differ; the lifecycle does not. Every top-five
+  entrant gets this hold, so its reason is neutral. Rows stored with the older
+  "integrity double-check" wording keep it in the operator queue, and the
+  public and miner projections show the current wording instead
+  (`public_review_reason`, #562).
 - **Stronger posture.** `claim_screening_attempts` binds the deep pass to the
   latest screener review revision in scope `integrity-double-check`. No worker
   heartbeats under that scope, so writing it never changes the fleet posture.
@@ -114,6 +137,30 @@ Nothing is deleted or rewritten to produce this. `original_reason`,
 `agents.review_reason`, and the full action history are unchanged, and the
 audit endpoint still returns the whole `action_history` chain.
 
+## A clean board review is recorded without a hold
+
+A board review that finds no violation on a scored or live agent records a
+terminal `clear` through `POST /api/v1/admin/copy-reviews/{agent_id}/attest`,
+or as a `clear` ruling in the batched rulings court, where it previews with
+`steps: ["attest"]`. The write takes the same guards as `open`
+(`expected_sha256`, `expected_score_count`, a miner-visible `reason`) and, in
+one transaction, adds a `resolved` / `clear` review row and one `clear` action.
+Both carry `hold_free: true` (the row's `algorithm_provenance` and the action's
+`evidence`).
+
+- `agents.status`, the score set and the board position are untouched, so
+  `would_change_crown` is always false. Before this, recording a clean row meant
+  `open` then `clear`, which pulled a paid row -- and for the champion, the
+  crown -- off the board between the two calls.
+- Only an agent with no review row is attested. An existing clear replays as
+  `already_applied` (single-row: `idempotent: true`). A pending review is
+  resolved with `resolve`, and a rejected or below-quorum agent stays a
+  conflict, so an attestation never resolves a hold or lifts a ban.
+- It is an ordinary resolved clear afterwards: `get_ath_review` returns it,
+  precedents list it, and the emission gate reads it as terminal. A later
+  `open` (manual or automated) reopens the row and a reject supersedes it,
+  leaving `clear`, `reopen`, `reject` in the action history.
+
 ## Precedents are the resolved holdings
 
 `GET /api/v1/admin/copy-reviews/precedents` is the court reporter, not the
@@ -130,6 +177,40 @@ a UUID.
 empty.** The platform actor `platform:deferred-source-review` auto-resolves
 each quarantine to `rescreen` within milliseconds of it being raised. Active
 quarantines are a transient screener state, not operator work.
+
+The exception is a quarantine a scored policy rescreen records while the agent
+keeps its board position. If an ATH reject then bans that exact agent, the
+quarantine is a **terminal ghost**: the screening resolvers refuse to rule on a
+terminal agent, so before ditto-subnet#2038 nothing could close it.
+
+- `resolve_copy_review` (and every batched ATH ruling built on it) now closes
+  the agent's active quarantine in the same transaction as the reject, and
+  the legacy `resolve_review()` CLI ban does the same. The ruling locks the
+  quarantine before the agent, the same order as the screening resolvers, so
+  a concurrent screening resolution serializes behind it. The reject action's
+  evidence and the resolve response carry `reconciled_quarantine_ids`.
+- A pre-existing ghost is closed through the fenced
+  `/screening-quarantines/batch-preview` and `/batch-resolve` pair: `reject`
+  with the exact agent UUID and artifact SHA-256 is `ready` with
+  `terminal_reconciliation: true`; release and rescreen stay `conflict`. The
+  unfenced single-row resolver refuses the row.
+- The preview names the current terminal ruling (`terminal_ruling`: agent
+  status, artifact SHA-256, ATH review, and its newest action, which must be
+  the reject). No such ruling (no resolved reject, a later reopen, or a review
+  held on another digest) means "not reconcilable". The preview token signs
+  every item's ruling; execute re-derives them and refuses the batch if any
+  moved, then re-derives each one under the quarantine and agent row locks and
+  refuses the item if it moved. A reject of a quarantine already closed behind
+  a terminal ruling, by any path or operator, replays as `already_applied`.
+- Either path appends a `screening_quarantine_resolutions` row and a manual
+  `screening_review_events` snapshot whose `terminal_reconciliation` evidence
+  names the source and the ATH review. It never changes `agents.status`, the
+  miner-visible screening reason, or the public moderation record.
+- `GET /admin/screening-quarantines` flags each such row with
+  `terminal_ghost` and `agent_status`, and reports `terminal_ghost_count`,
+  `actionable_count`, and `oldest_actionable_created_at` beside the pagination
+  `count`. The source-review SLO reports `terminal_quarantine_ghost_count` and
+  keeps ghosts out of backlog and oldest age.
 
 **`GET /admin/screening-submissions` is the agent table, not the queue.** It
 pages every agent ever submitted; enumerating holds from it means sweeping the
@@ -239,3 +320,40 @@ a copy hold opened at upload has no scores at all, and a hold that survived a
 benchmark rollout has none at the new active version. Both are still waiting for
 an operator. The MCP queue tool pins `generation=all` and does not expose the
 parameter.
+
+## Queue age against SLO
+
+`GET /api/v1/admin/ath-review-queue-slo` reports the age of this queue
+(ditto-subnet#2042, slice 2; the ordinary pre-score queue is
+`/admin/source-review-queue-slo`). The definitions live in
+`ditto/db/queries/ath_review_queue_slo.py`:
+
+- **Clock.** `COALESCE(reopened_at, opened_at)`, the same expression the queue
+  orders by. A deep-review retry does not move it; only a reopen restarts it.
+- **Classes.** `ath` aggregates every pending hold. `classes` breaks it down
+  into `copy` (including legacy holds with no `review_kind`),
+  `benchmark_overfit`, `deferred_source_review`, `integrity_double_check` (the
+  top-five `deferred_source_review` hold, by `trigger`), and `anomalous_score`.
+  `copy_review` repeats the copy entry.
+- **Reasons.** Copy, overfit, and anomalous-score holds are always
+  `escalation`, because only an operator exits them. Deferred and double-check
+  holds report `capacity_wait`, `active_work`, or `infrastructure_backoff` from
+  the newest screening attempt since the clock started. Once that pass
+  concludes they report `escalation`.
+- **Ghosts.** A pending review whose agent is no longer `ath_pending_review` is
+  a ghost, never backlog. `stranded_terminal_ghost_count` counts the agents
+  already banned or rejected. `stranded_hold_ghost_count` counts the rest,
+  which are the stranded holds described above.
+  `held_without_review_ghost_count` counts `ath_pending_review` agents that
+  have no pending row.
+- **Thresholds.** All are unset by default, so `overdue_count` and
+  `p95_exceeds_threshold` are null. Set them with
+  `DITTO_ATH_REVIEW_QUEUE_{MAX_AGE,P95_AGE}_THRESHOLD_SECONDS` for the
+  aggregate and `DITTO_COPY_REVIEW_QUEUE_{MAX_AGE,P95_AGE}_THRESHOLD_SECONDS`
+  for copy review. The endpoint only reports: it raises no alerts and takes no
+  escalation action.
+
+The public pipeline (`/public/agent/{id}/pipeline`) carries `ath_review` for a
+held submission. It includes the reason, the hold age, and the subnet-wide
+typical p50 and p95 across all pending ATH holds. It leaves out the queue
+class, the evidence, and every other agent.

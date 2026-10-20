@@ -142,7 +142,7 @@ compose_major="${compose_version%%.*}"
 if [ "${DITTO_ALLOW_MANAGED_STACK_MUTATION:-false}" != "true" ]; then
   for argument in "$@"; do
     case "$argument" in
-      up | down | create | restart | start | stop | kill | rm | run | pause | unpause | pull | build)
+      up | down | create | restart | start | stop | kill | rm | run | pause | unpause | pull | build | scale | watch)
         die "managed stack mutation must run through validator-stack-auto-update.sh"
         ;;
     esac

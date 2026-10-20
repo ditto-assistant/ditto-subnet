@@ -23,7 +23,40 @@ export interface EmissionRecipient {
   /** "champion" | "joint_champion" | "tail" */
   role?: string;
   share_of_miner_pool?: number;
+  /** Present, and false, only on a provisional incumbent (protocol 28): it
+   * holds this slot while its review is open and validators burn the share
+   * instead of reassigning it. Absent means paid. */
+  paid?: boolean;
   shared_seed_confirmations?: number | null;
+}
+
+/** Terminal-review reward eligibility for one exact artifact (#2041).
+ *
+ * Separate from `rank` and from champion role on purpose: a withheld artifact
+ * keeps its score and its rank on the board, and this is the only thing that
+ * says it is not being paid. Absent when the operator gate has nothing to
+ * report, which is every platform running the shipped `off` posture. */
+export interface RewardEligibility {
+  /** "eligible" | "unresolved_review" | "review_inconclusive" |
+   * "review_escalated" | "review_infrastructure_failed" | "review_missing" |
+   * "review_rejected" | "awaiting_next_window". Read as a string, not a union:
+   * Platform may add a class before this client ships. */
+  state: string;
+  /** Fixed miner-facing sentence published for `state`. Rendered verbatim so
+   * the board and the submission page cannot word it differently. */
+  reason: string;
+  /** Earning under the CURRENT posture. True in shadow even when the posture
+   * is not satisfied -- shadow publishes the finding without acting on it. */
+  reward_eligible: boolean;
+  /** The verdict enforcement would reach, independent of the posture. */
+  posture_satisfied: boolean;
+  /** "off" | "shadow" | "enforce". */
+  enforcement: string;
+  policy_revision: number;
+  window_start: string;
+  /** When a cleared artifact starts earning. Set only for
+   * `awaiting_next_window`; a clear is never applied backwards. */
+  activates_at?: string | null;
 }
 
 export interface RawLeaderDecision {
@@ -49,6 +82,15 @@ export interface RawLeaderDecision {
 /** KOTH emissions fold parameters. Consensus constants are always read from
  * here, never hardcoded in copy. */
 export interface EmissionsFold {
+  /** The crowned agent is also being paid. False means the crown is held but
+   * the 65% slot is unpaid rather than reassigned (#2041). */
+  champion_reward_eligible?: boolean;
+  /** The inverse, published under its own name because it is the word the
+   * board renders. */
+  provisional_champion?: boolean;
+  /** "enforce" while the terminal-review gate is withholding from this
+   * projection; absent when it is off or in shadow. */
+  reward_eligibility_mode?: string | null;
   margin?: number;
   dethrone_z?: number;
   champion_share?: number;
@@ -120,6 +162,8 @@ export interface LedgerEpochActor {
 export interface LedgerEpochRecipient extends LedgerEpochActor {
   role: "champion" | "joint_champion" | "tail";
   share_of_miner_pool: number;
+  /** False only on the pin's provisional incumbent, whose share burned. */
+  paid?: boolean;
 }
 
 export interface LedgerEpoch {
@@ -299,6 +343,7 @@ export interface LeaderboardEntry {
   /** Strict === true means registered; null/missing is UNKNOWN, not false. */
   registered?: boolean | null;
   emission_eligible?: boolean;
+  reward_eligibility?: RewardEligibility | null;
   miner_uid?: number | null;
   score_count?: number;
   score_quorum?: number;
@@ -366,7 +411,7 @@ export interface V9AuthoritativeToolGate {
  * protocol package (`ditto/tests/test_bench_version_pins.py` diffs it).
  */
 export interface V9BaseEvidence {
-  bench_version: 9 | 10 | 11 | 12 | 13;
+  bench_version: 9 | 10 | 11 | 12 | 13 | 14;
   score_gates: {
     rollout_mode: "shadow" | "enforce";
     model_use: V9ModelUseGate;

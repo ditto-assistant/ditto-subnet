@@ -2,6 +2,45 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
+TreasuryReceiptReadPhase = Literal[
+    "connection",
+    "pinned_finality",
+    "payment_finality",
+    "pinned_identity",
+    "source_finality",
+    "receipt_identity",
+    "source_epoch",
+    "autostake_route",
+    "source_events",
+    "payment_extrinsic",
+    "payment_events",
+    "timestamp",
+    "connection_close",
+]
+
+
+class TreasuryReceiptReadProgress:
+    """One provider invocation's fixed checkpoint, never provider data."""
+
+    phase: TreasuryReceiptReadPhase = "connection"
+
+
+TreasuryReadStep = Literal[
+    "connection",
+    "connection_close",
+    "finalized_head",
+    "finalized_height",
+    "canonical_hash",
+    "genesis_hash",
+    "epoch_storage",
+    "collector_storage",
+    "uid_binding",
+    "permit_vector",
+    "setter_binding",
+]
+
 
 class ChainError(Exception):
     """Base exception for chain-related errors."""
@@ -54,6 +93,18 @@ class ChainConnectionError(ChainError):
     pass
 
 
+class ChainTreasuryReceiptUnavailable(ChainConnectionError):
+    """Sanitized last checkpoint across existing bounded archive fallback."""
+
+    def __init__(
+        self, phase: TreasuryReceiptReadPhase, attempts: int, *, timed_out: bool
+    ):
+        super().__init__("finalized treasury receipt unavailable")
+        self.read_phase = phase
+        self.attempt_count = attempts
+        self.timed_out = timed_out
+
+
 # --- Lookup errors ---
 
 
@@ -86,6 +137,23 @@ class ChainTimeoutError(ChainError):
     """
 
     pass
+
+
+class ChainTreasuryReadTimeoutError(ChainTimeoutError):
+    """Fixed public checkpoint; no endpoint, params or provider exception text."""
+
+    def __init__(self, step: TreasuryReadStep):
+        super().__init__("bounded treasury read timed out")
+        self.read_step = step
+
+
+class ChainTreasuryActivationReadError(ChainError):
+    """Fixed phase around a read failure; never serialize the provider error."""
+
+    def __init__(self, stage: Literal["identity", "setter_roster"], error: Exception):
+        super().__init__("bounded treasury activation read failed")
+        self.read_stage = stage
+        self.read_error = error
 
 
 class ChainEmissionReceiptUnavailable(ChainError):

@@ -387,6 +387,7 @@ def _run_stack_compose_wrapper(
     transaction_ref: str | None = None,
     bootstrap_ref: str | None = None,
     write_managed: bool = True,
+    command: tuple[str, ...] = ("config",),
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     state_dir = tmp_path / "state"
     release_dir = state_dir / "current"
@@ -429,7 +430,7 @@ def _run_stack_compose_wrapper(
         "WRAPPER_CAPTURE": str(capture),
     }
     result = subprocess.run(
-        [str(STACK_COMPOSE), str(release_dir), "config"],
+        [str(STACK_COMPOSE), str(release_dir), *command],
         cwd=ROOT,
         env=env,
         text=True,
@@ -446,6 +447,22 @@ def test_stack_wrapper_exports_only_recorded_verified_descriptor_state(
 
     assert result.returncode == 0, result.stderr
     assert json.loads(capture.read_text())["descriptor"] == STACK_DIGEST
+
+
+@pytest.mark.parametrize(
+    "command",
+    [("up", "-d"), ("scale", "ditto-subnet=2"), ("watch",)],
+)
+def test_stack_wrapper_refuses_unmanaged_stack_mutation(
+    tmp_path: Path, command: tuple[str, ...]
+) -> None:
+    # `scale ditto-subnet=2` would start a second validator on the same hotkey
+    # outside the updater's drain and journal protocol.
+    result, capture = _run_stack_compose_wrapper(tmp_path, command=command)
+
+    assert result.returncode != 0
+    assert "managed stack mutation must run through" in result.stderr
+    assert not capture.exists()
 
 
 def test_stack_wrapper_rejects_stale_current_descriptor_state(tmp_path: Path) -> None:

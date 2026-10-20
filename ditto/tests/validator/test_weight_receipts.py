@@ -17,6 +17,7 @@ from ditto.api_models.weight_receipt import (
     weight_receipt_digest,
     weight_vector_digest,
 )
+from ditto.validator.errors import WeightReceiptConflictError
 from ditto.validator.platform import PlatformClient
 from ditto.validator.weight_receipts import WeightReceiptRelay
 
@@ -107,6 +108,65 @@ async def test_restart_retry_uses_same_id_but_identical_vector_new_artifact_does
     champion.agent_id = uuid4()
     assert await second.submit({"miner": 1.0}, ledger, champion) is True
     assert calls[1][0] != calls[2][0]
+
+
+async def test_stale_pin_uses_a_distinct_request_id_per_chain_epoch():
+    calls = []
+
+    async def accept(request_id, body):
+        calls.append((request_id, body))
+        return {
+            "request_id": request_id,
+            "request_digest": hashlib.sha256(
+                json.dumps(
+                    body, sort_keys=True, separators=(",", ":"), allow_nan=False
+                ).encode()
+            ).hexdigest(),
+        }
+
+    setter = SimpleNamespace(put_weights_with_receipt=accept)
+    ledger, champion = context()
+    relay = WeightReceiptRelay(setter, None, "validator", 118)
+    assert await relay.submit({"miner": 1.0}, ledger, champion) is True
+    assert (
+        await relay.submit(
+            {"miner": 1.0}, ledger, champion, chain_epoch_block=9_000_000
+        )
+        is True
+    )
+    assert (
+        await relay.submit(
+            {"miner": 1.0}, ledger, champion, chain_epoch_block=9_000_000
+        )
+        is True
+    )
+    assert (
+        await relay.submit(
+            {"miner": 1.0}, ledger, champion, chain_epoch_block=9_000_360
+        )
+        is True
+    )
+    unpinned, same_epoch, same_epoch_retry, next_epoch = calls
+    assert unpinned[0] != same_epoch[0]
+    assert same_epoch[0] == same_epoch_retry[0]
+    assert same_epoch[0] != next_epoch[0]
+    assert unpinned[1] == same_epoch[1] == next_epoch[1]
+    assert "chain-epoch" not in json.dumps(same_epoch[1])
+
+
+async def test_chain_epoch_block_must_be_a_non_negative_int():
+    ledger, champion = context()
+    relay = WeightReceiptRelay(
+        SimpleNamespace(put_weights_with_receipt=AsyncMock()),
+        None,
+        "validator",
+        118,
+    )
+    assert (
+        await relay.submit({"miner": 1.0}, ledger, champion, chain_epoch_block=True)
+        is False
+    )
+    relay.setter.put_weights_with_receipt.assert_not_awaited()
 
 
 async def test_timeout_is_uncertain_never_legacy_fallback():
@@ -212,6 +272,122 @@ async def test_platform_post_signs_immutable_receipt_and_checks_ack():
     assert signed[0].startswith(b"ditto-validator-weight-receipt:v1:")
 
 
+@pytest.mark.parametrize(
+    "body,code",
+    [
+        ({"error_code": 3002, "message": "attempt_rebound: reason"}, "attempt_rebound"),
+        ({"message": "Pylon attempt identity already has a receipt"}, "unknown"),
+        ({"message": "private body: attempt_rebound"}, "unknown"),
+        ({"detail": "unexpected shape"}, "unknown"),
+    ],
+)
+async def test_platform_conflict_surfaces_only_bounded_code(body, code):
+    claim = finalized()
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(409, json=body))
+    ) as http:
+        platform = PlatformClient(
+            SimpleNamespace(
+                platform_api_url="https://platform.invalid",
+                validator_hotkey="validator",
+            ),
+            http,
+            SimpleNamespace(sign=lambda _: b"x" * 64),
+        )
+        with pytest.raises(WeightReceiptConflictError) as raised:
+            await platform.submit_weight_receipt(claim)
+    assert raised.value.code == code
+
+
+async def test_recovery_logs_conflict_code_and_leaves_receipt_unacknowledged(caplog):
+    claim = finalized()
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(
+            return_value={"receipts": [envelope(claim)], "next_after_task_id": None}
+        ),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(
+            side_effect=WeightReceiptConflictError("request_rebound")
+        )
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    with caplog.at_level("WARNING", logger="ditto.validator.weight_receipts"):
+        await relay.recover()
+    setter.acknowledge_weight_receipt.assert_not_awaited()
+    assert relay.diagnostics.recovery_status == "forwarding_platform_failed"
+    assert relay.diagnostics.page_deferred == 1
+    assert "WeightReceiptConflictError(request_rebound)" in caplog.text
+
+
+async def test_persistent_conflict_is_acked_and_dropped_after_bounded_streak(caplog):
+    """A deterministic conflict must not 409 forever (#2712)."""
+    claim = finalized()
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(
+            return_value={"receipts": [envelope(claim)], "next_after_task_id": None}
+        ),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(
+            side_effect=WeightReceiptConflictError("ledger_pin_mismatch")
+        )
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    with caplog.at_level("WARNING", logger="ditto.validator.weight_receipts"):
+        for _ in range(4):
+            await relay.recover()
+        # Still below the threshold: deferred, unacknowledged.
+        setter.acknowledge_weight_receipt.assert_not_awaited()
+        assert relay.diagnostics.conflicts_dropped == 0
+        assert relay.diagnostics.page_deferred == 1
+
+        await relay.recover()
+    setter.acknowledge_weight_receipt.assert_awaited_once()
+    acked_body = setter.acknowledge_weight_receipt.call_args.args[1]
+    assert acked_body["attempt_id"] == str(claim.attempt.attempt_id)
+    assert acked_body["receipt_digest"] == weight_receipt_digest(claim)
+    assert relay.diagnostics.conflicts_dropped == 1
+    assert "dropped after 5 consecutive conflicts" in caplog.text
+
+
+async def test_successful_forwarding_clears_the_conflict_streak():
+    claim = finalized()
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(
+            return_value={"receipts": [envelope(claim)], "next_after_task_id": None}
+        ),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(
+            side_effect=WeightReceiptConflictError("ledger_pin_mismatch")
+        )
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    for _ in range(4):
+        await relay.recover()
+    platform.submit_weight_receipt.side_effect = None
+    platform.submit_weight_receipt.return_value = SubmitWeightReceiptResponse(
+        request_id=claim.request_id,
+        attempt_id=claim.attempt.attempt_id,
+        receipt_digest=weight_receipt_digest(claim),
+    )
+    await relay.recover()
+    assert relay.diagnostics.page_forwarded == 1
+    # A fresh conflict must again count from zero rather than ride the old streak.
+    platform.submit_weight_receipt.side_effect = WeightReceiptConflictError(
+        "ledger_pin_mismatch"
+    )
+    for _ in range(4):
+        await relay.recover()
+    setter.acknowledge_weight_receipt.assert_awaited_once()
+    assert relay.diagnostics.conflicts_dropped == 0
+
+
 async def test_pin_benchmark_identity_wins_over_compatible_champion_version():
     ledger, champion = context()
     champion.bench_version = 12
@@ -288,7 +464,10 @@ async def test_high_frequency_heartbeats_schedule_at_most_one_recovery_per_30s(
     assert relay.recover.await_count == 2
 
 
-async def test_diagnostics_distinguish_failure_stages_without_secret_material():
+@pytest.mark.parametrize("invalid_ack", [False, True])
+async def test_diagnostics_distinguish_failure_stages_without_secret_material(
+    invalid_ack,
+):
     from dataclasses import asdict
 
     ledger, champion = context()
@@ -311,12 +490,22 @@ async def test_diagnostics_distinguish_failure_stages_without_secret_material():
         "receipts": [envelope(claim)],
         "next_after_task_id": None,
     }
-    platform.submit_weight_receipt.side_effect = TimeoutError("secret-token")
+    failure = TimeoutError("secret-token")
+    if invalid_ack:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as invalid:
+            SubmitWeightReceiptResponse.model_validate(
+                {"receipt_digest": "secret-token"}
+            )
+        failure = invalid.value
+    platform.submit_weight_receipt.side_effect = failure
     await relay.recover()
     assert relay.diagnostics.recovery_status == "forwarding_platform_failed"
     assert relay.diagnostics.page_finalized == 1
     assert relay.diagnostics.page_deferred == 1
     assert relay.diagnostics.page_forwarded == 0
+    assert relay.diagnostics.last_validation is None
     setter.acknowledge_weight_receipt.assert_not_awaited()
     assert "secret-token" not in json.dumps(asdict(relay.diagnostics))
 
@@ -381,6 +570,13 @@ async def test_diagnostic_transport_is_signed_and_allows_old_platform(status):
         assert signed == [diagnostic_signing_message(report)]
         assert report.validator_hotkey == "validator"
         assert report.netuid == 118
+        assert report.schema_version == 3
+        assert report.observation.last_validation is not None
+        assert report.observation.last_validation.fields == [
+            "provenance.champion_artifact_sha256:string_pattern_mismatch"
+        ]
+        assert report.observation.failure_context is not None
+        assert report.observation.failure_context.claimed_commit_block == 9029300
         assert body["signature"] == "0x" + "00" * 64
         assert request.url.path == "/api/v1/validator/receipt-diagnostics"
         return httpx.Response(status, json={"accepted": True})
@@ -398,6 +594,195 @@ async def test_diagnostic_transport_is_signed_and_allows_old_platform(status):
         await platform.submit_receipt_diagnostics(
             ReceiptDiagnosticObservation(
                 submission_status="uncertain",
-                recovery_status="reading_pylon_failed",
+                recovery_status="validating_claim_failed",
+                last_validation={
+                    "error_count": 1,
+                    "fields": [
+                        "provenance.champion_artifact_sha256:string_pattern_mismatch"
+                    ],
+                },
+                failure_context={
+                    "claimed_schema_version": 1,
+                    "task_id": 12,
+                    "claimed_epoch_index": 25017,
+                    "claimed_commit_block": 9029300,
+                },
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("commit_block", "private-input", "attempt.commit_block:int_type"),
+        ("ciphertext_hash", "a" * 64, "attempt:value_error:ciphertext_digest"),
+    ],
+)
+async def test_receipt_validation_logs_safe_field_and_stage(
+    caplog, field, value, expected
+):
+    raw = envelope(finalized())
+    raw["attempts"][0][field] = value
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(return_value={"receipts": [raw]}),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(), submit_receipt_diagnostics=AsyncMock()
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    assert "stage=validating_claim" in caplog.text
+    assert expected in caplog.text
+    assert "validation_error_count=1" in caplog.text
+    for private in (
+        "private-input",
+        raw["request_id"],
+        raw["attempts"][0]["ciphertext_hex"],
+    ):
+        assert private not in caplog.text
+    assert relay.diagnostics.recovery_status == "validating_claim_failed"
+    assert relay.diagnostics.last_validation is not None
+    assert relay.diagnostics.last_validation.fields == [expected]
+    assert relay.diagnostics.last_validation.error_count == 1
+    sent = platform.submit_receipt_diagnostics.call_args.args[0]
+    assert sent.last_validation == relay.diagnostics.last_validation
+    assert sent.failure_context is not None
+    assert sent.failure_context.model_dump(mode="json") == {
+        "claimed_schema_version": 1,
+        "task_id": raw["task_id"],
+        "claimed_epoch_index": raw["provenance"]["epoch_index"],
+        "claimed_commit_block": None
+        if field == "commit_block"
+        else raw["attempts"][0]["commit_block"],
+        "attempt_id": raw["attempts"][0]["attempt_id"],
+    }
+    for private in (
+        "private-input",
+        raw["request_id"],
+        raw["attempts"][0]["ciphertext_hex"],
+    ):
+        assert private not in sent.model_dump_json()
+    assert relay.diagnostics.page_deferred == 1
+    platform.submit_weight_receipt.assert_not_awaited()
+    setter.acknowledge_weight_receipt.assert_not_awaited()
+
+
+async def test_receipt_validation_logs_bound_errors_and_redact_dict_keys(caplog):
+    raw = envelope(finalized())
+    raw["weights"] = {f"private-key-{i}": -1 for i in range(12)}
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(return_value={"receipts": [raw]}),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(submit_weight_receipt=AsyncMock())
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    assert caplog.text.count("weights.*:greater_than_equal") == 5
+    assert "validation_error_count=12" in caplog.text
+    assert "private-key" not in caplog.text
+    assert relay.diagnostics.last_validation is not None
+    assert relay.diagnostics.failure_context is not None
+    assert relay.diagnostics.last_validation.error_count == 12
+    assert (
+        relay.diagnostics.last_validation.fields == ["weights.*:greater_than_equal"] * 5
+    )
+    assert "input_value" not in caplog.text
+    assert relay.diagnostics.page_deferred == 1
+    platform.submit_weight_receipt.assert_not_awaited()
+    setter.acknowledge_weight_receipt.assert_not_awaited()
+
+
+async def test_sha256_validation_code_does_not_block_page_progress(caplog):
+    invalid = envelope(finalized())
+    invalid["provenance"]["champion_artifact_sha256"] = "x" * 64
+    valid = finalized().model_copy(update={"task_id": 2})
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(
+            return_value={
+                "receipts": [invalid, envelope(valid)],
+                "next_after_task_id": 2,
+            }
+        ),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(
+            return_value=SubmitWeightReceiptResponse(
+                request_id=valid.request_id,
+                attempt_id=valid.attempt.attempt_id,
+                receipt_digest=weight_receipt_digest(valid),
+            )
+        ),
+        submit_receipt_diagnostics=AsyncMock(),
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    assert relay.cursor == 2
+    assert relay.diagnostics.page_deferred == 1
+    assert relay.diagnostics.page_forwarded == 1
+    assert relay.diagnostics.last_validation is not None
+    assert relay.diagnostics.last_validation.fields == [
+        "provenance.champion_artifact_sha256:string_pattern_mismatch"
+    ]
+    platform.submit_weight_receipt.assert_awaited_once()
+    assert setter.acknowledge_weight_receipt.await_count == 1
+    assert setter.acknowledge_weight_receipt.call_args.args[0] == str(valid.request_id)
+    diagnostic = platform.submit_receipt_diagnostics.call_args.args[0]
+    assert diagnostic.last_validation == relay.diagnostics.last_validation
+    for private in (
+        "x" * 64,
+        invalid["request_id"],
+        invalid["attempts"][0]["ciphertext_hex"],
+    ):
+        assert private not in diagnostic.model_dump_json()
+        assert private not in caplog.text
+
+
+async def test_new_recovery_page_clears_old_validation_codes():
+    raw = envelope(finalized())
+    raw["attempts"][0]["commit_block"] = "private-input"
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(return_value={"receipts": [raw]}),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(), submit_receipt_diagnostics=AsyncMock()
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    assert relay.diagnostics.last_validation is not None
+    setter.list_weight_receipts.return_value = {"receipts": []}
+    await relay.recover()
+    assert relay.diagnostics.last_validation is None
+    assert relay.diagnostics.failure_context is None
+    assert platform.submit_receipt_diagnostics.call_args.args[0].last_validation is None
+    assert relay.diagnostics.page_deferred == 0
+
+
+async def test_invalid_claim_coordinates_are_unknown_and_never_echoed():
+    raw = envelope(finalized())
+    raw.update(schema_version=True, task_id="private-task")
+    raw["provenance"]["epoch_index"] = "private-epoch"
+    raw["attempts"][0].update(commit_block="private-block", attempt_id="private-id")
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(return_value={"receipts": [raw]}),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(), submit_receipt_diagnostics=AsyncMock()
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    diagnostic = platform.submit_receipt_diagnostics.call_args.args[0]
+    assert diagnostic.failure_context is not None
+    assert set(diagnostic.failure_context.model_dump().values()) == {None}
+    assert "private-" not in diagnostic.model_dump_json()
+    platform.submit_weight_receipt.assert_not_awaited()
+    setter.acknowledge_weight_receipt.assert_not_awaited()
+    assert (
+        WeightReceiptRelay(
+            setter, platform, "validator", 118
+        ).diagnostics.last_validation
+        is None
+    )

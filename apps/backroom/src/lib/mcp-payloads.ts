@@ -37,12 +37,30 @@ function timestamp(value: string | null | undefined) {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY
 }
 
+/**
+ * Screening-submission list tiers, narrowest first. `identity` is the search
+ * projection: just enough to name a row and hand its agent_id to
+ * get_screening_submission, so a wide prefix search stays cheap.
+ */
+export const SCREENING_SUBMISSION_DETAILS = ['identity', 'summary', 'full'] as const
+export type ScreeningSubmissionDetail = (typeof SCREENING_SUBMISSION_DETAILS)[number]
+
 export function compactScreeningSubmissions(
   response: ScreeningSubmissionList,
-  detail: 'summary' | 'full',
+  detail: ScreeningSubmissionDetail,
 ) {
   const items = response.items.map((submission) => {
     if (detail === 'full') return submission as unknown as ResponseRow
+    if (detail === 'identity') {
+      return {
+        agent_id: submission.agent_id,
+        agent_name: submission.agent_name,
+        agent_version: submission.agent_version,
+        agent_status: submission.agent_status,
+        submitted_at: submission.submitted_at,
+        artifact_sha256: submission.artifact_sha256,
+      } as ResponseRow
+    }
     const { attempts, ...rest } = submission
     const latestAttempt = [...attempts].sort(
       (left, right) =>

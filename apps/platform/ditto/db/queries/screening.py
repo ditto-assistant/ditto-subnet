@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
@@ -12,9 +13,11 @@ from sqlalchemy import (
     ColumnElement,
     and_,
     case,
+    distinct,
     exists,
     false,
     func,
+    lateral,
     or_,
     select,
     true,
@@ -71,6 +74,7 @@ from ditto.screener_policy_state import (
     effective_scored_rescreen_policy_version,
     effective_screening_policy_version,
 )
+from ditto_screening_protocol import reason_codes
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -113,32 +117,38 @@ _ADJUDICATED_NEGATIVE_OWNER_STATUSES = (
 # A platform-raised quarantine has no screener finding, but the row's
 # manifest_digest is NOT NULL and shown verbatim in the operator console. This
 # stable sentinel marks the origin as "platform, attempts exhausted".
-_EXHAUSTED_REASON_CODE = "repeatedly-inconclusive"
+EXHAUSTED_REASON_CODE = reason_codes.REPEATEDLY_INCONCLUSIVE
+"""Public alias: the emission-eligibility gate
+(:mod:`ditto.api_server.emission_eligibility`) classifies this code as
+inconclusive, and must not carry its own copy of the string."""
+_EXHAUSTED_REASON_CODE = EXHAUSTED_REASON_CODE
+# The worker's code for a complete review the model could not settle from
+# source. Deliberately unregistered in the shared registry (an operator retry);
+# policy v13 V2 counts it (:func:`complete_static_inconclusive_count`).
+L2_MODEL_INCONCLUSIVE_REASON_CODE = "l2-model-inconclusive"
 _EXHAUSTED_PUBLIC_REASON = (
     "Screening was inconclusive repeatedly; held for operator review"
 )
 _DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
 POLICY_ONLY_RESCREEN_REASON = "policy-only-rescreen"
-_ORPHANED_ATTEMPT_REASON_CODE = "worker-lease-orphaned"
+_ORPHANED_ATTEMPT_REASON_CODE = reason_codes.WORKER_LEASE_ORPHANED
 _ORPHANED_ATTEMPT_REASON = (
     "Screening worker stopped reporting this attempt; manual retry required"
 )
+# Unlike an orphan, an expiry still counts toward ``MAX_SCREENING_EXPIRIES`` and
+# backs off by status, so this code joins no retry or backoff set.
+LEASE_EXPIRED_REASON_CODE = reason_codes.SCREENING_LEASE_EXPIRED
+_LEASE_EXPIRED_REASON = "Screening lease expired"
 # Provider/reviewer failures held on reclaim for ``FAILED_ATTEMPT_RETRY_BACKOFF`` and,
 # with peer-pass evidence, counted toward ``MAX_SCREENING_EXPIRIES``
 # (``_inconclusive_attempt_count``). Do not add a code that should retry
 # automatically WITHOUT counting: those live in
 # ``screening_infra_retry.INFRA_AUTO_RETRY_REASON_CODES``, which has its own
-# backoff/breaker and never feeds the park cap.
-PROVIDER_BACKOFF_REASON_CODES = (
-    "targon-build-unavailable",
-    "targon-runtime-unavailable",
-    "targon-source-review-unavailable",
-    "cloudrun-build-unavailable",
-    "cloudrun-runtime-unavailable",
-    # The agentic reviewer reported a pre-verdict failure it marked
-    # retryable_infra; immediate reclaim would hot-loop against the same
-    # broken court, so hold the retry briefly before re-queueing.
-    "source-review-retryable-infra",
+# backoff/breaker and never feeds the park cap. The codes are the
+# ``PROVIDER_BACKOFF`` class of the shared screening registry
+# (``ditto_screening_protocol.reason_codes``), which records why each is here.
+PROVIDER_BACKOFF_REASON_CODES: tuple[str, ...] = (
+    reason_codes.PROVIDER_BACKOFF_REASON_CODES
 )
 # How long a provider-backoff failure waits after its FAILURE before the agent
 # is claimable again, capped by the attempt deadline. Backing off to the full
@@ -175,6 +185,298 @@ async def try_acquire_screening_claim_lock(session: AsyncSession) -> bool:
     )
 
 
+def screening_running_or_backoff(now: datetime) -> ColumnElement[bool]:
+    """Match an agent that holds a running lease or is still backing off.
+
+    A failed attempt backs off from its FAILURE time, not to the end of the
+    70-minute lease it no longer occupies: holding a review that died 20
+    minutes in until minute 70 stranded agents for most of an hour and read
+    as a stuck queue from the public pipeline. The short hold still prevents
+    hot-looping against a broken provider, the lease deadline stays the
+    upper bound, and an attempt with no recorded finish keeps the historical
+    deadline behavior. An operator retry for the attempt waives its hold.
+    """
+    backoff_until = func.least(
+        ScreeningAttempt.deadline,
+        func.coalesce(
+            ScreeningAttempt.finished_at + FAILED_ATTEMPT_RETRY_BACKOFF,
+            ScreeningAttempt.deadline,
+        ),
+    )
+    return exists(
+        select(ScreeningAttempt.attempt_id).where(
+            ScreeningAttempt.agent_id == Agent.agent_id,
+            or_(
+                ScreeningAttempt.status == "running",
+                and_(
+                    or_(
+                        ScreeningAttempt.status == "expired",
+                        and_(
+                            ScreeningAttempt.status == "failed",
+                            ScreeningAttempt.reason_code.in_(
+                                PROVIDER_BACKOFF_REASON_CODES
+                            ),
+                        ),
+                    ),
+                    backoff_until > now,
+                    ~exists(
+                        select(ScreeningRetryOverride.override_id).where(
+                            ScreeningRetryOverride.attempt_id
+                            == ScreeningAttempt.attempt_id
+                        )
+                    ),
+                ),
+            ),
+        )
+    )
+
+
+def screening_deferred_behind_earlier_owner(
+    candidate_payment: type[EvaluationPayment], *, netuid: int
+) -> ColumnElement[bool]:
+    """Match an agent whose bytes an earlier, different owner still holds.
+
+    While the earlier submission is uploaded, screening, or failed awaiting a
+    retry, the claim defers this one so the duplicate race resolves before
+    either is judged. ``candidate_payment`` must be outer-joined to the
+    agent's own payment row by the caller.
+    """
+    earlier = aliased(Agent)
+    earlier_payment = aliased(EvaluationPayment)
+    direct_owner_link = exists(
+        select(OwnerAttestation.attestation_id).where(
+            OwnerAttestation.netuid == netuid,
+            OwnerAttestation.revoked_at.is_(None),
+            or_(
+                and_(
+                    OwnerAttestation.hotkey_lo == Agent.miner_hotkey,
+                    OwnerAttestation.hotkey_hi == earlier.miner_hotkey,
+                ),
+                and_(
+                    OwnerAttestation.hotkey_lo == earlier.miner_hotkey,
+                    OwnerAttestation.hotkey_hi == Agent.miner_hotkey,
+                ),
+            ),
+        )
+    )
+    earlier_is_different_owner = and_(
+        earlier.miner_hotkey != Agent.miner_hotkey,
+        ~direct_owner_link,
+        or_(
+            candidate_payment.miner_coldkey.is_(None),
+            earlier_payment.miner_coldkey.is_(None),
+            earlier_payment.miner_coldkey != candidate_payment.miner_coldkey,
+        ),
+    )
+    return exists(
+        select(earlier.agent_id)
+        .select_from(earlier)
+        .outerjoin(
+            earlier_payment,
+            earlier_payment.agent_id == earlier.agent_id,
+        )
+        .where(
+            earlier.sha256 == Agent.sha256,
+            earlier_is_different_owner,
+            (earlier.created_at < Agent.created_at)
+            | (
+                (earlier.created_at == Agent.created_at)
+                & (earlier.agent_id < Agent.agent_id)
+            ),
+            earlier.status.in_(
+                (
+                    AgentStatus.UPLOADED,
+                    AgentStatus.SCREENING,
+                    AgentStatus.SCREENING_FAILED,
+                )
+            ),
+        )
+    )
+
+
+def scored_policy_release_filter(
+    canary_policy_version: int | None,
+) -> tuple[int | None, list[ColumnElement[bool]], bool]:
+    """Resolve the explicit scored-policy release a claim may take.
+
+    Returns the release's target policy version, the criteria that select a
+    pending release for it, and whether this claim may take such a release.
+    The process-global policy snapshot is read once, so every predicate built
+    from the result agrees.
+    """
+    scored_rescreen_policy_version = effective_scored_rescreen_policy_version()
+    scored_rescreen_activation_revision = (
+        effective_scored_rescreen_activation_revision()
+    )
+    scored_release_criteria: list[ColumnElement[bool]] = [
+        ScoredPolicyRescreenRelease.target_policy_version
+        == scored_rescreen_policy_version,
+        ScoredPolicyRescreenRelease.state == "pending",
+    ]
+    if scored_rescreen_activation_revision is not None:
+        scored_release_criteria.append(
+            ScoredPolicyRescreenRelease.activation_revision
+            == scored_rescreen_activation_revision
+        )
+    can_claim_scored_rescreen = scored_rescreen_policy_version is not None and (
+        scored_rescreen_policy_version == effective_screening_policy_version()
+        or (
+            canary_policy_version is not None
+            and canary_policy_version >= scored_rescreen_policy_version
+        )
+    )
+    return (
+        scored_rescreen_policy_version,
+        scored_release_criteria,
+        can_claim_scored_rescreen,
+    )
+
+
+def screening_canary_revision_usable(
+    *,
+    allowed_scopes: Collection[str] | None,
+    release_criteria: Sequence[ColumnElement[bool]] | None,
+) -> ColumnElement[bool]:
+    """Match an agent whose pinned review posture this claimant can bind.
+
+    An exact latest-attempt retry override wins, otherwise a pending scored
+    release (``release_criteria``, ``None`` when the claim may take none)
+    supplies the pinned revision. A pin is usable only in one of the
+    claimant's ``allowed_scopes`` as an enforcing adjudicator posture; with
+    ``None`` (no bound revision) only unpinned work is usable. The claim
+    filters on this before LIMIT so a retry unusable by one claimant cannot
+    hide the next upload from it.
+    """
+    latest_attempt_id = latest_screening_attempt_id()
+    retry_canary_revision = (
+        select(ScreeningRetryOverride.review_settings_revision)
+        .where(ScreeningRetryOverride.attempt_id == latest_attempt_id)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    release_canary_revision = (
+        select(ScoredPolicyRescreenRelease.review_settings_revision)
+        .where(
+            ScoredPolicyRescreenRelease.agent_id == Agent.agent_id,
+            *release_criteria,
+        )
+        .correlate(Agent)
+        .scalar_subquery()
+        if release_criteria is not None
+        else None
+    )
+    canary_revision = func.coalesce(retry_canary_revision, release_canary_revision)
+    usable: ColumnElement[bool] = canary_revision.is_(None)
+    if allowed_scopes is not None:
+        usable = or_(
+            usable,
+            exists(
+                select(ScreenerReviewSettingsRevision.revision).where(
+                    ScreenerReviewSettingsRevision.revision == canary_revision,
+                    ScreenerReviewSettingsRevision.scope.in_(allowed_scopes),
+                    ScreenerReviewSettingsRevision.settings["mode"].as_string()
+                    == "enforce",
+                    func.coalesce(
+                        ScreenerReviewSettingsRevision.settings[
+                            "l3_enabled"
+                        ].as_boolean(),
+                        ScreenerReviewSettings().l3_enabled,
+                    ).is_(True),
+                    ScreenerReviewSettingsRevision.settings[
+                        "adjudicator_mode"
+                    ].as_string()
+                    == "enforce",
+                )
+            ),
+        )
+    return usable
+
+
+def claim_canary_scopes(
+    binding: tuple[int, str, str, str] | None, *, enrolled_node_id: str | None
+) -> frozenset[str] | None:
+    """Review-settings scopes whose pinned revisions a claimant can use.
+
+    ``binding`` is the claim's ``(revision, instance_id, scope, checksum)``.
+    ``None``, a claimant on built-in defaults, can take only unpinned work.
+    """
+    if binding is None:
+        return None
+    scopes = {"*", binding[1], binding[2]}
+    # The endpoint authenticates enrollment before passing the node scope.
+    if enrolled_node_id is not None:
+        scopes.add(enrolled_node_id)
+    return frozenset(scopes)
+
+
+async def has_claimable_screening_work(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    review_settings_scopes: Collection[str] | None,
+    netuid: int,
+) -> bool:
+    """Report whether a fresh submission is waiting for this claimant.
+
+    Covers the two fresh-work arms of ``claim_screening_attempts``: a new
+    upload, and a failed screen whose exact latest attempt carries a Backroom
+    retry authorization. It applies the claim's own exclusions from the same
+    predicate builders, so work production would never select cannot hold
+    another lane back indefinitely:
+
+    - a running lease or backoff hold (``screening_running_or_backoff``);
+    - a duplicate deferred behind an earlier owner's in-flight submission
+      (``screening_deferred_behind_earlier_owner``), which can stay parked
+      until an operator acts on the earlier one;
+    - a retry pinned to a review posture outside ``review_settings_scopes``
+      (``screening_canary_revision_usable``); pass the scopes a production
+      claim from the same worker would bind (``claim_canary_scopes``).
+
+    The other claim arms are not modeled: the released scored-policy rescreen
+    (SCORED/LIVE), infrastructure auto-retries, stale EVALUATING rows and
+    deferred ATH passes. They do not hold a yielding lane, whose own
+    reservation of admitted workers covers them.
+
+    This is an advisory read for lanes that must yield to production, such as
+    report-only canaries. It is one unlocked ``SELECT``: it takes no advisory
+    lock, locks no rows, runs no expiry or orphan sweep, and writes nothing, so
+    it never queues behind or delays a production claim.
+    """
+    candidate_payment = aliased(EvaluationPayment)
+    # No canary policy version, deliberately. In these two arms a pending
+    # scored release only narrows which pinned posture is usable; it never
+    # makes an agent claimable. Ignoring it (``None``) therefore reports a
+    # superset of what any worker's claim selects. That can over-hold a
+    # yielding lane but never hide work from production, and it holds for
+    # workers of any build. The released scored rescreen is the SCORED/LIVE
+    # arm, which this read does not model.
+    _, release_criteria, can_claim_scored_rescreen = scored_policy_release_filter(None)
+    claimable = and_(
+        ~screening_running_or_backoff(now),
+        ~screening_deferred_behind_earlier_owner(candidate_payment, netuid=netuid),
+        screening_canary_revision_usable(
+            allowed_scopes=review_settings_scopes,
+            release_criteria=release_criteria if can_claim_scored_rescreen else None,
+        ),
+    )
+
+    def fresh_work(*arm: ColumnElement[bool]) -> ColumnElement[bool]:
+        return exists(
+            select(Agent.agent_id)
+            .outerjoin(candidate_payment, candidate_payment.agent_id == Agent.agent_id)
+            .where(*arm, claimable)
+        )
+
+    # Two EXISTS arms rather than one OR so the upload arm stays on the
+    # partial ``agents_status_uploaded_idx`` index.
+    uploaded = fresh_work(Agent.status == AgentStatus.UPLOADED)
+    authorized_retry = fresh_work(
+        Agent.status == AgentStatus.SCREENING_FAILED,
+        failed_screening_retry_authorized(),
+    )
+    return bool(await session.scalar(select(or_(uploaded, authorized_retry))))
+
+
 def screening_score_count() -> ScalarSelect[int]:
     """Return the accepted-score count correlated to the current agent."""
     return (
@@ -207,7 +509,54 @@ def screening_last_served_at() -> ColumnElement[Any]:
     return func.coalesce(latest_attempt, Agent.created_at)
 
 
-def screening_priority_order() -> tuple[ColumnElement[Any], ...]:
+def screening_score_aggregates() -> tuple[Any, Any]:
+    """One LATERAL aggregate pair per candidate agent, outerjoined by callers.
+
+    The three aggregates the screening order needs (accepted-score count,
+    average composite, and the latest current-policy screening-consumption
+    timestamp) were previously three separate correlated scalar subqueries
+    inside the ORDER BY, so PostgreSQL re-evaluated each of them for every
+    candidate row on every sort term — the production audit measured an empty
+    claim spending 6.5-13.7 s inside the claim transaction. Grouping them per
+    agent once and joining the result fixed that, but a plain grouped relation
+    has no WHERE on the candidate set, so every claim aggregated the entire
+    ``scores`` table. Each aggregate is now LATERAL: correlated on the outer
+    agent, so the planner probes one agent's rows per candidate (an index
+    lookup against the claimable set) instead of one whole-table aggregation
+    pass per claim, while each aggregate still runs exactly once per row.
+    """
+    score_count = lateral(
+        select(
+            func.count(Score.composite).label("score_count"),
+            func.avg(Score.composite).label("provisional_composite"),
+        )
+        .where(Score.agent_id == Agent.agent_id)
+        .correlate(Agent)
+        .subquery()
+    )
+    last_served = lateral(
+        select(
+            func.max(
+                func.coalesce(
+                    ScreeningAttempt.finished_at,
+                    ScreeningAttempt.deadline,
+                    ScreeningAttempt.started_at,
+                )
+            ).label("last_served_at"),
+        )
+        .where(
+            ScreeningAttempt.agent_id == Agent.agent_id,
+            ScreeningAttempt.policy_version == effective_screening_policy_version(),
+        )
+        .correlate(Agent)
+        .subquery()
+    )
+    return (score_count, last_served)
+
+
+def screening_priority_order(
+    aggregates: tuple[Any, Any] | None = None,
+) -> tuple[ColumnElement[Any], ...]:
     """Prioritize finalists while interleaving bounded screening retries.
 
     A policy bump can return stale non-scored work, while an existing board
@@ -218,15 +567,31 @@ def screening_priority_order() -> tuple[ColumnElement[Any], ...]:
     backlog, but it remains ahead of submissions arriving later. This prevents
     either retries or fresh arrivals from monopolizing the worker while
     preserving the existing score and age tie-breakers.
+
+    ``aggregates`` is the optional pair of precomputed grouped relations from
+    :func:`screening_score_aggregates`; pass it (and outerjoin it onto the
+    caller's select) so the per-agent aggregates are computed once per claim
+    rather than re-evaluated per row per ORDER BY term. Omitting it falls back
+    to the correlated scalar subqueries, which stays correct but slow — only
+    for callers that cannot restructure their select.
     """
-    score_count = screening_score_count()
-    last_served_at = screening_last_served_at()
-    provisional_composite = (
-        select(func.avg(Score.composite))
-        .where(Score.agent_id == Agent.agent_id)
-        .correlate(Agent)
-        .scalar_subquery()
-    )
+    score_count: ColumnElement[Any]
+    last_served_at: ColumnElement[Any]
+    provisional_composite: ColumnElement[Any]
+    if aggregates is None:
+        score_count = screening_score_count()
+        last_served_at = screening_last_served_at()
+        provisional_composite = (
+            select(func.avg(Score.composite))
+            .where(Score.agent_id == Agent.agent_id)
+            .correlate(Agent)
+            .scalar_subquery()
+        )
+    else:
+        score_counts, last_served = aggregates
+        score_count = func.coalesce(score_counts.c.score_count, 0)
+        last_served_at = func.coalesce(last_served.c.last_served_at, Agent.created_at)
+        provisional_composite = score_counts.c.provisional_composite
     in_completion_lane = case(
         (score_count >= SCORING_QUORUM - 1, 1),
         else_=0,
@@ -394,7 +759,12 @@ async def expire_screening_attempts(session: AsyncSession, *, now: datetime) -> 
     for attempt in attempts:
         attempt.status = "expired"
         attempt.finished_at = now
-        attempt.public_reason = "Screening lease expired"
+        attempt.public_reason = _LEASE_EXPIRED_REASON
+        if attempt.reason_code is None:
+            # A claim-time code (duplicate precheck, deferred mechanical
+            # admission, policy-only rescreen) is the lease's execution mode,
+            # which a late verdict is still checked against; keep it.
+            attempt.reason_code = LEASE_EXPIRED_REASON_CODE
         release = await session.scalar(
             select(ScoredPolicyRescreenRelease)
             .where(ScoredPolicyRescreenRelease.attempt_id == attempt.attempt_id)
@@ -407,7 +777,8 @@ async def expire_screening_attempts(session: AsyncSession, *, now: datetime) -> 
         agent = await session.get(Agent, attempt.agent_id)
         if agent is not None and agent.status == AgentStatus.SCREENING:
             agent.status = AgentStatus.SCREENING_FAILED
-            agent.screening_reason = "Screening lease expired"
+            agent.screening_reason = _LEASE_EXPIRED_REASON
+            agent.screening_reason_code = LEASE_EXPIRED_REASON_CODE
     return len(attempts)
 
 
@@ -432,8 +803,12 @@ async def fail_orphaned_screening_attempts(
     build is positive evidence the attempt is still being worked.
 
     These are infrastructure failures, not inconclusive reviews. Mark them
-    ``failed`` so they retry immediately without consuming the five-expiry
-    adjudication budget.
+    ``failed`` so they do not consume the five-expiry adjudication budget. They
+    park for an operator retry and are never retried automatically: a worker
+    also stops reporting an attempt after Platform rejected its verdict or the
+    worker died mid-screen, both of which the artifact can provoke. Overdue
+    leases are included when positive orphan evidence exists; otherwise they
+    are left for ``expire_screening_attempts``.
     """
     candidates = list(
         (
@@ -446,7 +821,6 @@ async def fail_orphaned_screening_attempts(
                     ScreeningAttempt.screener_hotkey == screener_hotkey,
                     ScreeningAttempt.status == "running",
                     ScreeningAttempt.started_at <= now - _ORPHANED_ATTEMPT_GRACE,
-                    ScreeningAttempt.deadline > now,
                 )
             )
         )
@@ -509,7 +883,6 @@ async def fail_orphaned_screening_attempts(
                 ScreeningAttempt.screener_hotkey == screener_hotkey,
                 ScreeningAttempt.status == "running",
                 ScreeningAttempt.started_at <= now - _ORPHANED_ATTEMPT_GRACE,
-                ScreeningAttempt.deadline > now,
             )
             .with_for_update(skip_locked=True)
             .execution_options(populate_existing=True)
@@ -575,6 +948,36 @@ async def fail_orphaned_screening_attempts(
             agent.screening_reason_code = _ORPHANED_ATTEMPT_REASON_CODE
         failed += 1
     return failed
+
+
+async def sweep_screening_leases(
+    session: AsyncSession, *, now: datetime, screener_hotkey: str | None = None
+) -> tuple[int, int]:
+    """Retire orphaned, then overdue, running leases; return both counts.
+
+    The orphan sweep runs first so an overdue attempt with positive orphan
+    evidence records an infrastructure failure instead of an expiry.
+    ``screener_hotkey`` limits the orphan sweep to that fleet; ``None``
+    sweeps every hotkey holding a running attempt. Both sweeps skip or re-read
+    locked rows, so callers need not hold the screening claim lock.
+    """
+    if screener_hotkey is None:
+        hotkeys = list(
+            await session.scalars(
+                select(distinct(ScreeningAttempt.screener_hotkey)).where(
+                    ScreeningAttempt.status == "running"
+                )
+            )
+        )
+    else:
+        hotkeys = [screener_hotkey]
+    orphaned = 0
+    for hotkey in hotkeys:
+        orphaned += await fail_orphaned_screening_attempts(
+            session, screener_hotkey=hotkey, now=now
+        )
+    expired = await expire_screening_attempts(session, now=now)
+    return orphaned, expired
 
 
 async def _fresh_heartbeat_instance_count(
@@ -733,6 +1136,31 @@ async def _inconclusive_attempt_count(session: AsyncSession, *, agent_id: UUID) 
     return int(count or 0)
 
 
+async def complete_static_inconclusive_count(
+    session: AsyncSession, *, agent_id: UUID, policy_version: int
+) -> int:
+    """Count finished source reviews of this agent that ended statically unsettled.
+
+    Policy v13's V2 rule counts complete reviews of the exact artifact, so
+    neither an operator retry nor a quarantine release resets the tally the way
+    they reset ``_inconclusive_attempt_count``. Only the worker's model-chosen
+    ``l2-model-inconclusive`` verdict counts: budget, time, provider and
+    infrastructure stops carry other codes. An agent's artifact is immutable,
+    so the agent id binds the exact artifact.
+    """
+    count = await session.scalar(
+        select(func.count())
+        .select_from(ScreeningAttempt)
+        .where(
+            ScreeningAttempt.agent_id == agent_id,
+            ScreeningAttempt.policy_version == policy_version,
+            ScreeningAttempt.status == "expired",
+            ScreeningAttempt.reason_code == L2_MODEL_INCONCLUSIVE_REASON_CODE,
+        )
+    )
+    return int(count or 0)
+
+
 async def _park_repeatedly_inconclusive(
     session: AsyncSession,
     agent: Agent,
@@ -860,12 +1288,7 @@ async def claim_screening_attempts(
     # resurrected every past rejection fleet-wide and cleared the operator's
     # stated reason, so a refused artifact could return under a newer policy that
     # never re-derived the original finding.
-    await expire_screening_attempts(session, now=now)
-    await fail_orphaned_screening_attempts(
-        session,
-        screener_hotkey=screener_hotkey,
-        now=now,
-    )
+    await sweep_screening_leases(session, now=now, screener_hotkey=screener_hotkey)
     claim_budget = await _shared_hotkey_claim_budget(
         session,
         screener_hotkey=screener_hotkey,
@@ -875,46 +1298,7 @@ async def claim_screening_attempts(
         limit = min(limit, claim_budget)
         if limit <= 0:
             return []
-    # A failed attempt backs off from its FAILURE time, not to the end of the
-    # 70-minute lease it no longer occupies: holding a review that died 20
-    # minutes in until minute 70 stranded agents for most of an hour and read
-    # as a stuck queue from the public pipeline. The short hold still prevents
-    # hot-looping against a broken provider, the lease deadline stays the
-    # upper bound, and an attempt with no recorded finish keeps the historical
-    # deadline behavior.
-    backoff_until = func.least(
-        ScreeningAttempt.deadline,
-        func.coalesce(
-            ScreeningAttempt.finished_at + FAILED_ATTEMPT_RETRY_BACKOFF,
-            ScreeningAttempt.deadline,
-        ),
-    )
-    has_running_or_backoff = exists(
-        select(ScreeningAttempt.attempt_id).where(
-            ScreeningAttempt.agent_id == Agent.agent_id,
-            or_(
-                ScreeningAttempt.status == "running",
-                and_(
-                    or_(
-                        ScreeningAttempt.status == "expired",
-                        and_(
-                            ScreeningAttempt.status == "failed",
-                            ScreeningAttempt.reason_code.in_(
-                                PROVIDER_BACKOFF_REASON_CODES
-                            ),
-                        ),
-                    ),
-                    backoff_until > now,
-                    ~exists(
-                        select(ScreeningRetryOverride.override_id).where(
-                            ScreeningRetryOverride.attempt_id
-                            == ScreeningAttempt.attempt_id
-                        )
-                    ),
-                ),
-            ),
-        )
-    )
+    has_running_or_backoff = screening_running_or_backoff(now)
     # Infrastructure-parked agents retry on their own schedule: per-artifact
     # exponential backoff, then the fleet breaker. Planned under the claim lock
     # from persisted attempts, so every worker derives the same answer.
@@ -952,6 +1336,9 @@ async def claim_screening_attempts(
     missing_dataset, prerequisite_admitted = await prerequisite_screening_predicates(
         session
     )
+    # Per-agent score aggregates are computed once per claim rather
+    # than re-evaluated per candidate row per ORDER BY term.
+    score_aggregates = screening_score_aggregates()
     pending_deferred_review = exists(
         select(AthReview.review_id).where(
             AthReview.agent_id == Agent.agent_id,
@@ -969,27 +1356,11 @@ async def claim_screening_attempts(
             ),
         )
     )
-    scored_rescreen_policy_version = effective_scored_rescreen_policy_version()
-    scored_rescreen_activation_revision = (
-        effective_scored_rescreen_activation_revision()
-    )
-    scored_release_criteria: list[ColumnElement[bool]] = [
-        ScoredPolicyRescreenRelease.target_policy_version
-        == scored_rescreen_policy_version,
-        ScoredPolicyRescreenRelease.state == "pending",
-    ]
-    if scored_rescreen_activation_revision is not None:
-        scored_release_criteria.append(
-            ScoredPolicyRescreenRelease.activation_revision
-            == scored_rescreen_activation_revision
-        )
-    can_claim_scored_rescreen = scored_rescreen_policy_version is not None and (
-        scored_rescreen_policy_version == effective_screening_policy_version()
-        or (
-            canary_policy_version is not None
-            and canary_policy_version >= scored_rescreen_policy_version
-        )
-    )
+    (
+        scored_rescreen_policy_version,
+        scored_release_criteria,
+        can_claim_scored_rescreen,
+    ) = scored_policy_release_filter(canary_policy_version)
     released_scored_policy_rescreen = (
         exists(
             select(ScoredPolicyRescreenRelease.release_id).where(
@@ -1016,6 +1387,17 @@ async def claim_screening_attempts(
         .where(ScreeningAttempt.attempt_id == latest_attempt_id)
         .correlate(Agent)
         .scalar_subquery()
+    )
+    canary_scopes = claim_canary_scopes(
+        review_settings_binding, enrolled_node_id=review_settings_enrolled_node_id
+    )
+    allowed_canary_scopes = canary_scopes or frozenset()
+    # Match the binding chosen below: an exact latest-attempt override wins,
+    # otherwise the pending release supplies the canary revision. Filter before
+    # LIMIT so a retry unusable by this claimant cannot hide the next upload.
+    canary_revision_usable = screening_canary_revision_usable(
+        allowed_scopes=canary_scopes,
+        release_criteria=scored_release_criteria if can_claim_scored_rescreen else None,
     )
     # Resolved before selection: a double-check hold without a usable posture
     # (or claimed by a worker that cannot bind one) must not be selected at
@@ -1134,66 +1516,26 @@ async def claim_screening_attempts(
         deferred_ath_eligible,
     )
     candidate_payment = aliased(EvaluationPayment)
-    earlier = aliased(Agent)
-    earlier_payment = aliased(EvaluationPayment)
-    direct_owner_link = exists(
-        select(OwnerAttestation.attestation_id).where(
-            OwnerAttestation.netuid == netuid,
-            OwnerAttestation.revoked_at.is_(None),
-            or_(
-                and_(
-                    OwnerAttestation.hotkey_lo == Agent.miner_hotkey,
-                    OwnerAttestation.hotkey_hi == earlier.miner_hotkey,
-                ),
-                and_(
-                    OwnerAttestation.hotkey_lo == earlier.miner_hotkey,
-                    OwnerAttestation.hotkey_hi == Agent.miner_hotkey,
-                ),
-            ),
-        )
-    )
-    earlier_is_different_owner = and_(
-        earlier.miner_hotkey != Agent.miner_hotkey,
-        ~direct_owner_link,
-        or_(
-            candidate_payment.miner_coldkey.is_(None),
-            earlier_payment.miner_coldkey.is_(None),
-            earlier_payment.miner_coldkey != candidate_payment.miner_coldkey,
-        ),
-    )
-    earlier_pending = exists(
-        select(earlier.agent_id)
-        .select_from(earlier)
-        .outerjoin(
-            earlier_payment,
-            earlier_payment.agent_id == earlier.agent_id,
-        )
-        .where(
-            earlier.sha256 == Agent.sha256,
-            earlier_is_different_owner,
-            (earlier.created_at < Agent.created_at)
-            | (
-                (earlier.created_at == Agent.created_at)
-                & (earlier.agent_id < Agent.agent_id)
-            ),
-            earlier.status.in_(
-                (
-                    AgentStatus.UPLOADED,
-                    AgentStatus.SCREENING,
-                    AgentStatus.SCREENING_FAILED,
-                )
-            ),
-        )
+    earlier_pending = screening_deferred_behind_earlier_owner(
+        candidate_payment, netuid=netuid
     )
     agents = list(
         await session.scalars(
             select(Agent)
+            # LATERAL aggregates carry their own correlation; no ON clause.
+            .outerjoin(score_aggregates[0], onclause=true())
+            .outerjoin(score_aggregates[1], onclause=true())
             .outerjoin(
                 candidate_payment,
                 candidate_payment.agent_id == Agent.agent_id,
             )
-            .where(eligible, ~has_running_or_backoff, ~earlier_pending)
-            .order_by(*screening_priority_order())
+            .where(
+                eligible,
+                ~has_running_or_backoff,
+                ~earlier_pending,
+                canary_revision_usable,
+            )
+            .order_by(*screening_priority_order(score_aggregates))
             # Surplus probe candidates only exist to be skipped below; widen the
             # window so they cannot crowd out claimable work behind them.
             .limit(limit + infra_plan.surplus_probe_candidates)
@@ -1276,6 +1618,8 @@ async def claim_screening_attempts(
         # into grounds for condemning a later identical submission. Once an
         # operator reviews that park and resolves it "reject", the rejection
         # branch below picks it up -- that IS a human judgement for cause.
+        # A policy v13 V2 reject is likewise no finding: verification did not
+        # complete, so it records violation_proven false.
         refused_for_cause = or_(
             owner.status == AgentStatus.BANNED,
             exists(
@@ -1284,7 +1628,11 @@ async def claim_screening_attempts(
                     or_(
                         (ScreeningQuarantine.status == "active")
                         & (ScreeningQuarantine.reason_code != _EXHAUSTED_REASON_CODE),
-                        ScreeningQuarantine.resolution == "reject",
+                        (ScreeningQuarantine.resolution == "reject")
+                        & (
+                            ScreeningQuarantine.reason_code
+                            != reason_codes.VERIFICATION_INCOMPLETE_UNREVIEWABLE
+                        ),
                     ),
                 )
             ),
@@ -1396,35 +1744,56 @@ async def claim_screening_attempts(
             # the live global revision: that would turn a one-attempt canary
             # into a fleet-wide toggle between the claim and the verdict.
             if review_settings_binding is None:
+                logger.warning(
+                    "screening canary skipped agent_id=%s revision=%s scope=%s "
+                    "instance_id=%s reason=no_binding",
+                    agent.agent_id,
+                    canary_review_settings_revision,
+                    None,
+                    None,
+                )
                 continue
             canary_settings = await session.get(
                 ScreenerReviewSettingsRevision,
                 canary_review_settings_revision,
             )
             if canary_settings is None:
+                logger.warning(
+                    "screening canary skipped agent_id=%s revision=%s scope=%s "
+                    "instance_id=%s reason=missing_revision",
+                    agent.agent_id,
+                    canary_review_settings_revision,
+                    None,
+                    review_settings_binding[1],
+                )
                 continue
             parsed_canary_settings = ScreenerReviewSettings.model_validate(
                 canary_settings.settings
             )
             instance_id = review_settings_binding[1]
-            allowed_canary_scopes = {
-                "*",
-                instance_id,
-                review_settings_binding[2],
-            }
-            # A persistent node owns multiple local worker heartbeat identities.
-            # Its live setting may intentionally inherit the global posture
-            # while one exact retry remains bound to an older, immutable
-            # node-scoped enforce revision. The endpoint supplies this value
-            # only after authenticating that the instance belongs to the node.
-            if review_settings_enrolled_node_id is not None:
-                allowed_canary_scopes.add(review_settings_enrolled_node_id)
+            if canary_settings.scope not in allowed_canary_scopes:
+                logger.warning(
+                    "screening canary skipped agent_id=%s revision=%s scope=%s "
+                    "instance_id=%s reason=scope_mismatch",
+                    agent.agent_id,
+                    canary_review_settings_revision,
+                    canary_settings.scope,
+                    instance_id,
+                )
+                continue
             if (
-                canary_settings.scope not in allowed_canary_scopes
-                or parsed_canary_settings.mode != "enforce"
+                parsed_canary_settings.mode != "enforce"
                 or not parsed_canary_settings.l3_enabled
                 or parsed_canary_settings.adjudicator_mode != "enforce"
             ):
+                logger.warning(
+                    "screening canary skipped agent_id=%s revision=%s scope=%s "
+                    "instance_id=%s reason=posture_mismatch",
+                    agent.agent_id,
+                    canary_review_settings_revision,
+                    canary_settings.scope,
+                    instance_id,
+                )
                 continue
             attempt_review_settings_binding = (
                 canary_settings.revision,

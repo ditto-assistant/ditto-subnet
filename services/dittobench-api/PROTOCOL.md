@@ -7,6 +7,26 @@ starter kit **byte-for-byte**.
 
 All payloads are JSON over HTTP.
 
+## Bench v14 declarative over-call contract
+
+V14 preserves v2–v13 scoring, including v13's whole-case declarative exclusion.
+Each observed `conversational-declarative` case counts in v14's memory over-call
+rate. Only `save_memory`, `update_memory`, and `delete_memory` are authorized
+persistence actions on that category; memory reads and no calls are unpenalized.
+Unrelated actions, alone or mixed with persistence calls, count once per case.
+Lifecycle-write cases remain outside the rate at every version.
+
+The generator identity is v14; the harness wire stays 9. Score gates, trusted
+efficiency, and LongMem/confirmation retain their prior contracts and postures.
+Capabilities add optional `v14_scored_runtime_env`, whose digest includes version
+14 and the binary source revision. The existing `scored_runtime_env` packet
+continues to describe version 13 with identical canonical bytes. Each slot's
+schema pins its own `bench_version`, so a validator ignores a packet placed in
+the other version's slot. Platform requires the v14 packet for v14 fleet
+readiness and v14 canary issuance. No scorer image or version is
+activated by capability advertisement. See
+[the rollout plan](../../docs/benchmark-v14-rollout.md).
+
 ## Benchmark-version negotiation (validator control plane)
 
 The benchmark contract is a deliberate input, never inferred from a dataset
@@ -97,6 +117,11 @@ historical fixed `medium` contract. The variable-strategy route is a distinct
 reviewed identity, `openrouter-route-6a097486af3c178d-v1`; a v9 scorer rejects
 the fixed-medium v7/v8 profile `openrouter-route-a471cd87ae7df5b9-v1` even
 though both serve the same model.
+
+Every other chat request field is forwarded, pinned, dropped, or refused as
+listed in the miner guide's
+[inference request contract](../../docs/MINER.md#inference-request-contract)
+(machine-readable: `docs/inference-request-fields.json`).
 
 ### Seeded tool catalog (v13)
 
@@ -1007,13 +1032,14 @@ marked incomplete (`TestClaimSpanCaptureBooksHarnessAndCompletionSpans`
 (#1849), `TestClaimSpanCaptureBoundsCompletionsPerCase` (#1849)).
 
 **The published normaliser.** Both sides pass every span through
-`scoregates.NormalizeSpan` — Unicode NFKC, casefold, markdown/label stripping
+`scoregates.NormalizeSpan` — combining marks dropped and Unicode NFKC
+(`José` → `jose`), casefold, markdown/label stripping
 (emphasis, code fences, headings, list markers, `ANSWER:`-style labels),
 punctuation folded to spaces except `$ . , -` inside numbers, whitespace
-collapsed — then tokenize with the Bench v12 value-token rule
-(`scoregates.ValueTokenHashes`): every `CanonicalNumber` (strip `$` and
+collapsed — then tokenize with `scoregates.SpanTokens`, the Bench v12
+value-token rule widened to every script: every `CanonicalNumber` (strip `$` and
 grouping commas, drop trailing fractional zeros and leading zeros) plus every
-lowercase alphanumeric token of at least 4 characters. `$4,110.67`,
+lowercase letter/digit run of at least 4 characters. `$4,110.67`,
 `4110.67 dollars`, `**Answer:** $4110.67`, `{"answer":"4110.67"}` and
 `４１１０.６７` all yield the single claim token `4110.67`; `411067` does not.
 Miners run the same functions locally; the vectors are published in

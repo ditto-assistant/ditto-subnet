@@ -75,7 +75,9 @@ dittobench_gh_token_file: "{{ ditto_secrets | default('/opt/ditto/secrets') }}/d
 
 # A single GitHub token (fine-grained PAT or App token) with READ on
 # ditto-assistant/{dittobench-api, ditto-subnet, ditto-harness}. Used to clone
-# this repo + the subnet worker over HTTPS AND as the BuildKit gh_token above.
+# this repo + the subnet worker over HTTPS, and by the sandbox's host-side git
+# askpass helper when dittobench_private_harness_dep is set. It never reaches a
+# docker build.
 # Provisioned out-of-band into Secret Manager by the key owner (see the runbook).
 dittobench_gh_token_secret: validator-gh-token
 

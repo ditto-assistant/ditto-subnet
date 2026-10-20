@@ -29,6 +29,10 @@ validator_stack_subtensor_network: finney
 validator_stack_disk_percent_ceiling: 90
 validator_stack_memory_percent_ceiling: 90
 validator_stack_cpu_percent_ceiling: 0
+# Scorer control-plane auth posture (shadow | enforce). This role always renders
+# a per-host broker token, so enforce is safe here once the shadow
+# would-reject logs are quiet; shadow keeps today's behavior.
+validator_stack_control_auth_mode: shadow
 
 # Dedicated coding execution remains independently double-gated. Identity
 # staging verifies only pre-positioned root-owned files; Ansible never copies
@@ -63,3 +67,10 @@ validator_stack_uv_bin: /usr/local/bin/uv
 # band, then update every copy; infra/ansible/tests/test_docker_apt_key_pin.py
 # keeps them identical.
 docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
+
+# Gamma uses only a pre-positioned public offline approval. No signing material
+# is read or copied by this profile and ordinary validators remain unarmed.
+validator_stack_treasury_guard_enabled: false
+validator_stack_treasury_approval_path: /var/lib/ditto-validator/treasury/emission-approval.json
+validator_stack_treasury_policy_digest: ""
+validator_stack_treasury_collector_policy_digest: ""

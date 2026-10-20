@@ -1,0 +1,132 @@
+.gamma-page {
+  max-width: 1120px;
+}
+.gamma-intro {
+  margin-bottom: 36px;
+}
+.gamma-intro h2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 28px;
+}
+.gamma-beta {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.gamma-page p {
+  max-width: 72ch;
+  line-height: 1.6;
+}
+.gamma-page section {
+  border-top: 1px solid var(--border);
+  padding: 28px 0;
+}
+.gamma-page h3 {
+  font-size: 19px;
+  margin-bottom: 16px;
+}
+.gamma-section-title {
+  display: flex;
+  gap: 20px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.gamma-section-title span,
+.gamma-caption {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.gamma-notice {
+  padding: 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+}
+.gamma-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 36px;
+  margin: 24px 0 12px;
+}
+.gamma-split dt,
+.gamma-wallets dt {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.gamma-split dd {
+  margin: 6px 0 0;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.gamma-table-scroll {
+  overflow-x: auto;
+  margin-top: 24px;
+}
+.gamma-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.gamma-table caption {
+  text-align: left;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.gamma-table th,
+.gamma-table td {
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.gamma-table th {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.gamma-table td small {
+  display: block;
+  color: var(--text-dim);
+  margin-top: 5px;
+}
+.gamma-address {
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.gamma-wallets dl > div {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.gamma-wallets dd {
+  margin: 0;
+}
+.gamma-rule {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.gamma-rule span {
+  margin-left: 12px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .gamma-section-title {
+    align-items: start;
+    flex-direction: column;
+    gap: 0;
+  }
+  .gamma-wallets dl > div {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+  .gamma-table th,
+  .gamma-table td {
+    min-width: 135px;
+  }
+}

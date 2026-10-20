@@ -56,6 +56,11 @@ run Terraform.
 
 ## The `sn118-preview-base` image
 
+`enable_preview_bake` defaults to false. The observed live state serial 4
+contains none of the staged bake SA/compute/WIF prerequisites; the checked-in
+production intent preserves this absence. Separately review and enable all
+three before configuring or running the bake workflow.
+
 **Bake preview base image** (`.github/workflows/preview-base-bake.yml`) runs
 nightly and on dispatch. It boots one throwaway VM on stock Ubuntu, lets
 `preview/cloud/startup.sh` install the toolchain and hand off to
@@ -85,6 +90,22 @@ To put previews on the baked image, set `GCP_PREVIEW_IMAGE_FAMILY` to
 `sn118-preview-base` and `GCP_PREVIEW_IMAGE_PROJECT` to this project on the
 `preview-stack` environment. Unsetting them reverts to stock Ubuntu with no
 other change.
+
+## Isolated collector custody backend bootstrap
+
+This existing root owns two additive, conditional state-bucket grants for
+the already-existing Terraform plan service account. They permit locking only
+`gcp-collector-custody/default.tflock` and creating only the initial
+`gcp-collector-custody/default.tfstate`. They do not permit overwriting/deleting
+state, except releasing the lock, and do not add payload or runtime access.
+`enable_collector_custody_backend=true` is the reviewed public bootstrap intent.
+Custody resources themselves have one owner in `gcp-collector-custody`.
+
+The first protected full preview plan must contain only these two IAM creations,
+with all sixteen existing managed preview resources unchanged. The workflow
+checks that scope before sealing and again after checksum verification before
+apply. Keep the private binary plan/hash and inspect actual drift; source/tests
+do not establish that a real plan is safe to apply. No targeted or local apply.
 
 **A baked image raises the floor on `GCP_PREVIEW_DISK_SIZE`.** A custom image
 reports `diskSizeGb` equal to the disk it was captured from, and

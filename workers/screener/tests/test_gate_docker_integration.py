@@ -31,6 +31,39 @@ from ditto_screener.policy import (
     load_policy_engine,
 )
 
+_STARTER_KIT = Path(__file__).resolve().parents[3] / "miners" / "dittobench-starter-kit"
+# The exclusions `dittobench-miner submit` passes to tar
+# (miners/dittobench-starter-kit/src/bin/dittobench-miner.rs). The kit commits
+# `.agents`/`.claude` skill symlinks for local development; a real submission
+# never ships them, and the gate rejects any link with SCR-ARCHIVE-003.
+_STARTER_SUBMIT_EXCLUDES = (
+    "target",
+    ".git",
+    "*.tgz",
+    "*.db",
+    "*.db-*",
+    ".env",
+    ".env.*",
+    ".agents",
+    ".claude",
+)
+
+
+def _package_starter_kit(starter_dir: Path, archive: Path) -> bytes:
+    """Archive the starter kit exactly as `dittobench-miner submit` does."""
+    subprocess.run(
+        [
+            "tar",
+            *(f"--exclude={pattern}" for pattern in _STARTER_SUBMIT_EXCLUDES),
+            "-czf",
+            str(archive),
+            ".",
+        ],
+        cwd=starter_dir,
+        check=True,
+    )
+    return archive.read_bytes()
+
 
 def _tar_gz(files: dict[str, bytes]) -> bytes:
     buffer = io.BytesIO()
@@ -170,6 +203,93 @@ async def _screen_provider_selector_harness(
     return result.outcome, restart_count
 
 
+def _require_starter_kit() -> None:
+    if not (_STARTER_KIT / "Dockerfile").is_file():
+        pytest.skip("the monorepo starter kit is not part of this checkout")
+
+
+def test_starter_package_mirrors_the_kit_submit_excludes() -> None:
+    _require_starter_kit()
+    source = (_STARTER_KIT / "src/bin/dittobench-miner.rs").read_text()
+    match = re.search(r"let excludes = \[(.*?)\];", source, re.DOTALL)
+    assert match is not None, "dittobench-miner submit no longer lists excludes"
+    assert tuple(re.findall(r'"([^"]+)"', match.group(1))) == (_STARTER_SUBMIT_EXCLUDES)
+
+
+async def test_submit_packaged_starter_kit_satisfies_archive_contract(
+    make_config: Any, tmp_path: Path
+) -> None:
+    _require_starter_kit()
+    archive = tmp_path / "dittobench-starter-kit.tar.gz"
+    _package_starter_kit(_STARTER_KIT, archive)
+    with tarfile.open(archive, mode="r:gz") as tar:
+        members = tar.getmembers()
+    names = {member.name.removeprefix("./") for member in members}
+    assert "Dockerfile" in names
+    assert not {name.split("/", 1)[0] for name in names} & {".agents", ".claude"}
+    assert all(member.isfile() or member.isdir() for member in members)
+
+    async with httpx.AsyncClient() as client:
+        gate = BuildGate(
+            make_config(max_tarball_bytes=20 * 1024 * 1024),
+            client,
+            policy=PolicyEngine(CORE_ONLY_MANIFEST),
+            journal=ReviewJournal(None),
+        )
+        assert gate._contract_error(str(archive)) is None
+
+
+async def test_starter_kit_skill_symlink_is_still_rejected_before_docker(
+    make_config: Any, tmp_path: Path
+) -> None:
+    """Packaging the kit correctly must not relax the gate's link rejection."""
+    _require_starter_kit()
+    packaged = tmp_path / "dittobench-starter-kit.tar.gz"
+    _package_starter_kit(_STARTER_KIT, packaged)
+    buffer = io.BytesIO()
+    with (
+        tarfile.open(packaged, mode="r:gz") as source,
+        tarfile.open(fileobj=buffer, mode="w:gz") as linked,
+    ):
+        for member in source:
+            linked.addfile(member, source.extractfile(member))
+        skill = tarfile.TarInfo("./.claude/skills/mine")
+        skill.type = tarfile.SYMTYPE
+        skill.linkname = "../../../../.agents/skills/mine"
+        linked.addfile(skill)
+    tarball = buffer.getvalue()
+    calls: list[list[str]] = []
+
+    def artifact(request: httpx.Request) -> httpx.Response:
+        assert request.url == httpx.URL("https://artifact.test/starter-kit.tar.gz")
+        return httpx.Response(200, content=tarball)
+
+    async def run(args: list[str], **_: Any) -> tuple[int, str]:
+        calls.append(args)
+        return 0, ""
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(artifact)) as client:
+        gate = BuildGate(
+            make_config(max_tarball_bytes=20 * 1024 * 1024),
+            client,
+            policy=PolicyEngine(CORE_ONLY_MANIFEST),
+            journal=ReviewJournal(None),
+        )
+        gate._run = run  # type: ignore[method-assign]
+        result = await gate.screen(
+            agent_id=uuid4(),
+            attempt_id=uuid4(),
+            bench_version=12,
+            miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url="https://artifact.test/starter-kit.tar.gz",
+        )
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.detail.startswith("error[SCR-ARCHIVE-003]"), result.detail
+    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+
+
 @pytest.mark.integration
 async def test_current_starter_kit_builds_and_health_checks_without_run(
     make_config: Any, tmp_path: Path
@@ -182,16 +302,8 @@ async def test_current_starter_kit_builds_and_health_checks_without_run(
     else:
         if not starter_dir_raw:
             pytest.skip("set DITTO_STARTER_KIT_DIR to a current canonical checkout")
-        starter_dir = Path(starter_dir_raw).resolve()
-        archive = tmp_path / "dittobench-starter-kit.tar.gz"
-        with archive.open("wb") as output:
-            subprocess.run(
-                ["git", "-C", str(starter_dir), "archive", "--format=tar.gz", "HEAD"],
-                check=True,
-                stdout=output,
-            )
-        source_archive = archive
-        tarball = archive.read_bytes()
+        source_archive = tmp_path / "dittobench-starter-kit.tar.gz"
+        tarball = _package_starter_kit(Path(starter_dir_raw).resolve(), source_archive)
 
     def artifact(request: httpx.Request) -> httpx.Response:
         assert request.url == httpx.URL("https://artifact.test/starter-kit.tar.gz")
@@ -296,15 +408,10 @@ async def test_current_starter_kit_clears_model_binding_audit(
     starter_dir_raw = os.environ.get("DITTO_STARTER_KIT_DIR")
     if not starter_dir_raw:
         pytest.skip("set DITTO_STARTER_KIT_DIR to a current canonical checkout")
-    starter_dir = Path(starter_dir_raw).resolve()
-    archive = tmp_path / "dittobench-starter-kit-audit.tar.gz"
-    with archive.open("wb") as output:
-        subprocess.run(
-            ["git", "-C", str(starter_dir), "archive", "--format=tar.gz", "HEAD"],
-            check=True,
-            stdout=output,
-        )
-    tarball = archive.read_bytes()
+    tarball = _package_starter_kit(
+        Path(starter_dir_raw).resolve(),
+        tmp_path / "dittobench-starter-kit-audit.tar.gz",
+    )
     pack = tmp_path / "private-control-pack.json"
     pack.write_text(
         json.dumps(
@@ -314,6 +421,9 @@ async def test_current_starter_kit_clears_model_binding_audit(
                         "id": "rotating-private-control",
                         "request": {
                             "case_id": "private-control",
+                            # Packs send the request verbatim; the kit rejects
+                            # the serde-default bench_version 0 before /run.
+                            "bench_version": 12,
                             "system_prompt": "Answer the user concisely.",
                             "user_input": "Return a short acknowledgement.",
                             "tools": [],
@@ -391,22 +501,10 @@ async def test_current_starter_kit_passes_behavioral_oracle(
     else:
         if not starter_dir_raw:
             pytest.skip("set DITTO_STARTER_KIT_ARCHIVE or DITTO_STARTER_KIT_DIR")
-        starter_dir = Path(starter_dir_raw).resolve()
-        archive = tmp_path / "dittobench-starter-kit-oracle.tar.gz"
-        with archive.open("wb") as output:
-            subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(starter_dir),
-                    "archive",
-                    "--format=tar.gz",
-                    "HEAD",
-                ],
-                check=True,
-                stdout=output,
-            )
-        tarball = archive.read_bytes()
+        tarball = _package_starter_kit(
+            Path(starter_dir_raw).resolve(),
+            tmp_path / "dittobench-starter-kit-oracle.tar.gz",
+        )
     # Generous timeout: this asserts the request CONTRACT, not prod timing
     # (the module default of 20s assumes prod-class hardware).
     oracle = BehavioralOracleModule(
@@ -631,21 +729,10 @@ async def test_current_starter_kit_passes_real_default_v7_luna_review(
     key_file = os.environ.get("SCREENER_SOURCE_REVIEW_API_KEY_FILE")
     if not starter_dir_raw or not key_file:
         pytest.skip("set starter-kit directory and protected source-review key")
-    archive = tmp_path / "dittobench-starter-kit-v7.tar.gz"
-    with archive.open("wb") as output:
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(Path(starter_dir_raw).resolve()),
-                "archive",
-                "--format=tar.gz",
-                "HEAD",
-            ],
-            check=True,
-            stdout=output,
-        )
-    tarball = archive.read_bytes()
+    tarball = _package_starter_kit(
+        Path(starter_dir_raw).resolve(),
+        tmp_path / "dittobench-starter-kit-v7.tar.gz",
+    )
 
     def artifact(request: httpx.Request) -> httpx.Response:
         assert request.url == httpx.URL("https://artifact.test/starter-kit.tar.gz")

@@ -426,6 +426,11 @@ class ValidatorConfig:
     http_timeout_seconds: float
     """Per-request timeout for platform + dittobench HTTP calls."""
 
+    treasury_approval_file: str | None = None
+    treasury_approved_policy_digest: str | None = None
+    treasury_collector_policy_digest: str | None = None
+    """Default-absent public proof and two immutable deployment pins; no signer."""
+
     scorer_require_binary_provenance: bool = False
     """Whether the pinned scorer revision must prove its identity from its binary.
 
@@ -699,8 +704,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         os.environ.get("VALIDATOR_PLATFORM_API_URL", "http://localhost:8000"),
     )
     benchmark_capacity = int(os.environ.get("VALIDATOR_BENCHMARK_CAPACITY", "1"))
-    longmem_capacity = int(
-        os.environ.get("VALIDATOR_LONGMEM_CAPACITY", str((benchmark_capacity + 1) // 2))
+    # Compose passes an empty value when the operator sets none; treat it like
+    # unset so a host sized below 7 slots derives a capacity it can accept.
+    longmem_raw = os.environ.get("VALIDATOR_LONGMEM_CAPACITY", "").strip()
+    longmem_capacity = (
+        int(longmem_raw) if longmem_raw else (benchmark_capacity + 1) // 2
     )
     coding_shadow_enabled = (
         os.environ.get("VALIDATOR_CODING_SHADOW_ENABLED", "false").lower() in _truthy
@@ -768,6 +776,18 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         else 10.0
     )
     config = ValidatorConfig(
+        treasury_approval_file=os.environ.get(
+            "DITTO_TREASURY_SHADOW_APPROVAL_FILE", ""
+        ).strip()
+        or None,
+        treasury_approved_policy_digest=os.environ.get(
+            "DITTO_TREASURY_APPROVED_POLICY_DIGEST", ""
+        ).strip()
+        or None,
+        treasury_collector_policy_digest=os.environ.get(
+            "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST", ""
+        ).strip()
+        or None,
         platform_api_url=platform_api_url,
         platform_inference_base_url=(
             os.environ.get("VALIDATOR_PLATFORM_INFERENCE_BASE_URL", "").strip()

@@ -251,9 +251,9 @@ type InferenceProxyConfig struct {
 	TicketConcurrency    int // DB-policy fallback default 16
 	ValidatorConcurrency int // DB-policy fallback default 48
 	GlobalConcurrency    int // DB-policy fallback default 96, cap 128
-	TicketRPM            int // DITTO_INFERENCE_TICKET_RPM, default 240
-	ValidatorRPM         int // DITTO_INFERENCE_VALIDATOR_RPM, default 960
-	GlobalRPM            int // DITTO_INFERENCE_GLOBAL_RPM, default 2880, cap 100000
+	TicketRPM            int // DITTO_INFERENCE_TICKET_RPM, default 1920
+	ValidatorRPM         int // DITTO_INFERENCE_VALIDATOR_RPM, default 7680
+	GlobalRPM            int // DITTO_INFERENCE_GLOBAL_RPM, default 23040, cap 100000
 
 	RequestBodyBytes  int64 // DITTO_INFERENCE_REQUEST_BODY_BYTES, default 4 MiB, max 8 MiB
 	ResponseBodyBytes int64 // DITTO_INFERENCE_RESPONSE_BODY_BYTES, default 2 MiB, max 8 MiB
@@ -545,9 +545,9 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		TicketConcurrency:    16,
 		ValidatorConcurrency: 48,
 		GlobalConcurrency:    96,
-		TicketRPM:            r.intval("DITTO_INFERENCE_TICKET_RPM", 240),
-		ValidatorRPM:         r.intval("DITTO_INFERENCE_VALIDATOR_RPM", 960),
-		GlobalRPM:            r.intval("DITTO_INFERENCE_GLOBAL_RPM", 2880),
+		TicketRPM:            r.intval("DITTO_INFERENCE_TICKET_RPM", 1920),
+		ValidatorRPM:         r.intval("DITTO_INFERENCE_VALIDATOR_RPM", 7680),
+		GlobalRPM:            r.intval("DITTO_INFERENCE_GLOBAL_RPM", 23040),
 
 		RequestBodyBytes:  r.int64val("DITTO_INFERENCE_REQUEST_BODY_BYTES", 4*1024*1024),
 		ResponseBodyBytes: r.int64val("DITTO_INFERENCE_RESPONSE_BODY_BYTES", 2*1024*1024),

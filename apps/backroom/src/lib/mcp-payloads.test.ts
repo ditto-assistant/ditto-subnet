@@ -154,6 +154,21 @@ describe('screening list summaries', () => {
       items: Array<{ attempts: Array<unknown> }>
     }
     expect(full.items[0].attempts).toHaveLength(2)
+
+    const identity = compactScreeningSubmissions(payload, 'identity') as {
+      detail: string
+      items: Array<Record<string, unknown>>
+    }
+    expect(identity.detail).toBe('identity')
+    expect(identity.items[0]).toEqual({
+      agent_id: agentId(1),
+      agent_name: 'screened-agent',
+      agent_version: 2,
+      agent_status: 'screening_failed',
+      submitted_at: '2026-07-25T12:00:00Z',
+      artifact_sha256: 'ab'.repeat(32),
+    })
+    expect(bytes(identity)).toBeLessThan(bytes(summary))
   })
 
   it('replaces quarantine evidence arrays with counts and codes in summary mode', () => {
@@ -579,6 +594,28 @@ describe('compactValidatorFleet', () => {
       stalled: false, purpose: 'canonical_quorum',
     })
     expect(JSON.stringify(member)).not.toContain('private-')
+  })
+
+  it('carries announced host specs and nulls a pre-v32 or malformed block', () => {
+    const specs = {
+      cpu_count: 16,
+      cpu_physical_cores: 8,
+      memory_total_mib: 65_536,
+      disk_total_gib: 500,
+      architecture: 'x86_64',
+    }
+    const payload = validatorFleetObservabilitySchema.parse({
+      generated_at: '2026-10-17T22:00:00Z',
+      validators: [
+        { validator_hotkey: '5' + 'A'.repeat(47), host_specs: specs },
+        { validator_hotkey: '5' + 'B'.repeat(47) },
+        { validator_hotkey: '5' + 'C'.repeat(47), host_specs: { cpu_count: 'many' } },
+      ],
+    })
+    const [announced, legacy, malformed] = compactValidatorFleet(payload).validators
+    expect(announced.host_specs).toEqual(specs)
+    expect(legacy.host_specs).toBeNull()
+    expect(malformed.host_specs).toBeNull()
   })
 
   it('preserves legacy counts and rejects unbound or malformed progress', () => {

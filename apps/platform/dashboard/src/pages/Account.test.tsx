@@ -384,6 +384,176 @@ describe("gate notes (#1852)", () => {
   });
 });
 
+function json(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+describe("screening review outcome (#1249)", () => {
+  const session = {
+    token: "ditto_ms_abc",
+    hotkey: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    scopes: ["read"],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  };
+  const agentId = "5fdadd33-bd0f-492d-ba71-49bef159f069";
+
+  async function openFeedback(attempts: unknown[]) {
+    localStorage.setItem("ditto.miner.session.v1", JSON.stringify(session));
+    const { setMinerSession } = await import("../stores/sessionStore");
+    setMinerSession(session);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me")) {
+        return json({
+          session: {
+            miner_hotkey: session.hotkey,
+            scopes: ["read"],
+            expires_at: session.expiresAt,
+            expires_in: 3600,
+          },
+          profile: {},
+          profile_url: "/miner/" + session.hotkey,
+          commands: [],
+        });
+      }
+      if (url.endsWith("/me/submissions")) {
+        return json([
+          { agent_id: agentId, name: "alpha", status: "quarantined", created_at: "2026-09-28" },
+        ]);
+      }
+      if (url.endsWith("/me/reviews")) return json({ reviews: [] });
+      if (url.endsWith("/screening-feedback")) {
+        return json({
+          agent_id: agentId,
+          miner_hotkey: session.hotkey,
+          agent_status: "quarantined",
+          attempts,
+        });
+      }
+      return new Response("[]", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(() => <ReviewsPage />);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Signed in");
+    });
+    const submissionsTab = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "submissions",
+    );
+    fireEvent.click(submissionsTab as HTMLButtonElement);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("alpha");
+    });
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (item) => item.textContent?.trim() === "Screening feedback",
+    );
+    fireEvent.click(button as HTMLButtonElement);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("policy v13");
+    });
+    return fetchMock;
+  }
+
+  const attempt = {
+    attempt_id: "0b8c4d1e-0000-4000-8000-000000000001",
+    status: "quarantined",
+    policy_version: 13,
+    started_at: "2026-09-28T00:00:00Z",
+    public_reason: "Submission held for anti-cheat review",
+  };
+
+  it("shows only the bounded outcome with fixed neutral next-step copy", async () => {
+    const fetchMock = await openFeedback([
+      { ...attempt, review_outcome: { outcome: "rejected", next_step: "resubmit_after_fix" } },
+      {
+        ...attempt,
+        attempt_id: "0b8c4d1e-0000-4000-8000-000000000002",
+        review_outcome: { outcome: "held_for_operator_review", next_step: "await_operator_review" },
+      },
+      {
+        ...attempt,
+        attempt_id: "0b8c4d1e-0000-4000-8000-000000000003",
+        review_outcome: { outcome: "cleared", next_step: "none" },
+      },
+      {
+        ...attempt,
+        attempt_id: "0b8c4d1e-0000-4000-8000-000000000004",
+        review_outcome: { outcome: "rejected", next_step: "contact_operators" },
+      },
+    ]);
+    const outcomes = Array.from(document.querySelectorAll(".account-review-outcome")).map(
+      (node) => node.textContent,
+    );
+    expect(outcomes).toEqual([
+      "Source review rejected this submission. Fix the submission and upload a new one, or appeal from the submission page.",
+      "Source review is holding this submission for an operator. No action needed now; an operator will decide.",
+      "Source review cleared this submission. No action needed.",
+      "Source review rejected this submission. Contact the subnet operators for next steps.",
+    ]);
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).endsWith("/screening-feedback"));
+    const headers = new Headers((call?.[1] as RequestInit | undefined)?.headers);
+    expect(headers.get("authorization")).toBe("Bearer ditto_ms_abc");
+  });
+
+  it("renders an older cached shape with a line-only note and no citations without leaking it", async () => {
+    // The pre-#1249-rework response carried notes and the court decision.
+    // A line-only note and an adjudication without ``citations`` must neither
+    // crash the panel nor be shown: that evidence is operator-side now.
+    await openFeedback([
+      {
+        ...attempt,
+        review_notes: [
+          {
+            kind: "observation",
+            category: "prompt_shape_probe",
+            path: null,
+            line: 9191,
+            summary: "Line-only observation about a request classifier",
+          },
+        ],
+        adjudication: {
+          decision: "reject",
+          reason: "The lookup answers without the model.",
+          reject_invariant: "i8_evaluation_independence",
+        },
+      },
+      {
+        ...attempt,
+        attempt_id: "0b8c4d1e-0000-4000-8000-000000000002",
+        status: "failed",
+        review_outcome: { outcome: "cleared", next_step: "none" },
+      },
+    ]);
+    const text = document.body.textContent ?? "";
+    // Both attempts rendered: the first did not abort the list.
+    expect(text).toContain("policy v13 · quarantined");
+    expect(text).toContain("policy v13 · failed");
+    expect(text).toContain("Source review cleared this submission. No action needed.");
+    expect(document.querySelectorAll(".account-review-outcome")).toHaveLength(1);
+    for (const hidden of [
+      "Line-only observation",
+      "prompt_shape_probe",
+      "9191",
+      "The lookup answers without the model.",
+      "i8_evaluation_independence",
+      "Cited",
+    ]) {
+      expect(text).not.toContain(hidden);
+    }
+  });
+
+  it("renders nothing for an outcome value this dashboard does not know", async () => {
+    await openFeedback([
+      { ...attempt, review_outcome: { outcome: "future_value", next_step: "none" } },
+    ]);
+    expect(document.querySelectorAll(".account-review-outcome")).toHaveLength(0);
+    expect(document.body.textContent).toContain("policy v13 · quarantined");
+  });
+});
+
 describe("Ditto account link", () => {
   const session = {
     token: "ditto_ms_abc",
@@ -551,5 +721,172 @@ describe("Ditto account link", () => {
     await waitFor(() => {
       expect(document.body.textContent).toContain("Linking is not enabled on this deployment yet.");
     });
+  });
+});
+
+describe("submission versions and private downloads (#2867)", () => {
+  const session = {
+    token: "ditto_ms_owner",
+    hotkey: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    scopes: ["download", "read"],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  };
+  const agentId = "5fdadd33-bd0f-492d-ba71-49bef159f069";
+
+  async function openSubmissions(download: () => Promise<Response>, canDownload = true) {
+    const { setMinerSession } = await import("../stores/sessionStore");
+    setMinerSession(session);
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...location, assign });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me"))
+        return json({
+          session: {
+            miner_hotkey: session.hotkey,
+            scopes: canDownload ? ["download", "read"] : ["read"],
+            expires_at: session.expiresAt,
+            expires_in: 3600,
+          },
+          profile: {},
+          profile_url: "/miner/" + session.hotkey,
+          commands: [],
+        });
+      if (url.endsWith("/me/submissions"))
+        return json([
+          {
+            agent_id: agentId,
+            name: "alpha",
+            version: 7,
+            status: "rejected",
+            created_at: "2026-10-13T00:00:00Z",
+          },
+          {
+            agent_id: "00000000-0000-4000-8000-000000000001",
+            name: "legacy",
+            version: null,
+            status: "quarantined",
+            created_at: "2026-07-13T00:00:00Z",
+          },
+          {
+            agent_id: "00000000-0000-4000-8000-000000000002",
+            name: "older API",
+            status: "scored",
+            created_at: "2026-07-12T00:00:00Z",
+          },
+        ]);
+      if (url.endsWith("/me/reviews")) return json({ reviews: [] });
+      if (url.endsWith("/artifact")) return download();
+      return json([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(() => <ReviewsPage />);
+    const tab = await waitFor(() => {
+      const button = Array.from(document.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "submissions",
+      );
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    fireEvent.click(tab);
+    const button = await waitFor(() => {
+      const found = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Download submitted source for alpha"]',
+      );
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    return { button, assign, fetchMock };
+  }
+
+  it("shows submission revisions and a legacy fallback alongside time", async () => {
+    await openSubmissions(async () => json({}));
+    const rows = Array.from(document.querySelectorAll(".account-list > li"));
+    expect(rows[0]?.textContent).toContain("v7 · rejected · 2026-10-13T00:00:00Z");
+    expect(rows[1]?.textContent).toContain("Unversioned · quarantined · 2026-07-13T00:00:00Z");
+    expect(rows[2]?.textContent).toContain("Unversioned · scored");
+    expect(document.querySelectorAll(".account-submission-download button")).toHaveLength(3);
+  });
+
+  it("requests the owner's link with the bearer and starts an attachment download", async () => {
+    const url = "https://storage.example/owner-source?signature=private";
+    const { button, assign, fetchMock } = await openSubmissions(async () =>
+      json({ download_url: url }),
+    );
+    fireEvent.click(button);
+    await waitFor(() => expect(assign).toHaveBeenCalledWith(url));
+    const calls = fetchMock.mock.calls.filter((call) => String(call[0]).endsWith("/artifact"));
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0]?.[0])).toContain("/me/agents/" + agentId + "/artifact");
+    const init = calls[0]?.[1] as RequestInit;
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer ditto_ms_owner");
+    expect(init.cache).toBe("no-store");
+    expect(document.body.textContent).toContain(
+      "Download started. The private link expires in five minutes.",
+    );
+  });
+
+  it("disables only the selected row while preparing a link", async () => {
+    let resolve!: (response: Response) => void;
+    const pending = new Promise<Response>((done) => {
+      resolve = done;
+    });
+    const { button, assign, fetchMock } = await openSubmissions(() => pending);
+    fireEvent.click(button);
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toBe("Preparing download…");
+    const other = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Download submitted source for legacy"]',
+    );
+    expect(other?.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(
+      fetchMock.mock.calls.filter((call) => String(call[0]).endsWith("/artifact")),
+    ).toHaveLength(1);
+    resolve(json({ download_url: "https://storage.example/source" }));
+    await waitFor(() => expect(assign).toHaveBeenCalledOnce());
+    expect(button.disabled).toBe(false);
+  });
+
+  it("shows a failed request and permits a retry without navigating", async () => {
+    let attempt = 0;
+    const { button, assign } = await openSubmissions(async () => {
+      attempt++;
+      return attempt === 1
+        ? new Response(JSON.stringify({ detail: "invalid or expired miner session" }), {
+            status: 401,
+          })
+        : json({ download_url: "https://storage.example/source" });
+    });
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("invalid or expired miner session"),
+    );
+    expect(assign).not.toHaveBeenCalled();
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(assign).toHaveBeenCalledOnce());
+    expect(document.body.textContent).not.toContain("invalid or expired miner session");
+  });
+
+  it("prompts an older read-only session to sign in with Download enabled", async () => {
+    const { button, fetchMock, assign } = await openSubmissions(async () => json({}), false);
+    expect(button.disabled).toBe(true);
+    expect(document.body.textContent).toContain(
+      "Sign in again with Download enabled to get your source.",
+    );
+    fireEvent.click(button);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/artifact"))).toBe(false);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing credential without navigating", async () => {
+    const { button, assign } = await openSubmissions(async () => json({}));
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("The download link is missing. Try again."),
+    );
+    expect(assign).not.toHaveBeenCalled();
+    expect(button.disabled).toBe(false);
   });
 });

@@ -7,7 +7,6 @@
 # --- GCP placement ---
 gcp_project: ditto-app-dev
 gcp_region: us-central1
-gcp_zone: us-central1-a
 
 # --- Connection over IAP (the VM has no public IP; SSH via the IAP tunnel) ---
 # Mirrors group_vars/role_validator.yml. Set GCP_OSLOGIN_USER to your OS Login

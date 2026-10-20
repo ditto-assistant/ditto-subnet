@@ -40,8 +40,8 @@
 //!
 //! ======================= BENCH V13 HONEST ARCHITECTURE =====================
 //! Bench v13 grades the prose and adds relay-observed gates (see `v13.rs`
-//! and PROTOCOL.md "Bench v13"). The kit stays inside every gate by
-//! construction, and each rule below is the line a rewrite would cross:
+//! and PROTOCOL.md "Bench v13"). The default served path leaves the wire
+//! system prompt intact and lets the model decide how to answer and act:
 //!
 //!  * The model's value is served as the model wrote it. The `answer` slot is
 //!    only ever a verbatim substring of `final_text` (`v13::answer_slot_from_prose`);
@@ -52,31 +52,28 @@
 //!    wire stays at bench 9, so a default-on slot would change live v12
 //!    grading (an authoritative slot has no prose fallback).
 //!  * The graded value is never written into a harness-authored span. The
-//!    system prompt carries a values-free policy (`v13::HARNESS_POLICY_PROMPT`);
-//!    retrieved memory is injected by the harness library as `/seed`-derived
-//!    context, which the causal gate exempts. (`answer_in_prompt`.)
+//!    harness passes through the wire system prompt; retrieved memory is
+//!    injected by the harness library as `/seed`-derived context, which the
+//!    causal gate exempts. (`answer_in_prompt`.)
 //!  * The whole catalog is offered on every turn, including the deciding one.
 //!    The documented preloading example (`DITTOBENCH_PRELOAD_TOP_K`) trims by
 //!    the PUBLISHED embedding and always retains its top-3, which is the
 //!    safe harbor. Restraint is the model's choice: a model-emitted call is
 //!    always executed, never swallowed. (`restraint_without_offer`,
 //!    `expected_tool_not_offered`, `swallowed_model_call`.)
-//!  * Clarifying questions and declines come from the model, name the missing
-//!    detail, and cite what memory search found. The stock harness leaves the
-//!    optional `abstain` field absent; prose is never converted into a wire flag.
-//!  * Runtime-described options (`set_accent_color`, `set_chat_font`) are
-//!    solved list-then-act: the model calls `discover_capabilities`, reads the
-//!    served inventory, and passes one listed spelling; a near-miss is decided
-//!    by the qualifier the user used. The mock's "unknown option" error is fed
-//!    back to the model to recover, never patched on the host.
+//!  * Clarifying questions and declines come from the model. The stock harness
+//!    leaves the optional `abstain` field absent; prose is never converted into
+//!    a wire flag. Available tool schemas and results go to the model without
+//!    a host-side option registry or argument repair.
 //!
 //! `scripts/local-rehearsal.py --gates` replays the public rules against a
 //! local run and prints per-case notes before you upload.
 //!
 //! =========================================================================
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Context;
@@ -114,26 +111,49 @@ struct ToolExecCtx {
     case_id: String,
     user_id: String,
     hop: AtomicI32,
+    effect_receipts_v1: bool,
+    pending_effects: Mutex<HashMap<(String, String), String>>,
+    blocked_tool_calls: Mutex<Vec<protocol::BlockedToolCall>>,
 }
 
-const MAX_OBSERVED_TOOL_ATTEMPTS: usize = 2;
+impl ToolExecCtx {
+    fn reserve_legacy_effect(&self, key: &(String, String)) -> bool {
+        let mut pending = self
+            .pending_effects
+            .lock()
+            .expect("pending tool effects lock");
+        if pending.contains_key(key) {
+            return false;
+        }
+        pending.insert(key.clone(), "legacy-delivery-unknown".to_string());
+        true
+    }
 
-fn is_retryable_tool_error(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    error.contains("retry")
-        || error.contains("transient")
-        || error.contains("temporary")
-        || error.contains("429")
-        || error.contains("502")
-        || error.contains("503")
-        || error.contains("504")
-}
+    fn operation_for(&self, key: &(String, String)) -> String {
+        self.pending_effects
+            .lock()
+            .expect("pending tool effects lock")
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+    }
 
-fn is_retryable_tool_status(status: reqwest::StatusCode) -> bool {
-    status == reqwest::StatusCode::TOO_MANY_REQUESTS
-        || status == reqwest::StatusCode::BAD_GATEWAY
-        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
-        || status == reqwest::StatusCode::GATEWAY_TIMEOUT
+    fn mark_unknown(&self, key: &(String, String), operation_id: &str) {
+        self.pending_effects
+            .lock()
+            .expect("pending tool effects lock")
+            .insert(key.clone(), operation_id.to_string());
+    }
+
+    fn resolve_effect(&self, key: &(String, String), operation_id: &str) {
+        let mut pending = self
+            .pending_effects
+            .lock()
+            .expect("pending tool effects lock");
+        if pending.get(key).is_some_and(|id| id == operation_id) {
+            pending.remove(key);
+        }
+    }
 }
 
 /// A catalog tool built from a wire tool definition. It exposes the case's
@@ -169,54 +189,125 @@ impl Tool for WireTool {
     }
 
     async fn execute(&self, args: Value) -> HarnessResult<Value> {
-        // Observed execution: execute for real through the validator's mock endpoint.
+        // A new model-emitted effect gets one operation identity. Under V1,
+        // an uncertain effect keeps that identity for a later matching model
+        // emission; a verified result releases it so an intentional repeat is
+        // a separate effect. Same-emission transport retries retain the hop.
         if let Some(ctx) = &self.exec {
-            for attempt in 0..MAX_OBSERVED_TOOL_ATTEMPTS {
-                let hop = ctx.hop.fetch_add(1, Ordering::SeqCst);
-                let body = protocol::ToolExecRequest {
-                    case_id: ctx.case_id.clone(),
-                    user_id: ctx.user_id.clone(),
-                    name: self.def.name.clone(),
-                    args: args.clone(),
-                    hop,
-                };
+            let key = (
+                self.def.name.clone(),
+                serde_json::to_string(&args).expect("JSON arguments serialize"),
+            );
+            // The legacy endpoint has no receipt proving whether a failed POST
+            // applied an effect. Reserve before sending so even concurrent
+            // identical model emissions cannot duplicate an unknown effect.
+            if !ctx.effect_receipts_v1 && !ctx.reserve_legacy_effect(&key) {
+                ctx.blocked_tool_calls
+                    .lock()
+                    .expect("blocked tool calls lock")
+                    .push(protocol::BlockedToolCall {
+                        name: self.def.name.clone(),
+                        args: args.clone(),
+                        state: "blocked_before_execution".to_string(),
+                    });
+                return Ok(
+                    json!({"error": "tool effect delivery unknown; cannot safely repeat without a receipt"}),
+                );
+            }
+            let effect_key = ctx.effect_receipts_v1.then_some(key.clone());
+            let operation_id = effect_key.as_ref().map(|key| ctx.operation_for(key));
+            let mark_unknown = || {
+                if let (Some(key), Some(id)) = (&effect_key, &operation_id) {
+                    ctx.mark_unknown(key, id);
+                }
+            };
+            let resolve_effect = || {
+                if let (Some(key), Some(id)) = (&effect_key, &operation_id) {
+                    ctx.resolve_effect(key, id);
+                }
+            };
+            let body = protocol::ToolExecRequest {
+                case_id: ctx.case_id.clone(),
+                user_id: ctx.user_id.clone(),
+                name: self.def.name.clone(),
+                args,
+                hop: ctx.hop.fetch_add(1, Ordering::SeqCst),
+                operation_id: operation_id.clone(),
+                effect_protocol: ctx
+                    .effect_receipts_v1
+                    .then(|| protocol::TOOL_EFFECT_PROTOCOL_V1.to_string()),
+            };
+            let max_attempts = if ctx.effect_receipts_v1 { 2 } else { 1 };
+            for attempt in 0..max_attempts {
                 match ctx.client.post(&ctx.endpoint).json(&body).send().await {
                     Ok(resp) => {
                         let status = resp.status();
                         if !status.is_success() {
-                            let response_body = resp.text().await.unwrap_or_default();
-                            if attempt + 1 < MAX_OBSERVED_TOOL_ATTEMPTS
-                                && is_retryable_tool_status(status)
-                            {
+                            if ctx.effect_receipts_v1 && status.is_server_error() && attempt == 0 {
                                 continue;
                             }
+                            let response_body = resp.text().await.unwrap_or_default();
+                            if ctx.effect_receipts_v1 {
+                                mark_unknown();
+                                return Ok(json!({
+                                    "error": format!("tool effect delivery unknown: endpoint returned {status}: {response_body}")
+                                }));
+                            }
                             return Ok(json!({
-                                "error": format!(
-                                    "tool endpoint returned {status}: {response_body}"
-                                )
+                                "error": format!("tool endpoint returned {status}: {response_body}")
                             }));
                         }
                         match resp.json::<protocol::ToolExecResponse>().await {
-                            Ok(r) if !r.result.is_empty() => {
-                                return Ok(json!({ "result": r.result }));
-                            }
-                            Ok(r) if !r.error.is_empty() => {
-                                if attempt + 1 < MAX_OBSERVED_TOOL_ATTEMPTS
-                                    && is_retryable_tool_error(&r.error)
-                                {
-                                    continue;
+                            Ok(r) => {
+                                if ctx.effect_receipts_v1 {
+                                    if r.operation_id != operation_id {
+                                        mark_unknown();
+                                        return Ok(
+                                            json!({ "error": "tool receipt operation mismatch" }),
+                                        );
+                                    }
+                                    match r.effect_state.as_deref() {
+                                        Some("applied") => resolve_effect(),
+                                        Some("not_applied") => {
+                                            resolve_effect();
+                                            return Ok(json!({
+                                                "error": if r.error.is_empty() { "tool effect not applied" } else { &r.error }
+                                            }));
+                                        }
+                                        _ => {
+                                            mark_unknown();
+                                            return Ok(
+                                                json!({ "error": "tool effect delivery unknown" }),
+                                            );
+                                        }
+                                    }
                                 }
-                                return Ok(json!({ "error": r.error }));
-                            }
-                            Ok(_) => {
+                                if !ctx.effect_receipts_v1
+                                    && !r.result.is_empty()
+                                    && r.error.is_empty()
+                                {
+                                    ctx.resolve_effect(&key, "legacy-delivery-unknown");
+                                }
+                                if !r.result.is_empty() {
+                                    return Ok(json!({ "result": r.result }));
+                                }
+                                if !r.error.is_empty() {
+                                    return Ok(json!({ "error": r.error }));
+                                }
                                 return Ok(json!({
-                                    "error": format!(
-                                        "tool endpoint returned an empty result for {}",
-                                        self.def.name
-                                    )
+                                    "error": format!("tool endpoint returned an empty result for {}", self.def.name)
                                 }));
                             }
                             Err(err) => {
+                                if ctx.effect_receipts_v1 && attempt == 0 {
+                                    continue;
+                                }
+                                if ctx.effect_receipts_v1 {
+                                    mark_unknown();
+                                    return Ok(json!({
+                                        "error": format!("tool effect delivery unknown: decode tool result: {err}")
+                                    }));
+                                }
                                 return Ok(
                                     json!({ "error": format!("decode tool result: {err}") }),
                                 );
@@ -224,16 +315,26 @@ impl Tool for WireTool {
                         }
                     }
                     Err(err) => {
+                        if ctx.effect_receipts_v1 && attempt == 0 {
+                            continue;
+                        }
+                        if ctx.effect_receipts_v1 {
+                            mark_unknown();
+                            return Ok(json!({
+                                "error": format!("tool effect delivery unknown: endpoint unreachable: {err}")
+                            }));
+                        }
                         return Ok(json!({ "error": format!("tool endpoint unreachable: {err}") }));
                     }
                 }
             }
-            return Ok(json!({ "error": "tool endpoint retry budget exhausted" }));
+            unreachable!("bounded tool effect attempts always return")
+        } else {
+            Ok(json!({
+                "status": "ok",
+                "note": "stub result from the practice harness; provide tool_endpoint (observed execution) or a real Tool to execute",
+            }))
         }
-        Ok(json!({
-            "status": "ok",
-            "note": "stub result from the practice harness; provide tool_endpoint (observed execution) or a real Tool to execute",
-        }))
     }
 }
 
@@ -309,7 +410,90 @@ mod tool_exec_tests {
             case_id: "case-123".to_string(),
             user_id: "scored-user".to_string(),
             hop: AtomicI32::new(0),
+            effect_receipts_v1: false,
+            pending_effects: Mutex::new(HashMap::new()),
+            blocked_tool_calls: Mutex::new(Vec::new()),
         })
+    }
+
+    async fn applied_but_first_response_lost(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> (StatusCode, Json<protocol::ToolExecResponse>) {
+        let attempt = {
+            let mut calls = calls.lock().expect("lock calls");
+            calls.push(call.clone());
+            calls.len()
+        };
+        if attempt == 1 {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(Default::default()));
+        }
+        (
+            StatusCode::OK,
+            Json(protocol::ToolExecResponse {
+                result: "effect applied once".to_string(),
+                operation_id: call.operation_id,
+                effect_state: Some("applied".to_string()),
+                replayed: true,
+                ..Default::default()
+            }),
+        )
+    }
+
+    async fn mismatched_applied_receipt(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> Json<protocol::ToolExecResponse> {
+        calls.lock().expect("lock calls").push(call);
+        Json(protocol::ToolExecResponse {
+            result: "untrusted result".to_string(),
+            operation_id: Some("different-operation-0001".to_string()),
+            effect_state: Some("applied".to_string()),
+            ..Default::default()
+        })
+    }
+
+    async fn effect_applied_but_receipt_unavailable(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> StatusCode {
+        calls.lock().expect("lock calls").push(call);
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+
+    async fn successful_legacy_result(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> Json<protocol::ToolExecResponse> {
+        calls.lock().expect("lock calls").push(call);
+        Json(protocol::ToolExecResponse {
+            result: "effect applied".to_string(),
+            ..Default::default()
+        })
+    }
+
+    async fn receipt_available_on_later_model_emission(
+        State(calls): State<Arc<Mutex<Vec<protocol::ToolExecRequest>>>>,
+        Json(call): Json<protocol::ToolExecRequest>,
+    ) -> (StatusCode, Json<protocol::ToolExecResponse>) {
+        let attempt = {
+            let mut calls = calls.lock().expect("lock calls");
+            calls.push(call.clone());
+            calls.len()
+        };
+        if attempt <= 2 {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(Default::default()));
+        }
+        (
+            StatusCode::OK,
+            Json(protocol::ToolExecResponse {
+                result: "effect applied".to_string(),
+                operation_id: call.operation_id,
+                effect_state: Some("applied".to_string()),
+                replayed: attempt == 3,
+                ..Default::default()
+            }),
+        )
     }
 
     fn wire_tool(exec: Arc<ToolExecCtx>) -> WireTool {
@@ -323,9 +507,10 @@ mod tool_exec_tests {
         }
     }
 
-    async fn assert_transient_recovery(
+    async fn assert_transient_not_replayed(
         app: Router,
         calls: Arc<Mutex<Vec<protocol::ToolExecRequest>>>,
+        expected_error: &str,
     ) {
         let (endpoint, task) = serve(app).await;
         let result = wire_tool(exec_context(endpoint))
@@ -334,33 +519,224 @@ mod tool_exec_tests {
             .expect("execute tool");
         task.abort();
 
-        assert_eq!(
-            result["result"],
-            "Top result: the Veltrix index reached 4,218 points."
-        );
+        assert!(result["error"].as_str().unwrap().contains(expected_error));
         let calls = calls.lock().expect("lock calls");
-        assert_eq!(calls.len(), 2);
+        assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].hop, 0);
-        assert_eq!(calls[1].hop, 1);
-        assert_eq!(calls[0].args, calls[1].args);
+        assert_eq!(calls[0].args, json!({"queries": ["Veltrix index"]}));
     }
 
     #[tokio::test]
-    async fn retries_a_transient_tool_error_once() {
+    async fn a_transient_tool_error_does_not_replay_a_model_call() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new()
             .route("/tool", post(transient_json_then_success))
             .with_state(Arc::clone(&calls));
-        assert_transient_recovery(app, calls).await;
+        assert_transient_not_replayed(app, calls, "transient upstream error").await;
     }
 
     #[tokio::test]
-    async fn retries_a_transient_http_status_once() {
+    async fn a_transient_http_status_does_not_replay_a_model_call() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new()
             .route("/tool", post(transient_status_then_success))
             .with_state(Arc::clone(&calls));
-        assert_transient_recovery(app, calls).await;
+        assert_transient_not_replayed(app, calls, "503").await;
+    }
+
+    #[tokio::test]
+    async fn legacy_unknown_delivery_blocks_matching_model_retry_but_not_other_arguments() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(effect_applied_but_receipt_unavailable))
+            .with_state(Arc::clone(&calls));
+        let (endpoint, task) = serve(app).await;
+        let tool = wire_tool(exec_context(endpoint));
+
+        let first = tool
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("first emission");
+        let repeat = tool
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("repeat emission");
+        let different = tool
+            .execute(json!({"theme": "light"}))
+            .await
+            .expect("different effect");
+        task.abort();
+
+        assert!(first["error"]
+            .as_str()
+            .expect("first error")
+            .contains("503"));
+        assert!(repeat["error"]
+            .as_str()
+            .expect("repeat error")
+            .contains("cannot safely repeat"));
+        assert!(different["error"]
+            .as_str()
+            .expect("different error")
+            .contains("503"));
+        let calls = calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].args, json!({"theme": "dark"}));
+        assert_eq!(calls[1].args, json!({"theme": "light"}));
+        let blocked = tool
+            .exec
+            .as_ref()
+            .expect("execution context")
+            .blocked_tool_calls
+            .lock()
+            .expect("blocked calls lock");
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].name, "search_web");
+        assert_eq!(blocked[0].args, json!({"theme": "dark"}));
+        assert_eq!(blocked[0].state, "blocked_before_execution");
+    }
+
+    #[tokio::test]
+    async fn legacy_confirmed_result_allows_a_later_intentional_repeat() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(successful_legacy_result))
+            .with_state(Arc::clone(&calls));
+        let (endpoint, task) = serve(app).await;
+        let tool = wire_tool(exec_context(endpoint));
+
+        for _ in 0..2 {
+            let result = tool
+                .execute(json!({"theme": "dark"}))
+                .await
+                .expect("effect emission");
+            assert_eq!(result["result"], "effect applied");
+        }
+        task.abort();
+
+        let calls = calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!((calls[0].hop, calls[1].hop), (0, 1));
+    }
+
+    #[tokio::test]
+    async fn advertised_receipts_recover_the_same_operation_after_lost_response() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(applied_but_first_response_lost))
+            .with_state(Arc::clone(&calls));
+        let (endpoint, task) = serve(app).await;
+        let mut ctx = exec_context(endpoint);
+        Arc::get_mut(&mut ctx)
+            .expect("unshared context")
+            .effect_receipts_v1 = true;
+        let result = wire_tool(ctx)
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("execute tool");
+        task.abort();
+
+        assert_eq!(result["result"], "effect applied once");
+        let calls = calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], calls[1]);
+        assert_eq!(calls[0].hop, 0);
+        assert_eq!(
+            calls[0].effect_protocol.as_deref(),
+            Some(protocol::TOOL_EFFECT_PROTOCOL_V1)
+        );
+        assert!(calls[0]
+            .operation_id
+            .as_ref()
+            .is_some_and(|id| id.len() >= 16));
+    }
+
+    #[tokio::test]
+    async fn advertised_receipts_reject_a_different_operation_id() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(mismatched_applied_receipt))
+            .with_state(Arc::clone(&calls));
+        let (endpoint, task) = serve(app).await;
+        let mut ctx = exec_context(endpoint);
+        Arc::get_mut(&mut ctx)
+            .expect("unshared context")
+            .effect_receipts_v1 = true;
+        let result = wire_tool(ctx)
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("execute tool");
+        task.abort();
+
+        assert_eq!(result["error"], "tool receipt operation mismatch");
+        assert_eq!(calls.lock().expect("lock calls").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn exhausted_receipt_retry_reports_unknown_delivery() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(effect_applied_but_receipt_unavailable))
+            .with_state(Arc::clone(&calls));
+        let (endpoint, task) = serve(app).await;
+        let mut ctx = exec_context(endpoint);
+        Arc::get_mut(&mut ctx)
+            .expect("unshared context")
+            .effect_receipts_v1 = true;
+        let result = wire_tool(ctx)
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("execute tool");
+        task.abort();
+
+        assert!(result["error"]
+            .as_str()
+            .expect("tool error")
+            .contains("tool effect delivery unknown"));
+        let calls = calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], calls[1]);
+    }
+
+    #[tokio::test]
+    async fn later_model_retry_reuses_pending_operation_then_new_effect_gets_new_id() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/tool", post(receipt_available_on_later_model_emission))
+            .with_state(Arc::clone(&calls));
+        let (endpoint, task) = serve(app).await;
+        let mut ctx = exec_context(endpoint);
+        Arc::get_mut(&mut ctx)
+            .expect("unshared context")
+            .effect_receipts_v1 = true;
+        let tool = wire_tool(ctx);
+
+        let uncertain = tool
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("first model emission");
+        assert!(uncertain["error"]
+            .as_str()
+            .expect("unknown result")
+            .contains("delivery unknown"));
+        let recovered = tool
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("second model emission");
+        assert_eq!(recovered["result"], "effect applied");
+        let separate_effect = tool
+            .execute(json!({"theme": "dark"}))
+            .await
+            .expect("third model emission");
+        assert_eq!(separate_effect["result"], "effect applied");
+        task.abort();
+
+        let calls = calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0], calls[1]);
+        assert_eq!(calls[0].operation_id, calls[2].operation_id);
+        assert_eq!((calls[0].hop, calls[2].hop, calls[3].hop), (0, 1, 2));
+        assert_ne!(calls[2].operation_id, calls[3].operation_id);
     }
 }
 
@@ -711,6 +1087,10 @@ impl Baseline {
                 case_id: req.case_id.clone(),
                 user_id: user_id.clone(),
                 hop: AtomicI32::new(0),
+                effect_receipts_v1: req.tool_effect_protocol.as_deref()
+                    == Some(protocol::TOOL_EFFECT_PROTOCOL_V1),
+                pending_effects: Mutex::new(HashMap::new()),
+                blocked_tool_calls: Mutex::new(Vec::new()),
             })
         });
 
@@ -744,12 +1124,9 @@ impl Baseline {
             .map(|d| Arc::new(WireTool::from_wire(d, exec_ctx.clone())) as Arc<dyn Tool>)
             .collect();
 
-        // The system prompt the model runs on: the wire prompt first, then the
-        // values-free v13 answering policy (answer in the requested unit, ask
-        // by naming the missing detail, list-then-act, grounded declines), and
-        // the `Answer:` line request only when the slot is enabled.
-        // EXTENSION POINT: keep it values-free — a graded value written here is
-        // a harness-authored span and the v13 causal gate zeroes it.
+        // Default serving preserves the wire prompt. Only the opt-in local
+        // answer-slot rehearsal adds an output-format instruction. Never put a
+        // computed graded value in a harness-authored prompt span.
         let answer_slot = v13::answer_slot_enabled();
         let system_prompt = v13::compose_system_prompt(&req.system_prompt, answer_slot);
 
@@ -872,6 +1249,15 @@ impl Baseline {
             answer: v13::answer_slot(&final_text, answer_slot),
             final_text,
             tool_calls,
+            blocked_tool_calls: exec_ctx
+                .as_ref()
+                .map(|ctx| {
+                    ctx.blocked_tool_calls
+                        .lock()
+                        .expect("blocked tool calls lock")
+                        .clone()
+                })
+                .unwrap_or_default(),
             prompt_tokens,
             output_tokens,
             latency_ms,

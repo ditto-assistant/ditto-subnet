@@ -227,6 +227,35 @@ def test_logout_keeps_session_when_revoke_fails(tmp_path, monkeypatch) -> None:
     assert load_miner_session(network="local") is not None
 
 
+def test_logout_clears_a_session_the_server_already_invalidated(
+    tmp_path, monkeypatch
+) -> None:
+    # An expired or dashboard-revoked session makes revoke return 401. The
+    # server has nothing left to revoke, so the dead local token must go too.
+    monkeypatch.setenv("DITTO_CLI_CONFIG_PATH", str(tmp_path / "config.json"))
+    from ditto.miner_cli.errors import LoginRequiredError
+    from ditto.miner_cli.preferences import load_miner_session, save_miner_session
+
+    save_miner_session(
+        network="local",
+        token="ditto_ms_" + "ab" * 32,
+        hotkey=HOTKEY,
+        scopes=["read"],
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+    client = MagicMock()
+    client.revoke_miner_session.side_effect = LoginRequiredError(
+        "miner session is invalid or expired"
+    )
+    ctor = MagicMock()
+    ctor.return_value.__enter__.return_value = client
+    ctor.return_value.__exit__.return_value = False
+    with patch("ditto.miner_cli.commands.login.ApiClient", ctor):
+        rc = run(_args(login_command="logout", user_code=None))
+    assert rc == 0
+    assert load_miner_session(network="local") is None
+
+
 def test_start_without_code_prints_url() -> None:
     handle, wallet = _wallet()
     started = MinerDeviceStartResponse(

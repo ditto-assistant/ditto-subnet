@@ -1,15 +1,9 @@
 ###############################################################################
 # Trusted monorepo image-build and hosted DittoBench release identities.
 #
-# The trusted controller impersonates ditto-screening-candidate-push only
-# while promoting a verified runtime archive to the private candidate
-# repository. The Targon runtime rental gets a separate 30-minute reader
-# token from ditto-screening-candidate-pull. Kaniko rentals receive only a
-# ditto-image-builder token that can write ditto-public-runtime. None of
-# those identities receive a GCP key, controller identity, or Secret Manager
-# authority. GitHub's release fallback is a separate prod-env WIF principal.
-# The two public repositories are readable without credentials so Targon can
-# pull the reviewed Kaniko executor and released screener image.
+# GitHub's scoped WIF principal publishes the reviewed builder and screener
+# images. The protected candidate repository is retained for historical
+# Terraform state; no active Targon credential or token mint remains.
 ###############################################################################
 
 resource "google_artifact_registry_repository" "public_builders" {
@@ -17,7 +11,7 @@ resource "google_artifact_registry_repository" "public_builders" {
   location      = var.region
   repository_id = "ditto-public-builders"
   format        = "DOCKER"
-  description   = "Public, reviewed builder images used by isolated Targon rentals."
+  description   = "Public, reviewed builder images used by the screener fleet."
 
   lifecycle {
     prevent_destroy = true
@@ -76,81 +70,6 @@ resource "google_artifact_registry_repository_iam_member" "public_runtime_reader
   repository = google_artifact_registry_repository.public_runtime.repository_id
   role       = "roles/artifactregistry.reader"
   member     = "allUsers"
-}
-
-resource "google_service_account" "image_builder" {
-  project      = var.project
-  account_id   = "ditto-image-builder"
-  display_name = "Ditto Trusted Image Builder"
-}
-
-resource "google_artifact_registry_repository_iam_member" "image_builder_runtime_writer" {
-  project    = var.project
-  location   = var.region
-  repository = google_artifact_registry_repository.public_runtime.repository_id
-  role       = "roles/artifactregistry.writer"
-  member     = "serviceAccount:${google_service_account.image_builder.email}"
-}
-
-resource "google_service_account" "screening_candidate_push" {
-  project      = var.project
-  account_id   = "ditto-screening-candidate-push"
-  display_name = "Ditto Screening Candidate Push"
-}
-
-resource "google_artifact_registry_repository_iam_member" "screening_candidate_writer" {
-  project    = var.project
-  location   = var.region
-  repository = google_artifact_registry_repository.screening_candidates.repository_id
-  role       = "roles/artifactregistry.writer"
-  member     = "serviceAccount:${google_service_account.screening_candidate_push.email}"
-}
-
-resource "google_service_account" "screening_candidate_pull" {
-  project      = var.project
-  account_id   = "ditto-screening-candidate-pull"
-  display_name = "Ditto Screening Candidate Pull"
-}
-
-resource "google_artifact_registry_repository_iam_member" "screening_candidate_reader" {
-  project    = var.project
-  location   = var.region
-  repository = google_artifact_registry_repository.screening_candidates.repository_id
-  role       = "roles/artifactregistry.reader"
-  member     = "serviceAccount:${google_service_account.screening_candidate_pull.email}"
-}
-
-resource "google_service_account_iam_member" "screener_controller_mint_builder_tokens" {
-  count              = local.screener_capacity_controller_count
-  service_account_id = google_service_account.image_builder.name
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
-}
-
-resource "google_service_account_iam_member" "screener_controller_mint_candidate_push_tokens" {
-  count              = local.screener_capacity_controller_count
-  service_account_id = google_service_account.screening_candidate_push.name
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
-}
-
-resource "google_service_account_iam_member" "screener_controller_mint_candidate_pull_tokens" {
-  count              = local.screener_capacity_controller_count
-  service_account_id = google_service_account.screening_candidate_pull.name
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
-}
-
-resource "google_service_account_iam_member" "platform_api_mint_candidate_push_tokens" {
-  service_account_id = google_service_account.screening_candidate_push.name
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${local.platform_api_sa_email}"
-}
-
-resource "google_service_account_iam_member" "platform_api_mint_candidate_pull_tokens" {
-  service_account_id = google_service_account.screening_candidate_pull.name
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${local.platform_api_sa_email}"
 }
 
 resource "google_service_account" "subnet_build" {
@@ -235,21 +154,6 @@ resource "google_service_account_iam_member" "dittobench_deploy_actas_runtime" {
 output "subnet_build_sa_email" {
   description = "Set as ditto-subnet's GCP_SUBNET_BUILD_SA prod-environment secret."
   value       = google_service_account.subnet_build.email
-}
-
-output "image_builder_sa_email" {
-  description = "Trusted Kaniko identity that can write only ditto-public-runtime."
-  value       = google_service_account.image_builder.email
-}
-
-output "screening_candidate_push_sa_email" {
-  description = "Host-side identity impersonated to promote verified miner archives."
-  value       = google_service_account.screening_candidate_push.email
-}
-
-output "screening_candidate_pull_sa_email" {
-  description = "Candidates-only reader identity impersonated for Targon runtime pull tokens."
-  value       = google_service_account.screening_candidate_pull.email
 }
 
 output "dittobench_deploy_sa_email" {

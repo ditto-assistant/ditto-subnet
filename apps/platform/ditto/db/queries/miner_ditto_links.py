@@ -127,9 +127,9 @@ async def create_attempt(
 
 
 async def get_attempt(
-    session: AsyncSession, *, attempt_id: UUID
+    session: AsyncSession, *, attempt_id: UUID, lock: bool = False
 ) -> MinerDittoLinkAttempt | None:
-    return await session.get(MinerDittoLinkAttempt, attempt_id)
+    return await session.get(MinerDittoLinkAttempt, attempt_id, with_for_update=lock)
 
 
 async def get_attempt_by_state(

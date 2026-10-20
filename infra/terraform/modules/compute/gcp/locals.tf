@@ -16,7 +16,7 @@ locals {
     "app-small" = "e2-medium" # 2 vCPU (shared) / 4 GB
 
     # Capacity reconciler: one small, private control-plane VM. It does not
-    # execute submissions; it only talks to Platform, Targon, and the GCE MIG.
+    # execute submissions; it coordinates Platform and the bounded GCE MIG.
     "controller-small" = "e2-small" # 2 shared vCPU / 2 GB
 
     # Standard app host: the prod SN118 API under miner upload storms. Every

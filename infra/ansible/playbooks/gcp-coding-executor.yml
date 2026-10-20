@@ -3,6 +3,10 @@
 # optional coding-executor Terraform cohort. This play never installs a
 # task-serving scorer or validator and defaults to a no-op until host variables
 # explicitly enable the daemon after a protected infrastructure apply.
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_coding_executor
+
 - name: Provision dedicated shadow-coding executor daemons
   hosts: role_coding_executor
   become: true

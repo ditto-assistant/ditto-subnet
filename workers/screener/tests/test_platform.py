@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import json
 import os
@@ -14,20 +15,24 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
+from ditto_screener import platform as platform_module
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.enrollment import (
     NodeCredential,
     load_node_credential,
     store_node_credential,
 )
-from ditto_screener.errors import PlatformError
+from ditto_screener.errors import (
+    PlatformAuthOnlyFailure,
+    PlatformAuthUnavailable,
+    PlatformError,
+    PlatformRejected,
+)
 from ditto_screener.heartbeat import ScreenerHeartbeatRequest
 from ditto_screener.platform import (
-    _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS,
     _TRANSIENT_PLATFORM_RETRY_DELAYS,
+    ClaimResponseInvalid,
     PlatformClient,
-    RemoteSubmissionBuildRejected,
-    _remote_source_review_poll_deadline,
 )
 from ditto_screener.review_settings import bootstrap_review_settings
 from ditto_screening_protocol import SCREENING_POLICY_VERSION, ScreenResultOutcome
@@ -35,12 +40,6 @@ from ditto_screening_protocol import SCREENING_POLICY_VERSION, ScreenResultOutco
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _TOKEN = "test-screener-token-at-least-32-characters"
-
-
-def test_remote_source_review_poll_reserves_terminal_commit_grace() -> None:
-    assert _remote_source_review_poll_deadline(now=10.0, timeout=1_800.0) == (
-        10.0 + 1_800.0 + _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS
-    )
 
 
 def _assert_auth(request: httpx.Request) -> None:
@@ -79,6 +78,38 @@ async def test_l2_canary_completion_retries_identical_body_after_502(
         )
     assert len(bodies) == 2
     assert bodies[0] == bodies[1]
+
+
+async def test_l2_canary_claim_declares_pinned_posture_support(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """Platform leases a pinned canary only to a worker that applies the pin."""
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        _assert_auth(request)
+        assert request.url.path.endswith("/l2-report-canaries/claim")
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200, content=b"null", headers={"content-type": "application/json"}
+        )
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        claimed = await client.claim_l2_report_canary(
+            instance_id="subnet-screener-1-worker-1",
+            settings_revision=124,
+            settings_checksum="d" * 64,
+        )
+    assert claimed is None
+    assert bodies == [
+        {
+            "instance_id": "subnet-screener-1-worker-1",
+            "settings_revision": 124,
+            "settings_checksum": "d" * 64,
+            "accepts_review_settings_override": True,
+        }
+    ]
 
 
 async def test_l2_canary_completion_does_not_retry_expired_or_conflicting_lease(
@@ -250,6 +281,88 @@ async def test_claim_next_parses_strict_v13_runtime_lease_from_json_wire(
     assert response.items[0].scored_runtime_evidence.attempt_id == attempt_id
 
 
+async def test_invalid_claim_response_keeps_the_committed_attempt_ids(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A wire-contract skew must not lose the leases Platform already committed."""
+    attempt_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/screener/claim"
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "agent_id": str(_AGENT),
+                        "bench_version": 13,
+                        "miner_hotkey": _MINER,
+                        "name": "v13-agent",
+                        "sha256": "de" * 32,
+                        "status": "screening",
+                        "created_at": "2026-09-25T01:52:23Z",
+                        "attempt_id": str(attempt_id),
+                        "lease_deadline": "2026-09-25T02:02:28Z",
+                        "policy_version": 13,
+                        "build_only": True,
+                        "deferred_source_review": True,
+                        # A nested shape this build does not understand.
+                        "scored_runtime_evidence": {"lease": [str(attempt_id)]},
+                    }
+                ],
+                "count": 1,
+                "required_policy_version": 13,
+            },
+        )
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(ClaimResponseInvalid) as raised:
+            await client.claim_next(
+                policy_version=13,
+                review_settings=bootstrap_review_settings(make_config()),
+                instance_id="worker-1",
+            )
+    assert isinstance(raised.value, PlatformError)
+    assert "scored_runtime_evidence" in str(raised.value)
+    [ref] = raised.value.attempts
+    assert ref.agent_id == _AGENT
+    assert ref.attempt_id == attempt_id
+    assert ref.policy_version == 13
+    assert ref.build_only is True
+    assert ref.deferred_source_review is True
+    assert ref.policy_only is False
+    assert ref.review_settings_override is None
+
+
+async def test_unrecoverable_claim_response_logs_only_ids(
+    make_config: Callable[..., ScreenerConfig], caplog: pytest.LogCaptureFixture
+) -> None:
+    attempt_id = uuid4()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "items": [{"attempt_id": str(attempt_id), "name": "secret-name"}],
+                "count": 1,
+                "required_policy_version": 13,
+            },
+        )
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(ClaimResponseInvalid) as raised:
+            await client.claim_next(
+                policy_version=13,
+                review_settings=bootstrap_review_settings(make_config()),
+                instance_id="worker-1",
+            )
+    assert raised.value.attempts == ()
+    assert str(attempt_id) in caplog.text
+    assert "secret-name" not in caplog.text
+
+
 async def test_policy_preflight_is_read_only(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -339,6 +452,278 @@ async def test_enrolled_node_refresh_failure_is_single_shot(
     assert stored.pending_refresh_id is not None
 
 
+def _open_fd_count() -> int | None:
+    # Linux exposes descriptor counts through procfs. Keep the lock/cancellation
+    # assertions running on macOS even though this extra leak check is unavailable.
+    descriptors = Path("/proc/self/fd")
+    return len(list(descriptors.iterdir())) if descriptors.is_dir() else None
+
+
+def _stored_node_credential(
+    path: Path, cfg: ScreenerConfig, *, expires_at: datetime
+) -> NodeCredential:
+    credential = NodeCredential(
+        environment="test",
+        node_id="ditto-screener-test",
+        provider="test",
+        provider_resource_id="resource-test",
+        screener_hotkey=cfg.screener_hotkey,
+        mnemonic=(
+            "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
+        ),
+        api_token="stored-node-token-at-least-43-characters-xxxxxxxx",
+        expires_at=expires_at,
+    )
+    store_node_credential(path, credential)
+    return credential
+
+
+def _observe_credential_lock_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> asyncio.Event:
+    waiting = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    flock = fcntl.flock
+
+    def observed_flock(descriptor: int, operation: int) -> None:
+        if operation & fcntl.LOCK_EX:
+            loop.call_soon_threadsafe(waiting.set)
+        flock(descriptor, operation)
+
+    monkeypatch.setattr(platform_module.fcntl, "flock", observed_flock)
+    return waiting
+
+
+async def test_cancelled_auth_wait_does_not_leak_flock(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_file = tmp_path / "node.json"
+    cfg = make_config(node_credential_file=str(credential_file))
+    _stored_node_credential(
+        credential_file, cfg, expires_at=datetime.now(UTC) + timedelta(minutes=1)
+    )
+    lock_path = tmp_path / ".node.json.refresh.lock"
+    holder = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    waiting = _observe_credential_lock_wait(monkeypatch)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        pytest.fail("a cancelled lock waiter must not send a Platform request")
+
+    client, http = _make_client(cfg, handler)
+    try:
+        async with http:
+            fd_count = _open_fd_count()
+            task = asyncio.create_task(client.get_required_policy_version())
+            try:
+                await asyncio.wait_for(waiting.wait(), timeout=2)
+            finally:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=2)
+            assert _open_fd_count() == fd_count
+    finally:
+        os.close(holder)
+    probe = os.open(lock_path, os.O_WRONLY)
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(probe)
+
+
+@pytest.mark.parametrize("hold_lock", [False, True])
+async def test_auth_fast_path_skips_lock_when_not_expiring(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path, hold_lock: bool
+) -> None:
+    credential_file = tmp_path / "node.json"
+    cfg = make_config(node_credential_file=str(credential_file))
+    credential = _stored_node_credential(
+        credential_file, cfg, expires_at=datetime.now(UTC) + timedelta(hours=6)
+    )
+    lock_path = tmp_path / ".node.json.refresh.lock"
+    holder = None
+    if hold_lock:
+        holder = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/screener/queue"
+        assert request.headers["Authorization"] == f"Bearer {credential.api_token}"
+        return httpx.Response(
+            200,
+            json={
+                "items": [],
+                "count": 0,
+                "required_policy_version": SCREENING_POLICY_VERSION,
+            },
+        )
+
+    client, http = _make_client(cfg, handler)
+    try:
+        async with http:
+            assert (
+                await asyncio.wait_for(client.get_required_policy_version(), timeout=2)
+                == SCREENING_POLICY_VERSION
+            )
+        assert lock_path.exists() == hold_lock
+    finally:
+        if holder is not None:
+            os.close(holder)
+
+
+async def test_auth_lock_wait_is_bounded(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_file = tmp_path / "node.json"
+    cfg = make_config(
+        node_credential_file=str(credential_file), http_timeout_seconds=0.1
+    )
+    _stored_node_credential(
+        credential_file, cfg, expires_at=datetime.now(UTC) + timedelta(minutes=1)
+    )
+    monkeypatch.setattr(platform_module, "_CREDENTIAL_LOCK_GRACE_SECONDS", 0)
+    lock_path = tmp_path / ".node.json.refresh.lock"
+    holder = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        pytest.fail("a timed-out lock waiter must not send a Platform request")
+
+    client, http = _make_client(cfg, handler)
+    try:
+        async with http:
+            fd_count = _open_fd_count()
+            with pytest.raises(PlatformError, match="credential lock timed out"):
+                await asyncio.wait_for(client.get_required_policy_version(), timeout=2)
+            assert _open_fd_count() == fd_count
+    finally:
+        os.close(holder)
+
+
+async def test_auth_rechecks_expiry_after_acquiring_lock(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential_file = tmp_path / "node.json"
+    cfg = make_config(node_credential_file=str(credential_file))
+    credential = _stored_node_credential(
+        credential_file, cfg, expires_at=datetime.now(UTC) + timedelta(minutes=1)
+    )
+    rotated = credential.model_copy(
+        update={
+            "api_token": "peer-rotated-token-at-least-43-characters-xxxxxxxx",
+            "expires_at": datetime.now(UTC) + timedelta(hours=6),
+        }
+    )
+    lock_path = tmp_path / ".node.json.refresh.lock"
+    holder = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    waiting = _observe_credential_lock_wait(monkeypatch)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        assert request.headers["Authorization"] == f"Bearer {rotated.api_token}"
+        return httpx.Response(
+            200,
+            json={
+                "items": [],
+                "count": 0,
+                "required_policy_version": SCREENING_POLICY_VERSION,
+            },
+        )
+
+    client, http = _make_client(cfg, handler)
+    try:
+        async with http:
+            task = asyncio.create_task(client.get_required_policy_version())
+            try:
+                await asyncio.wait_for(waiting.wait(), timeout=2)
+                store_node_credential(credential_file, rotated)
+                fcntl.flock(holder, fcntl.LOCK_UN)
+                assert (
+                    await asyncio.wait_for(task, timeout=2) == SCREENING_POLICY_VERSION
+                )
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    finally:
+        os.close(holder)
+    assert calls == ["/api/v1/screener/queue"]
+
+
+async def test_cancelled_refresh_releases_flock_and_preserves_refresh_id(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    credential_file = tmp_path / "node.json"
+    cfg = make_config(node_credential_file=str(credential_file))
+    _stored_node_credential(
+        credential_file, cfg, expires_at=datetime.now(UTC) + timedelta(minutes=1)
+    )
+    refresh_started = asyncio.Event()
+    refresh_ids: list[str] = []
+    new_token = "rotated-node-token-at-least-43-characters-xxxxxxxx"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/nodes/refresh"):
+            refresh_ids.append(json.loads(request.content)["refresh_id"])
+            if len(refresh_ids) == 1:
+                refresh_started.set()
+                await asyncio.Event().wait()
+            return httpx.Response(
+                200,
+                json={
+                    "api_token": new_token,
+                    "expires_at": (datetime.now(UTC) + timedelta(hours=6)).isoformat(),
+                },
+            )
+        assert request.headers["Authorization"] == f"Bearer {new_token}"
+        return httpx.Response(
+            200,
+            json={
+                "items": [],
+                "count": 0,
+                "required_policy_version": SCREENING_POLICY_VERSION,
+            },
+        )
+
+    class Keypair:
+        def sign(self, _message: bytes) -> bytes:
+            return b"a" * 64
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = PlatformClient(cfg, http, keypair=Keypair())
+        fd_count = _open_fd_count()
+        task = asyncio.create_task(client.get_required_policy_version())
+        try:
+            await asyncio.wait_for(refresh_started.wait(), timeout=2)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        assert _open_fd_count() == fd_count
+        probe = os.open(tmp_path / ".node.json.refresh.lock", os.O_WRONLY)
+        try:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(probe)
+        assert (
+            await asyncio.wait_for(client.get_required_policy_version(), timeout=2)
+            == SCREENING_POLICY_VERSION
+        )
+    assert len(refresh_ids) == 2
+    assert refresh_ids[0] == refresh_ids[1]
+    stored = load_node_credential(credential_file)
+    assert stored.api_token == new_token
+    assert stored.pending_refresh_id is None
+
+
 async def test_submit_heartbeat_matches_open_platform_contract(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -391,179 +776,6 @@ async def test_get_artifact_parses_url(
     assert str(art.download_url).startswith("https://storage.test/")
 
 
-async def test_targon_build_download_is_fully_hashed_before_import(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    attempt_id = uuid4()
-    build_id = uuid4()
-    image = b"verified docker archive"
-    digest = hashlib.sha256(image).hexdigest()
-    status = {
-        "build_id": str(build_id),
-        "attempt_id": str(attempt_id),
-        "status": "succeeded",
-        "provider": "targon",
-        "artifact_sha256": "de" * 32,
-        "image_ref": f"ditto-screen/{_AGENT}-{attempt_id}:latest",
-        "output_sha256": digest,
-        "output_size_bytes": len(image),
-        "download_url": "https://storage.test/image.tar",
-        "error_code": None,
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "storage.test":
-            return httpx.Response(200, content=image)
-        if request.method == "POST":
-            assert request.url.path.endswith("/submission-image-builds")
-            return httpx.Response(200, json=status)
-        raise AssertionError(f"unexpected request: {request.method} {request.url}")
-
-    client, http = _make_client(make_config(), handler)
-    async with http:
-        archive = await client.build_submission_image(
-            _AGENT, attempt_id=attempt_id, timeout=1
-        )
-    assert archive is not None
-    try:
-        assert archive.build_id == build_id
-        assert Path(archive.path).read_bytes() == image
-        assert archive.sha256 == digest
-    finally:
-        os.unlink(archive.path)
-
-
-async def test_targon_build_digest_mismatch_discards_and_falls_back(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    attempt_id = uuid4()
-    build_id = uuid4()
-    deletes: list[str] = []
-    status = {
-        "build_id": str(build_id),
-        "attempt_id": str(attempt_id),
-        "status": "succeeded",
-        "provider": "targon",
-        "artifact_sha256": "de" * 32,
-        "image_ref": f"ditto-screen/{_AGENT}-{attempt_id}:latest",
-        "output_sha256": "ab" * 32,
-        "output_size_bytes": 6,
-        "download_url": "https://storage.test/image.tar",
-        "error_code": None,
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "storage.test":
-            return httpx.Response(200, content=b"tamper")
-        if request.method == "POST":
-            return httpx.Response(200, json=status)
-        if request.method == "DELETE":
-            deletes.append(request.url.path)
-            return httpx.Response(204)
-        raise AssertionError(f"unexpected request: {request.method} {request.url}")
-
-    client, http = _make_client(make_config(), handler)
-    async with http:
-        archive = await client.build_submission_image(
-            _AGENT, attempt_id=attempt_id, timeout=1
-        )
-    assert archive is None
-    assert deletes == [
-        f"/api/v1/screener/agent/{_AGENT}/submission-image-builds/{build_id}"
-    ]
-
-
-async def test_remote_kaniko_failure_is_a_deterministic_build_rejection(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    attempt_id = uuid4()
-    build_id = uuid4()
-    status = {
-        "build_id": str(build_id),
-        "attempt_id": str(attempt_id),
-        "status": "fallback_required",
-        "provider": "hetzner",
-        "artifact_sha256": "de" * 32,
-        "image_ref": f"ditto-screen/{_AGENT}-{attempt_id}:latest",
-        "error_code": "FLEET_SUBMISSION_KANIKO_FAILED",
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "POST"
-        return httpx.Response(200, json=status)
-
-    client, http = _make_client(make_config(), handler)
-    async with http:
-        with pytest.raises(
-            RemoteSubmissionBuildRejected,
-            match="FLEET_SUBMISSION_KANIKO_FAILED",
-        ):
-            await client.build_submission_image(
-                _AGENT, attempt_id=attempt_id, timeout=1
-            )
-
-
-@pytest.mark.parametrize(
-    ("observation", "accepted"),
-    [
-        (
-            {
-                "ok": True,
-                "risk_level": "low",
-                "categories": [],
-                "clearance_certified": True,
-            },
-            True,
-        ),
-        (
-            {
-                "ok": True,
-                "risk_level": "medium",
-                "categories": ["suspicious"],
-                "clearance_certified": False,
-            },
-            True,
-        ),
-    ],
-)
-async def test_targon_source_review_returns_succeeded_observation(
-    make_config: Callable[..., ScreenerConfig],
-    observation: dict[str, object],
-    accepted: bool,
-) -> None:
-    attempt_id = uuid4()
-    review_id = uuid4()
-    deleted = False
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal deleted
-        if request.method == "POST":
-            return httpx.Response(
-                200,
-                json={
-                    "review_id": str(review_id),
-                    "attempt_id": str(attempt_id),
-                    "status": "succeeded",
-                    "provider": "targon",
-                    "artifact_sha256": "de" * 32,
-                    "observation": observation,
-                    "error_code": None,
-                },
-            )
-        if request.method == "DELETE":
-            deleted = True
-            return httpx.Response(204)
-        raise AssertionError(f"unexpected request: {request.method} {request.url}")
-
-    client, http = _make_client(make_config(), handler)
-    async with http:
-        result = await client.review_submission_source(
-            _AGENT, attempt_id=attempt_id, timeout=1
-        )
-    assert (result is not None) is accepted
-    assert deleted
-
-
 async def test_submit_result_posts_signed_verdict(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -604,67 +816,6 @@ async def test_submit_result_posts_signed_verdict(
     assert captured["detail"] == "ok"
     assert captured["policy_version"] == SCREENING_POLICY_VERSION
     assert captured["attempt_id"] == "550e8400-e29b-41d4-a716-446655440001"
-
-
-async def test_source_review_retries_transient_platform_failure(
-    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    attempt_id = uuid4()
-    review_id = uuid4()
-    polls = 0
-
-    async def no_sleep(_delay: float) -> None:
-        return None
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal polls
-        if request.method == "POST":
-            return httpx.Response(
-                200,
-                json={
-                    "review_id": str(review_id),
-                    "attempt_id": str(attempt_id),
-                    "status": "running",
-                    "provider": "hetzner",
-                    "artifact_sha256": "de" * 32,
-                    "observation": None,
-                    "error_code": None,
-                },
-            )
-        if request.method == "GET":
-            polls += 1
-            if polls == 1:
-                return httpx.Response(502, text="rolling platform deploy")
-            return httpx.Response(
-                200,
-                json={
-                    "review_id": str(review_id),
-                    "attempt_id": str(attempt_id),
-                    "status": "succeeded",
-                    "provider": "hetzner",
-                    "artifact_sha256": "de" * 32,
-                    "observation": {
-                        "ok": True,
-                        "risk_level": "low",
-                        "categories": [],
-                        "clearance_certified": True,
-                    },
-                    "error_code": None,
-                },
-            )
-        if request.method == "DELETE":
-            return httpx.Response(204)
-        raise AssertionError(f"unexpected request: {request.method} {request.url}")
-
-    monkeypatch.setattr(asyncio, "sleep", no_sleep)
-    client, http = _make_client(make_config(), handler)
-    async with http:
-        result = await client.review_submission_source(
-            _AGENT, attempt_id=attempt_id, timeout=1
-        )
-    assert result is not None
-    assert result.clearance_certified is True
-    assert polls == 2
 
 
 async def test_submit_result_retries_transient_server_failure(
@@ -725,6 +876,224 @@ async def test_submit_result_does_not_retry_conflict(
             )
 
     assert calls == 1
+
+
+async def _submit_infra_verdict(client: PlatformClient):
+    return await client.submit_result(
+        _AGENT,
+        signature="ab" * 64,
+        passed=False,
+        policy_version=SCREENING_POLICY_VERSION,
+        attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+        outcome=ScreenResultOutcome.RETRYABLE_INFRA,
+    )
+
+
+@pytest.mark.parametrize("status_code", [400, 409, 413, 422])
+async def test_submit_result_raises_bounded_platform_rejection(
+    make_config: Callable[..., ScreenerConfig], status_code: int
+) -> None:
+    requests: list[httpx.Request] = []
+    body = "validation refused: " + "x" * 600
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(status_code, text=body)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformRejected) as raised:
+            await _submit_infra_verdict(client)
+
+    assert len(requests) == 1
+    assert raised.value.status_code == status_code
+    assert raised.value.body == body[:500]
+    assert str(raised.value) == f"verdict rejected ({status_code}): {body[:500]}"
+
+
+@pytest.mark.parametrize("status_code", [400, 413, 422])
+async def test_submit_result_rejection_after_lost_response_remains_ambiguous(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            raise httpx.ReadError("accepted response lost", request=request)
+        return httpx.Response(status_code, text="retry rejected")
+
+    async def no_sleep(_delay: float) -> None:
+        pass
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError) as raised:
+            await _submit_infra_verdict(client)
+
+    assert type(raised.value) is PlatformError
+    assert "uncertain dispatch" in str(raised.value)
+    assert len(requests) == 2
+    assert requests[0].content == requests[1].content
+
+
+@pytest.mark.parametrize("status_code", [408, 425, 429, 500, 503, None])
+async def test_submit_result_exhausted_transient_failure_remains_ambiguous(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int | None,
+) -> None:
+    requests: list[httpx.Request] = []
+    delays: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if status_code is None:
+            raise httpx.ReadError("response lost", request=request)
+        return httpx.Response(status_code, text="temporary failure")
+
+    async def no_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError) as raised:
+            await _submit_infra_verdict(client)
+
+    assert type(raised.value) is PlatformError
+    assert len(requests) == len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1
+    assert delays == list(_TRANSIENT_PLATFORM_RETRY_DELAYS)
+    assert all(request.content == requests[0].content for request in requests)
+
+
+@pytest.mark.parametrize("previous_dispatch", [False, True])
+@pytest.mark.parametrize("permanent", [False, True])
+async def test_submit_result_auth_exhaustion_tracks_any_previous_dispatch(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    previous_dispatch: bool,
+    permanent: bool,
+) -> None:
+    auth_calls = 0
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise httpx.ReadError("response lost", request=request)
+
+    client, http = _make_client(make_config(), handler)
+
+    async def auth_headers() -> dict[str, str]:
+        nonlocal auth_calls
+        auth_calls += 1
+        if previous_dispatch and auth_calls == 1:
+            return {}
+        if permanent:
+            raise PlatformAuthUnavailable("signing key missing")
+        raise PlatformError("credential refresh rejected (503)")
+
+    async def no_sleep(_delay: float) -> None:
+        pass
+
+    monkeypatch.setattr(client, "_auth_headers", auth_headers)
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    async with http:
+        with pytest.raises(PlatformError) as raised:
+            await _submit_infra_verdict(client)
+
+    assert auth_calls == (
+        1 + int(previous_dispatch)
+        if permanent
+        else len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1
+    )
+    assert len(requests) == int(previous_dispatch)
+    if previous_dispatch:
+        assert type(raised.value) is PlatformError
+    else:
+        assert isinstance(raised.value, PlatformAuthOnlyFailure)
+        assert "no verdict request was sent" in str(raised.value)
+
+
+@pytest.mark.parametrize("missing_keypair", [False, True])
+async def test_submit_result_retries_real_credential_refresh_unless_key_missing(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_keypair: bool,
+) -> None:
+    credential_file = tmp_path / "node.json"
+    credential = NodeCredential(
+        environment="test",
+        node_id="ditto-screener-test",
+        provider="test",
+        provider_resource_id="resource-test",
+        screener_hotkey=make_config().screener_hotkey,
+        mnemonic=(
+            "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
+        ),
+        api_token="old-node-token-at-least-43-characters-xxxxxxxx",
+        expires_at=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    store_node_credential(credential_file, credential)
+    refresh_ids: list[str] = []
+    verdicts: list[httpx.Request] = []
+    delays: list[float] = []
+    new_token = "new-node-token-at-least-43-characters-xxxxxxxx"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/nodes/refresh"):
+            refresh_ids.append(json.loads(request.content)["refresh_id"])
+            if len(refresh_ids) == 1:
+                return httpx.Response(503, text="temporary refresh failure")
+            return httpx.Response(
+                200,
+                json={
+                    "api_token": new_token,
+                    "expires_at": (datetime.now(UTC) + timedelta(hours=6)).isoformat(),
+                },
+            )
+        assert request.headers["Authorization"] == f"Bearer {new_token}"
+        verdicts.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "agent_id": str(_AGENT),
+                "status": "screening_failed",
+                "accepted": True,
+            },
+        )
+
+    class Keypair:
+        def sign(self, _message: bytes) -> bytes:
+            return b"a" * 64
+
+    async def no_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    cfg = make_config(node_credential_file=str(credential_file))
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = PlatformClient(cfg, http, keypair=None if missing_keypair else Keypair())
+    async with http:
+        if missing_keypair:
+            with pytest.raises(PlatformAuthOnlyFailure) as raised:
+                await _submit_infra_verdict(client)
+            assert isinstance(raised.value.__cause__, PlatformAuthUnavailable)
+            assert delays == []
+            assert refresh_ids == []
+            assert verdicts == []
+        else:
+            response = await _submit_infra_verdict(client)
+            assert response.status.value == "screening_failed"
+            assert len(verdicts) == 1
+            assert len(refresh_ids) == 2
+            assert refresh_ids[0] == refresh_ids[1]
+            assert delays == [_TRANSIENT_PLATFORM_RETRY_DELAYS[0]]
+            assert load_node_credential(credential_file).pending_refresh_id is None
 
 
 async def test_upload_screened_image_streams_exact_metadata_and_bytes(
@@ -837,6 +1206,67 @@ async def test_upload_initiation_retries_502_with_one_idempotency_id(
         )
     assert len(requested_ids) == 2
     assert requested_ids[0] == requested_ids[1] == str(result)
+
+
+async def test_upload_completion_replays_after_gateway_502(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Production 2026-10-02/03: Platform verified the image but the gateway
+    # answered 502, failing the screen as image-upload-failed.
+    monkeypatch.setattr(platform_module, "_IMAGE_COMPLETE_RETRY_DELAYS", (0.0, 0.0))
+    archive = tmp_path / "image.tar"
+    archive.write_bytes(b"docker-image")
+    completions = 0
+    aborted = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal completions, aborted
+        if request.url.path.endswith("/screened-image-upload"):
+            return httpx.Response(
+                200,
+                json={
+                    "image_upload_id": json.loads(request.content)["image_upload_id"],
+                    "storage_upload_id": "storage-upload",
+                    "part_size_bytes": 5 * 1024**2,
+                    "expires_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        if request.url.path.endswith("/part"):
+            return httpx.Response(
+                200,
+                json={
+                    "upload_url": "https://storage.test/image.part",
+                    "expires_at": datetime.now(UTC).isoformat(),
+                    "required_headers": {},
+                },
+            )
+        if request.method == "PUT":
+            return httpx.Response(200, headers={"ETag": '"part-etag"'})
+        if request.url.path.endswith("/complete"):
+            completions += 1
+            if completions == 1:
+                return httpx.Response(502, text="")
+            return httpx.Response(200, json={"verified": True})
+        if request.url.path.endswith("/abort"):
+            aborted = True
+            return httpx.Response(200, json={"aborted": True})
+        raise AssertionError(request.url)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        await client.upload_screened_image(
+            _AGENT,
+            attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+            path=str(archive),
+            sha256="12" * 32,
+            size_bytes=archive.stat().st_size,
+            image_id="sha256:" + "34" * 32,
+            image_ref=f"ditto-screen/{_AGENT}:latest",
+        )
+    assert completions == 2
+    assert not aborted
 
 
 async def test_upload_initiation_rejects_platform_that_ignores_idempotency_id(

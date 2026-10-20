@@ -15,6 +15,10 @@
 #
 #   GCP_OSLOGIN_USER=… \
 #     ansible-playbook -i infra/ansible/inventory/gcp.yml infra/ansible/playbooks/gcp-screener.yml
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_screener
+
 - name: Converge the SN118 screener VM
   hosts: role_screener
   become: true

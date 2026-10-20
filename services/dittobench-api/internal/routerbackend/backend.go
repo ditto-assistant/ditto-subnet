@@ -19,10 +19,31 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ditto-assistant/dittobench-api/internal/netguard"
 	"github.com/ditto-assistant/dittobench-api/internal/routerharness"
 	"github.com/ditto-assistant/dittobench-api/internal/routerreplay"
 	"github.com/ditto-assistant/dittobench-api/internal/routerscore"
 )
+
+// probeTimeout bounds the whole inclusion probe: connect, response headers, and
+// the capped advertisement read. The probe runs after memory scoring but before
+// the run is recorded, so a harness that accepts the connection and never
+// answers must not be able to hold the finished run or its slot.
+const probeTimeout = 10 * time.Second
+
+// NewProbeClient returns the SSRF-guarded client for the inclusion probe,
+// bounded by probeTimeout. netguard.Client sets no overall timeout because its
+// callers are expected to bound each request; ProbeInclusion's getter takes no
+// context, so the bound has to live on the client.
+func NewProbeClient(allowPrivate bool) *http.Client {
+	return newProbeClient(allowPrivate, probeTimeout)
+}
+
+func newProbeClient(allowPrivate bool, timeout time.Duration) *http.Client {
+	c := netguard.Client(allowPrivate)
+	c.Timeout = timeout
+	return c
+}
 
 // ErrNotIncluded is returned by Dispatcher.Run when the submission advertised no
 // router project (the /router/health probe came back StatusUnsupported). It is

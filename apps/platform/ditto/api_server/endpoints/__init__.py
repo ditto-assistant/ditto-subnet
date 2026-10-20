@@ -5,6 +5,9 @@ from __future__ import annotations
 from ditto.api_server.endpoints.admin_artifact_release_settings import (
     router as admin_artifact_release_settings_router,
 )
+from ditto.api_server.endpoints.admin_ath_review_queue_slo import (
+    router as admin_ath_review_queue_slo_router,
+)
 from ditto.api_server.endpoints.admin_ath_rulings import (
     router as admin_ath_rulings_router,
 )
@@ -16,6 +19,9 @@ from ditto.api_server.endpoints.admin_benchmark_rollout import (
 )
 from ditto.api_server.endpoints.admin_burn_settings import (
     router as admin_burn_settings_router,
+)
+from ditto.api_server.endpoints.admin_claim_provenance import (
+    router as admin_claim_provenance_router,
 )
 from ditto.api_server.endpoints.admin_coding_catalog import (
     router as admin_coding_catalog_router,
@@ -56,11 +62,20 @@ from ditto.api_server.endpoints.admin_copy_review import (
 from ditto.api_server.endpoints.admin_core_qualification import (
     router as admin_core_qualification_router,
 )
+from ditto.api_server.endpoints.admin_database_backup import (
+    router as admin_database_backup_router,
+)
 from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
     router as admin_efficiency_bonus_settings_router,
 )
+from ditto.api_server.endpoints.admin_emission_eligibility import (
+    router as admin_emission_eligibility_router,
+)
 from ditto.api_server.endpoints.admin_hotkey_bans import (
     router as admin_hotkey_bans_router,
+)
+from ditto.api_server.endpoints.admin_inference_admission import (
+    router as admin_inference_admission_router,
 )
 from ditto.api_server.endpoints.admin_inference_concurrency_settings import (
     router as admin_inference_concurrency_settings_router,
@@ -80,6 +95,9 @@ from ditto.api_server.endpoints.admin_lease_revocations import (
 from ditto.api_server.endpoints.admin_miner_fees import (
     router as admin_miner_fees_router,
 )
+from ditto.api_server.endpoints.admin_outlier_escalation import (
+    router as admin_outlier_escalation_router,
+)
 from ditto.api_server.endpoints.admin_owner import (
     router as admin_owner_router,
 )
@@ -91,6 +109,9 @@ from ditto.api_server.endpoints.admin_queue_policy_settings import (
 )
 from ditto.api_server.endpoints.admin_retirement import (
     router as admin_retirement_router,
+)
+from ditto.api_server.endpoints.admin_scoring_lease_settings import (
+    router as admin_scoring_lease_settings_router,
 )
 from ditto.api_server.endpoints.admin_scoring_readiness import (
     router as admin_scoring_readiness_router,
@@ -122,6 +143,18 @@ from ditto.api_server.endpoints.admin_submission_settings import (
 from ditto.api_server.endpoints.admin_traces import (
     router as admin_traces_router,
 )
+from ditto.api_server.endpoints.admin_transcript_mirror_settings import (
+    router as admin_transcript_mirror_settings_router,
+)
+from ditto.api_server.endpoints.admin_treasury_quote import (
+    router as admin_treasury_quote_router,
+)
+from ditto.api_server.endpoints.admin_treasury_receipts import (
+    router as admin_treasury_receipts_router,
+)
+from ditto.api_server.endpoints.admin_treasury_settings import (
+    router as admin_treasury_settings_router,
+)
 from ditto.api_server.endpoints.admin_v13_private_generation import (
     router as admin_v13_private_generation_router,
 )
@@ -130,6 +163,9 @@ from ditto.api_server.endpoints.admin_v13_scorer_cohort import (
 )
 from ditto.api_server.endpoints.admin_validation_retry import (
     router as admin_validation_retry_router,
+)
+from ditto.api_server.endpoints.admin_validator_capacity import (
+    router as admin_validator_capacity_router,
 )
 from ditto.api_server.endpoints.admin_validator_slot_settings import (
     router as admin_validator_slot_settings_router,
@@ -197,15 +233,24 @@ from ditto.api_server.endpoints.validator_confirmation import (
 )
 
 __all__ = [
+    "admin_database_backup_router",
     "health_router",
     "inference_router",
     "admin_artifact_release_settings_router",
+    "admin_transcript_mirror_settings_router",
+    "admin_ath_review_queue_slo_router",
     "admin_ath_rulings_router",
     "admin_attestation_router",
     "admin_benchmark_rollout_router",
     "admin_burn_settings_router",
+    "admin_emission_eligibility_router",
+    "admin_treasury_settings_router",
+    "admin_treasury_receipts_router",
+    "admin_treasury_quote_router",
+    "admin_inference_admission_router",
     "admin_inference_concurrency_settings_router",
     "admin_inference_observability_router",
+    "admin_scoring_lease_settings_router",
     "admin_traces_router",
     "admin_queue_policy_settings_router",
     "admin_efficiency_bonus_settings_router",
@@ -219,6 +264,7 @@ __all__ = [
     "admin_copy_review_router",
     "admin_coding_certifications_router",
     "admin_coding_control_plane_router",
+    "admin_claim_provenance_router",
     "admin_coding_catalog_router",
     "admin_coding_private_v2_releases_router",
     "admin_coding_evaluations_router",
@@ -228,6 +274,7 @@ __all__ = [
     "admin_continual_retest_settings_router",
     "admin_core_qualification_router",
     "admin_miner_fees_router",
+    "admin_outlier_escalation_router",
     "admin_owner_router",
     "admin_quarantine_router",
     "admin_retirement_router",
@@ -243,6 +290,7 @@ __all__ = [
     "admin_submission_settings_router",
     "admin_submission_deposit_address_router",
     "admin_validation_retry_router",
+    "admin_validator_capacity_router",
     "admin_validator_slot_settings_router",
     "admin_v13_scorer_cohort_router",
     "metrics_router",

@@ -8,9 +8,11 @@ signature. It never touches the platform DB directly.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
-from datetime import UTC, datetime
+import re
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
@@ -120,6 +122,7 @@ from ditto.validator.coding_publication import (
 from ditto.validator.errors import (
     PlatformError,
     PlatformInfrastructureError,
+    WeightReceiptConflictError,
 )
 from ditto.validator.signing import (
     sign_artifact_request,
@@ -144,6 +147,7 @@ from ditto.validator.signing import (
     sign_ledger_request,
     sign_top5_confirmation_job_request,
     sign_top5_confirmation_score,
+    sign_transcript_request,
     sign_v9_confirmation_artifact_request,
     sign_v9_confirmation_claim,
     sign_v9_confirmation_fail,
@@ -161,6 +165,11 @@ logger = logging.getLogger(__name__)
 _PREFIX = "/api/v1/validator"
 # The scoring ledger lives under a sibling prefix, not /validator.
 _SCORING_PREFIX = "/api/v1/scoring"
+# A finished run's signed score is replayed verbatim: Platform accepts an exact
+# retry of an already-consumed ticket and still refuses anything after the lease
+# deadline. Back off long enough to ride out a Platform rollout's 502 window.
+_SCORE_SUBMIT_RETRY_DELAYS = (2.0, 8.0, 20.0, 45.0, 90.0)
+_SCORE_SUBMIT_DEADLINE_MARGIN = timedelta(seconds=30)
 # Exchange is idempotent for one signed nonce. Keep fast recovery for ordinary
 # blips, but survive a full relay handover window without throwing away a
 # benchmark ticket. This does not spend inference budget: no model request can
@@ -288,6 +297,16 @@ def _inference_budget_evidence(response: httpx.Response) -> dict[str, int]:
     return evidence
 
 
+def _weight_receipt_conflict_code(response: httpx.Response) -> str:
+    """Platform's bounded ``<code>: ...`` 409 category; never echo the rest."""
+    try:
+        message = response.json()["message"]
+    except (ValueError, KeyError, TypeError):
+        return "unknown"
+    code = message.partition(":")[0] if isinstance(message, str) else ""
+    return code if re.fullmatch(r"[a-z_]{1,32}", code) else "unknown"
+
+
 class PlatformClient:
     """HTTP client for one platform base URL."""
 
@@ -308,6 +327,7 @@ class PlatformClient:
         self, observation: ReceiptDiagnosticObservation
     ) -> None:
         report = ReceiptDiagnosticReport(
+            schema_version=3,
             validator_hotkey=self._config.validator_hotkey,
             netuid=self._config.netuid,
             timestamp=int(datetime.now(UTC).timestamp()),
@@ -350,6 +370,8 @@ class PlatformClient:
             )
         except httpx.HTTPError as exc:
             raise PlatformError("weight receipt persistence outcome unknown") from exc
+        if response.status_code == 409:
+            raise WeightReceiptConflictError(_weight_receipt_conflict_code(response))
         if response.status_code != 200:
             raise PlatformError(f"weight receipt rejected ({response.status_code})")
         result = SubmitWeightReceiptResponse.model_validate(response.json())
@@ -1985,22 +2007,30 @@ class PlatformClient:
                 f"ledger rejected ({resp.status_code}): {resp.text[:200]}"
             )
         ledger = LedgerResponse.model_validate(resp.json())
+        # Every row the fold can read must carry its own verifiable quorum
+        # receipts. The protocol-28 provisional incumbent is deliberately kept
+        # out of ``entries`` (it is crowned but never paid), yet it still
+        # decides the champion, tail and score-ceiling cohort, so it is held to
+        # exactly the same proof contract as a payable row.
+        served = (
+            [*ledger.entries, ledger.provisional_incumbent]
+            if ledger.provisional_incumbent is not None
+            else ledger.entries
+        )
         if ledger.v9_confirmation_mode == "enforce" and any(
             entry.bench_version == 9 and entry.v9_confirmation is None
-            for entry in ledger.entries
+            for entry in served
         ):
             raise PlatformError(
                 "v9 enforce ledger contained a row without full confirmation"
             )
         if ledger.v9_confirmation_mode is None and any(
-            entry.v9_confirmation is not None for entry in ledger.entries
+            entry.v9_confirmation is not None for entry in served
         ):
             raise PlatformError(
                 "ledger carried v9 confirmation receipts without enforce marker"
             )
-        invalid = [
-            entry.agent_id for entry in ledger.entries if not verify_ledger_entry(entry)
-        ]
+        invalid = [entry.agent_id for entry in served if not verify_ledger_entry(entry)]
         if invalid:
             sample = ", ".join(str(agent_id) for agent_id in invalid[:3])
             raise PlatformError(
@@ -2128,7 +2158,10 @@ class PlatformClient:
         """Report a signed score for ``agent_id``.
 
         A 5xx or transport failure after a finished run is Platform
-        infrastructure. It still parks the attempt; only Backroom may retry.
+        infrastructure. Resending the identical signed report is free and
+        idempotent (Platform accepts an exact retry of a consumed ticket), so
+        it is replayed with backoff while the lease has room. Only a failure
+        that outlasts the retries parks the attempt for Backroom.
         """
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/score"
         payload = SubmitScoreRequest(
@@ -2137,20 +2170,47 @@ class PlatformClient:
             signature=signature,
             report=report,
         )
-        try:
-            resp = await self._client.post(
-                url, json=payload.model_dump(mode="json"), headers=self._headers
+        body = payload.model_dump(mode="json")
+        attempts = len(_SCORE_SUBMIT_RETRY_DELAYS) + 1
+        for attempt in range(attempts):
+            try:
+                resp = await self._client.post(url, json=body, headers=self._headers)
+            except httpx.HTTPError as error:
+                failure: PlatformInfrastructureError = PlatformInfrastructureError(
+                    f"score submit failed: {error}"
+                )
+                failure.__cause__ = error
+            else:
+                if resp.status_code == 200:
+                    return SubmitScoreResponse.model_validate(resp.json())
+                message = f"score rejected ({resp.status_code}): {resp.text[:200]}"
+                if resp.status_code not in {408, 429} and resp.status_code < 500:
+                    raise PlatformError(message)
+                failure = PlatformInfrastructureError(message)
+            if attempt + 1 >= attempts:
+                raise failure
+            delay = _SCORE_SUBMIT_RETRY_DELAYS[attempt]
+            # Like the worker's lease guard, only an aware deadline is comparable.
+            if (
+                ticket_deadline is not None
+                and ticket_deadline.tzinfo is not None
+                and (
+                    datetime.now(UTC) + timedelta(seconds=delay)
+                    >= ticket_deadline - _SCORE_SUBMIT_DEADLINE_MARGIN
+                )
+            ):
+                raise failure
+            logger.warning(
+                "score submit for %s hit Platform infrastructure (%s); "
+                "replaying in %.0fs (attempt %d/%d)",
+                agent_id,
+                failure,
+                delay,
+                attempt + 2,
+                attempts,
             )
-        except httpx.HTTPError as error:
-            raise PlatformInfrastructureError(
-                f"score submit failed: {error}"
-            ) from error
-        if resp.status_code == 200:
-            return SubmitScoreResponse.model_validate(resp.json())
-        message = f"score rejected ({resp.status_code}): {resp.text[:200]}"
-        if resp.status_code in {408, 429} or resp.status_code >= 500:
-            raise PlatformInfrastructureError(message)
-        raise PlatformError(message)
+            await asyncio.sleep(delay)
+        raise AssertionError("score submit retry loop did not return")
 
     async def issue_coding_certification_lease(
         self,
@@ -2708,8 +2768,26 @@ class PlatformClient:
         :class:`PlatformError` on rejection so the caller can log it; callers
         treat failure as best-effort (the score already stands)."""
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/transcript/{run_id}"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        digest = hashlib.sha256(body).hexdigest()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Transcript-Sha256": digest,
+            "X-Validator-Transcript-Nonce": str(nonce),
+            "X-Validator-Transcript-Requested-At": requested_at.isoformat(),
+            "X-Validator-Transcript-Signature": sign_transcript_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                agent_id=agent_id,
+                run_id=run_id,
+                transcript_sha256=digest,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
         try:
-            resp = await self._client.put(url, content=body, headers=self._headers)
+            resp = await self._client.put(url, content=body, headers=proof_headers)
         except httpx.HTTPError as e:
             raise PlatformError(f"transcript submit failed: {e}") from e
         if resp.status_code != 200:

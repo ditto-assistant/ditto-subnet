@@ -81,7 +81,7 @@ class SourceReviewQueueSlo(BaseModel):
                 "Agents whose latest screening attempt still looks 'running' "
                 "although the agent already reached a terminal or progressed-"
                 "past-screening status. Visible for reconciliation; never "
-                "folded into the counts above. See ditto-subnet#2038."
+                "folded into the counts above."
             ),
         ),
     ]
@@ -95,6 +95,18 @@ class SourceReviewQueueSlo(BaseModel):
             ),
         ),
     ]
+    terminal_quarantine_ghost_count: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Active screening quarantines whose exact agent is already "
+                "banned or rejected. Historical, never escalation backlog or "
+                "oldest age; close each with a fenced batch reject. See "
+                "ditto-subnet#2038."
+            ),
+        ),
+    ]
     attempt_status_drift_ghost_count: Annotated[
         int,
         Field(
@@ -104,13 +116,14 @@ class SourceReviewQueueSlo(BaseModel):
                 "endpoint's reason classification does not cover (e.g. a "
                 "terminal passed/rejected verdict on an agent whose own "
                 "status never advanced past screening) -- the same kind of "
-                "attempts/agents drift as the two counts above, never folded "
+                "attempts/agents drift as the stale-running and resolved-"
+                "quarantine counts, never folded "
                 "into backlog_count."
             ),
         ),
     ]
     ghost_count: Annotated[
-        int, Field(ge=0, description="Sum of the three reconciliation counts above.")
+        int, Field(ge=0, description="Sum of the four reconciliation counts above.")
     ]
 
     max_actionable_age_threshold_seconds: Annotated[

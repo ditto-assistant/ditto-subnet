@@ -169,6 +169,84 @@ SELECT w.window_seconds,
 """
 
 
+RATE_LIMIT_BURST_WINDOW_SECONDS = 300
+"""The issue's five-minute grain: the incident read 209/903 chat failures here."""
+
+RATE_LIMIT_BURST_THRESHOLD = 100
+"""Provisional ``upstream_http_429`` count per lane per five minutes.
+
+A report-only floor pending measurement, not a tuned limit: it sits above the
+18 and 38 failed chat calls per five minutes read after the 2026-09-22 burst
+recovered and below the 209 read during it. Crossing it enforces nothing,
+changes no route, and retries nothing -- it only sets ``active`` on the
+Backroom read. Replace it with a measured value before anything acts on it.
+"""
+
+RATE_LIMIT_BURST_TICKET_LIMIT = 20
+"""Affected tickets returned per lane, most rate-limited first."""
+
+# Global in-flight peak per lane over the burst window. Same definition as
+# ``inference_observability.WINDOWS_SQL``'s ``peak_global_concurrency``: one
+# running sum over the start/end events of requests that STARTED inside the
+# window, so the two reads agree for the same window. It sweeps five minutes of
+# the ledger rather than replaying the whole hour-wide runtime read.
+RATE_LIMIT_BURST_PEAKS_SQL = """
+WITH recent AS (
+    SELECT r.request_kind, r.started_at, COALESCE(r.completed_at, now()) AS ended_at
+      FROM inference_requests r
+     WHERE r.started_at >= now() - make_interval(secs => :window_seconds)
+),
+events AS (
+    SELECT request_kind, started_at AS at, 1 AS delta FROM recent
+    UNION ALL
+    SELECT request_kind, ended_at AS at, -1 AS delta FROM recent
+),
+running AS (
+    SELECT request_kind, sum(delta) OVER (PARTITION BY request_kind ORDER BY at) AS active
+      FROM events
+)
+SELECT lane.request_kind,
+       COALESCE(max(running.active), 0)::bigint AS peak_global_concurrency
+  FROM (VALUES ('chat'), ('embedding')) AS lane(request_kind)
+  LEFT JOIN running ON running.request_kind = lane.request_kind
+ GROUP BY lane.request_kind
+ ORDER BY lane.request_kind
+"""
+
+# Tickets are the grant's stamped ticket identity, so a ticket that minted more
+# than one grant inside the window still reports once.
+RATE_LIMIT_BURST_TICKETS_SQL = """
+WITH limited AS (
+    SELECT r.request_kind, r.grant_id, count(*)::bigint AS rate_limited_failures
+      FROM inference_requests r
+     WHERE r.started_at >= now() - make_interval(secs => :window_seconds)
+       AND r.terminal_error_code = 'upstream_http_429'
+  GROUP BY r.request_kind, r.grant_id
+),
+tickets AS (
+    SELECT l.request_kind, g.agent_id, g.bench_version, g.validator_hotkey,
+           g.slot_id, g.ticket_deadline,
+           sum(l.rate_limited_failures)::bigint AS rate_limited_failures
+      FROM limited l
+      JOIN inference_grants g ON g.grant_id = l.grant_id
+  GROUP BY l.request_kind, g.agent_id, g.bench_version, g.validator_hotkey,
+           g.slot_id, g.ticket_deadline
+),
+ranked AS (
+    SELECT t.*,
+           row_number() OVER (
+               PARTITION BY t.request_kind
+               ORDER BY t.rate_limited_failures DESC, t.ticket_deadline,
+                        t.validator_hotkey, t.slot_id, t.agent_id) AS ticket_rank,
+           count(*) OVER (PARTITION BY t.request_kind)::bigint AS tickets_total
+      FROM tickets t
+)
+SELECT * FROM ranked
+ WHERE ticket_rank <= :ticket_limit
+ ORDER BY request_kind, ticket_rank
+"""
+
+
 async def load_inference_failure_taxonomy_rows(
     session: AsyncSession,
     *,
@@ -182,3 +260,28 @@ async def load_inference_failure_taxonomy_rows(
         .all()
     )
     return lanes, groups
+
+
+async def load_rate_limit_burst_rows(
+    session: AsyncSession,
+    *,
+    ticket_limit: int = RATE_LIMIT_BURST_TICKET_LIMIT,
+) -> tuple[Sequence[RowMapping], Sequence[RowMapping]]:
+    """Return per-lane burst-window peaks and the capped affected-ticket rows."""
+    window = {"window_seconds": RATE_LIMIT_BURST_WINDOW_SECONDS}
+    peaks = (
+        (await session.execute(text(RATE_LIMIT_BURST_PEAKS_SQL), window))
+        .mappings()
+        .all()
+    )
+    tickets = (
+        (
+            await session.execute(
+                text(RATE_LIMIT_BURST_TICKETS_SQL),
+                {**window, "ticket_limit": ticket_limit},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return peaks, tickets

@@ -74,7 +74,7 @@ resource "google_compute_instance" "this" {
     enable_integrity_monitoring = var.enable_integrity_monitoring
   }
 
-  deletion_protection = true
+  deletion_protection = var.deletion_protection
 
   lifecycle {
     # The PG VM carries irreplaceable state (Postgres data disk, River worker).
@@ -89,4 +89,21 @@ resource "google_compute_instance" "this" {
       metadata["ssh-keys"],
     ]
   }
+}
+
+# Separate attachments never change the instance or recreate either disk.
+resource "google_compute_disk_resource_policy_attachment" "boot_snapshot" {
+  count   = var.boot_disk_snapshot_policy != "" ? 1 : 0
+  project = var.project == "" ? null : var.project
+  zone    = var.location
+  disk    = google_compute_instance.this.name
+  name    = basename(var.boot_disk_snapshot_policy)
+}
+
+resource "google_compute_disk_resource_policy_attachment" "data_snapshot" {
+  count   = var.data_disk_snapshot_policy != "" ? 1 : 0
+  project = var.project == "" ? null : var.project
+  zone    = var.location
+  disk    = google_compute_disk.data[0].name
+  name    = basename(var.data_disk_snapshot_policy)
 }

@@ -40,10 +40,11 @@ private IPC, bounded local logs, and a locked
 are rejected. An image is never exported if
 it only boots as root or depends on writing elsewhere in its root filesystem.
 
-Production builds use a dedicated rootless Docker daemon. The worker verifies
-Docker's advertised `rootless` security option before accepting work when
-`SCREENER_REQUIRE_ROOTLESS_DOCKER=1`; a missing or rootful endpoint becomes a
-retryable infrastructure result, never a miner failure. The build receives no
+Production builds use a dedicated rootless Docker daemon. Rootless verification
+is enabled by default, including for standalone workers. The worker checks
+Docker's advertised `rootless` security option before accepting work; a missing
+or rootful endpoint becomes a retryable infrastructure result, never a miner
+failure. The build receives no
 credentials, cannot request host networking or insecure BuildKit entitlements,
 and non-root host traffic is denied access to cloud metadata except DNS.
 
@@ -57,12 +58,55 @@ digest, byte size, immutable Docker image ID, and image reference into the
 canonical signed verdict. Validators can therefore load the screened image
 instead of repeating the untrusted build.
 
+Verdict submission retries the same signed payload across transient HTTP,
+transport, and node-credential refresh failures. A missing signing key stops
+authentication retries immediately. A definitive 400, 413, or 422 verdict
+rejection triggers one best-effort, signed infrastructure fallback for the same
+attempt (`worker-verdict-rejected`), with bounded private rejection diagnostics.
+Authentication failure before any verdict dispatch uses
+`worker-verdict-auth-failed`. A 409 conflict, transport failure or exhausted
+transient retry may conceal an accepted verdict, so it never triggers a
+replacement. In particular, a response lost after acceptance can be followed
+by a 409 when the same signed payload is retried after the agent changes state.
+Platform can still refuse the fallback if the attempt has already closed.
+
 Rust is the reference starter implementation, not a competition requirement.
 Python, TypeScript/JavaScript, Go, Rust, or any other implementation is accepted
 when its root `Dockerfile` builds an image that serves the same `/health`,
 `/seed`, and `/run` HTTP contract on port 8080. The screener never infers the
 contract from a language manifest such as `Cargo.toml`, `package.json`,
 `pyproject.toml`, or `go.mod`.
+
+Source review exempts a submitted file from parts of its scrutiny only on an
+exact `path + sha256` match against a runtime manifest,
+`ditto_screener/data/starter-kit-provenance-v*.json`. The static preflight, the
+L1 provenance block, and the L2 analyzer image all load that set, so adding a
+manifest to it is an admission-relevant trust expansion that ships separately
+from the kit change.
+
+Every `miners/dittobench-starter-kit` change ships the next manifest, staged
+outside the runtime set. Commit the kit change, then run
+`scripts/generate_starter_provenance.py` from the repository root with the
+next version number into `staged-starter-provenance/`. The generator refuses to
+write into `ditto_screener/data/`. Screener CI runs on kit changes, and
+`tests/test_starter_provenance_current.py` fails, printing the exact command,
+until the newest manifest (staged or active) equals the kit's tracked,
+submittable files. No runtime path, and neither screener image, reads
+`staged-starter-provenance/`.
+
+Activating a staged manifest is its own reviewed change. It is made only after
+the independent canonical starter review described in the repository-root
+`docs/canonical-starter-source-control.md` is recorded and reconciled with the
+source-only fixture result, and only for a manifest whose files equal that
+reviewed fixture archive exactly. Staged `v6` equals
+`canonical-starter-v0.330.5.tgz`, and a test pins that. The activation change
+moves the file unrenamed with
+`git mv staged-starter-provenance/starter-kit-provenance-vN.json ditto_screener/data/`,
+adds that revision to `test_supported_starter_manifests_are_versioned_and_distinct`
+in `tests/test_l2_review.py`, keeps exact-file trust to the roles that evidence
+supports, and is released and deployed like any screener change, which rebuilds
+the analyzer image. Never edit or delete a published manifest, because older
+honest derivatives must keep matching.
 
 The only shared application boundary is the dependency-light
 `packages/ditto-screening-protocol` package. It owns request/response models,
@@ -148,7 +192,7 @@ Required values are supplied through the production host's protected
   module names this environment variable.
 - `SCREENER_SOURCE_REVIEW_API_KEY_FILE`: required mode-0400 OpenRouter key file
   for the private read-only source reviewer. The default model is
-  `openai/gpt-5.6-luna`.
+  `openai/gpt-6-luna`.
 - `SCREENER_SEED_PROBE_MODE`: `shadow` (default), `enforce`, or `off`. After
   the health gate, one bounded `POST /seed` wave with a single coined pair
   proves the image can ingest state, not just answer `/health`. `shadow`
@@ -172,21 +216,26 @@ Required values are supplied through the production host's protected
   model cannot establish actual tool choice, memory correctness, or user
   isolation. The mode has no influence on the screening outcome and should
   remain off until its overhead and evidence profile have been calibrated.
-  Targon-only smoke and pre-build source holds leave these checks `not_recorded`.
+  A source hold before runtime leaves these checks `not_recorded`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
-- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-5.6-terra`; legacy
+- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; legacy
   `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.
   `SCREENER_L2_FALLBACK_MODELS` is the ordered OpenRouter model-failover chain
-  (`z-ai/glm-5.2`, then `openai/gpt-5.6-sol`). A fallback is used only after a
+  (`z-ai/glm-5.2` by default). A fallback is used only after a
   model/routing error, never after a valid analyst response.
 - `SCREENER_L3_REVIEW_ENABLED`: `true` (default) runs the independent SOL
-  critic/adjudicator after L2. `false` keeps L1 routing and the Terra L2 analyst
+  critic/adjudicator after L2. `false` keeps L1 routing and the L2 analyst
   active while making the L2 result authoritative. Platform review-settings
   revisions can change this between leases without a worker restart.
-- `SCREENER_L3_REVIEW_MODEL`: locked to `openai/gpt-5.6-sol`; both layers use
+- `SCREENER_L3_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; both layers use
   OpenRouter ZDR routing and deny data collection.
 - `SCREENER_L2_ANALYZER_IMAGE`: locked to the updater-built
   `ditto-screener-l2-analyzer:active` image.
+- The signed screener worker runs each bounded reviewer `bash`, `rg`, or
+  coreutils command in a disposable analyzer container. The submitted source
+  is mounted read-only; the container has no network, secrets, or Docker socket.
+  Model calls and API credentials stay in the worker process outside that
+  container. Candidate build and execution remain separate screening stages.
 - `SCREENER_L2_CACHE_DIR` and `SCREENER_L2_AUDIT_JOURNAL_FILE`: protected
   sanitized cache/audit locations. Raw source and transcripts are never stored.
 - `SCREENER_SCORER_CAPABILITIES_URL` and `SCREENER_EXPECTED_SCORER_REVISION`:
@@ -201,8 +250,21 @@ Required values are supplied through the production host's protected
 - `SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE=true`: V13 canary gate that holds L2
   inconclusive before any model call unless Platform supplied a fresh signed
   cohort lease for the exact attempt and artifact. Set on the Platform process
-  (which forwards it to Targon source-review rentals) and on local screeners.
+  and on the signed screener workers.
   Leave it off for legacy screening; never treat an absent lease as CLEAR.
+  V13 with L3 off requires the lease without this flag. Freshness is checked
+  against claim receipt, not against each later use, so a long build or L1
+  pass cannot age out a lease Platform just certified. A present lease that is
+  stale at receipt or bound to another attempt, artifact, or policy is held
+  inconclusive. A V13 arrival under policy 13 with no lease means the pinned
+  scorer cohort was unavailable: that is retryable infrastructure,
+  `l2-runtime-evidence-unavailable`, which Platform retries automatically, and
+  Platform withholds such claims while the cohort is down. Any other arrival
+  without a lease (for example a non-V13 arrival during an open rollout) keeps
+  the inconclusive hold, so a per-agent cause never loops through that retry.
+- `SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS` (default `300`, 1-3600):
+  oldest signed cohort observation accepted at claim receipt. The report-only
+  L2 canary uses the same receipt-anchored rule.
 - `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
   `off` and `shadow` preserve the v1 decisive result; `shadow` additionally
   computes the reachability-and-causality v2 candidate for comparison.
@@ -212,8 +274,11 @@ Required values are supplied through the production host's protected
 
 Static preflight v2 makes a source match decisive only when both its effective
 Docker/Cargo/runtime reachability and its category-specific source-to-sink flow
-are proven. Excluded or test-only code is inert. Dynamic and unsupported build
-or import forms remain advisory source-review leads. Roll out `shadow` first,
+are proven. Code excluded from the effective build is inert. Test-only code
+never makes a v2 match decisive, but the v1 detector scans it, including files
+reached only through `cfg(test)`-gated `include!` or `#[path]`, because no build
+flag can be proven off; a test-only match keeps its pre-build lead. Dynamic and
+unsupported build or import forms remain advisory source-review leads. Roll out `shadow` first,
 inspect only the sanitized private journal, and promote to `enforce` explicitly.
 
 Static source matches remain pre-execution leads. In `shadow`/`enforce`, the

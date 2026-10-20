@@ -1,0 +1,179 @@
+{
+  "critical_file_comparison": {
+    "files": [
+      {
+        "identical_to_v472": true,
+        "path": "runtime/src/proxy_filters/mod.rs",
+        "sha256": "cbd460f709682d823e03fe0097b96569735506ea84d1cd1f3c9414a5d09b7d19"
+      },
+      {
+        "identical_to_v472": true,
+        "path": "runtime/src/proxy_filters/call_groups.rs",
+        "sha256": "68cebbb31ac2ff33dba3ae4082161deba16de83611ed12ef7fe12281df148981"
+      },
+      {
+        "identical_to_v472": true,
+        "path": "common/src/proxy.rs",
+        "sha256": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05"
+      },
+      {
+        "identical_to_v472": true,
+        "path": "pallets/proxy/src/lib.rs",
+        "sha256": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12"
+      },
+      {
+        "identical_to_v472": true,
+        "path": "pallets/subtensor/src/subnets/registration.rs",
+        "sha256": "ea13c9fc845228cbadd8990066f147429ca85772cb26efece7e834fb3fdbb6db"
+      },
+      {
+        "identical_to_v472": true,
+        "path": "pallets/subtensor/src/staking/move_stake.rs",
+        "sha256": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b"
+      },
+      {
+        "identical_to_v472": true,
+        "path": "pallets/subtensor/src/coinbase/run_coinbase.rs",
+        "sha256": "09cce211f362295e6e880dc9bb2cbc1c2ee3b83c510e58e40baf5d184ac7ad1d"
+      },
+      {
+        "identical_to_v472": true,
+        "path": "pallets/subtensor/src/rpc_info/stake_info.rs",
+        "sha256": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917"
+      },
+      {
+        "identical_to_v472": true,
+        "path": "pallets/subtensor/src/staking/account.rs",
+        "sha256": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9"
+      },
+      {
+        "identical_to_v472": true,
+        "path": "pallets/subtensor/src/staking/lock.rs",
+        "sha256": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419"
+      }
+    ],
+    "source_sha": "f87cada631f81d11683e715a9f059f693992e64a"
+  },
+  "independent_rebuild_performed": false,
+  "keys_loaded": 0,
+  "live_public_contract": {
+    "block": 9217305,
+    "block_hash": "0xd9fa3543ed43edbdf2c53554a6552feb1714fa0967f7e0b0642f275d9fd073ee",
+    "checked_at_utc": "2026-10-05T14:24:23.636521+00:00",
+    "collector_account": {
+      "consumers": 1,
+      "data": {
+        "flags": 170141183460469231731687303715884105728,
+        "free": 53051972,
+        "frozen": 0,
+        "reserved": 126000000
+      },
+      "nonce": 5,
+      "providers": 1,
+      "sufficients": 0
+    },
+    "first_v473_block": 9217264,
+    "keys_loaded": 0,
+    "last_v472_block": 9217263,
+    "metadata_sha256": "054f253ec4e57a441ef79cddb7a9c0d9cd98efffbb8384add69b31315013632a",
+    "native_filters": {
+      "Registration": [
+        {
+          "call": "register",
+          "call_index": 6,
+          "pallet": "SubtensorModule",
+          "pallet_index": 7
+        },
+        {
+          "call": "register_limit",
+          "call_index": 134,
+          "pallet": "SubtensorModule",
+          "pallet_index": 7
+        },
+        {
+          "call": "burned_register",
+          "call_index": 7,
+          "pallet": "SubtensorModule",
+          "pallet_index": 7
+        }
+      ],
+      "Transfer": [
+        {
+          "call": "transfer_keep_alive",
+          "call_index": 3,
+          "pallet": "Balances",
+          "pallet_index": 5
+        },
+        {
+          "call": "transfer_allow_death",
+          "call_index": 0,
+          "pallet": "Balances",
+          "pallet_index": 5
+        },
+        {
+          "call": "transfer_all",
+          "call_index": 4,
+          "pallet": "Balances",
+          "pallet_index": 5
+        },
+        {
+          "call": "transfer_stake",
+          "call_index": 86,
+          "pallet": "SubtensorModule",
+          "pallet_index": 7
+        },
+        {
+          "call": "transfer_stake_and_hotkey",
+          "call_index": 143,
+          "pallet": "SubtensorModule",
+          "pallet_index": 7
+        }
+      ]
+    },
+    "proxies": [
+      [
+        {
+          "delay": 0,
+          "delegate": "5Cg2dw1VG4dw2yPq9cxRZwJmMJsQFiisBn27aseAvZLJF7w8",
+          "proxy_type": "Transfer"
+        },
+        {
+          "delay": 0,
+          "delegate": "5GvbyrQMsWKzkEn77eA1zVrSLmjzLCxh9GpY5beSD6a3RBVV",
+          "proxy_type": "Registration"
+        }
+      ],
+      126000000
+    ],
+    "runtime_code_hash": "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08",
+    "spec_version": 473,
+    "transaction_version": 1,
+    "transactions_submitted": 0,
+    "uid": 21
+  },
+  "official_release": "https://github.com/RaoFoundation/subtensor/releases/tag/v473",
+  "reviewed_additional_files": {
+    "Cargo.lock": "65dfd36c5376b901a303c92ed40271136da6fee30de98d3ea3124fc58e0e84b7",
+    "common/src/proxy.rs": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05",
+    "pallets/proxy/src/lib.rs": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
+    "pallets/subtensor/src/coinbase/run_coinbase.rs": "09cce211f362295e6e880dc9bb2cbc1c2ee3b83c510e58e40baf5d184ac7ad1d",
+    "pallets/subtensor/src/lib.rs": "eccfd3af41f21443544bc44058a10dc865fe44cf4b120a956c437b9950158305",
+    "pallets/subtensor/src/migrations/migrate_alpha_v2.rs": "265acc203d332fae3c82978745663d34046da57fa0f71f142e5189df79fd8072",
+    "pallets/subtensor/src/rpc_info/mod.rs": "c5c94c4f4e77b9e18f056206defdfc6013029ecfcd606652438d5850390968cf",
+    "pallets/subtensor/src/rpc_info/stake_info.rs": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
+    "pallets/subtensor/src/staking/account.rs": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
+    "pallets/subtensor/src/staking/helpers.rs": "da71ae49c2ddd53016bd3dc425c8fd2cdc02775d31477538b375b2124aea9fee",
+    "pallets/subtensor/src/staking/lock.rs": "9d17513f1d6142588850cd4f7306441eefd7b2817f841810b775655916c88419",
+    "pallets/subtensor/src/staking/move_stake.rs": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
+    "pallets/subtensor/src/staking/stake_utils.rs": "040f765497db2b4e0eeb1ebf531b6da87beaa189d88e1e8c297d65f660c19da1",
+    "pallets/subtensor/src/subnets/registration.rs": "ea13c9fc845228cbadd8990066f147429ca85772cb26efece7e834fb3fdbb6db",
+    "runtime/src/lib.rs": "00d6f095f8ece5f7e0991edc2ea776bba45ffae58207255e16d6a0bf925e9871",
+    "runtime/src/proxy_filters/call_groups.rs": "68cebbb31ac2ff33dba3ae4082161deba16de83611ed12ef7fe12281df148981",
+    "runtime/src/proxy_filters/mod.rs": "cbd460f709682d823e03fe0097b96569735506ea84d1cd1f3c9414a5d09b7d19"
+  },
+  "transactions_submitted": 0,
+  "upstream_source": "f87cada631f81d11683e715a9f059f693992e64a",
+  "wasm_blake2_256": "0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08",
+  "wasm_bytes": 2593406,
+  "wasm_sha256": "cbd9f5b4c72edd86af5c956ae21c66448818e227f4085ecb021acd89e533adfc"
+}

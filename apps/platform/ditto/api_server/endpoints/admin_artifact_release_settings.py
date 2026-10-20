@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
@@ -14,6 +15,8 @@ from ditto.api_models.artifact_release_settings import (
     AdminArtifactReleaseSettingsRequest,
     AdminArtifactReleaseSettingsResponse,
     ReceiptDiagnosticRow,
+    RevealPlanShadowStatus,
+    SourceArchiveProviderStatus,
     SourceReleaseEligibilityRow,
     SourceReleaseGateStatus,
 )
@@ -70,6 +73,17 @@ def _default_revision() -> RevisionModel:
     )
 
 
+def _reveal_plan_shadow(cursor: Any) -> RevealPlanShadowStatus | None:
+    """The collector's shadow summary, or None before the first comparison."""
+    from ditto.api_server.source_emission_collector import _REVEAL_PLAN_MODE
+
+    summary = getattr(cursor, "reveal_plan_shadow", None) if cursor else None
+    if not summary:
+        # No comparison has run: zero counters would read as zero misses.
+        return None
+    return RevealPlanShadowStatus.model_validate({**summary, "mode": _REVEAL_PLAN_MODE})
+
+
 @router.get("", response_model=AdminArtifactReleaseSettingsResponse)
 async def get_settings(
     request: Request,
@@ -103,7 +117,14 @@ async def get_settings(
             .limit(25)
         )
     ).all()
-    netuid = request.app.state.config.chain.netuid
+    chain = request.app.state.config.chain
+    netuid = chain.netuid
+    # Only expose the host. A configured URL can contain sensitive path/query
+    # data; a malformed URL must not hide the collector's other diagnostics.
+    try:
+        archive_host = urlsplit(chain.archive_rpc_url or "").hostname
+    except ValueError:
+        archive_host = None
     cursor = await session.get(SourceEmissionCollectorCursor, netuid)
     last_payout = await session.scalar(
         select(SourceEmissionPayout)
@@ -175,10 +196,17 @@ async def get_settings(
         release_gate=SourceReleaseGateStatus(
             version=SOURCE_RELEASE_GATE_VERSION,
             automatic_confirmation_enabled=request.app.state.config.source_emission_confirmation_enabled,
+            archive_provider=SourceArchiveProviderStatus(
+                configured=bool(chain.archive_rpc_url),
+                host=archive_host,
+                auth_mode=chain.archive_rpc_auth_mode,
+                credential_configured=bool(chain.archive_rpc_api_key),
+            ),
             collector_cursor_block=cursor.block if cursor else None,
             collector_cursor_hash=cursor.block_hash if cursor else None,
             collector_runtime_code_hash=cursor.runtime_code_hash if cursor else None,
             collector_blocked_reason=cursor.last_blocked_reason if cursor else None,
+            reveal_plan_shadow=_reveal_plan_shadow(cursor),
             last_payout_block=last_payout.block if last_payout else None,
             last_payout_blocked_reason=last_payout.blocked_reason
             if last_payout

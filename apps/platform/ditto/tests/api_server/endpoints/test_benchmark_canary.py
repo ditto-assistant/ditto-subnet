@@ -1,6 +1,7 @@
 """Real-Postgres canary authority, transport and score-isolation regressions."""
 
 import asyncio
+import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
@@ -347,6 +348,57 @@ async def test_old_v13_validator_cannot_enqueue(client, ready, session_maker):
             )
             == 0
         )
+
+
+async def test_v14_canary_requires_the_v14_runtime_env_packet(
+    client, ready, session_maker
+):
+    """Deterministic v13 support alone cannot receive a v14 canary lease.
+
+    Issuance shares ``heartbeat_supports_version`` with rollout eligibility, so
+    the version-bound packet gate applies here without a second copy.
+    """
+    payload = {
+        **ready,
+        "bench_version": 14,
+        "confirmation": f"ISSUE CANARY V14 {ready['agent_id']}",
+    }
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.get(ValidatorHeartbeat, HOTKEY)
+        capabilities = dict(heartbeat.capabilities)
+        scorer = {
+            **capabilities["scorer_benchmarks"],
+            "supported_bench_versions": [7, 8, 12, 13, 14],
+        }
+        capabilities["scorer_benchmarks"] = scorer
+        heartbeat.capabilities = capabilities
+    missing = await client.post(
+        "/api/v1/admin/benchmark-canaries", headers=_HEADERS, json=payload
+    )
+    assert missing.status_code == 409, missing.text
+    assert (
+        missing.json()["message"] == "validator lacks fresh target-version capability"
+    )
+
+    keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+    revision = scorer["source_revision"]
+    material = f"scored-runtime-env-v1\n14\n{revision}\n" + "\n".join(keys)
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.get(ValidatorHeartbeat, HOTKEY)
+        heartbeat.capabilities = {
+            **capabilities,
+            "scorer_benchmarks": {
+                **scorer,
+                "v14_scored_runtime_env": {
+                    "bench_version": 14,
+                    "scope": "scorer-injected-env-only",
+                    "source_revision": revision,
+                    "injected_keys": keys,
+                    "sha256": hashlib.sha256(material.encode()).hexdigest(),
+                },
+            },
+        }
+    assert (await issue(client, payload))["bench_version"] == 14
 
 
 async def test_later_ordinary_lease_starts_fresh(client, ready, session_maker):

@@ -1,8 +1,11 @@
 """Bind signed validator scorer probes to one exact screening lease.
 
 No single validator can describe the environment for a submission whose future
-scorer has not been chosen. A packet is available only while every fresh V13
-validator eligible for that work reports the same descriptor-bound evidence.
+scorer has not been chosen. A packet is available only while every V13
+validator eligible for that work reports the same descriptor-bound evidence:
+only pinned members signing the cohort's authority packet are issued V13 work,
+and at least a quorum of them must be routable. ``validator_count`` is how many
+routable members sign it, never fewer than the quorum of three.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ async def scored_runtime_evidence_for_lease(
         pinned = await pinned_cohort_packet(session, now=now)
     if pinned is None:
         return None
-    packet, oldest_observation = pinned
+    packet = pinned.packet
     return ScoredRuntimeEvidenceLease(
         attempt_id=attempt_id,
         artifact_sha256=artifact_sha256,
@@ -49,6 +52,6 @@ async def scored_runtime_evidence_for_lease(
         scorer_image_digest=packet.scorer_image_digest,
         scorer_env_sha256=packet.scorer_env_sha256,
         injected_keys=packet.injected_keys,
-        validator_count=3,
-        observed_at=oldest_observation,
+        validator_count=len(pinned.routable),
+        observed_at=pinned.oldest_scorer_observed_at,
     )

@@ -18,8 +18,6 @@ dependencies = [
     "pydantic>=2.12",
     "psutil>=6",
     "ditto-screening-protocol==0.18.0",
-    "tree-sitter>=0.25",
-    "tree-sitter-rust>=0.24",
 ]
 
 [project.scripts]

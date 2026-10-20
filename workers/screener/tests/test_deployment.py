@@ -52,11 +52,11 @@ def test_deploy_reinstalls_and_probes_embedded_protocol() -> None:
     assert "verify-installed-signing-contract.py" in bootstrap
 
 
-def test_bootstrap_preserves_separate_remote_and_local_build_budgets() -> None:
+def test_bootstrap_uses_local_build_budget_only() -> None:
     bootstrap = (ROOT / "scripts" / "bootstrap-screener.sh").read_text()
 
-    assert "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS=1500" in bootstrap
     assert "SCREENER_BUILD_TIMEOUT_SECONDS=2700" in bootstrap
+    assert "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS" not in bootstrap
 
 
 def test_deploy_repairs_legacy_remote_build_mode_and_restarts_worker() -> None:
@@ -197,6 +197,24 @@ def test_pull_request_ci_keeps_fast_safety_gates() -> None:
     assert "docker build -f workers/screener/Dockerfile" in workflow
     assert "tests/test_gate_docker_integration.py" not in workflow
     assert "screener-core-e2e" not in workflow
+
+
+def test_pull_request_ci_runs_on_starter_kit_changes() -> None:
+    # The starter provenance drift guard is a screener test, so a kit-only
+    # change must still run this workflow.
+    lines = workflow_text("screener-ci.yml").splitlines()
+    start = lines.index("  pull_request:")
+    assert lines[start + 1] == "    paths:"
+    paths = []
+    for line in lines[start + 2 :]:
+        if line.lstrip().startswith("#"):
+            continue
+        if not line.startswith("      - "):
+            break
+        paths.append(line.removeprefix("      - "))
+
+    assert "miners/dittobench-starter-kit/**" in paths
+    assert "workers/screener/**" in paths
 
 
 def test_container_entrypoints_do_not_require_a_writable_uv_cache() -> None:

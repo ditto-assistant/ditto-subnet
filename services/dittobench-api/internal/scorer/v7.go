@@ -135,31 +135,29 @@ func ToolEfficiencyFactorForVersion(perCase []protocol.CaseScore, benchVersion i
 	return toolEfficiencyFactorWith(perCase, legacyEffParams)
 }
 
-// memoryWriteCategory reports whether a memory case's INTENDED work is a memory
-// write, so a save/update/delete call on it is not an over-call.
-//
-// gen.QTLifecycleWrite is the pre-v8 lifecycle-chain write. It is unreachable
-// from v8 on: the lifecycle suite is not built at all above v8
-// (gen.generateMemorySuite skips buildLifecycle), the v3 cross-user lifecycle
-// probe is gated `< BenchVersionV8`, and gen.removeV8LegacyWriteCases strips any
-// residual write-family case from the staged set. So from v8 the exclusion
-// matched nothing, while gen.QTDeclarativeAck — the live category whose whole
-// point is that the user states a value in-turn for the harness to keep —
-// counted every save_memory call as an over-call and charged a competent harness
-// the bounded penalty for doing the case's own work.
-//
-// The repair is gated at v13 rather than applied from v8. Widening it to v8
-// would change the composite gate a v8..v12 transcript scores to, i.e. it would
-// silently give one dataset+transcript two different scores depending on when it
-// was scored, which is exactly what the frozen-contract rule forbids. Whether to
-// repair v8..v12 retrospectively is a fairness/backfill decision: making it is a
-// one-line change to the version bound below, plus a rescore.
+// memoryWriteCategory preserves historical whole-case exclusions. Lifecycle
+// writes remain excluded at every version. V13 excluded declarative acknowledgements
+// in full; v14 counts them and exempts only their authorized persistence actions.
 func memoryWriteCategory(category string, benchVersion int) bool {
 	switch category {
 	case gen.QTLifecycleWrite:
 		return true
 	case gen.QTDeclarativeAck:
-		return benchVersion >= protocol.BenchVersionV13
+		return benchVersion >= protocol.BenchVersionV13 && benchVersion < protocol.BenchVersionV14
+	default:
+		return false
+	}
+}
+
+// declarativeMemoryWrite is the v14 action-scoped exception. A write on a
+// recall, chitchat, or any other memory case remains an over-call.
+func declarativeMemoryWrite(category, name string, benchVersion int) bool {
+	if benchVersion < protocol.BenchVersionV14 || category != gen.QTDeclarativeAck {
+		return false
+	}
+	switch name {
+	case "save_memory", "update_memory", "delete_memory":
+		return true
 	default:
 		return false
 	}
@@ -174,7 +172,7 @@ func memoryOverCallFactorWith(perCase []protocol.CaseScore, maxPenalty float64, 
 		}
 		observed++
 		for _, name := range cs.Called {
-			if !memoryTools[name] {
+			if !memoryTools[name] && !declarativeMemoryWrite(cs.Category, name, benchVersion) {
 				overCalled++
 				break
 			}
@@ -185,6 +183,23 @@ func memoryOverCallFactorWith(perCase []protocol.CaseScore, maxPenalty float64, 
 	}
 	rate := float64(overCalled) / float64(observed)
 	return round6(1.0 - maxPenalty*rate)
+}
+
+// MemoryOverCallFactorForVersion is the memory over-call multiplier exactly as
+// the composite gate for benchVersion applies it: the v7 contract's penalty and
+// category scope from bench_version 7, the historical v3 factor for 3..6. The
+// composite gate itself calls this, so the value published in RunDetails can
+// never drift from the one folded into the composite. ok is false before
+// bench_version 3, whose composite carries no gate at all.
+func MemoryOverCallFactorForVersion(perCase []protocol.CaseScore, benchVersion int) (factor float64, ok bool) {
+	switch {
+	case benchVersion >= protocol.BenchVersionV7:
+		return memoryOverCallFactorWith(perCase, v7MemoryOverCallMaxPenalty, benchVersion), true
+	case benchVersion >= protocol.BenchVersionV3:
+		return MemoryOverCallFactor(perCase), true
+	default:
+		return 1.0, false
+	}
 }
 
 // metamorphicConsistencyFactorWith is MetamorphicConsistencyFactor with an
@@ -251,9 +266,10 @@ func transformAuditFactorWith(perCase []protocol.CaseScore, enforced bool, maxPe
 // than an operator flag; the factor stays a pure function of (dataset,
 // transcript) and any third party reproduces it.
 func compositeGateV7(perCase []protocol.CaseScore, benchVersion int) float64 {
+	memoryOverCall, _ := MemoryOverCallFactorForVersion(perCase, benchVersion)
 	bounded := toolEfficiencyFactorWith(perCase, v7EffParams) *
 		metamorphicConsistencyFactorWith(perCase, v7MetamorphicMaxPenalty) *
-		memoryOverCallFactorWith(perCase, v7MemoryOverCallMaxPenalty, benchVersion)
+		memoryOverCall
 	if bounded < v7BoundedGateFloor {
 		bounded = v7BoundedGateFloor
 	}

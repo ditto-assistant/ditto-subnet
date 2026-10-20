@@ -21,6 +21,7 @@ vi.mock('../server/admin.functions', () => ({
 const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   aggregate_mode: 'fleet_ready',
   tie_weighting_mode: 'disabled',
+  statistical_band_mode: 'disabled',
   ledger_pin_mode: 'epoch',
   crown_incumbent_mode: 'disabled',
   idle_retests_enabled: false,
@@ -49,6 +50,9 @@ function control(
       aggregate_active: true,
       tie_weighting_fleet_ready: true,
       tie_weighting_active: false,
+      statistical_band_fleet_ready: false,
+      statistical_band_active: false,
+      statistical_band_required_protocol: 29,
       crown_incumbent_fleet_ready: false,
       crown_incumbent_active: false,
       crown_incumbent_required_protocol: 27,
@@ -65,6 +69,7 @@ function control(
     },
     field_support: {
       tie_weighting_mode: true,
+      statistical_band_mode: true,
       ledger_pin_mode: true,
       crown_incumbent_mode: true,
       retest_cohort_size: true,
@@ -150,6 +155,29 @@ describe('ContinualRetestControlPanel', () => {
         reason: 'pause all rescoring for the v7 rollout window',
         confirmation: CONTINUAL_RETEST_CONFIRMATION,
       },
+    })
+  })
+
+  it('labels the statistical cap separately and applies only its mode', async () => {
+    render(<ContinualRetestControlPanel initialState={control()} readOnly={false} />)
+
+    const cap = screen.getByRole('button', { name: /Cap statistical bands \(fleet ready\)/ })
+    expect(screen.getByRole('button', { name: /Legacy statistical bands \(rollback\)/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Pool ties \+ ceiling crown/ })).toBeTruthy()
+    fireEvent.click(cap)
+    fireEvent.change(screen.getByLabelText(/Operator reason/), {
+      target: { value: 'enable the reviewed statistical cap after protocol readiness' },
+    })
+    fireEvent.change(screen.getByLabelText(new RegExp(CONTINUAL_RETEST_CONFIRMATION)), {
+      target: { value: CONTINUAL_RETEST_CONFIRMATION },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply policy' }))
+
+    await waitFor(() => expect(updateContinualRetestSettings).toHaveBeenCalledTimes(1))
+    expect(updateContinualRetestSettings.mock.calls[0][0].data.settings).toEqual({
+      ...SETTINGS,
+      statistical_band_mode: 'fleet_ready',
+      tie_weighting_mode: 'disabled',
     })
   })
 
@@ -275,6 +303,7 @@ describe('ContinualRetestControlPanel', () => {
     expect(updateContinualRetestSettings.mock.calls[0][0].data.settings).toEqual({
       aggregate_mode: 'fleet_ready',
       tie_weighting_mode: 'disabled',
+      statistical_band_mode: 'disabled',
       ledger_pin_mode: 'live',
       crown_incumbent_mode: 'disabled',
       idle_retests_enabled: false,

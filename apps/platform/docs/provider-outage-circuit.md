@@ -41,13 +41,37 @@ capacity:
 
 Parking writes the circuit epoch onto the ticket or source-review row. It does
 not increment an attempt counter, mint an infrastructure retry grant, or spend
-the inconclusive-expiry cap. Each lease may consume that refund only once per
-outage epoch; another resume after the same outage keeps failing uses the
-existing finite attempt budget instead of receiving unlimited retries. When
-cooldown ends, the first scoring or screening claim atomically becomes the one
-half-open probe. All other work remains parked until that probe succeeds and
-the relay closes the circuit. A failed probe reopens the cooldown and clears
-the probe slot.
+the inconclusive-expiry cap. When cooldown ends, the first scoring or screening
+claim atomically becomes the one half-open probe. All other work remains parked
+until that probe succeeds and the relay closes the circuit. A failed probe
+reopens the cooldown and clears the probe slot.
+
+The parked epoch is a single no-fault resume, and a scoring ticket may consume
+it once. A resumed lease that is parked again, in the same or a later epoch, is
+charged against the finite attempt budget, so a flapping provider cannot mint
+unlimited paid re-leases. That includes a lease an operator grant authorized:
+once the ticket has spent its resume, the next park consumes the grant. Source
+reviews keep their per-epoch refund.
+
+Validation-retry triage therefore reports `recommended_action: null` instead of
+`retry` in two windows (ditto-subnet#2087):
+
+- **while the circuit is open**, for every recoverable below-quorum row. The
+  park filters on nothing but the live half-open probe, so a grant spent now is
+  parked whatever failed the slot before;
+- **after it closes**, for the rows the outage itself parked, until the
+  provider has recorded no failure for `PROVIDER_RECOVERY_QUIET_WINDOW` (30
+  minutes). The relay cooldown is two minutes, so a still-overloaded provider
+  flaps between open, half-open, and closed: one successful half-open probe
+  closes the circuit even when the next request re-opens it, and a grant
+  landing in that gap is parked again and charged.
+
+The detail and list responses carry `provider_outage_blocks_retry` and the
+`provider_outage` circuit snapshot so the wait is explained rather than
+inferred. While blocked, a plain grant is refused; a deliberate operator
+override must set `acknowledge_provider_outage=true`. Provider outage parking
+is infrastructure and never agent-attributable, so it never recommends
+withdrawal.
 
 Valid verdicts remain authoritative even if another request opens the circuit
 at the same time. An exhausted source-review 429 completion is instead stored
@@ -64,4 +88,8 @@ so a rolling relay cannot consume a screening attempt.
 Backroom's inference runtime metrics include the current provider circuit
 snapshot (`state`, `epoch`, cooldown, failure count, and probe ownership). This
 is the authoritative operator view; dashboards and process logs are supporting
-telemetry only.
+telemetry only. Backroom must declare `provider_outage` in its response
+schema: zod strips undeclared keys, and before ditto-subnet#2087 the MCP tool
+silently dropped the snapshot the Platform served. `get_validation_retry` and
+`list_stuck_submissions` carry the same circuit row beside their outage-aware
+recommendation.

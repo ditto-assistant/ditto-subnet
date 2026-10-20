@@ -198,11 +198,25 @@ class AdminQuarantineItem(BaseModel):
     resolution_history: list[AdminQuarantineResolutionEvent] = Field(
         default_factory=list
     )
+    agent_status: str | None = None
+    """The exact agent's current status. Null only from an older Platform."""
+    terminal_ghost: bool = False
+    """True for an active row whose exact agent is already ``banned`` or
+    ``rejected``: historical, not an actionable review (ditto-subnet#2038)."""
 
 
 class AdminQuarantineList(BaseModel):
     items: list[AdminQuarantineItem]
     count: int
+    """Every row matching the status filter; the pagination total."""
+    terminal_ghost_count: int = 0
+    """Active rows in ``count`` whose exact agent is already terminal. They are
+    reconciliation work, never actionable review backlog or queue age."""
+    actionable_count: int | None = None
+    """Active rows that still need a screening ruling (``status=active`` or
+    ``all``); null for ``status=resolved``."""
+    oldest_actionable_created_at: datetime | None = None
+    """``created_at`` of the oldest actionable active row; ghosts excluded."""
 
 
 class AdminScreeningReviewEvent(BaseModel):
@@ -270,6 +284,24 @@ class AdminQuarantineResolveRequest(BaseModel):
 class AdminQuarantineResolveResponse(BaseModel):
     quarantine: AdminQuarantineItem
     agent_status: str
+
+
+class AdminVerifiedV13ClearReleaseRequest(BaseModel):
+    """Compare-and-swap guards for releasing one held, verified v13 court clear."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8)]
+    expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    confirmation: Literal["RELEASE VERIFIED V13 COURT CLEAR"]
+
+
+class AdminVerifiedV13ClearReleaseResponse(BaseModel):
+    quarantine: AdminQuarantineItem
+    agent_status: str
+    adjudication_digest: str
+    """The signed court adjudication the release was re-verified against."""
+    idempotent: bool = False
 
 
 class AdminScreeningDisputeItem(BaseModel):
@@ -1050,6 +1082,22 @@ class AdminQuarantineBatchPreviewRequest(BaseModel):
     ]
 
 
+class AdminQuarantineTerminalRuling(BaseModel):
+    """The exact ruling that holds a quarantine's agent terminal.
+
+    A batch preview signs this into its token, and execution re-derives it
+    under the quarantine and agent row locks; any change refuses the item.
+    """
+
+    agent_status: str
+    artifact_sha256: str
+    ath_review_id: UUID | None = None
+    ath_action_id: UUID | None = None
+    """The specific ATH reject action; null only when the review predates the
+    action ledger (or for the legacy CLI ban, which cites no review)."""
+    ath_resolved_at: datetime | None = None
+
+
 class AdminQuarantineBatchPreviewItem(BaseModel):
     quarantine_id: UUID
     agent_id: UUID | None = None
@@ -1059,6 +1107,17 @@ class AdminQuarantineBatchPreviewItem(BaseModel):
     reason: str
     disposition: Literal["ready", "already_applied", "conflict", "not_found"]
     resulting_agent_status: str | None = None
+    public_reason_code: str | None = None
+    public_record_hash: str | None = None
+    terminal_reconciliation: bool = False
+    """True for a quarantine behind an already-terminal agent
+    (ditto-subnet#2038), active or already closed behind that ruling. Only
+    ``reject`` is ready, and only against an identified current ATH reject: it
+    closes the orphan and leaves the terminal agent ruling and public record
+    unchanged. A closed one replays as ``already_applied``."""
+    terminal_ruling: AdminQuarantineTerminalRuling | None = None
+    """The current terminal ruling this decision is fenced to; signed into the
+    preview token and re-checked under lock at execution."""
     message: str
 
 
@@ -1080,6 +1139,10 @@ class AdminQuarantineBatchExecuteItem(BaseModel):
     quarantine_id: UUID
     status: Literal["applied", "already_applied", "failed"]
     agent_status: str | None = None
+    terminal_reconciliation: bool = False
+    """True when ``reject`` closed an orphaned quarantine behind an
+    already-terminal agent without changing that agent's ruling."""
+    terminal_ruling: AdminQuarantineTerminalRuling | None = None
     message: str
 
 
@@ -1207,12 +1270,22 @@ class AdminBaselineDiffManifest(BaseModel):
     stock_kit_count: int
     custom_file_count: int
     # Lines that are neither baseline code nor kit code at any revision: the
-    # size of the surface a reviewer actually has to read.
+    # size of the surface a reviewer actually has to read. Summed over every
+    # compared file, not only the rows ``files`` returns.
     custom_added_lines: int
     # True when the submission's paths were realigned by stripping one wrapping
     # directory so they line up with the kit layout.
     path_aligned: bool
     truncated: bool
+    # Readable text files the bounded source read skipped (combined text budget
+    # or file cap). They were NOT compared: they appear in no ``files`` row and
+    # no count above, and ``file_count`` covers compared paths only.
+    omitted_file_count: int
+    # The first MAX_OMITTED_PATHS omitted paths, sorted.
+    omitted_paths: list[str]
+    # False whenever anything was omitted: ``custom_added_lines`` is then a
+    # lower bound, never the whole custom surface.
+    custom_added_lines_complete: bool
 
 
 class AdminBaselineDiffFileDetail(BaseModel):
@@ -1246,6 +1319,19 @@ class AdminValidatorAssignment(BaseModel):
     ] = "legacy_unclassified"
     agent_status: str | None = None
     first_reported_at: datetime | None = None
+    seed: Annotated[
+        str | None,
+        Field(
+            pattern=r"^(0|[1-9][0-9]*)$",
+            description=(
+                "Exact decimal dataset seed this lease runs, as a string so a "
+                "64-bit value survives JSON. For continual_retest it is the "
+                "shared champion-anchored seed, so two leases for one agent "
+                "with the same value are the same paired run. Null when the "
+                "ticket has no seed yet."
+            ),
+        ),
+    ] = None
 
 
 class AdminValidatorAssignmentList(BaseModel):
@@ -1288,6 +1374,8 @@ __all__ = [
     "AdminQuarantineResolutionEvent",
     "AdminQuarantineResolveRequest",
     "AdminQuarantineResolveResponse",
+    "AdminVerifiedV13ClearReleaseRequest",
+    "AdminVerifiedV13ClearReleaseResponse",
     "AdminScreeningAttempt",
     "AdminScreeningDisputeItem",
     "AdminScreeningDisputeList",

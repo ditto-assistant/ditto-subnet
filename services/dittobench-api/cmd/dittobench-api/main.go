@@ -19,6 +19,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -313,7 +314,7 @@ func main() {
 	routerBackend := routerbackend.NewOffloadedBackend(
 		strings.TrimSpace(os.Getenv("DITTOBENCH_ROUTER_OFFLOAD_URL")), allowPrivate,
 	)
-	routerGetClient := netguard.Client(allowPrivate)
+	routerGetClient := routerbackend.NewProbeClient(allowPrivate)
 	s.routerDispatcher = routerbackend.Dispatcher{
 		Backend: routerBackend,
 		Get:     routerGetClient.Get,
@@ -435,7 +436,8 @@ type capabilitiesResponse struct {
 	// SoftwareVersionOrigin mirrors SourceRevisionOrigin for software_version.
 	SoftwareVersionOrigin release.Origin `json:"software_version_origin,omitempty"`
 	// Only keys injected by this binary into a Bench v13 sandbox are covered.
-	ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"scored_runtime_env,omitempty"`
+	ScoredRuntimeEnv    *scoredRuntimeEnvEvidence `json:"scored_runtime_env,omitempty"`
+	V14ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v14_scored_runtime_env,omitempty"`
 }
 
 type scoredRuntimeEnvEvidence struct {
@@ -447,34 +449,31 @@ type scoredRuntimeEnvEvidence struct {
 }
 
 func (s *server) scoredRuntimeEnvEvidence() *scoredRuntimeEnvEvidence {
+	return s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV13)
+}
+
+func (s *server) scoredRuntimeEnvEvidenceForVersion(version int) *scoredRuntimeEnvEvidence {
 	// A practice-only scorer does not launch screened miner images and cannot
 	// attest to the scored container environment.
 	if !s.allowScreenedImages || s.sourceRevisionOrigin != release.OriginBinary || s.sourceRevisionMismatch || !canonicalSourceRevision(s.sourceRevision) {
 		return nil
 	}
-	const version = protocol.BenchVersionV13
 	keys := make([]string, 0)
 	for key := range harnessSandboxEnv(nil, version) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	material := "scored-runtime-env-v1\n13\n" + s.sourceRevision + "\n" + strings.Join(keys, "\n")
+	material := fmt.Sprintf("scored-runtime-env-v1\n%d\n", version) + s.sourceRevision + "\n" + strings.Join(keys, "\n")
 	digest := sha256.Sum256([]byte(material))
 	return &scoredRuntimeEnvEvidence{version, "scorer-injected-env-only", s.sourceRevision, keys, hex.EncodeToString(digest[:])}
 }
 
-// advertisedMinBenchVersion / advertisedMaxBenchVersion bound the capability
-// set this build ADVERTISES to validators, as a window over
-// protocol.SupportedBenchVersions() rather than a retyped list. The generator
-// and scorer already accept v13 (protocol.SupportedBenchVersion,
-// scoregates.SupportedBenchVersion, efficiency.ProductionReadyForVersion), so
-// advertising it is exactly one pin: the v13 wiring-sweep PR (#1519) moves
-// advertisedMaxBenchVersion to V13 together with the validator
-// SUPPORTED_BENCH_VERSIONS, the release.yml identity gate, and the starter-kit
-// MAX_SUPPORTED_BENCH_VERSION, so the version never strands at one layer.
+// The advertised window derives from the generator's reproducible contracts
+// and technical readiness. Extending the ceiling does not activate a version:
+// Platform's reviewed rollout and exact scorer packet govern scheduling.
 const (
 	advertisedMinBenchVersion = protocol.BenchVersionV8
-	advertisedMaxBenchVersion = protocol.BenchVersionV13
+	advertisedMaxBenchVersion = protocol.BenchVersionV14
 )
 
 // supportedBenchVersions is the capability set this build can administer. It is
@@ -500,23 +499,11 @@ type v8IsolationReporter interface {
 	V8IsolationReady(context.Context) error
 }
 
-// executesUntrustedImages reports whether this deployment can be asked to launch
-// a miner container at all. Only two paths start one: a screener-built image,
-// accepted solely under the narrow DITTOBENCH_ALLOW_SCREENED_IMAGES opt-in that
-// marks a validator-owned sandbox, and a validator-side source build, which the
-// v8 contract retires. A deployment with neither — the hosted practice endpoint
-// — serves v8 only over harness_url, driving and scoring a harness the miner
-// already runs themselves, so it has no isolation boundary to make ready.
-//
-// The source-build half is derived from validateBenchmarkImageContract rather
-// than restated, so a future version that re-enables source builds re-arms the
-// isolation gate here instead of silently leaving it exempt.
+// executesUntrustedImages reports whether this deployment can launch a miner
+// image. Canonical scoring only loads a screener-built image under the narrow
+// validator-owned opt-in. Hosted practice drives the miner's own harness_url.
 func (s *server) executesUntrustedImages() bool {
-	if s.allowScreenedImages {
-		return true
-	}
-	sourceBuild := submitRequest{BenchVersion: protocol.BenchVersionV8, TarballURL: "https://example.invalid/source.tgz"}
-	return validateBenchmarkImageContract(sourceBuild) == ""
+	return s.allowScreenedImages
 }
 
 // runtimeSupportedBenchVersions intersects the immutable scorer contract with
@@ -567,6 +554,7 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		SourceRevisionMismatch: s.sourceRevisionMismatch,
 		SoftwareVersionOrigin:  s.softwareVersionOrigin,
 		ScoredRuntimeEnv:       s.scoredRuntimeEnvEvidence(),
+		V14ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV14),
 	})
 }
 
@@ -715,7 +703,7 @@ type submitRequest struct {
 	BenchVersion int    `json:"bench_version,omitempty"`
 	HarnessURL   string `json:"harness_url,omitempty"`
 	GitURL       string `json:"git_url,omitempty"`
-	GitRef       string `json:"git_ref,omitempty"`
+	GitRef       string `json:"git_ref,omitempty"` // required full commit SHA for git_url
 	// GitSubdir selects a repository-relative Docker context after cloning a
 	// monorepo. It is valid only with GitURL and is resolved without allowing
 	// absolute paths, parent traversal, or symlink escape.
@@ -848,6 +836,12 @@ func validateGitSourceOptions(req submitRequest) string {
 	if req.GitSubdir != "" && req.GitURL == "" {
 		return "git_subdir requires git_url"
 	}
+	if req.GitRef != "" && req.GitURL == "" {
+		return "git_ref requires git_url"
+	}
+	if req.GitURL != "" && !sandbox.ValidGitCommitSHA(req.GitRef) {
+		return "git_ref must be a full 40-character lowercase commit SHA"
+	}
 	return ""
 }
 
@@ -900,7 +894,7 @@ func validateScreenedImageAccess(req submitRequest, allowScreenedImages bool) st
 }
 
 func validateBenchmarkImageContract(req submitRequest) string {
-	if req.BenchVersion >= protocol.BenchVersionV8 && req.ScreenedImageURL == "" {
+	if req.ScreenedImageURL == "" {
 		return fmt.Sprintf(
 			"benchmark version %d requires a screener-built image; source builds are disabled",
 			req.BenchVersion,
@@ -1022,7 +1016,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// Abuse guard: per-IP rate limit on the expensive submit endpoint. Skipped
 	// in local/dev mode (DITTOBENCH_ALLOW_PRIVATE_HARNESS), where a calibration
 	// loop legitimately submits in bulk from a single IP.
-	if !s.allowPrivate && !s.limiter.Allow(clientIP(r)) {
+	if !s.allowPrivate && !s.limiter.Allow(rateLimitKey(clientIP(r))) {
 		writeError(w, http.StatusTooManyRequests, "rate limit exceeded; slow down and retry shortly")
 		return
 	}
@@ -1069,13 +1063,12 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Screened-image metadata is an integrity pin, not caller authentication.
-	// Only validator-owned/private deployments may bypass the source build; the
-	// public unauthenticated practice API must always build submitted source.
+	// Only validator-owned/private deployments may load a screened image.
 	if msg := validateScreenedImageAccess(req, s.allowScreenedImages); msg != "" {
 		writeError(w, http.StatusForbidden, msg)
 		return
 	}
-	// The screened-image contract bans validator-side SOURCE BUILDS (git_url /
+	// The screened-image contract bans sandbox SOURCE BUILDS (git_url /
 	// tarball_url). A direct harness_url run never builds anything — the miner runs
 	// their own already-built harness and the API only drives + scores it — so the
 	// contract is inapplicable there. The exemption is keyed on the SOURCE KIND,
@@ -1128,7 +1121,7 @@ func (s *server) handleVersionedScore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
-	if !s.allowPrivate && !s.limiter.Allow(clientIP(r)) {
+	if !s.allowPrivate && !s.limiter.Allow(rateLimitKey(clientIP(r))) {
 		writeError(w, http.StatusTooManyRequests, "rate limit exceeded; slow down and retry shortly")
 		return
 	}
@@ -2016,6 +2009,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
 		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, c.ID, caseToolEndpoint, toolRunUserID))
 		observed := toolSrv.Observed(c.ID)
+		attachEffectAccounting(execution.ToolProvenance, toolSrv.EffectAccounting(c.ID))
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		cs = applyV10ToolProvenance(req.BenchVersion, scope, cs, resp, observed, execution)
 		cs = applyV13RestraintProvenance(req.BenchVersion, c, cs, execution)
@@ -2187,6 +2181,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
 			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, mc.ID, caseToolEndpoint, uid))
 			observedCalls := toolSrv.Observed(mc.ID)
+			attachEffectAccounting(execution.ToolProvenance, toolSrv.EffectAccounting(mc.ID))
 			resp = withObservedTrajectory(resp, observedCalls)
 			gradedResp := resp
 			projected := projectedHarnessCase{Response: resp, Observed: observedCalls}
@@ -2318,7 +2313,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			tokenUsage,
 			relayExecution,
 		); err != nil {
-			s.failRelayUnavailable(runID, err)
+			s.failRelayUnavailableWithAdmission(runID, err, relayExecution.Admission)
 			return
 		}
 	}
@@ -2397,6 +2392,12 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// details blob so it survives the platform wire alongside the other factors).
 	report.Details.ConversationalSanity = report.ConversationalSanity
 	report.Details.MetamorphicConsistency = scorer.MetamorphicConsistency(perCase)
+	// The memory over-call multiplier the composite gate applied (issue #533):
+	// the same function AggregateForVersion folds in, so a published composite
+	// decomposes into its factors from the record alone.
+	if factor, ok := scorer.MemoryOverCallFactorForVersion(perCase, req.BenchVersion); ok {
+		report.Details.MemoryOverCall = &factor
+	}
 	if tr, pairs := scorer.TransformRobustness(perCase); tr != nil {
 		report.Details.TransformRobustness = tr
 		report.Details.AuditCaseCount = pairs
@@ -3394,4 +3395,21 @@ func clientIPFromHops(r *http.Request, hops int) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// rateLimitKey buckets a client address for the per-IP limiter. An IPv6
+// client is typically assigned a whole /64 and can rotate through it freely,
+// so IPv6 is keyed by its /64 prefix; IPv4, including IPv4-mapped IPv6, stays
+// keyed per address.
+func rateLimitKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	prefix, _ := addr.Prefix(64)
+	return prefix.String()
 }

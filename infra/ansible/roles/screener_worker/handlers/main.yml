@@ -10,19 +10,29 @@
     name: "{{ screener_executor_unit }}"
     state: restarted
 
+# In check mode a first-time unit was never written, so it cannot be found.
 - name: restart ditto-screener
   ansible.builtin.systemd:
     name: "{{ screener_unit }}"
     state: restarted
+  register: screener_unit_restart
+  failed_when:
+    - screener_unit_restart.failed | default(false)
+    - not (ansible_check_mode and 'Could not find' in (screener_unit_restart.msg | default('')))
   when:
     - screener_hotkey | length > 0
     - screener_entrypoint.stat.exists | default(false)
 
 # A running timer keeps its old schedule until restarted; re-arm it after the
 # unit is rewritten (runs after "reload systemd (screener)", in listen order).
+# In check mode a first-time unit was never written, so it cannot be found.
 - name: restart screener cache cleanup timer
   ansible.builtin.systemd:
     name: "{{ screener_cache_gc_unit }}.timer"
     state: restarted
     daemon_reload: true
+  register: screener_cache_gc_restart
+  failed_when:
+    - screener_cache_gc_restart.failed | default(false)
+    - not (ansible_check_mode and 'Could not find' in (screener_cache_gc_restart.msg | default('')))
   when: screener_cache_gc_enabled | bool

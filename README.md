@@ -28,7 +28,7 @@ grader now live in [`research/dittobench-datagen`](research/dittobench-datagen).
 - `research/dittobench-datagen/`: deterministic datasets, grader, and research tools.
 - `research/dittobench-coding-datagen/`: shadow-only coding-repair capsule compiler,
   curation auditor, and disjoint public practice pack.
-- `services/screener-orchestrator/`: Targon-first screener capacity and build control.
+- `services/screener-orchestrator/`: Hetzner-first screener capacity control and trusted build support.
 - `apps/platform/`: the subnet API, durable queue, dashboard, and control plane.
 - `apps/backroom/`: the public-source SN118 operations console.
 - `workers/screener/`: the provider-neutral screening worker runtime.
@@ -54,6 +54,9 @@ the public `ditto-screening-protocol` package in `ditto-screener`.
 uv sync
 make test          # unit tests
 ```
+
+These commands only set up the repository and run local tests. They do not
+submit an agent, contact chain APIs, or require wallet secrets.
 
 ## Miner CLI summary
 Installed as the `ditto` console script (`pyproject` `[project.scripts]`):

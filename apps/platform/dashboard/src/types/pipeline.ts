@@ -13,6 +13,17 @@ import type {
 
 // ── Activity / submissions (/public/activity) ────────────────
 
+/** Coarse public reason a submission entered deferred source review. */
+export type DeferredReviewTrigger = "top_five" | "anomaly";
+
+/** Public automated-review conclusion for a held submission. */
+export type ReviewConclusion =
+  | "pending"
+  | "not_completed"
+  | "no_finding"
+  | "budget_exhausted"
+  | "adverse_signal";
+
 export interface ActivityEntry {
   agent_id?: string;
   name?: string | null;
@@ -33,6 +44,12 @@ export interface ActivityEntry {
   score_floor?: number | null;
   review_reason?: string | null;
   screening_reason?: string | null;
+  /** Why an active deferred-source-review hold was opened (#562). Empty when
+   * the row is not held for deferred review. */
+  deferred_review_triggers?: DeferredReviewTrigger[] | null;
+  /** What the automated source review concluded for a held row (#562); null
+   * when the hold has no automated conclusion (e.g. a copy review). */
+  review_conclusion?: ReviewConclusion | null;
   duplicate_of?: string | null;
   duplicate_name?: string | null;
   duplicate_version?: number | null;
@@ -121,6 +138,14 @@ export interface PipelineEntry extends ActivityEntry {
   /** "exhausted" | "cooling_down" | others advance on their own. */
   retry_state?: string | null;
   retry_after?: string | null;
+  /** "operator_hold" | "terminal_artifact_failure"; null while advancing. A
+   * parked row says whose failure it was: the fleet's, or the artifact's. */
+  retry_disposition?: string | null;
+  /** Allowlisted machine cause behind a terminal disposition, else null. */
+  terminal_failure_code?: string | null;
+  /** Allowlisted cause behind an operator hold, when every remaining slot
+   * agrees on one. Null means unattributed, not that the fleet is at fault. */
+  hold_failure_code?: string | null;
   provisional_composite?: number | null;
   active_benchmarks?: BenchmarkProgress[];
   active_bench_version?: number | null;
@@ -203,6 +228,15 @@ export interface ValidationAttempt {
     | "provider_recovery_exhausted"
     | "grant_decline_evidence_mismatch"
     | "budget_evidence_absent"
+    | "request_too_large"
+    | "invalid_json"
+    | "invalid_schema"
+    | "stale_session"
+    | "model_not_allowed"
+    | "grant_not_servable"
+    | "grant_rate_denied"
+    | "platform_capacity"
+    | "provider_failure"
     | null;
   deadline?: string | null;
   benchmark_progress?: BenchmarkProgress | null;
@@ -249,11 +283,10 @@ export interface AcceptedScore {
   gate_evidence?: GateEvidence | null;
 }
 
-/** A shared-seed continual top-five retest result. */
+/** A continual top-five retest result. Reusable seed identifiers stay private. */
 export interface ConfirmationScore {
   composite: number;
   bench_version?: number | null;
-  seed?: string | number;
   validator_hotkey?: string;
   accepted_at?: string | null;
 }
@@ -270,24 +303,59 @@ export interface Dispute {
   submitted_at?: string | null;
 }
 
+/** Live validator-retry state while a submission is below scoring quorum. */
+export interface ValidatorRetry {
+  state?: string | null;
+  disposition?: string | null;
+  terminal_failure_code?: string | null;
+  hold_failure_code?: string | null;
+  retry_after?: string | null;
+}
+
 /** Live admission-retry state while a submission is still in admission. */
 export interface AdmissionRetry {
   state?: string | null;
   attempt_count?: number | null;
   next_retry_at?: string | null;
   last_failure_infrastructure?: boolean | null;
+  /** "build" | "runtime_smoke" | "source_review"; null when unknown. */
+  lane?: string | null;
+}
+
+/** Terminal-review reward eligibility for this exact artifact (#2041).
+ *
+ * Separate from `status` and from the score fields: the score, its rank and the
+ * review history below all stand while a review is open. Absent while the
+ * operator gate is off, which is every platform running the shipped posture. */
+export interface RewardEligibilityDetail {
+  state: string;
+  /** The platform's own sentence. Rendered verbatim so this page and the board
+   * cannot word the same withheld state differently. */
+  reason: string;
+  reward_eligible: boolean;
+  posture_satisfied: boolean;
+  /** "off" | "shadow" | "enforce". */
+  enforcement: string;
+  policy_revision?: number;
+  window_start?: string;
+  /** When a clear starts earning; never backdated. */
+  activates_at?: string | null;
 }
 
 /** /public/agent/{id}/pipeline — the drawer's full history. */
 export interface PipelinePayload {
   status?: string;
+  reward_eligibility?: RewardEligibilityDetail | null;
   admission_retry?: AdmissionRetry | null;
+  validator_retry?: ValidatorRetry | null;
   quorum?: number | null;
   score_count?: number | null;
   active_bench_version?: number | null;
   score_floor?: number | null;
   provisional_scores?: AcceptedScore[];
   confirmation_scores?: ConfirmationScore[];
+  /** Seed-free per-wave medians, including agents absent from the leaderboard. */
+  confirmation_sample_composites?: number[];
   validation_attempts?: ValidationAttempt[];
   inference_runs?: InferenceRun[];
   screening_attempts?: ScreeningAttempt[];

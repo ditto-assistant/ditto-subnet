@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -209,6 +210,86 @@ async def test_unconfigured_control_token_is_rejected_by_the_scorer() -> None:
             await client.prepare_inference_session()
 
     assert seen == [("POST", "/v1/inference/session", None)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [("stack-control-token", "Bearer stack-control-token"), ("", None)],
+    ids=["configured", "unconfigured"],
+)
+async def test_scoring_calls_present_the_control_token_when_configured(
+    token: str, expected: str | None
+) -> None:
+    """The scorer protects every route but ``/health``, not just the broker.
+
+    Capability, submit, poll, transcript, and cancel must carry the same bearer
+    as the inference-session calls, or ``DITTOBENCH_CONTROL_AUTH_MODE=enforce``
+    would 401 the scoring path. An unconfigured validator sends no header at
+    all, exactly as before.
+    """
+    seen: list[tuple[str, str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(
+            (request.method, request.url.path, request.headers.get("Authorization"))
+        )
+        path = request.url.path
+        if path == "/v1/capabilities":
+            return httpx.Response(
+                200,
+                json={
+                    "software_version": "1.2.3",
+                    "source_revision": _REVISION,
+                    "supported_bench_versions": [8],
+                },
+            )
+        if path == "/v2/score":
+            return httpx.Response(202, json={"run_id": "run-1"})
+        if path.endswith("/transcript"):
+            return httpx.Response(200, content=_TRANSCRIPT)
+        if request.method == "DELETE":
+            return httpx.Response(202, json={"status": "failed"})
+        return httpx.Response(
+            200,
+            json=_done_job_with_transcript(hashlib.sha256(_TRANSCRIPT).hexdigest()),
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_control_token=token,
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+        dittobench_timeout_seconds=1.0,
+        dittobench_poll_seconds=0.0,
+        run_size="full",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        await client.scorer_benchmark_capability(_stack())
+        run_id = await client._submit(
+            tarball_url="https://example.test/agent.tgz",
+            dataset_sha256="12" * 32,
+            bench_version=8,
+            screened_image_url="https://example.test/image.tar",
+            screened_image_sha256="34" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "56" * 32,
+            screened_image_ref=(
+                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+            ),
+        )
+        await client._poll(run_id, expected_bench_version=8)
+        await client._cancel(run_id)
+
+    assert [(method, path) for method, path, _ in seen] == [
+        ("GET", "/v1/capabilities"),
+        ("POST", "/v2/score"),
+        ("GET", "/v1/runs/run-1"),
+        ("GET", "/v1/runs/run-1/transcript"),
+        ("DELETE", "/v1/runs/run-1"),
+    ]
+    assert {authorization for _, _, authorization in seen} == {expected}
 
 
 def _stack(revision: str = _REVISION) -> ValidatorStackIdentity:
@@ -805,6 +886,86 @@ async def test_binary_derived_revision_matching_the_pin_is_verified() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verified_v14_scorer_packet_is_separate_from_v13() -> None:
+    keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+    packet = {
+        "bench_version": 14,
+        "scope": "scorer-injected-env-only",
+        "source_revision": _REVISION,
+        "injected_keys": keys,
+        "sha256": hashlib.sha256(
+            (
+                "scored-runtime-env-v1\n14\n" + _REVISION + "\n" + "\n".join(keys)
+            ).encode()
+        ).hexdigest(),
+    }
+    client, http = _capability_client(
+        {
+            **_STAMPED,
+            "supported_bench_versions": [13, 14],
+            "features": ["v13-deterministic-enterprise-v1"],
+            "v14_scored_runtime_env": packet,
+        }
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (13, 14)
+    assert observed.v14_scored_runtime_env is not None
+    assert observed.v14_scored_runtime_env.sha256 == packet["sha256"]
+    assert observed.scored_runtime_env is None
+    bad = {**packet, "sha256": "0" * 64}
+    client, http = _capability_client(
+        {
+            **_STAMPED,
+            "supported_bench_versions": [13, 14],
+            "v14_scored_runtime_env": bad,
+        }
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+    assert observed.v14_scored_runtime_env is None
+
+
+@pytest.mark.parametrize(
+    ("slot", "version"), [("scored_runtime_env", 14), ("v14_scored_runtime_env", 13)]
+)
+@pytest.mark.asyncio
+async def test_packet_in_the_other_versions_slot_is_ignored(
+    slot: str, version: int
+) -> None:
+    """A validly digested packet for one version cannot fill the other's slot.
+
+    Accepting it would make the signed capability invalid, and that must not
+    downgrade an otherwise verified scorer to ``unreachable``.
+    """
+    keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+    material = f"scored-runtime-env-v1\n{version}\n{_REVISION}\n" + "\n".join(keys)
+    packet = {
+        "bench_version": version,
+        "scope": "scorer-injected-env-only",
+        "source_revision": _REVISION,
+        "injected_keys": keys,
+        "sha256": hashlib.sha256(material.encode()).hexdigest(),
+    }
+    client, http = _capability_client(
+        {
+            **_STAMPED,
+            "supported_bench_versions": [13, 14],
+            "features": ["v13-deterministic-enterprise-v1"],
+            slot: packet,
+        }
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+    assert observed.status == "fresh_verified"
+    assert observed.supported_bench_versions == (13, 14)
+    assert observed.deterministic_v13_datasets
+    assert observed.scored_runtime_env is None
+    assert observed.v14_scored_runtime_env is None
+
+
+@pytest.mark.asyncio
 async def test_verified_v13_scorer_packet_enters_signed_capability() -> None:
     keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
     material = "scored-runtime-env-v1\n13\n" + _REVISION + "\n" + "\n".join(keys)
@@ -1390,6 +1551,67 @@ async def test_timeout_tolerates_older_scorer_without_cancel_route() -> None:
             await client._poll("run-1", expected_bench_version=8)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("poll", "match"),
+    [
+        (lambda: httpx.Response(503, text="scorer restarting"), "poll rejected"),
+        (lambda: httpx.Response(200, json=["running"]), "not a JSON object"),
+        (lambda: httpx.Response(200, text="<html>bad gateway"), "not a JSON object"),
+        (
+            lambda: (_ for _ in ()).throw(httpx.ConnectError("connection reset")),
+            "poll failed",
+        ),
+    ],
+    ids=["non-200", "non-object", "invalid-json", "transport-error"],
+)
+async def test_unreadable_poll_cancels_background_run(
+    poll: Callable[[], httpx.Response], match: str
+) -> None:
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "DELETE":
+            return httpx.Response(202, json={"status": "failed"})
+        return poll()
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_timeout_seconds=60,
+        dittobench_poll_seconds=0.01,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(DittobenchError, match=match):
+            await client._poll("run-1", expected_bench_version=8)
+
+    assert methods == ["GET", "DELETE"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_failed_run_is_not_cancelled() -> None:
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        return httpx.Response(
+            200, json={"run_id": "run-1", "status": "failed", "error": "boom"}
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_timeout_seconds=60,
+        dittobench_poll_seconds=0.01,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(DittobenchError, match="failed: boom"):
+            await client._poll("run-1", expected_bench_version=8)
+
+    assert methods == ["GET"]
+
+
 def _done_job() -> dict[str, object]:
     return {
         "status": "done",
@@ -1909,6 +2131,81 @@ async def test_agent_attributable_inference_failures_stay_the_agents(
         if expected_code == "inference_request_rejected":
             assert "rejected before reservation" in str(raised.value)
             assert "exhausted" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_pre_reservation_413_is_request_too_large() -> None:
+    failure = {
+        "kind": "sandbox_failure",
+        "code": "inference_request_rejected",
+        "retryable": False,
+        "diagnostics": {
+            "admission_taxonomy": {
+                "request_too_large": {
+                    "count": 2,
+                    "http_status": 413,
+                    "first": "2026-09-24T00:00:00Z",
+                    "last": "2026-09-24T00:00:02Z",
+                }
+            }
+        },
+    }
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": "harness inference request rejected",
+                "failure": failure,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(DittobenchError) as raised:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=8
+            )
+    assert raised.value.code == "inference_request_rejected:request_too_large"
+    assert failure_detail(raised.value) == raised.value.code
+    assert "exhausted" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "non_agent_code",
+    [
+        "stale_session",
+        "grant_not_servable",
+        "grant_rate_denied",
+        "platform_capacity",
+        "provider_failure",
+    ],
+)
+async def test_mixed_admission_taxonomy_preserves_non_agent_code(
+    non_agent_code: str,
+) -> None:
+    failure = {
+        "kind": "sandbox_failure",
+        "code": "inference_request_rejected",
+        "retryable": False,
+        "diagnostics": {
+            "admission_taxonomy": {
+                "request_too_large": {"count": 3},
+                non_agent_code: {"count": 1},
+            }
+        },
+    }
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "failed", "failure": failure})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(DittobenchError) as raised:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=8
+            )
+    assert raised.value.code == f"inference_request_rejected:{non_agent_code}"
 
 
 def test_agent_inference_codes_are_never_no_fault() -> None:
@@ -2454,6 +2751,62 @@ class TestPlatformRouteProofGap:
             == "model_inference_required"
         )
         assert dittobench._platform_route_proof_gap(payload) is False
+
+
+class TestSeedDeadlineExceeded:
+    """A ``/seed`` that outlives the scorer's deadline is named, not no-fault.
+
+    ditto-subnet#2921: one validator's stalled seeds arrived as anonymous
+    ``scoring_error`` while the same artifacts seeded in minutes elsewhere. The
+    code must reach ``failure_detail``, but a harness that really embeds too
+    slowly must still run out of ordinary attempts.
+    """
+
+    _FAILURE = {
+        "kind": "validator_infrastructure",
+        "code": "seed_deadline_exceeded",
+        "retryable": True,
+    }
+
+    def test_never_mints_a_no_fault_grant(self) -> None:
+        assert "seed_deadline_exceeded" in dittobench._BOUNDED_RETRY_CODES
+        assert "seed_deadline_exceeded" not in dittobench._SANDBOX_INFRASTRUCTURE_CODES
+        payload: dict[str, object] = {"failure": self._FAILURE}
+        assert dittobench._sandbox_infrastructure_failure_code(payload) is None
+        assert dittobench._agent_attributable_failure_code(payload) is None
+        assert dittobench._platform_route_proof_gap(payload) is False
+
+    def test_requires_the_retryable_infrastructure_shape(self) -> None:
+        for kind, retryable in (
+            ("sandbox_failure", True),
+            ("validator_infrastructure", False),
+        ):
+            payload: dict[str, object] = {
+                "failure": {**self._FAILURE, "kind": kind, "retryable": retryable}
+            }
+            assert dittobench._bounded_retry_failure_code(payload) is None
+
+    @pytest.mark.asyncio
+    async def test_poll_hands_back_the_named_code(self) -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "failed",
+                    "error": "seeding v8 tool routing state failed: "
+                    "seed deadline exceeded",
+                    "failure": self._FAILURE,
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            with pytest.raises(DittobenchError) as raised:
+                await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                    "run-1", expected_bench_version=13
+                )
+        assert type(raised.value) is DittobenchError
+        assert raised.value.code == "seed_deadline_exceeded"
+        assert failure_detail(raised.value) == "seed_deadline_exceeded"
 
 
 # --- container log tail ----------------------------------------------------

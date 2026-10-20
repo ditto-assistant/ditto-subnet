@@ -16,8 +16,8 @@ sr25519 signature verbatim, so authenticity (who scored) and integrity (nothing
 reordered/dropped) are both independently checkable off the public read.
 
 Appends run inside the caller's score-write transaction, so an entry is durable
-iff its score is. A head lock (``SELECT ... FOR UPDATE`` on the latest row)
-serializes concurrent appends onto one linear chain.
+iff its score is. A transaction advisory lock serializes every append, including
+the genesis entry when no head row exists yet.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ditto.db.models import ScoreAuditEntry
 
@@ -147,11 +147,18 @@ async def append_audit_entry(
 ) -> ScoreAuditEntry:
     """Append one immutable, hash-chained entry. Must run in a transaction.
 
-    Locks the current chain head (``FOR UPDATE``) so concurrent appends serialize
-    onto a single linear chain, links this entry to the head's ``entry_hash``,
-    hashes the canonical content, and inserts. Returns the persisted row (its
-    ``seq`` is assigned on flush).
+    Lock before reading the head. A row lock alone cannot protect an empty
+    chain, and a waiter on the old head may still miss the newly inserted head.
+    The advisory lock lasts through commit, so the next append reads the actual
+    predecessor. Returns the persisted row (its ``seq`` is assigned on flush).
     """
+    await session.execute(
+        select(
+            func.pg_advisory_xact_lock(
+                func.hashtextextended("ditto-score-audit-chain", 0)
+            )
+        )
+    )
     head = (
         await session.execute(
             select(ScoreAuditEntry)

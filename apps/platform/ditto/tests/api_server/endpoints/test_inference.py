@@ -1,7 +1,9 @@
 import base64
 import copy
 import json
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -1736,6 +1738,37 @@ def test_every_field_has_exactly_one_decided_fate() -> None:
         "top_k",
     ):
         assert normal in _FORWARDED_REQUEST_FIELDS, normal
+
+
+def test_request_field_fates_match_the_published_contract() -> None:
+    """The checked-in table miners read is this partition, exactly.
+
+    The model relay asserts the same file against its Go mirror
+    (``TestRequestFieldFatesMatchThePublishedContract``), so a fate changed in
+    only one language fails one of the two suites.
+    """
+    docs = Path(__file__).parents[6] / "docs"
+    contract = json.loads((docs / "inference-request-fields.json").read_text())
+    assert set(contract["forwarded"]) == _FORWARDED_REQUEST_FIELDS
+    assert set(contract["pinned"]) == _PINNED_REQUEST_FIELDS
+    assert set(contract["dropped"]) == _DROPPED_REQUEST_FIELDS
+    assert contract["refused"] == _REFUSED_REQUEST_FIELDS
+    assert set(contract["forwarded_value_limits"]) <= _FORWARDED_REQUEST_FIELDS
+
+    # The miner guide renders the same table. A row that disagrees with it
+    # misinforms miners about which requests fail a scored run.
+    guide = (docs / "MINER.md").read_text()
+    section = guide.split("\n## Inference request contract\n", 1)[1].split("\n## ")[0]
+    rows = [
+        [cell.strip() for cell in line.strip("|").split("|")]
+        for line in section.splitlines()
+        if line.startswith("| ")
+    ]
+    fields = {row[0]: set(re.findall(r"`([^`]+)`", row[1])) for row in rows}
+    for fate in ("forwarded", "pinned", "dropped"):
+        assert fields[fate.capitalize()] == set(contract[fate]), fate
+    refused = {row[0].strip("`"): row[1] for row in rows if row[0].startswith("`")}
+    assert refused == contract["refused"]
 
 
 def test_caller_shape_rejections_do_not_cool_shared_provider_route() -> None:

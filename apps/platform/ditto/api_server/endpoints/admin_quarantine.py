@@ -9,12 +9,13 @@ import json
 import logging
 import secrets
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import ValidationError
+from pydantic import AwareDatetime, StringConstraints, ValidationError
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -58,6 +59,7 @@ from ditto.api_models.admin_quarantine import (
     AdminQuarantineResolutionEvent,
     AdminQuarantineResolveRequest,
     AdminQuarantineResolveResponse,
+    AdminQuarantineTerminalRuling,
     AdminRejectScreeningRequest,
     AdminRejectScreeningResponse,
     AdminScreenedImageRebuildDetail,
@@ -97,6 +99,8 @@ from ditto.api_models.admin_quarantine import (
     AdminValidatorAssignmentList,
     AdminValidatorAssignmentReleaseRequest,
     AdminValidatorAssignmentReleaseResponse,
+    AdminVerifiedV13ClearReleaseRequest,
+    AdminVerifiedV13ClearReleaseResponse,
     resolution_reason_code,
     review_event_resolution_reason_code,
 )
@@ -122,7 +126,10 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
-from ditto.api_server.endpoints.screener import _derive_dataset_seed
+from ditto.api_server.endpoints.screener import (
+    _derive_dataset_seed,
+    completion_receipt_verifies,
+)
 from ditto.api_server.endpoints.validator import ChainDep
 from ditto.api_server.shadow_review import shadow_review_observation
 from ditto.api_server.source_diff import (
@@ -139,10 +146,11 @@ from ditto.api_server.source_inspect import (
     TarSourceInspector,
 )
 from ditto.api_server.starter_kit import (
-    align_candidate_paths,
     is_stock_kit_text,
     starter_kit_head_text,
     starter_kit_provenance,
+    strip_wrapping_root,
+    wrapping_root,
 )
 from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
 from ditto.db.models import (
@@ -195,17 +203,36 @@ from ditto.db.queries.benchmark_rollout import (
     maybe_activate_rollout,
     open_rollout,
 )
+from ditto.db.queries.moderation_audit import (
+    ACTION_PROVENANCE_REVOCATION,
+    ACTION_REJECT,
+    ACTION_RESCREEN,
+    ModerationAuditUnavailable,
+    preview_moderation_record,
+    public_status,
+    record_moderation_audit_if_enabled,
+)
 from ditto.db.queries.payments import (
     get_miner_coldkey_for_agent,
     get_miner_coldkeys_for_agents,
 )
 from ditto.db.queries.screening_review_deadlines import review_deadline_binding
 from ditto.db.queries.screening_review_events import append_manual_review_event
+from ditto.db.queries.terminal_quarantine_reconciliation import (
+    TERMINAL_QUARANTINE_AGENT_STATUSES,
+    TERMINAL_RECONCILIATION_RESOLUTION,
+    TerminalRuling,
+    current_terminal_ruling,
+    is_terminal_quarantine_ghost,
+    reconcile_terminal_quarantine,
+    terminal_reconciliation_record,
+)
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol import (
     AdjudicationCompletionReceipt,
     AdjudicationRunDiagnostic,
+    SourceReviewAdjudication,
     SourceReviewNote,
     source_review_notes_digest,
 )
@@ -224,6 +251,46 @@ GeneratorDep = Annotated[DatasetGenerator, Depends(get_dataset_generator)]
 StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
 DatasetPin = tuple[int, int, str, str, int | None, str | None]
 BATCH_PREVIEW_TTL = timedelta(minutes=10)
+V13_AWAITING_VERIFICATION_CODE = "source-review-awaiting-v13-verification"
+_USE_AGENT_IMAGE = object()
+
+
+async def _publish_moderation(
+    session: AsyncSession,
+    *,
+    action_type: str,
+    agent: Agent,
+    previous_status: object,
+    resulting_status: object,
+    recorded_at: datetime,
+    artifact_sha256: str | None = None,
+    screened_image_sha256: str | None | object = _USE_AGENT_IMAGE,
+    related_action_id: str | None = None,
+) -> None:
+    """Append the public moderation record in the caller's transaction."""
+    image_sha = (
+        agent.screened_image_sha256
+        if screened_image_sha256 is _USE_AGENT_IMAGE
+        else screened_image_sha256
+    )
+    try:
+        await record_moderation_audit_if_enabled(
+            session,
+            action_type=action_type,
+            agent_id=agent.agent_id,
+            miner_hotkey=agent.miner_hotkey,
+            artifact_sha256=artifact_sha256 or agent.sha256,
+            screened_image_sha256=image_sha if isinstance(image_sha, str) else None,
+            previous_status=public_status(previous_status),
+            resulting_status=public_status(resulting_status),
+            recorded_at=recorded_at,
+            related_action_id=related_action_id,
+        )
+    except ModerationAuditUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="public audit record could not be published",
+        ) from exc
 
 
 async def require_admin(
@@ -430,6 +497,8 @@ def _item(
             )
             for event in history or []
         ],
+        agent_status=agent.status.value,
+        terminal_ghost=is_terminal_quarantine_ghost(row, agent),
     )
 
 
@@ -571,18 +640,52 @@ def _preview_signature_payload(
     ).encode()
 
 
+def _terminal_fence_payload(
+    decisions_digest: str,
+    terminal_rulings: list[AdminQuarantineTerminalRuling | None],
+    terminal_reconciliations: list[bool],
+) -> bytes:
+    return json.dumps(
+        {
+            "decisions_digest": decisions_digest,
+            "terminal_reconciliations": terminal_reconciliations,
+            "terminal_rulings": [
+                ruling.model_dump(mode="json") if ruling is not None else None
+                for ruling in terminal_rulings
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+
 def _sign_batch_preview(
     secret: str,
     actor: str,
     decisions: list[AdminQuarantineBatchDecision],
     issued_at: int,
+    terminal_rulings: list[AdminQuarantineTerminalRuling | None],
+    terminal_reconciliations: list[bool],
 ) -> str:
+    """``issued_at.decisions_digest.terminal_fence_digest``.
+
+    The second digest binds each item's previewed terminal ruling (or its
+    absence) and terminal classification, so an unidentified terminal ruling
+    cannot be confused with a nonterminal preview. Execution refuses a batch
+    whose terminal state moved
+    (ditto-subnet#2038) with its own message.
+    """
     digest = hmac.new(
         secret.encode(),
         _preview_signature_payload(actor, decisions, issued_at),
         hashlib.sha256,
     ).hexdigest()
-    return f"{issued_at}.{digest}"
+    fence = hmac.new(
+        secret.encode(),
+        _terminal_fence_payload(digest, terminal_rulings, terminal_reconciliations),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{issued_at}.{digest}.{fence}"
 
 
 def _verify_batch_preview(
@@ -590,9 +693,11 @@ def _verify_batch_preview(
     secret: str,
     actor: str,
     decisions: list[AdminQuarantineBatchDecision],
+    terminal_rulings: list[AdminQuarantineTerminalRuling | None],
+    terminal_reconciliations: list[bool],
 ) -> None:
     try:
-        issued_text, _digest = token.split(".", 1)
+        issued_text, digest, fence = token.split(".")
         issued_at = int(issued_text)
     except (TypeError, ValueError):
         raise HTTPException(
@@ -603,11 +708,19 @@ def _verify_batch_preview(
         raise HTTPException(
             status_code=409, detail="batch preview expired; preview again"
         )
-    expected = _sign_batch_preview(secret, actor, decisions, issued_at)
-    if not secrets.compare_digest(token, expected):
+    expected = _sign_batch_preview(
+        secret, actor, decisions, issued_at, terminal_rulings, terminal_reconciliations
+    )
+    _issued, expected_digest, expected_fence = expected.split(".")
+    if not secrets.compare_digest(digest, expected_digest):
         raise HTTPException(
             status_code=409,
             detail="batch decisions changed after preview; preview again",
+        )
+    if not secrets.compare_digest(fence, expected_fence):
+        raise HTTPException(
+            status_code=409,
+            detail="terminal ruling changed after preview; preview again",
         )
 
 
@@ -727,6 +840,7 @@ async def list_validator_assignments(
             purpose=str(ticket.purpose),  # type: ignore[arg-type]
             agent_status=agent.status.value,
             first_reported_at=ticket.first_reported_at,
+            seed=str(ticket.seed) if ticket.seed is not None else None,
         )
         for ticket, agent, score_count, provisional_composite in rows
     ]
@@ -835,6 +949,29 @@ async def list_quarantines(
     if status != "all":
         count_stmt = count_stmt.where(ScreeningQuarantine.status == status)
     total = int((await session.scalar(count_stmt)) or 0)
+    terminal_ghost_count = 0
+    actionable_count: int | None = None
+    oldest_actionable_created_at: datetime | None = None
+    if status != "resolved":
+        # An active row behind an already-terminal agent is reconciliation
+        # work, not review backlog: keep it out of the actionable count and
+        # the oldest-age clock (ditto-subnet#2038).
+        is_ghost = Agent.status.in_(tuple(TERMINAL_QUARANTINE_AGENT_STATUSES))
+        active = (
+            await session.execute(
+                select(
+                    func.count().filter(is_ghost),
+                    func.count().filter(~is_ghost),
+                    func.min(ScreeningQuarantine.created_at).filter(~is_ghost),
+                )
+                .select_from(ScreeningQuarantine)
+                .join(Agent, Agent.agent_id == ScreeningQuarantine.agent_id)
+                .where(ScreeningQuarantine.status == "active")
+            )
+        ).one()
+        terminal_ghost_count = int(active[0] or 0)
+        actionable_count = int(active[1] or 0)
+        oldest_actionable_created_at = active[2]
     rows = (await session.execute(stmt)).all()
     history = await _resolution_history(
         session, [quarantine.quarantine_id for quarantine, _agent in rows]
@@ -851,7 +988,13 @@ async def list_quarantines(
         )
         for quarantine, agent in rows
     ]
-    return AdminQuarantineList(items=items, count=total)
+    return AdminQuarantineList(
+        items=items,
+        count=total,
+        terminal_ghost_count=terminal_ghost_count,
+        actionable_count=actionable_count,
+        oldest_actionable_created_at=oldest_actionable_created_at,
+    )
 
 
 @router.post(
@@ -924,11 +1067,27 @@ async def _preview_batch_decision(
             disposition="conflict",
             message="submission identity changed",
         )
+    reconciled = await terminal_reconciliation_record(session, quarantine=quarantine)
+    if reconciled is not None or is_terminal_quarantine_ghost(quarantine, agent):
+        return await _preview_terminal_reconciliation(
+            session,
+            decision=decision,
+            agent=agent,
+            reconciled=reconciled,
+            base=base,
+        )
     target = {
         "release": AgentStatus.EVALUATING,
         "rescreen": AgentStatus.SCREENING_FAILED,
         "reject": AgentStatus.REJECTED,
     }[decision.resolution]
+    public_reason_code, public_record_hash = preview_moderation_record(
+        action_type=decision.resolution,
+        artifact_sha256=agent.sha256,
+        screened_image_sha256=agent.screened_image_sha256,
+        previous_status=public_status(agent.status),
+        resulting_status=public_status(target),
+    )
     if (
         quarantine.status == "resolved"
         and quarantine.resolution == decision.resolution
@@ -940,6 +1099,8 @@ async def _preview_batch_decision(
             **base,
             disposition="already_applied",
             resulting_agent_status=target,
+            public_reason_code=public_reason_code,
+            public_record_hash=public_record_hash,
             message="this exact operator decision is already recorded",
         )
     is_initial = (
@@ -961,7 +1122,99 @@ async def _preview_batch_decision(
         **base,
         disposition="ready",
         resulting_agent_status=target,
+        public_reason_code=public_reason_code,
+        public_record_hash=public_record_hash,
         message=f"will set submission status to {target}",
+    )
+
+
+def _terminal_ruling_wire(
+    ruling: TerminalRuling | None,
+) -> AdminQuarantineTerminalRuling | None:
+    if ruling is None:
+        return None
+    return AdminQuarantineTerminalRuling(
+        agent_status=ruling.agent_status,
+        artifact_sha256=ruling.artifact_sha256,
+        ath_review_id=ruling.ath_review_id,
+        ath_action_id=ruling.ath_action_id,
+        ath_resolved_at=ruling.ath_resolved_at,
+    )
+
+
+async def _preview_terminal_reconciliation(
+    session: AsyncSession,
+    *,
+    decision: AdminQuarantineBatchDecision,
+    agent: Agent,
+    reconciled: ScreeningReviewEvent | None,
+    base: dict[str, object],
+) -> AdminQuarantineBatchPreviewItem:
+    """Preview a quarantine behind an already-terminal agent (ditto-subnet#2038).
+
+    Only ``reject`` agrees with a terminal ruling; it closes the quarantine
+    without changing the agent or publishing a new record. It is ready only
+    against the identified current ATH reject for this exact agent and
+    artifact, which the preview returns and its token signs. A quarantine
+    already closed behind a terminal ruling -- by the ruling itself or by any
+    operator -- replays as ``already_applied``.
+    """
+    ruling = _terminal_ruling_wire(await current_terminal_ruling(session, agent=agent))
+    status = agent.status.value
+    if reconciled is not None:
+        if decision.resolution != TERMINAL_RECONCILIATION_RESOLUTION:
+            return AdminQuarantineBatchPreviewItem(
+                **base,  # type: ignore[arg-type]
+                disposition="conflict",
+                terminal_reconciliation=True,
+                terminal_ruling=ruling,
+                message=(
+                    "quarantine was already closed behind a terminal ruling; "
+                    "no screening decision applies"
+                ),
+            )
+        return AdminQuarantineBatchPreviewItem(
+            **base,  # type: ignore[arg-type]
+            disposition="already_applied",
+            resulting_agent_status=status,
+            terminal_reconciliation=True,
+            terminal_ruling=ruling,
+            message=(
+                f"orphaned quarantine already closed by {reconciled.actor}; "
+                "terminal agent ruling unchanged"
+            ),
+        )
+    if ruling is None:
+        return AdminQuarantineBatchPreviewItem(
+            **base,  # type: ignore[arg-type]
+            disposition="conflict",
+            terminal_reconciliation=True,
+            message=(
+                f"submission is already {status}, but no current ATH reject "
+                "identifies this exact agent and artifact; not reconcilable"
+            ),
+        )
+    if decision.resolution != TERMINAL_RECONCILIATION_RESOLUTION:
+        return AdminQuarantineBatchPreviewItem(
+            **base,  # type: ignore[arg-type]
+            disposition="conflict",
+            terminal_reconciliation=True,
+            terminal_ruling=ruling,
+            message=(
+                f"submission is already {status}; only reject can close this "
+                "orphaned quarantine"
+            ),
+        )
+    return AdminQuarantineBatchPreviewItem(
+        **base,  # type: ignore[arg-type]
+        disposition="ready",
+        resulting_agent_status=status,
+        terminal_reconciliation=True,
+        terminal_ruling=ruling,
+        message=(
+            f"will close the orphaned quarantine; submission stays {status} "
+            "under its terminal ruling"
+        ),
     )
 
 
@@ -992,7 +1245,12 @@ async def preview_quarantine_batch(
     assert secret is not None
     return AdminQuarantineBatchPreviewResponse(
         preview_token=_sign_batch_preview(
-            secret, x_admin_actor, payload.decisions, issued_at
+            secret,
+            x_admin_actor,
+            payload.decisions,
+            issued_at,
+            [item.terminal_ruling for item in items],
+            [item.terminal_reconciliation for item in items],
         ),
         expires_at=datetime.fromtimestamp(issued_at, UTC) + BATCH_PREVIEW_TTL,
         items=items,
@@ -1004,6 +1262,76 @@ async def preview_quarantine_batch(
             item.disposition in {"conflict", "not_found"} for item in items
         ),
     )
+
+
+async def _apply_batch_resolution(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    quarantine: ScreeningQuarantine,
+    decision: AdminQuarantineBatchDecision,
+    actor: str,
+    new_dataset: DatasetPin | None,
+) -> AgentStatus:
+    """Apply one previewed ruling to a locked quarantine and its locked agent."""
+    prior_agent_status = agent.status
+    target = {
+        "release": AgentStatus.EVALUATING,
+        "rescreen": AgentStatus.SCREENING_FAILED,
+        "reject": AgentStatus.REJECTED,
+    }[decision.resolution]
+    now = datetime.now(UTC)
+    agent.status = target
+    agent.screening_reason = decision.reason
+    agent.screening_reason_code = resolution_reason_code(decision.resolution)
+    await _apply_dataset(session, agent, new_dataset)
+    quarantine.status = "resolved"
+    quarantine.resolved_at = now
+    quarantine.resolved_by = actor
+    quarantine.resolution = decision.resolution
+    quarantine.resolution_reason = decision.reason
+    if decision.resolution == "rescreen":
+        score_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(Score)
+                .where(Score.agent_id == agent.agent_id)
+            )
+            or 0
+        )
+        await _authorize_screening_retry(
+            session,
+            agent=agent,
+            attempt_id=quarantine.attempt_id,
+            expected_score_count=score_count,
+            reason=decision.reason,
+            actor=actor,
+            now=now,
+        )
+    resolution_id = uuid4()
+    session.add(
+        ScreeningQuarantineResolution(
+            resolution_id=resolution_id,
+            quarantine_id=quarantine.quarantine_id,
+            resolution=decision.resolution,
+            reason=decision.reason,
+            actor=actor,
+            created_at=now,
+        )
+    )
+    await append_manual_review_event(
+        session,
+        agent=agent,
+        quarantine=quarantine,
+        resolution_id=resolution_id,
+        resolution=decision.resolution,
+        reason=decision.reason,
+        actor=actor,
+        prior_agent_status=prior_agent_status,
+        next_agent_status=target,
+        created_at=now,
+    )
+    return target
 
 
 @router.post(
@@ -1029,26 +1357,49 @@ async def execute_quarantine_batch(
         )
     secret = request.app.state.config.admin_api_token
     assert secret is not None
+    # The token signs each item's previewed terminal ruling. Re-derive them now
+    # so a batch whose terminal state moved since the preview is refused whole.
+    previewed_items = [
+        await _preview_batch_decision(session, decision, x_admin_actor)
+        for decision in payload.decisions
+    ]
+    previewed_rulings = [item.terminal_ruling for item in previewed_items]
+    previewed_terminal = [item.terminal_reconciliation for item in previewed_items]
+    await session.rollback()
     _verify_batch_preview(
         payload.preview_token,
         secret,
         x_admin_actor,
         payload.decisions,
+        previewed_rulings,
+        previewed_terminal,
     )
 
     results: list[AdminQuarantineBatchExecuteItem] = []
-    for decision in payload.decisions:
+    for decision, previewed_ruling, was_terminal in zip(
+        payload.decisions, previewed_rulings, previewed_terminal, strict=True
+    ):
         try:
             preview = await _preview_batch_decision(session, decision, x_admin_actor)
             # End the read-only implicit transaction before the per-item write
             # transaction (and before release dataset preparation).
             await session.rollback()
+            if (
+                preview.terminal_ruling != previewed_ruling
+                or preview.terminal_reconciliation != was_terminal
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="terminal ruling changed after preview; preview again",
+                )
             if preview.disposition == "already_applied":
                 results.append(
                     AdminQuarantineBatchExecuteItem(
                         quarantine_id=decision.quarantine_id,
                         status="already_applied",
                         agent_status=preview.resulting_agent_status,
+                        terminal_reconciliation=preview.terminal_reconciliation,
+                        terminal_ruling=preview.terminal_ruling,
                         message=preview.message,
                     )
                 )
@@ -1101,76 +1452,82 @@ async def execute_quarantine_batch(
                     and agent.status == AgentStatus.REJECTED
                     and decision.resolution == "release"
                 )
-                if not is_initial and not is_correction:
+                # Fence the previewed terminal state under both row locks
+                # (ditto-subnet#2038): the same classification, and for a
+                # reconciliation the same ruling on the same artifact.
+                is_terminal_ghost = is_terminal_quarantine_ghost(quarantine, agent)
+                replayed = (
+                    previewed_ruling is not None
+                    and not is_terminal_ghost
+                    and await terminal_reconciliation_record(
+                        session, quarantine=quarantine
+                    )
+                    is not None
+                )
+                locked_ruling = (
+                    await current_terminal_ruling(session, agent=agent)
+                    if is_terminal_ghost or replayed
+                    else None
+                )
+                if (
+                    _terminal_ruling_wire(locked_ruling) != previewed_ruling
+                    or (is_terminal_ghost or replayed) != was_terminal
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="terminal ruling changed after preview",
+                    )
+                if replayed:
+                    # A concurrent execution closed it behind this same ruling.
+                    target = agent.status
+                elif (
+                    is_terminal_ghost
+                    and locked_ruling is not None
+                    and decision.resolution == TERMINAL_RECONCILIATION_RESOLUTION
+                ):
+                    await reconcile_terminal_quarantine(
+                        session,
+                        agent=agent,
+                        quarantine=quarantine,
+                        actor=x_admin_actor,
+                        reason=decision.reason,
+                        now=datetime.now(UTC),
+                        source="operator_reconciliation",
+                        ruling=locked_ruling,
+                    )
+                    target = agent.status
+                elif not is_initial and not is_correction:
                     raise HTTPException(
                         status_code=409,
                         detail="quarantine changed after preview",
                     )
-                prior_agent_status = agent.status
-                target = {
-                    "release": AgentStatus.EVALUATING,
-                    "rescreen": AgentStatus.SCREENING_FAILED,
-                    "reject": AgentStatus.REJECTED,
-                }[decision.resolution]
-                now = datetime.now(UTC)
-                agent.status = target
-                agent.screening_reason = decision.reason
-                agent.screening_reason_code = resolution_reason_code(
-                    decision.resolution
-                )
-                await _apply_dataset(session, agent, new_dataset)
-                quarantine.status = "resolved"
-                quarantine.resolved_at = now
-                quarantine.resolved_by = x_admin_actor
-                quarantine.resolution = decision.resolution
-                quarantine.resolution_reason = decision.reason
-                if decision.resolution == "rescreen":
-                    score_count = int(
-                        await session.scalar(
-                            select(func.count())
-                            .select_from(Score)
-                            .where(Score.agent_id == agent.agent_id)
-                        )
-                        or 0
-                    )
-                    await _authorize_screening_retry(
+                else:
+                    target = await _apply_batch_resolution(
                         session,
                         agent=agent,
-                        attempt_id=quarantine.attempt_id,
-                        expected_score_count=score_count,
-                        reason=decision.reason,
+                        quarantine=quarantine,
+                        decision=decision,
                         actor=x_admin_actor,
-                        now=now,
+                        new_dataset=new_dataset,
                     )
-                resolution_id = uuid4()
-                session.add(
-                    ScreeningQuarantineResolution(
-                        resolution_id=resolution_id,
-                        quarantine_id=quarantine.quarantine_id,
-                        resolution=decision.resolution,
-                        reason=decision.reason,
-                        actor=x_admin_actor,
-                        created_at=now,
-                    )
-                )
-                await append_manual_review_event(
-                    session,
-                    agent=agent,
-                    quarantine=quarantine,
-                    resolution_id=resolution_id,
-                    resolution=decision.resolution,
-                    reason=decision.reason,
-                    actor=x_admin_actor,
-                    prior_agent_status=prior_agent_status,
-                    next_agent_status=target,
-                    created_at=now,
-                )
             results.append(
                 AdminQuarantineBatchExecuteItem(
                     quarantine_id=decision.quarantine_id,
-                    status="applied",
+                    status="already_applied" if replayed else "applied",
                     agent_status=target,
-                    message="decision applied and audit event recorded",
+                    terminal_reconciliation=previewed_ruling is not None,
+                    terminal_ruling=previewed_ruling,
+                    message=(
+                        "orphaned quarantine was already closed behind this "
+                        "terminal ruling"
+                    )
+                    if replayed
+                    else (
+                        "orphaned quarantine closed and audit event recorded; "
+                        "terminal agent ruling unchanged"
+                    )
+                    if previewed_ruling is not None
+                    else "decision applied and audit event recorded",
                 )
             )
         except HTTPException as exc:
@@ -1561,6 +1918,16 @@ async def resolve_quarantine(
             and payload.resolution == "release"
         )
         if not is_initial_resolution and not is_rejection_correction:
+            if is_terminal_quarantine_ghost(quarantine, agent):
+                # This route has no exact identity fence, so it never closes
+                # an orphan behind a terminal ruling (ditto-subnet#2038).
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"submission is already {agent.status.value}; close "
+                        "this orphaned quarantine with a fenced batch reject"
+                    ),
+                )
             raise HTTPException(
                 status_code=409,
                 detail="quarantine is not active or a correctable rejection",
@@ -1631,6 +1998,305 @@ async def resolve_quarantine(
     return AdminQuarantineResolveResponse(
         quarantine=_item(quarantine, agent, history[quarantine.quarantine_id], coldkey),
         agent_status=agent.status,
+    )
+
+
+async def _verified_v13_court_clear(
+    session: AsyncSession, quarantine: ScreeningQuarantine, agent: Agent
+) -> dict[str, object]:
+    """Re-verify a held v13 court clear from the evidence Platform retained.
+
+    Platform accepts a v13 court clear only as a held quarantine. Releasing it
+    needs the proof the verdict receipt gate checked, re-derived from stored
+    rows rather than trusted: the exact attempt and artifact, an enforced
+    adjudicator posture bound to the claim, a ``clear`` adjudication matching
+    its signed digest, and the screener's completion-receipt signature over
+    both. Any gap refuses with 409 and the hold stays for ordinary review.
+    """
+    if quarantine.policy_version < 13:
+        raise HTTPException(
+            status_code=409,
+            detail="only a policy v13 court clear can be released this way",
+        )
+    codes = {
+        item.get("code") for item in quarantine.evidence or [] if isinstance(item, dict)
+    }
+    if (
+        quarantine.reason_code != "adjudicated-source-review-clear"
+        or V13_AWAITING_VERIFICATION_CODE not in codes
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="quarantine is not a v13 court clear awaiting verification",
+        )
+    attempt = await session.get(ScreeningAttempt, quarantine.attempt_id)
+    if (
+        attempt is None
+        or attempt.agent_id != agent.agent_id
+        or attempt.policy_version != quarantine.policy_version
+        or attempt.screener_hotkey != quarantine.screener_hotkey
+        or attempt.artifact_sha256 is None
+        or attempt.artifact_sha256.lower() != agent.sha256.lower()
+    ):
+        raise HTTPException(
+            status_code=409, detail="court clear is not bound to this artifact"
+        )
+    revision = (
+        await session.get(
+            ScreenerReviewSettingsRevision, attempt.review_settings_revision
+        )
+        if attempt.review_settings_revision is not None
+        else None
+    )
+    if (
+        revision is None
+        or revision.checksum != attempt.review_settings_checksum
+        or revision.scope != attempt.review_settings_scope
+        or ScreenerReviewSettings.model_validate(revision.settings).adjudicator_mode
+        != "enforce"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="court clear was not produced under an enforced adjudicator",
+        )
+    event = await session.scalar(
+        select(ScreeningReviewEvent).where(
+            ScreeningReviewEvent.attempt_id == attempt.attempt_id,
+            ScreeningReviewEvent.event_kind == "automated",
+            ScreeningReviewEvent.quarantine_id == quarantine.quarantine_id,
+        )
+    )
+    evidence = event.evidence if event is not None else {}
+    try:
+        adjudication = SourceReviewAdjudication.model_validate(
+            evidence.get("adjudication")
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=409, detail="signed court adjudication was not retained"
+        ) from exc
+    if adjudication.decision != "clear":
+        raise HTTPException(
+            status_code=409,
+            detail=f"court decision is {adjudication.decision}, not clear",
+        )
+    if (
+        adjudication.policy_version != attempt.policy_version
+        or not adjudication.prompt_revision.endswith(
+            f"-policy-v{attempt.policy_version}"
+        )
+    ):
+        raise HTTPException(
+            status_code=409, detail="court adjudication policy mismatch"
+        )
+    digest = adjudication.canonical_digest()
+    if evidence.get("adjudication_digest") != digest:
+        raise HTTPException(
+            status_code=409,
+            detail="retained adjudication does not match its signed digest",
+        )
+    receipt = adjudication.completion_receipt
+    signature = evidence.get("completion_receipt_signature")
+    if (
+        receipt is None
+        or receipt.model_dump(mode="json") != quarantine.court_completion_receipt
+        or not isinstance(signature, str)
+    ):
+        raise HTTPException(
+            status_code=409, detail="court completion receipt was not retained"
+        )
+    if not completion_receipt_verifies(
+        screener_hotkey=attempt.screener_hotkey,
+        agent_id=agent.agent_id,
+        attempt_id=attempt.attempt_id,
+        artifact_sha256=attempt.artifact_sha256.lower(),
+        adjudication_digest=digest,
+        receipt=receipt,
+        signature=signature,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="court completion receipt signature did not verify",
+        )
+    return {
+        "attempt_id": str(attempt.attempt_id),
+        "adjudication_digest": digest,
+        "completion_receipt_signer": attempt.screener_hotkey,
+        "review_settings_revision": revision.revision,
+    }
+
+
+async def _verified_clear_release_target(
+    session: AsyncSession,
+    quarantine_id: UUID,
+    payload: AdminVerifiedV13ClearReleaseRequest,
+    actor: str,
+    *,
+    for_update: bool,
+) -> tuple[ScreeningQuarantine, Agent, dict[str, object], bool]:
+    """Return the rows, verified court evidence, and whether already released.
+
+    Only this exact operator decision (actor and reason) recorded by this path
+    replays as idempotent; any other resolved quarantine is a conflict.
+    """
+    quarantine_stmt = select(ScreeningQuarantine).where(
+        ScreeningQuarantine.quarantine_id == quarantine_id
+    )
+    quarantine = await session.scalar(
+        quarantine_stmt.with_for_update() if for_update else quarantine_stmt
+    )
+    if quarantine is None:
+        raise HTTPException(status_code=404, detail="quarantine not found")
+    agent_stmt = select(Agent).where(Agent.agent_id == quarantine.agent_id)
+    agent = await session.scalar(
+        agent_stmt.with_for_update() if for_update else agent_stmt
+    )
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    if agent.sha256 != payload.expected_sha256:
+        raise HTTPException(status_code=409, detail="artifact identity changed")
+    if (
+        quarantine.status == "resolved"
+        and quarantine.resolution == "release"
+        and quarantine.resolved_by == actor
+        and quarantine.resolution_reason == payload.reason
+    ):
+        released = await session.scalar(
+            select(ScreeningReviewEvent.evidence)
+            .where(
+                ScreeningReviewEvent.quarantine_id == quarantine_id,
+                ScreeningReviewEvent.event_kind == "manual",
+                ScreeningReviewEvent.effective_decision == "release",
+            )
+            .order_by(
+                ScreeningReviewEvent.created_at.desc(),
+                ScreeningReviewEvent.event_id.desc(),
+            )
+            .limit(1)
+        )
+        if released is not None and "verified_v13_court_clear" in released:
+            return quarantine, agent, released["verified_v13_court_clear"], True
+    if quarantine.status != "active" or agent.status != AgentStatus.QUARANTINED:
+        raise HTTPException(status_code=409, detail="quarantine is not active")
+    # Only the hold on the agent's latest attempt may be released: an older
+    # court clear must never release a quarantine from a later screen, even of
+    # the same artifact. Same ordering as the claim path's latest attempt.
+    latest_attempt_id = await session.scalar(
+        select(ScreeningAttempt.attempt_id)
+        .where(ScreeningAttempt.agent_id == agent.agent_id)
+        .order_by(
+            ScreeningAttempt.started_at.desc(), ScreeningAttempt.attempt_id.desc()
+        )
+        .limit(1)
+    )
+    if quarantine.attempt_id is None or quarantine.attempt_id != latest_attempt_id:
+        raise HTTPException(
+            status_code=409, detail="a later screening attempt supersedes this hold"
+        )
+    return (
+        quarantine,
+        agent,
+        await _verified_v13_court_clear(session, quarantine, agent),
+        False,
+    )
+
+
+@router.post(
+    "/screening-quarantines/{quarantine_id}/release-verified-v13-clear",
+    response_model=AdminVerifiedV13ClearReleaseResponse,
+)
+async def release_verified_v13_court_clear(
+    quarantine_id: UUID,
+    payload: AdminVerifiedV13ClearReleaseRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    chain: ChainDep,
+    generator: GeneratorDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminVerifiedV13ClearReleaseResponse:
+    """Release one held v13 court clear after re-verifying its signed receipt.
+
+    A narrow path beside ``resolve_quarantine`` for the
+    ``source-review-awaiting-v13-verification`` hold only; it never releases
+    automatically. The court evidence is verified before dataset generation and
+    again under the row locks. The submission then moves to ``evaluating``
+    exactly like an ordinary release, where a missing screened image is rebuilt
+    by the fail-closed build-only claim before validators can score it.
+    """
+    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    async with session.begin():
+        *_, already_released = await _verified_clear_release_target(
+            session, quarantine_id, payload, x_admin_actor, for_update=False
+        )
+    new_dataset = (
+        None
+        if already_released
+        else await _prepare_release_dataset(session, chain, generator, quarantine_id)
+    )
+
+    async with session.begin():
+        (
+            quarantine,
+            agent,
+            verified,
+            already_released,
+        ) = await _verified_clear_release_target(
+            session, quarantine_id, payload, x_admin_actor, for_update=True
+        )
+        if not already_released:
+            prior_agent_status = agent.status
+            now = datetime.now(UTC)
+            agent.status = AgentStatus.EVALUATING
+            agent.screening_reason = payload.reason
+            agent.screening_reason_code = resolution_reason_code("release")
+            await _apply_dataset(session, agent, new_dataset)
+            quarantine.status = "resolved"
+            quarantine.resolved_at = now
+            quarantine.resolved_by = x_admin_actor
+            quarantine.resolution = "release"
+            quarantine.resolution_reason = payload.reason
+            resolution_id = uuid4()
+            session.add(
+                ScreeningQuarantineResolution(
+                    resolution_id=resolution_id,
+                    quarantine_id=quarantine.quarantine_id,
+                    resolution="release",
+                    reason=payload.reason,
+                    actor=x_admin_actor,
+                    created_at=now,
+                )
+            )
+            await append_manual_review_event(
+                session,
+                agent=agent,
+                quarantine=quarantine,
+                resolution_id=resolution_id,
+                resolution="release",
+                reason=payload.reason,
+                actor=x_admin_actor,
+                prior_agent_status=prior_agent_status,
+                next_agent_status=agent.status,
+                created_at=now,
+                verified_court_clear=verified,
+            )
+
+    logger.info(
+        "admin_actor=%s released verified v13 court clear quarantine_id=%s "
+        "agent_id=%s adjudication_digest=%s idempotent=%s",
+        x_admin_actor,
+        quarantine_id,
+        agent.agent_id,
+        verified["adjudication_digest"],
+        already_released,
+    )
+    history = await _resolution_history(session, [quarantine.quarantine_id])
+    coldkey = await get_miner_coldkey_for_agent(session, agent_id=agent.agent_id)
+    return AdminVerifiedV13ClearReleaseResponse(
+        quarantine=_item(quarantine, agent, history[quarantine.quarantine_id], coldkey),
+        agent_status=agent.status,
+        adjudication_digest=str(verified["adjudication_digest"]),
+        idempotent=already_released,
     )
 
 
@@ -1934,6 +2600,31 @@ def _screening_submission(
     )
 
 
+# Operator search bounds for ``GET /screening-submissions``. Upload caps agent
+# names at 64 characters and SS58 keys are 48 alphanumerics, so these reject
+# only input that could never match; the repeatable filters are capped so a
+# query string cannot expand into an unbounded ``IN`` list.
+_SubmissionAgentName = Annotated[str, StringConstraints(min_length=1, max_length=64)]
+_SubmissionSs58Key = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9]{1,64}$")]
+_SubmissionSha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{64}$")]
+_SubmissionReasonCode = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+]
+_MAX_SUBMISSION_REASON_CODES = 20
+
+
+def _like_prefix(value: str) -> str:
+    """Escape LIKE metacharacters so a name prefix matches literally.
+
+    Postgres treats backslash as the default LIKE escape, so escaping it first
+    and then ``%``/``_`` keeps ``moon_v1`` from matching ``moonXv1``; the
+    constant prefix before the trailing ``%`` still lets the planner use the
+    ``text_pattern_ops`` index on ``agents.name``.
+    """
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
+
+
 @router.get("/screening-submissions", response_model=AdminScreeningSubmissionList)
 async def list_screening_submissions(
     _admin: AdminDep,
@@ -1941,10 +2632,67 @@ async def list_screening_submissions(
     generation: Annotated[Literal["active", "all"], Query()] = "active",
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
+    agent_name: Annotated[_SubmissionAgentName | None, Query()] = None,
+    agent_name_prefix: Annotated[_SubmissionAgentName | None, Query()] = None,
+    miner_hotkey: Annotated[_SubmissionSs58Key | None, Query()] = None,
+    miner_coldkey: Annotated[_SubmissionSs58Key | None, Query()] = None,
+    artifact_sha256: Annotated[_SubmissionSha256 | None, Query()] = None,
+    agent_status: Annotated[
+        list[AgentStatus] | None, Query(max_length=len(AgentStatus))
+    ] = None,
+    screening_reason_code: Annotated[
+        list[_SubmissionReasonCode] | None,
+        Query(max_length=_MAX_SUBMISSION_REASON_CODES),
+    ] = None,
+    submitted_after: Annotated[AwareDatetime | None, Query()] = None,
+    submitted_before: Annotated[AwareDatetime | None, Query()] = None,
 ) -> AdminScreeningSubmissionList:
-    """Return current-benchmark screening rows unless history is requested."""
+    """Return current-benchmark screening rows unless history is requested.
+
+    Every filter is optional and AND-combined with the generation boundary, and
+    ``count`` is the filtered total so offsets page the match set. ``agent_name``
+    is exact, ``agent_name_prefix`` is a literal prefix, ``miner_coldkey`` is the
+    immutable payment-time owner, ``agent_status`` and ``screening_reason_code``
+    are repeatable any-of lists, and ``submitted_after`` (inclusive) /
+    ``submitted_before`` (exclusive) bound ``created_at``, the sort key.
+    """
+    if (
+        submitted_after is not None
+        and submitted_before is not None
+        and submitted_after >= submitted_before
+    ):
+        raise HTTPException(
+            status_code=422, detail="submitted_after must be before submitted_before"
+        )
     active_version = await active_bench_version(session)
     where: list[ColumnElement[bool]] = []
+    if agent_name is not None:
+        where.append(Agent.name == agent_name)
+    if agent_name_prefix is not None:
+        where.append(Agent.name.like(_like_prefix(agent_name_prefix), escape="\\"))
+    if miner_hotkey is not None:
+        where.append(Agent.miner_hotkey == miner_hotkey)
+    if miner_coldkey is not None:
+        where.append(
+            Agent.agent_id.in_(
+                select(EvaluationPayment.agent_id).where(
+                    EvaluationPayment.miner_coldkey == miner_coldkey,
+                    EvaluationPayment.agent_id.is_not(None),
+                )
+            )
+        )
+    if artifact_sha256 is not None:
+        where.append(Agent.sha256 == artifact_sha256.lower())
+    if agent_status:
+        where.append(Agent.status.in_(sorted(set(agent_status))))
+    if screening_reason_code:
+        where.append(
+            Agent.screening_reason_code.in_(sorted(set(screening_reason_code)))
+        )
+    if submitted_after is not None:
+        where.append(Agent.created_at >= submitted_after)
+    if submitted_before is not None:
+        where.append(Agent.created_at < submitted_before)
     if generation == "active":
         rollout = await admission_rollout_for_active_version(
             session, bench_version=active_version
@@ -2926,6 +3674,8 @@ async def rescreen_rejected_submission(
         )
         if latest_attempt_id is None:
             raise HTTPException(status_code=409, detail="screening attempt is missing")
+        prior_status = agent.status
+        rescreen_at = datetime.now(UTC)
         agent.status = AgentStatus.SCREENING_FAILED
         agent.screening_reason = "Operator requested a screening retry"
         # The submission is going back to the screener, so no verdict describes
@@ -2934,6 +3684,14 @@ async def rescreen_rejected_submission(
         # the conflation #2260 is about. The code is repopulated when the new
         # attempt concludes, and the attempt row keeps the old lead verbatim.
         agent.screening_reason_code = None
+        await _publish_moderation(
+            session,
+            action_type=ACTION_RESCREEN,
+            agent=agent,
+            previous_status=prior_status,
+            resulting_status=agent.status,
+            recorded_at=rescreen_at,
+        )
         await _authorize_screening_retry(
             session,
             agent=agent,
@@ -3397,7 +4155,16 @@ async def reject_screening_submission(
             attempt.finished_at = now
             attempt.public_reason = payload.reason
             attempt.reason_code = _OPERATOR_REJECT_REASON_CODE
+        prior_status = agent.status
         agent.status = AgentStatus.REJECTED
+        await _publish_moderation(
+            session,
+            action_type=ACTION_REJECT,
+            agent=agent,
+            previous_status=prior_status,
+            resulting_status=agent.status,
+            recorded_at=now,
+        )
         agent.screening_reason = payload.reason
         agent.screening_reason_code = _OPERATOR_REJECT_REASON_CODE
         agent.screening_policy_version = effective_screening_policy_version()
@@ -3567,6 +4334,15 @@ async def rebuild_screened_image(
         agent.screened_image_verified_at = None
         agent.screening_reason = "Operator requested screened image rebuild"
         agent.screening_reason_code = None
+        await _publish_moderation(
+            session,
+            action_type=ACTION_PROVENANCE_REVOCATION,
+            agent=agent,
+            previous_status=agent.status,
+            resulting_status=agent.status,
+            recorded_at=now,
+            screened_image_sha256=old_image_sha256,
+        )
         await append_audit_entry(
             session,
             agent_id=agent_id,
@@ -4700,14 +5476,43 @@ async def search_screening_source(
     )
 
 
+@dataclass(frozen=True)
+class _BaselinePair:
+    agent: Agent
+    inspector: TarSourceInspector
+    candidate: dict[str, str]
+    baseline: dict[str, str]
+    path_aligned: bool
+    # Aligned path -> inspector path for every readable text file the bounded
+    # snapshot skipped. Those files were not compared; they are reported as
+    # omitted, never diffed as if the submission did not have them.
+    omitted: dict[str, str]
+
+
 async def _baseline_pair(
     agent_id: UUID, session: AsyncSession, storage: S3StorageClient
-) -> tuple[Agent, dict[str, str], dict[str, str], bool]:
+) -> _BaselinePair:
     """Load one submission's text map aligned against the starter-kit baseline."""
     agent, inspector = await _load_inspector(agent_id, session, storage)
-    raw_text = await asyncio.to_thread(inspector.read_all_text)
-    candidate = await asyncio.to_thread(align_candidate_paths, raw_text)
-    return agent, candidate, starter_kit_head_text(), candidate is not raw_text
+    snapshot = await asyncio.to_thread(inspector.read_text_snapshot)
+    # Align on EVERY readable path, skipped ones included, so a skipped file is
+    # named by the same path its loaded siblings are.
+    root = await asyncio.to_thread(
+        wrapping_root, [*snapshot.texts, *snapshot.omitted_paths]
+    )
+    return _BaselinePair(
+        agent=agent,
+        inspector=inspector,
+        candidate={
+            strip_wrapping_root(path, root): text
+            for path, text in snapshot.texts.items()
+        },
+        baseline=starter_kit_head_text(),
+        path_aligned=root is not None,
+        omitted={
+            strip_wrapping_root(path, root): path for path in snapshot.omitted_paths
+        },
+    )
 
 
 @router.get(
@@ -4729,34 +5534,42 @@ async def get_screening_baseline_diff(
     marks stock kit code — including files that match an older kit revision
     rather than the tip — so the operator can go straight to the custom surface.
 
+    Totals cover every compared file. Readable files the bounded source read
+    skipped are listed in ``omitted_paths`` rather than diffed; when any exist,
+    ``custom_added_lines_complete`` is false and the total is a lower bound.
+
     Unified-diff bodies come from the per-file endpoint.
     """
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
-    agent, candidate, baseline, aligned = await _baseline_pair(
-        agent_id, session, storage
-    )
+    pair = await _baseline_pair(agent_id, session, storage)
     manifest = await asyncio.to_thread(
-        build_baseline_diff_manifest, candidate, baseline, is_stock_kit_text
+        build_baseline_diff_manifest,
+        pair.candidate,
+        pair.baseline,
+        is_stock_kit_text,
+        omitted=list(pair.omitted),
     )
     provenance = starter_kit_provenance()
     logger.info(
-        "admin_actor=%s viewed baseline diff agent_id=%s custom_lines=%s revision=%s",
+        "admin_actor=%s viewed baseline diff agent_id=%s custom_lines=%s "
+        "omitted_files=%s revision=%s",
         x_admin_actor,
         agent_id,
         manifest["custom_added_lines"],
+        manifest["omitted_file_count"],
         provenance["revision"],
     )
     return AdminBaselineDiffManifest(
         agent_id=agent_id,
-        artifact_sha256=agent.sha256,
+        artifact_sha256=pair.agent.sha256,
         baseline=AdminStarterKitProvenance(
             source=provenance["source"],
             revision=provenance["revision"],
             commit_set_sha256=provenance["commit_set_sha256"],
             commit_count=int(provenance["commit_count"]),
         ),
-        path_aligned=aligned,
+        path_aligned=pair.path_aligned,
         **manifest,  # type: ignore[arg-type]
     )
 
@@ -4777,15 +5590,26 @@ async def read_screening_baseline_diff_file(
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
     normalized = path.removeprefix("./")
-    _agent, candidate, baseline, _aligned = await _baseline_pair(
-        agent_id, session, storage
-    )
+    pair = await _baseline_pair(agent_id, session, storage)
+    candidate = pair.candidate
+    skipped_source = pair.omitted.get(normalized)
+    if skipped_source is not None:
+        # The combined snapshot budget skipped this file; one file on its own is
+        # within the per-file text bound, so read it rather than diff it as if
+        # the submission did not contain it.
+        try:
+            skipped_text = await asyncio.to_thread(
+                pair.inspector.read_full_text, skipped_source
+            )
+        except SourceInspectError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        candidate = {**candidate, normalized: skipped_text}
     try:
         detail = await asyncio.to_thread(
             unified_diff_for_file,
             normalized,
             candidate,
-            baseline,
+            pair.baseline,
             pair_renames=False,
         )
     except KeyError as error:

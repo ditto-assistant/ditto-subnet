@@ -37,10 +37,11 @@ the token request to the configured issuer. It is never logged or served.
    `/start`, so a dashboard authorize URL handed to someone else fails closed.
    The signed-in browser is redirected to `GET /api/v1/miner-auth/ditto/accept`.
 4. **Ditto-side acceptance.** That page names the hotkey (and coldkey) asking
-   for the account and offers *Yes, link* / *Not me*. `POST …/accept` consumes
-   the token: accept → `authenticated` (identity now visible to the hotkey
-   side), decline → `failed`. This is what stops the reverse phish: a miner
-   who tricks someone else into signing in on their attempt gets a declined
+   for the account and offers *Yes, link* / *Not me*. `POST …/accept` takes
+   the token from the form body (never its URL) and consumes it under a row
+   lock: accept → `authenticated` (identity now visible to the hotkey side),
+   decline → `failed`. This is what stops the reverse phish: a miner who
+   tricks someone else into signing in on their attempt gets a declined
    attempt, not that person's account.
 4b. `POST /api/v1/me/ditto-link/attempts/{id}/confirm` — bearer = the miner
    session that **started** the attempt (scope `profile`), attempt must be

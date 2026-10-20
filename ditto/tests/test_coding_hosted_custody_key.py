@@ -2,6 +2,8 @@ from pathlib import Path
 
 import yaml
 
+from ditto.tests.ansible_playbooks import converge_play
+
 ROOT = Path(__file__).parents[2]
 ROLE = ROOT / "infra/ansible/roles/coding_hosted_custody_key"
 
@@ -84,9 +86,9 @@ def test_account_discovery_is_one_complete_passwd_snapshot() -> None:
 
 
 def test_custody_playbook_and_ci_never_enable_the_role() -> None:
-    playbook = yaml.safe_load(
-        (ROOT / "infra/ansible/playbooks/gcp-coding-hosted-custody-key.yml").read_text()
-    )[0]
+    playbook = converge_play(
+        ROOT / "infra/ansible/playbooks/gcp-coding-hosted-custody-key.yml"
+    )
     fixture = yaml.safe_load(
         (ROOT / "infra/ansible/tests/coding-hosted-custody-key.yml").read_text()
     )[0]

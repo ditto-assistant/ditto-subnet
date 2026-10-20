@@ -146,14 +146,22 @@ class ScreenerControllerNodeState(BaseModel):
     ready: bool
     active_lease: bool
     screening_concurrency: Annotated[int, Field(ge=0)] = 0
+    admission_open: bool = True
     image_reference: str | None = None
     heartbeat_seen_at: datetime | None = None
+    # Legacy GCP fleet rows share one hotkey, so active_lease marks every row
+    # while any of them screens. This comes from the instance's own heartbeat
+    # and is null for enrolled nodes.
+    instance_busy: bool | None = None
 
 
 class ScreenerControllerNodesResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     nodes: tuple[ScreenerControllerNodeState, ...]
+    # Running, unexpired attempts on the shared legacy GCP hotkey. More than
+    # the busy legacy rows means a claim has not yet been heartbeated.
+    legacy_gcp_running_attempts: Annotated[int, Field(ge=0)]
 
 
 class ScreenerCapacityEventRequest(BaseModel):
@@ -669,6 +677,8 @@ class ScreenerCapacityView(BaseModel):
     events: list[ScreenerCapacityEventView]
     event_retention_days: int | None = None
     """Capacity events older than this are pruned; ``None`` keeps them all."""
+    legacy_bearer_accepted: bool
+    """Whether screener endpoints still accept the fleet-wide shared bearer."""
     builds: list[TrustedImageBuildView] = Field(default_factory=list)
     provider_jobs: list[ScreenerProviderJobView] = Field(default_factory=list)
     provider_control: ScreenerProviderSettingsControl

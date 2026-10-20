@@ -1,4 +1,172 @@
 import '@tanstack/react-start/server-only'
+import { manualControlSchema } from '../lib/treasury-manual.schemas'
+
+export async function fetchTreasuryManualTransfers() {
+  return manualControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual'))
+}
+import { z } from 'zod'
+import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema, treasuryReceiptPreflightInputSchema, treasuryReceiptPreflightSchema } from '../lib/treasury-receipts.schemas'
+
+export async function recordTreasuryReceipt(rawInput: unknown, actor: string) {
+  const { confirmation: _confirmation, ...body } = treasuryReceiptInputSchema.parse(rawInput)
+  return treasuryReceiptSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts', {
+    // Archive verification has bounded provider fallback. Do not abandon the
+    // verified audit write at the ordinary 20s read deadline; no signing occurs.
+    method: 'POST', actor, body, timeoutMs: 120_000,
+  }))
+}
+
+export async function fetchTreasuryReceiptPreflight(rawInput: unknown) {
+  const body = treasuryReceiptPreflightInputSchema.parse(rawInput)
+  return treasuryReceiptPreflightSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts/preflight', {
+    method: 'POST', body, timeoutMs: 120_000,
+  }))
+}
+
+export async function fetchTreasuryReceipts() {
+  return treasuryReceiptPageSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts?limit=100'))
+}
+
+import { treasuryGammaLedgerSchema } from '../lib/treasury-gamma-ledger.schemas'
+
+/** Per-epoch Gamma collector readings, validated at the Platform boundary. */
+export async function fetchTreasuryLedger(limit: number) {
+  return treasuryGammaLedgerSchema.parse(await platformAdminRequest(`/api/v1/admin/treasury-ledger?limit=${limit}`, {
+    retries: 1,
+  }))
+}
+import { publicTreasuryApprovalSchema, treasuryActivationPreflightInputSchema, treasuryActivationPreflightSchema, treasuryLedgerReadinessSchema } from '../lib/treasury-ledger.schemas'
+import { recordTreasuryRuntimeInputSchema, treasuryRuntimeControlSchema, treasuryRuntimeRevisionSchema } from '../lib/treasury-ledger.schemas'
+import { runtimeInterfaceReportInputSchema, runtimeInterfaceReportSchema } from '../lib/runtime-interface.schemas'
+import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
+
+export async function previewTreasuryTopup(rawInput: unknown) {
+  const input = treasuryPreviewInputSchema.parse(rawInput)
+  const [policy, quote] = await Promise.all([
+    fetchTreasurySettings(), fetchTreasuryQuote(input),
+  ])
+  const proposed = policy.effective
+  const quoteImpact = treasuryRouteImpactBps(input.route, quote)
+  return {
+    dry_run: true as const,
+    execution_enabled: false as const,
+    route: input.route,
+    quote,
+    policy_revision: policy.revision,
+    checks: {
+      gm_allocation_proposed: proposed.allocation_version === 2
+        ? proposed.service_buckets.some(bucket => bucket.bucket_id === 'gm_credits' && bucket.allocation_bps > 0)
+        : proposed.gm_bps > 0,
+      single_topup_within_limit: quote.tao_path.amount_rao <= proposed.max_single_topup_rao,
+      price_impact_within_limit: quoteImpact <= proposed.max_slippage_bps,
+      linked_wallet_verified: false,
+      current_payment_instructions_verified: false,
+      daily_spend_reconciled: false,
+    },
+  }
+}
+
+export async function fetchTreasuryQuote(rawInput: unknown) {
+  const input = treasuryQuoteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/treasury-quote?source_alpha_rao=${input.sourceAlphaRao}`,
+  )
+  return treasuryQuoteSchema.parse(payload)
+}
+
+export async function fetchTreasurySettings() {
+  return treasuryControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-settings'))
+}
+
+export async function fetchTreasuryObserverSettings(revision: number) {
+  const selected = z.number().int().min(1).max(2_147_483_647).parse(revision)
+  const row = z.object({
+    revision: z.number().int().min(1).max(2_147_483_647),
+    checksum: z.string().regex(/^[0-9a-f]{64}$/),
+    settings: z.record(z.string(), z.unknown()),
+  }).parse(await platformAdminRequest(`/api/v1/admin/treasury-settings/revisions/${selected}`))
+  if (row.revision !== selected) throw new Error('Historical treasury revision mismatch')
+  return { history: [row] }
+}
+
+export async function fetchTreasuryLedgerReadiness() {
+  return treasuryLedgerReadinessSchema.parse(
+    await platformAdminRequest('/api/v1/admin/treasury-settings/ledger-readiness'),
+  )
+}
+
+export async function fetchTreasuryRuntime() {
+  return treasuryRuntimeControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-runtime'))
+}
+
+export async function fetchRuntimeInterfaceReport(rawInput: unknown = {}) {
+  const input = z.object(runtimeInterfaceReportInputSchema).parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.block !== undefined) params.set('block', String(input.block))
+  const query = params.size ? `?${params.toString()}` : ''
+  return runtimeInterfaceReportSchema.parse(
+    await platformAdminRequest(`/api/v1/admin/runtime-interface${query}`),
+  )
+}
+
+export async function recordTreasuryRuntime(rawInput: unknown, actor: string) {
+  const input = z.object(recordTreasuryRuntimeInputSchema).parse(rawInput)
+  if (input.confirmation !== `GAMMA ${input.mode.toUpperCase()} ${input.expectedPolicyDigest}`
+    || (input.mode === 'enforce') !== (input.activationEpoch !== null)) {
+    throw new Error('Exact Gamma mode, policy confirmation and epoch required')
+  }
+  const approval = publicTreasuryApprovalSchema.parse(JSON.parse(input.approvalJson))
+  const settings = { version: 1 as const, mode: input.mode, approval,
+    approved_policy_digest: input.expectedPolicyDigest,
+    collector_policy_digest: input.expectedCollectorPolicyDigest,
+    managed_validator_hotkeys: input.managedValidatorHotkeys,
+    activation_epoch: input.activationEpoch }
+  const result = treasuryRuntimeRevisionSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-runtime', {
+    method: 'POST', actor, timeoutMs: 120_000,
+    body: { expected_revision: input.expectedRevision, settings, reason: input.reason, confirmation: input.confirmation },
+  }))
+  if (JSON.stringify(result.settings) !== JSON.stringify(settings)
+    || result.parent_revision !== input.expectedRevision) throw new Error('Gamma control response mismatch')
+  return result
+}
+
+export async function fetchTreasuryActivationPreflight(rawInput: unknown) {
+  const input = treasuryActivationPreflightInputSchema.parse(rawInput)
+  const approval = publicTreasuryApprovalSchema.parse(JSON.parse(input.approvalJson))
+  const payload = await platformAdminRequest('/api/v1/admin/treasury-settings/activation-preflight', {
+    method: 'POST',
+    body: {
+      approval,
+      expected_policy_digest: input.expectedPolicyDigest,
+      expected_collector_policy_digest: input.expectedCollectorPolicyDigest,
+      managed_validator_hotkeys: input.managedValidatorHotkeys ?? [],
+    },
+  })
+  const result = treasuryActivationPreflightSchema.parse(payload)
+  if (result.proposed_policy_digest !== input.expectedPolicyDigest
+    || result.proposed_collector_policy_digest !== input.expectedCollectorPolicyDigest
+    || (input.managedValidatorHotkeys !== undefined
+      && JSON.stringify([...result.managed_validator_hotkeys].sort()) !== JSON.stringify([...input.managedValidatorHotkeys].sort()))) {
+    throw new Error('Treasury preflight response differs from requested policy')
+  }
+  return result
+}
+
+export async function recordTreasurySettings(rawInput: unknown, actor: string) {
+  const input = recordTreasurySettingsInputSchema.parse(rawInput)
+  const revision = await platformAdminRequest('/api/v1/admin/treasury-settings', {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      settings: input.settings,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  })
+  treasuryRevisionSchema.parse(revision)
+  return fetchTreasurySettings()
+}
 
 import {
   listV13BenignApprovalsInputSchema,
@@ -110,6 +278,9 @@ import {
   expireRunningScreeningResponseSchema,
   rejectScreeningSubmissionInputSchema,
   rejectScreeningSubmissionResponseSchema,
+  screeningSubmissionFiltersSchema,
+  releaseVerifiedV13CourtClearInputSchema,
+  releaseVerifiedV13CourtClearResponseSchema,
   resolveScreeningQuarantineInputSchema,
   resolveScreeningQuarantineResponseSchema,
   resolveScreeningDisputeInputSchema,
@@ -144,6 +315,8 @@ import {
   sourceDiffFileInputSchema,
   sourceDiffInputSchema,
   sourceDiffManifestSchema,
+  lineageSourceDiffInputSchema,
+  lineageSourceDiffFileInputSchema,
   sourceExcerptInputSchema,
   sourceExcerptSchema,
   sourceListingInputSchema,
@@ -234,7 +407,10 @@ import {
   efficiencyBonusSettingsControlSchema,
   efficiencyBonusSettingsRevisionSchema,
   setEfficiencyBonusSettingsInputSchema,
+  agentEmissionEligibilityInputSchema,
+  agentEmissionEligibilitySchema,
   burnSettingsControlSchema,
+  emissionEligibilityControlSchema,
   burnSettingsRevisionSchema,
   setBurnSettingsInputSchema,
   continualRetestSettingsForPlatform,
@@ -245,8 +421,18 @@ import {
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   sourceReviewQueueSloSchema,
+  athReviewQueueSloSchema,
+  validatorCapacitySummarySchema,
+  outlierEscalationDryRunInputSchema,
+  outlierEscalationDryRunSchema,
+  outlierEscalationInputSchema,
+  outlierEscalationSchema,
+  claimProvenanceCasesInputSchema,
+  claimProvenanceCasesSchema,
   queuePolicySettingsControlSchema,
   setInferenceConcurrencySettingsInputSchema,
+  scoringLeaseSettingsControlSchema,
+  setScoringLeaseSettingsInputSchema,
   runtimeProfileArtifactSchema,
   runtimeProfileCaptureInputSchema,
   runtimeProfileDownloadSchema,
@@ -277,8 +463,14 @@ import {
   screenerFanoutShadowInputSchema,
   screenerFanoutShadowResponseSchema,
   l2ReportCanaryLookupInputSchema,
+  l2ReportCanaryPreflightInputSchema,
+  l2ReportCanaryPreflightViewSchema,
   scheduleL2ReportCanaryInputSchema,
   l2ReportCanaryViewSchema,
+  canonicalStarterPreflightSchema,
+  registerCanonicalStarterInputSchema,
+  reviewCanonicalStarterInputSchema,
+  scheduleCanonicalStarterInputSchema,
   screenerPolicyManifestControlSchema,
   copyCourtControlSchema,
   applyCopyCourtSettingsInputSchema,
@@ -602,24 +794,120 @@ export async function fetchL2ReportCanary(rawInput: unknown) {
   return l2ReportCanaryViewSchema.parse(payload)
 }
 
+export async function fetchL2ReportCanaryPreflight(rawInput: unknown) {
+  const input = l2ReportCanaryPreflightInputSchema.parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.artifactSha256 !== undefined) params.set('artifact_sha256', input.artifactSha256)
+  if (input.expectedAgentStatus !== undefined) {
+    params.set('expected_agent_status', input.expectedAgentStatus)
+  }
+  if (input.expectedScoreCount !== undefined) {
+    params.set('expected_score_count', String(input.expectedScoreCount))
+  }
+  if (input.historicalRulingKind !== undefined) {
+    params.set('historical_ruling_kind', input.historicalRulingKind)
+  }
+  if (input.historicalRulingId !== undefined) {
+    params.set('historical_ruling_id', input.historicalRulingId)
+  }
+  const query = params.toString()
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/preflight/${input.agentId}/${input.sourceAttemptId}${query ? `?${query}` : ''}`,
+  )
+  return l2ReportCanaryPreflightViewSchema.parse(payload)
+}
+
 export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
   const input = scheduleL2ReportCanaryInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/screener-l2-report-canaries', {
-    method: 'POST',
-    actor,
-    body: {
-      request_id: input.requestId,
-      agent_id: input.agentId,
-      source_attempt_id: input.sourceAttemptId,
-      artifact_sha256: input.artifactSha256,
-      policy_version: 13,
-      expected_agent_status: input.expectedAgentStatus,
-      expected_score_count: input.expectedScoreCount,
-      target_node_id: input.targetNodeId,
-      review_label: input.reviewLabel,
-      confirm_report_only: true,
+  const pinned = input.reviewSettingsRevision !== undefined
+  // Platform ignores unknown request fields, so a pin sent on the plain route
+  // to a build that predates pins would queue the canary under the node's
+  // posture. A pin therefore travels only on its own route. A build without
+  // that route answers 405 (the path matches GET /{canary_id}) or 404 during
+  // routing and queues nothing; the route itself never answers 404.
+  const path = `/api/v1/admin/screener-l2-report-canaries${pinned ? '/pinned' : ''}`
+  let payload: unknown
+  try {
+    payload = await platformAdminRequest(path, {
+      method: 'POST',
+      actor,
+      body: {
+        request_id: input.requestId,
+        agent_id: input.agentId,
+        source_attempt_id: input.sourceAttemptId,
+        artifact_sha256: input.artifactSha256,
+        policy_version: 13,
+        expected_agent_status: input.expectedAgentStatus,
+        expected_score_count: input.expectedScoreCount,
+        target_node_id: input.targetNodeId,
+        review_label: input.reviewLabel,
+        run_mode: input.runMode,
+        historical_ruling_kind: input.historicalRulingKind,
+        historical_ruling_id: input.historicalRulingId,
+        ...(pinned ? { review_settings_revision: input.reviewSettingsRevision } : {}),
+        confirm_report_only: true,
+      },
+    })
+  } catch (error) {
+    if (
+      pinned &&
+      error instanceof PlatformAdminError &&
+      (error.status === 404 || error.status === 405)
+    ) {
+      throw new Error(
+        'This Platform build does not support canary review settings pins yet, so nothing was queued. ' +
+          'Retry reviewSettingsRevision after Platform is deployed with POST /admin/screener-l2-report-canaries/pinned.',
+      )
+    }
+    throw error
+  }
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function fetchCanonicalStarterPreflight() {
+  const payload = await platformAdminRequest(
+    '/api/v1/admin/screener-l2-report-canaries/fixture/preflight',
+  )
+  return canonicalStarterPreflightSchema.parse(payload)
+}
+
+export async function registerCanonicalStarter(rawInput: unknown, actor: string) {
+  const input = registerCanonicalStarterInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    '/api/v1/admin/screener-l2-report-canaries/fixture/register',
+    {
+      method: 'POST', actor, operatorProof: true,
+      body: { request_id: input.requestId, target_node_id: input.targetNodeId, confirm_report_only: true },
     },
-  })
+  )
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function reviewCanonicalStarter(rawInput: unknown, actor: string) {
+  const input = reviewCanonicalStarterInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/fixture/${input.canaryId}/review`,
+    {
+      method: 'POST', actor, operatorProof: true,
+      body: {
+        reviewer_evidence_sha256: input.reviewerEvidenceSha256,
+        reviewed_archive_sha256: input.reviewedArchiveSha256,
+        reviewed_dockerfile_sha256: input.reviewedDockerfileSha256,
+        built_image_digest: input.builtImageDigest,
+        reviewer_evidence_url: input.reviewerEvidenceUrl,
+        confirm_candidate_review: true,
+      },
+    },
+  )
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function scheduleCanonicalStarter(rawInput: unknown, actor: string) {
+  const input = scheduleCanonicalStarterInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/fixture/${input.canaryId}/schedule`,
+    { method: 'POST', actor, operatorProof: true, body: { confirm_report_only: true } },
+  )
   return l2ReportCanaryViewSchema.parse(payload)
 }
 
@@ -682,6 +970,38 @@ export async function fetchScreenerPolicyManifestControl() {
 export async function fetchScreenerCapacity() {
   const payload = await platformAdminRequest('/api/v1/admin/screener-capacity')
   return screenerCapacityViewSchema.parse(payload)
+}
+
+const databaseBackupObjectSchema = z.object({
+  key: z.string(), size: z.number().int().nonnegative(), last_modified: z.string(),
+})
+export const databaseBackupStatusSchema = z.object({
+  observed_at: z.string(),
+  bucket: z.literal('ditto-platform-pg-backups'),
+  backup_status: z.enum(['disabled', 'unavailable', 'missing', 'stale', 'fresh']),
+  daily: z.array(databaseBackupObjectSchema),
+  monthly: z.array(databaseBackupObjectSchema),
+  hours_since_last_success: z.number().nonnegative().nullable(),
+  manifest: z.object({
+    format_version: z.literal(1), database: z.literal('ditto_platform_prod'),
+    server_version: z.string(), server_version_num: z.number().int(),
+    pg_dump_version: z.string(), database_bytes: z.number().nonnegative(),
+    alembic_version: z.string(), row_counts: z.record(z.string(), z.number().int()),
+    started_at: z.string(), completed_at: z.string(),
+    objects: z.array(z.object({
+      name: z.string(), sha256: z.string(), size: z.number().int().nonnegative(),
+    })),
+  }).nullable(),
+  snapshot_status: z.enum(['unavailable', 'missing', 'present']),
+  newest_snapshot: z.object({
+    name: z.string(), created_at: z.string(), status: z.string(), disk_size_gb: z.number(),
+  }).nullable(),
+})
+
+export async function fetchDatabaseBackupStatus() {
+  return databaseBackupStatusSchema.parse(
+    await platformAdminRequest('/api/v1/admin/database-backup-status', { timeoutMs: 60_000 }),
+  )
 }
 
 export async function fetchScreeningInfraRetries() {
@@ -1005,6 +1325,28 @@ export async function setEfficiencyBonusSettings(rawInput: unknown, actor: strin
   } catch (cause) {
     throw efficiencyBonusConflict(cause) ?? cause
   }
+}
+
+const EMISSION_ELIGIBILITY_PATH = '/api/v1/admin/emission-eligibility'
+
+/** The terminal-review emission posture, its history, and the rehearsal feed.
+ *
+ * Read-only on purpose. The gate decides who the validator fold may pay and it
+ * ships `off`; moving it is deliberately a Platform write with a typed
+ * confirmation, not something this console can do as a side effect of a read.
+ */
+export async function fetchEmissionEligibility() {
+  const payload = await platformAdminRequest(EMISSION_ELIGIBILITY_PATH)
+  return emissionEligibilityControlSchema.parse(payload)
+}
+
+/** One exact artifact's eligibility record, plus whether the fold can see it. */
+export async function fetchAgentEmissionEligibility(rawInput: unknown) {
+  const { agentId } = agentEmissionEligibilityInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(agentId)}/emission-eligibility`,
+  )
+  return agentEmissionEligibilitySchema.parse(payload)
 }
 
 const BURN_SETTINGS_PATH = '/api/v1/admin/burn-settings'
@@ -1411,6 +1753,68 @@ export async function fetchSourceReviewQueueSlo() {
   return sourceReviewQueueSloSchema.parse(payload)
 }
 
+const ATH_REVIEW_QUEUE_SLO_PATH = '/api/v1/admin/ath-review-queue-slo'
+
+export async function fetchAthReviewQueueSlo() {
+  const payload = await platformAdminRequest(ATH_REVIEW_QUEUE_SLO_PATH)
+  return athReviewQueueSloSchema.parse(payload)
+}
+
+export async function fetchOutlierEscalation(rawInput: unknown = {}) {
+  const input = outlierEscalationInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    limit: String(input.limit),
+    window_hours: String(input.windowHours),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/outlier-escalation?${params.toString()}`,
+    { retries: 1 },
+  )
+  return outlierEscalationSchema.parse(payload)
+}
+
+export async function fetchClaimProvenanceCases(rawInput: unknown) {
+  const input = claimProvenanceCasesInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    artifact_sha256: input.artifactSha256,
+    run_id: input.runId,
+    include_unflagged: String(input.includeUnflagged),
+    limit: String(input.limit),
+  })
+  if (input.caseId) params.set('case_id', input.caseId)
+  if (input.finding) params.set('finding', input.finding)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/claim-provenance?${params.toString()}`,
+    { retries: 1 },
+  )
+  return claimProvenanceCasesSchema.parse(payload)
+}
+
+export async function fetchOutlierEscalationDryRun(rawInput: unknown = {}) {
+  const input = outlierEscalationDryRunInputSchema.parse(rawInput)
+  const params = new URLSearchParams({ limit: String(input.limit) })
+  if (input.benchVersion !== undefined) {
+    params.set('bench_version', String(input.benchVersion))
+  }
+  if (input.minCohortSize !== undefined) {
+    params.set('min_cohort_size', String(input.minCohortSize))
+  }
+  if (input.modifiedZThreshold !== undefined) {
+    params.set('modified_z_threshold', String(input.modifiedZThreshold))
+  }
+  if (input.minCompositeFloor !== undefined) {
+    params.set('min_composite_floor', String(input.minCompositeFloor))
+  }
+  if (input.perAxisEnforce !== undefined) {
+    params.set('per_axis_enforce', String(input.perAxisEnforce))
+  }
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/outlier-escalation/dry-run?${params.toString()}`,
+    { retries: 1 },
+  )
+  return outlierEscalationDryRunSchema.parse(payload)
+}
+
 export async function fetchInferenceFailureTaxonomy() {
   const payload = await platformAdminRequest(INFERENCE_FAILURE_TAXONOMY_PATH, {
     timeoutMs: 30_000,
@@ -1591,7 +1995,7 @@ export async function fetchV13ReportOnlyCurrentPacket() {
 }
 
 export async function activateV13ScorerCohort(input: {
-  hotkeys: [string, string, string]
+  hotkeys: string[]
   packet: {
     source_revision: string
     release_descriptor_digest: string
@@ -1619,7 +2023,7 @@ export async function activateV13ScorerCohort(input: {
 }
 
 export async function rotateV13ScorerCohort(input: {
-  hotkeys: [string, string, string]
+  hotkeys: string[]
   packet: {
     source_revision: string
     release_descriptor_digest: string
@@ -1635,6 +2039,7 @@ export async function rotateV13ScorerCohort(input: {
     injected_keys: string[]
   }
   expectedCurrentRotationId?: number
+  expectedCurrentHotkeys?: string[]
   expectedSlotSettingsRevision: number
   expectedSlotSettingsChecksum: string
   reason: string
@@ -1647,6 +2052,7 @@ export async function rotateV13ScorerCohort(input: {
       packet: input.packet,
       expected_current_packet: input.expectedCurrentPacket,
       expected_current_rotation_id: input.expectedCurrentRotationId ?? null,
+      expected_current_hotkeys: input.expectedCurrentHotkeys ?? null,
       expected_slot_settings_revision: input.expectedSlotSettingsRevision,
       expected_slot_settings_checksum: input.expectedSlotSettingsChecksum,
       reason: input.reason,
@@ -1747,6 +2153,52 @@ export async function setValidatorIssuancePause(rawInput: unknown, actor: string
   return fetchValidatorSlotSettings()
 }
 
+const SCORING_LEASE_SETTINGS_PATH = '/api/v1/admin/scoring-lease-settings'
+
+export async function fetchScoringLeaseSettings() {
+  const payload = await platformAdminRequest(SCORING_LEASE_SETTINGS_PATH)
+  return scoringLeaseSettingsControlSchema.parse(payload)
+}
+
+// The platform owns the wording of every refusal: a stale `expected_revision`,
+// a concurrent write, a confirmation that does not name the resulting TTL, an
+// out-of-range TTL, or a blank audit field. Keep its text verbatim and append
+// the recovery for THAT refusal. Re-reading the revision only fixes a stale or
+// concurrent write; advising it for an input refusal sends the operator back
+// to repeat the same failing request.
+function scoringLeaseRefusal(cause: unknown) {
+  if (!(cause instanceof PlatformAdminError)) return null
+  if (cause.status !== 409 && cause.status !== 422) return null
+  const recovery = /confirmation/i.test(cause.message)
+    ? 'Nothing was applied: the confirmation must name the TTL this revision applies, typed out as "APPLY SCORING TICKET TTL <n> MINUTES" rather than derived from the number above it.'
+    : cause.status === 422
+      ? 'Nothing was applied and the revision did not change: correct the refused input (a whole-minute scoring_ticket_ttl_minutes inside the bounds get_scoring_lease_settings reports, and a reason of at least 8 non-blank characters) and resubmit with the same expectedRevision.'
+      : 'Nothing was applied: re-read get_scoring_lease_settings and resubmit with the revision it reports.'
+  return new Error(`${cause.message}. ${recovery}`)
+}
+
+/** Append one scoring lease revision. It applies to NEW leases only. */
+export async function setScoringLeaseSettings(rawInput: unknown, actor: string) {
+  const input = setScoringLeaseSettingsInputSchema.parse(rawInput)
+  try {
+    await platformAdminRequest(SCORING_LEASE_SETTINGS_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        scope: input.scope,
+        expected_revision: input.expectedRevision,
+        settings: input.settings,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+  } catch (cause) {
+    throw scoringLeaseRefusal(cause) ?? cause
+  }
+  return fetchScoringLeaseSettings()
+}
+
 // The platform's existing public heartbeat view. It is the only place the two
 // numbers a cap decision needs — advertised slots and reported disk headroom —
 // are already published, so the console reads it rather than asking the platform
@@ -1778,6 +2230,16 @@ export async function fetchValidatorFleetObservability() {
     retries: 1,
   })
   return validatorFleetObservabilitySchema.parse(payload)
+}
+
+const VALIDATOR_CAPACITY_PATH = '/api/v1/admin/validator-capacity'
+
+export async function fetchValidatorCapacity() {
+  const payload = await platformAdminRequest(VALIDATOR_CAPACITY_PATH, {
+    timeoutMs: 15_000,
+    retries: 1,
+  })
+  return validatorCapacitySummarySchema.parse(payload)
 }
 
 export async function fetchLedgerEpochSnapshots(limit = 24) {
@@ -1843,6 +2305,23 @@ export async function resolveScreeningQuarantine(
     },
   )
   return resolveScreeningQuarantineResponseSchema.parse(payload)
+}
+
+export async function releaseVerifiedV13CourtClear(rawInput: unknown, actor: string) {
+  const input = releaseVerifiedV13CourtClearInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-quarantines/${encodeURIComponent(input.quarantineId)}/release-verified-v13-clear`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        reason: input.reason,
+        expected_sha256: input.expectedSha256,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  return releaseVerifiedV13CourtClearResponseSchema.parse(payload)
 }
 
 function toPlatformBatchDecision(decision: {
@@ -2156,12 +2635,30 @@ export async function fetchScreeningSubmissions(
   limit = 200,
   offset = 0,
   generation: 'active' | 'all' = 'active',
+  rawFilters: unknown = {},
 ) {
+  const filters = screeningSubmissionFiltersSchema.parse(rawFilters)
   const query = new URLSearchParams({
     generation,
     limit: String(limit),
     offset: String(offset),
   })
+  const scalar: Array<[string, string | undefined]> = [
+    ['agent_name', filters.agentName],
+    ['agent_name_prefix', filters.agentNamePrefix],
+    ['miner_hotkey', filters.minerHotkey],
+    ['miner_coldkey', filters.minerColdkey],
+    ['artifact_sha256', filters.artifactSha256],
+    ['submitted_after', filters.submittedAfter],
+    ['submitted_before', filters.submittedBefore],
+  ]
+  for (const [key, value] of scalar) {
+    if (value !== undefined) query.set(key, value)
+  }
+  for (const status of filters.agentStatus ?? []) query.append('agent_status', status)
+  for (const code of filters.screeningReasonCode ?? []) {
+    query.append('screening_reason_code', code)
+  }
   const payload = await platformAdminRequest(
     `/api/v1/admin/screening-submissions?${query.toString()}`,
   )
@@ -2509,6 +3006,7 @@ export async function retryValidation(rawInput: unknown, actor: string) {
         request_id: requestId,
         expected_snapshot: input.expectedSnapshot,
         reason: input.reason,
+        acknowledge_provider_outage: input.acknowledgeProviderOutage,
       } satisfies RetryRequest,
     },
   )
@@ -2655,7 +3153,11 @@ export async function batchRetryValidation(rawInput: unknown, actor: string) {
     {
       method: 'POST',
       actor,
-      body: { reason: input.reason, items },
+      body: {
+        reason: input.reason,
+        items,
+        acknowledge_provider_outage: input.acknowledgeProviderOutage,
+      },
     },
   )
   return batchRetryValidationResponseSchema.parse(payload)
@@ -3205,6 +3707,29 @@ export async function fetchCopyReviewSourceDiffFile(rawInput: unknown, actor: st
   const query = new URLSearchParams({ path: input.path })
   const payload = await platformAdminRequest(
     `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/source-diff/file?${query.toString()}`,
+    { actor },
+  )
+  return sourceDiffFileDetailSchema.parse(payload)
+}
+
+export async function fetchLineageSourceDiff(rawInput: unknown, actor: string) {
+  const input = lineageSourceDiffInputSchema.parse(rawInput)
+  const query = new URLSearchParams({ reference_agent_id: input.referenceAgentId })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/lineage-source-diff?${query.toString()}`,
+    { actor },
+  )
+  return sourceDiffManifestSchema.parse(payload)
+}
+
+export async function fetchLineageSourceDiffFile(rawInput: unknown, actor: string) {
+  const input = lineageSourceDiffFileInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    reference_agent_id: input.referenceAgentId,
+    path: input.path,
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/lineage-source-diff/file?${query.toString()}`,
     { actor },
   )
   return sourceDiffFileDetailSchema.parse(payload)

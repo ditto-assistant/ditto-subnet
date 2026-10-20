@@ -52,6 +52,7 @@ from ditto.api_server.koth import (
     tie_band_comparison,
     top5_round_is_due,
 )
+from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.chain import ChainClient
 from ditto.db.models import Agent, ConfirmationScore, ValidatorTicket
 from ditto.db.queries.benchmark_rollout import active_bench_version
@@ -307,6 +308,7 @@ async def _claimability(
         requesting_validator=_NO_VALIDATOR,
         canonical_version=version,
         now=now,
+        ticket_ttl=await resolve_scoring_ticket_ttl(request.app.state),
     )
     catchup_ids = (
         await _unserved_catchup_members(

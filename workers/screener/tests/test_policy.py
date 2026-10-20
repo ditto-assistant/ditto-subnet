@@ -4,27 +4,37 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 
+from ditto_screener.adjudicator import ADJUDICATOR_KEY_UNAVAILABLE_CODE
 from ditto_screener.policy import (
+    _COURT_KEY_UNAVAILABLE,
     _ORACLE_SYSTEM_PROMPT,
     CORE_ONLY_MANIFEST,
+    HELD_SOURCE_REVIEW_CODES,
+    SOURCE_REVIEW_KEY_UNAVAILABLE_CODE,
     AgenticSourceReviewModule,
     BehavioralChallengePackModule,
     BehavioralOracleModule,
     ChallengeObservation,
+    ModuleDisposition,
+    ModuleResult,
     PolicyContext,
     PolicyEngine,
+    PolicyEvidence,
     PolicyManifest,
     ReviewJournal,
+    ScreeningDecision,
     ScreeningOutcome,
     SourceFingerprintTriageModule,
     SourceReviewObservation,
     TimingRelayRiskModule,
     core_decision,
+    is_held_source_review,
     load_policy_engine,
 )
 from ditto_screening_protocol import (
@@ -133,6 +143,250 @@ async def test_v13_terminal_l2_inconclusive_preserves_bounded_audit() -> None:
     decision = await engine.evaluate(_context(challenge, review))
     assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
     assert decision.review_audit == audit
+    assert decision.reason_code == "l2-model-inconclusive"
+
+
+@pytest.mark.parametrize(
+    ("subcode", "expected_detail"),
+    [
+        (
+            "context_length_exceeded",
+            "private policy audit inconclusive (subcode=context_length_exceeded)",
+        ),
+        (
+            "models:openai/gpt-6-sol+z-ai/glm-5.2",
+            "private policy audit inconclusive "
+            "(subcode=models:openai/gpt-6-sol+z-ai/glm-5.2)",
+        ),
+        ("free text with spaces", "private policy audit inconclusive"),
+        (None, "private policy audit inconclusive"),
+    ],
+)
+async def test_parked_provider_fault_names_its_bounded_subcode(
+    subcode: str | None, expected_detail: str
+) -> None:
+    """A parked L3 fault must say why it stopped, not only that it did."""
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l3-adjudicator-model-provider-fault",
+            failure_disposition="inconclusive",
+            failure_subcode=subcode,
+        )
+
+    async def challenge(*_args: object) -> ChallengeObservation:
+        raise AssertionError("inconclusive source review must stop before challenge")
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="l3-provider-fault-subcode",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+    decision = await engine.evaluate(_context(challenge, review))
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert decision.reason_code == "l3-adjudicator-model-provider-fault"
+    assert decision.detail == expected_detail
+
+
+async def test_exhausted_review_keeps_its_subcode_through_aggregation() -> None:
+    """A pass-inconclusive selector result is aggregated, not returned at once."""
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l2-model-total-budget",
+            failure_disposition="pass_inconclusive",
+            failure_subcode="max_output_tokens",
+        )
+
+    async def challenge(*_args: object) -> ChallengeObservation:
+        raise AssertionError("no challenge is configured")
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="pass-inconclusive-subcode",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+    decision = await engine.evaluate(_context(challenge, review))
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert decision.detail.endswith("(subcode=max_output_tokens)")
+
+
+@pytest.mark.parametrize(
+    ("exhausted", "expected_outcome", "expected_reason"),
+    [
+        (True, ScreeningOutcome.INCONCLUSIVE, "source-review-inconclusive"),
+        (False, ScreeningOutcome.QUARANTINE, "source-safety-private-challenge-risk"),
+    ],
+)
+async def test_deciding_selector_reason_survives_a_passing_oracle(
+    exhausted: bool, expected_outcome: ScreeningOutcome, expected_reason: str
+) -> None:
+    async def review() -> SourceReviewObservation:
+        if exhausted:
+            return SourceReviewObservation(
+                ok=False,
+                risk_level=None,
+                finding_digest=None,
+                categories=(),
+                error_code="source-review-step-budget-exhausted",
+                failure_disposition="pass_inconclusive",
+                review_audit={"stage": "l1", "steps_used": 20},
+            )
+        return SourceReviewObservation(
+            ok=True,
+            risk_level="high",
+            finding_digest="ab" * 32,
+            categories=("provider_bypass",),
+        )
+
+    async def challenge(*_args: object) -> ChallengeObservation:
+        return ChallengeObservation(
+            "v8-behavioral-oracle",
+            True,
+            "ab" * 32,
+            elapsed_ms=1200,
+            gateway_calls=3,
+            gateway_token_observed=True,
+        )
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="selector-and-oracle",
+            module_specs=(
+                {"kind": "agentic_source_review"},
+                {"kind": "behavioral_oracle"},
+            ),
+        ),
+        (
+            AgenticSourceReviewModule(module_id="private-source-review"),
+            BehavioralOracleModule(module_id="oracle"),
+        ),
+    )
+    decision = await engine.evaluate(_context(challenge, review, policy_version=13))
+    assert decision.outcome == expected_outcome
+    assert decision.evidence[-1].code == "behavioral-oracle-passed"
+    assert decision.reason_code == expected_reason
+
+
+async def test_challenge_pack_reason_is_the_failed_challenge_after_success(
+    tmp_path: Path,
+) -> None:
+    pack = tmp_path / "pack.json"
+    pack.write_text(
+        json.dumps(
+            {
+                "challenges": [
+                    {
+                        "id": challenge_id,
+                        "request": {"case_id": challenge_id},
+                        "timeout_seconds": 10,
+                        "required_response_keys": ["final_text"],
+                    }
+                    for challenge_id in ("first", "second")
+                ]
+            }
+        )
+    )
+
+    async def challenge(
+        challenge_id: str, _request: object, _timeout: float
+    ) -> ChallengeObservation:
+        return ChallengeObservation(
+            challenge_id,
+            challenge_id == "first",
+            "ab" * 32,
+            elapsed_ms=1000,
+            json_keys=("final_text",),
+            error_code=None if challenge_id == "first" else "challenge-http-503",
+        )
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="multi-challenge-reason",
+            module_specs=({"kind": "behavioral_challenge_pack"},),
+        ),
+        (BehavioralChallengePackModule(module_id="pack", pack_path=pack),),
+    )
+    decision = await engine.evaluate(_context(challenge))
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert [item.code for item in decision.evidence] == [
+        "challenge-observed",
+        "challenge-http-503",
+    ]
+    assert decision.reason_code == "challenge-http-503"
+
+
+@pytest.mark.parametrize("earlier_records", [15, 16, 20])
+async def test_terminal_review_reason_retains_its_evidence_after_prior_modules(
+    earlier_records: int,
+) -> None:
+    class PriorEvidenceModule:
+        module_id = "prior-audit"
+        phase = "selector"
+        clears_selection = False
+
+        async def evaluate(self, context: PolicyContext) -> ModuleResult:
+            assert context.agent_id == _AGENT
+            return ModuleResult(
+                ModuleDisposition.CLEAR,
+                tuple(
+                    PolicyEvidence(self.module_id, f"prior-{i}", "earlier observation")
+                    for i in range(earlier_records)
+                ),
+            )
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l2-review-unavailable",
+            failure_disposition="inconclusive",
+        )
+
+    async def challenge(*_args: object) -> ChallengeObservation:
+        raise AssertionError("terminal source review must stop before challenge")
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="bounded-terminal-reason",
+            module_specs=({"kind": "prior-audit"}, {"kind": "agentic_source_review"}),
+        ),
+        (PriorEvidenceModule(), AgenticSourceReviewModule(module_id="terminal-review")),
+    )
+    decision = await engine.evaluate(_context(challenge, review, policy_version=13))
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert decision.reason_code == "l2-review-unavailable"
+    assert len(decision.evidence) == 16
+    assert decision.evidence[-1].module_id == "terminal-review"
+    assert decision.evidence[-1].code == decision.reason_code
+    assert [item.code for item in decision.evidence[:-1]] == [
+        f"prior-{i}" for i in range(15)
+    ]
+
+
+@pytest.mark.parametrize("reason", ["", "A", "bad/code", "a" * 65, "valid-code\n"])
+def test_decision_reason_code_rejects_invalid_wire_codes(reason: str) -> None:
+    with pytest.raises(ValueError, match="reason_code"):
+        ScreeningDecision(
+            outcome=ScreeningOutcome.INCONCLUSIVE,
+            detail="",
+            manifest_digest=CORE_ONLY_MANIFEST.digest,
+            reason_code=reason,
+        )
 
 
 async def test_core_only_pass_never_calls_run() -> None:
@@ -147,9 +401,10 @@ async def test_core_only_pass_never_calls_run() -> None:
     assert decision.outcome == ScreeningOutcome.PASS
     assert decision.submits_verdict and decision.passed
     assert calls == 0
+    assert decision.reason_code is None
 
 
-async def test_default_v7_runs_luna_review_and_behavioral_oracle_and_passes() -> None:
+async def test_default_source_review_passes_without_private_oracle() -> None:
     reviews = 0
     challenges = 0
 
@@ -175,6 +430,7 @@ async def test_default_v7_runs_luna_review_and_behavioral_oracle_and_passes() ->
             risk_level="low",
             finding_digest=None,
             categories=("none",),
+            clearance_certified=True,
         )
 
     engine = load_policy_engine(None)
@@ -183,22 +439,52 @@ async def test_default_v7_runs_luna_review_and_behavioral_oracle_and_passes() ->
     assert engine.manifest.rotation_id == "v8-luna-source-review-behavioral-oracle"
     assert decision.outcome == ScreeningOutcome.PASS
     assert reviews == 1
-    # The always-on oracle runs even though source review cleared (no tripwire).
-    assert challenges == 1
+    assert challenges == 0
 
 
 @pytest.mark.parametrize(
     ("policy_version", "expected"),
-    [
-        (12, ScreeningOutcome.PASS),
-        (13, ScreeningOutcome.INCONCLUSIVE),
-    ],
+    [(12, ScreeningOutcome.PASS), (13, ScreeningOutcome.QUARANTINE)],
 )
-async def test_skipped_mandatory_challenge_is_fail_closed_for_v13(
+async def test_uncertified_low_source_cannot_clear_v13(
+    policy_version: int, expected: ScreeningOutcome
+) -> None:
+    async def no_challenge(*_):  # type: ignore[no-untyped-def]
+        raise AssertionError("source-only policy has no challenge")
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=True,
+            risk_level="low",
+            finding_digest=None,
+            categories=("none",),
+            clearance_certified=False,
+        )
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="source-certificate-regression",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+    decision = await engine.evaluate(
+        _context(no_challenge, review, policy_version=policy_version)
+    )
+    assert decision.outcome == expected
+    if policy_version == 13:
+        assert decision.evidence[0].code == "source-review-clearance-unproven"
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "expected"),
+    [(12, ScreeningOutcome.PASS), (13, ScreeningOutcome.PASS)],
+)
+async def test_source_certificate_is_decisive_without_universal_challenge(
     policy_version: int,
     expected: ScreeningOutcome,
 ) -> None:
-    """A complete source ledger cannot replace mandatory v13 runtime evidence."""
+    """A complete source certificate reaches a verdict without a challenge."""
 
     notes = tuple(
         SourceReviewNote(
@@ -224,6 +510,7 @@ async def test_skipped_mandatory_challenge_is_fail_closed_for_v13(
             finding_digest=None,
             categories=("none",),
             notes=notes,
+            clearance_certified=True,
         )
 
     decision = await load_policy_engine(None).evaluate(
@@ -234,8 +521,7 @@ async def test_skipped_mandatory_challenge_is_fail_closed_for_v13(
     assert decision.outcome == expected
     assert decision.policy_version == policy_version
     assert decision.review_notes == notes
-    if policy_version == 13:
-        assert decision.evidence[-1].code == "challenge-inconclusive"
+    assert not any(item.code == "challenge-inconclusive" for item in decision.evidence)
 
 
 async def test_timing_is_only_a_tripwire_and_routes_to_quarantine(
@@ -319,6 +605,7 @@ async def test_l2_failure_disposition_fails_closed_without_rejection(
 
     assert decision.outcome == expected
     assert decision.outcome != ScreeningOutcome.DETERMINISTIC_REJECT
+    assert decision.reason_code == "l2-review-unavailable"
 
 
 @pytest.mark.parametrize(
@@ -393,6 +680,7 @@ def test_preexecution_budget_exhaustion_is_fail_closed_for_v13(
         policy_version=policy_version,
     )
 
+    assert decision.reason_code == "source-review-step-budget-exhausted"
     assert decision.outcome == expected
     assert decision.policy_version == policy_version
     assert decision.review_audit == {"stage": "l1", "steps_used": 20}
@@ -470,6 +758,7 @@ async def test_low_advisory_source_categories_clear_without_anti_cheat_hold(
             finding_digest="ab" * 32,
             categories=(category,),
             finding=finding,
+            clearance_certified=True,
         )
 
     engine = PolicyEngine(
@@ -862,6 +1151,40 @@ async def test_reasoning_harness_passes_the_oracle() -> None:
     assert any(item.code == "behavioral-oracle-passed" for item in decision.evidence)
 
 
+async def test_explicit_private_oracle_fails_closed_when_skipped() -> None:
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=True,
+            risk_level="low",
+            finding_digest="ab" * 32,
+            categories=("none",),
+            clearance_certified=True,
+        )
+
+    async def unavailable(*_args: object) -> ChallengeObservation:
+        raise AssertionError("skip_challenges must stop before private runtime")
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="source-and-oracle",
+            module_specs=(
+                {"kind": "agentic_source_review"},
+                {"kind": "behavioral_oracle"},
+            ),
+        ),
+        (
+            AgenticSourceReviewModule(module_id="private-source-review"),
+            BehavioralOracleModule(module_id="oracle"),
+        ),
+    )
+    decision = await engine.evaluate(
+        _context(unavailable, review), skip_challenges=True
+    )
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert not decision.submits_verdict
+    assert any(item.code == "challenge-inconclusive" for item in decision.evidence)
+
+
 async def test_single_call_oracle_is_inconclusive_without_causal_evidence() -> None:
     async def observe(*_):  # type: ignore[no-untyped-def]
         return ChallengeObservation(
@@ -1128,8 +1451,10 @@ def test_final_adjudication_settles_preexecution_source_lead(
     assert decision.outcome == outcome
     assert decision.adjudication == adjudication
     assert decision.evidence[0].code == "source-review-adjudicated"
-    if policy_version == 13 and court_decision in {"clear", "reject"}:
-        assert decision.evidence[1].code == "source-review-awaiting-v13-verification"
+    assert any(
+        item.code == "source-review-awaiting-v13-verification"
+        for item in decision.evidence
+    ) == (policy_version == 13 and court_decision == "clear")
 
 
 async def test_source_review_finding_travels_to_quarantine_decision() -> None:
@@ -1208,12 +1533,53 @@ async def test_final_adjudication_crosses_the_local_policy_boundary(
 
     assert decision.outcome == outcome
     assert decision.adjudication == adjudication
-    if policy_version == 13 and court_decision in {"clear", "reject"}:
-        assert decision.evidence[1].code == "source-review-awaiting-v13-verification"
+    assert any(
+        item.code == "source-review-awaiting-v13-verification"
+        for item in decision.evidence
+    ) == (policy_version == 13 and court_decision == "clear")
 
 
-async def test_v13_source_clear_holds_before_later_oracle() -> None:
-    """An L4 source clear cannot bypass unverified runtime evidence."""
+async def test_v13_court_clear_is_quarantine_transport_on_both_paths() -> None:
+    """Platform refuses a v13 PASS carrying a court clear; hold it instead."""
+    adjudication = {
+        "decision": "clear",
+        "reason": "final source-review court decision",
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v3-policy-v13",
+        "notes_considered": 1,
+    }
+    observation = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l3-adjudicator-incomplete",
+        failure_disposition="retryable_infra",
+        adjudication=adjudication,
+    )
+
+    async def challenge(*_):  # type: ignore[no-untyped-def]
+        raise AssertionError("no behavioral pack is configured")
+
+    async def review() -> SourceReviewObservation:
+        return observation
+
+    post_build = await load_policy_engine(None).evaluate(
+        _context(challenge, review, policy_version=13)
+    )
+    preflight = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        observation, policy_version=13
+    )
+
+    for decision in (post_build, preflight):
+        assert decision.outcome == ScreeningOutcome.QUARANTINE
+        assert decision.adjudication == adjudication
+        assert decision.evidence[-1].code == "source-review-awaiting-v13-verification"
+        assert decision.reason_code == "source-review-awaiting-v13-verification"
+
+
+async def test_v13_source_clear_does_not_require_universal_oracle() -> None:
+    """An L4 source clear settles the built-in profile as a held quarantine."""
 
     async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
         return ChallengeObservation(
@@ -1264,7 +1630,7 @@ async def test_oracle_transport_failure_is_fail_closed_for_v13(
     policy_version: int,
     expected: ScreeningOutcome,
 ) -> None:
-    """A source-only clear cannot complete v13 mandatory runtime verification."""
+    """The built-in source profile does not call the optional runtime check."""
 
     async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
         return ChallengeObservation(
@@ -1303,7 +1669,7 @@ async def test_oracle_transport_failure_is_fail_closed_for_v13(
     assert decision.policy_version == policy_version
     assert decision.adjudication == adjudication
     assert [item.code for item in decision.evidence] == (
-        ["source-review-adjudicated", "challenge-transport-failure"]
+        ["source-review-adjudicated"]
         if policy_version == 12
         else [
             "source-review-adjudicated",
@@ -1313,7 +1679,7 @@ async def test_oracle_transport_failure_is_fail_closed_for_v13(
 
 
 async def test_clean_review_finding_is_kept_when_oracle_is_inconclusive() -> None:
-    """A low-risk source review remains exculpatory on an inconclusive oracle."""
+    """An explicitly requested audit preserves source evidence on failure."""
     finding = _finding_payload("low")
 
     async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
@@ -1333,9 +1699,23 @@ async def test_clean_review_finding_is_kept_when_oracle_is_inconclusive() -> Non
             finding_digest=parsed.canonical_digest(),
             categories=("none",),
             finding=finding,
+            clearance_certified=True,
         )
 
-    decision = await load_policy_engine(None).evaluate(_context(challenge, review))
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="targeted-source-oracle",
+            module_specs=(
+                {"kind": "agentic_source_review"},
+                {"kind": "behavioral_oracle"},
+            ),
+        ),
+        (
+            AgenticSourceReviewModule(module_id="source"),
+            BehavioralOracleModule(module_id="oracle"),
+        ),
+    )
+    decision = await engine.evaluate(_context(challenge, review))
     assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
     assert decision.finding == finding
 
@@ -1502,6 +1882,83 @@ def test_unavailable_court_is_retryable_infra_not_a_hold_or_admission() -> None:
     assert decision.evidence[0].code == "source-review-unavailable"
 
 
+def _court_could_not_start(escalation_code: str) -> dict[str, object]:
+    return {
+        "decision": "escalate",
+        "reason": "Automated adjudication could not start; held for retry",
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v3-policy-v12",
+        "notes_considered": 0,
+        "escalation_code": escalation_code,
+    }
+
+
+# Only the node's key failure carries the fleet-owned code Platform retries
+# automatically; an archive the court could not open stays operator-retried.
+_COURT_START_FAILURES = (
+    (ADJUDICATOR_KEY_UNAVAILABLE_CODE, SOURCE_REVIEW_KEY_UNAVAILABLE_CODE),
+    ("adjudicator-unavailable", "source-review-unavailable"),
+)
+
+
+def test_policy_spells_the_court_key_code_as_the_adjudicator_does() -> None:
+    assert _COURT_KEY_UNAVAILABLE == ADJUDICATOR_KEY_UNAVAILABLE_CODE
+
+
+@pytest.mark.parametrize(("escalation_code", "reason_code"), _COURT_START_FAILURES)
+def test_preexecution_court_start_failure_names_whose_fault_it_is(
+    escalation_code: str, reason_code: str
+) -> None:
+    observation = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-oserror",
+        failure_disposition="retryable_infra",
+        adjudication=_court_could_not_start(escalation_code),
+    )
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        observation
+    )
+    assert decision.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert decision.reason_code == reason_code
+    assert [item.code for item in decision.evidence] == [reason_code]
+
+
+@pytest.mark.parametrize(("escalation_code", "reason_code"), _COURT_START_FAILURES)
+async def test_source_review_court_start_failure_names_whose_fault_it_is(
+    escalation_code: str, reason_code: str
+) -> None:
+    """The live 2026-09-27 hold: an upstream error, then a court with no key."""
+
+    async def challenge(*_):  # type: ignore[no-untyped-def]
+        raise AssertionError
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="source-review-inconsistent-verdict",
+            failure_disposition="retryable_infra",
+            adjudication=_court_could_not_start(escalation_code),
+        )
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="court-start-failure",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+    decision = await engine.evaluate(_context(challenge, review))
+    assert decision.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert decision.reason_code == reason_code
+    assert decision.evidence[0].code == reason_code
+
+
 @pytest.mark.parametrize(
     "escalation_code",
     ["adjudicator-failed", "adjudicator-no-evidence", "verdict-contract-failed"],
@@ -1537,3 +1994,83 @@ def test_refused_court_holds_for_an_operator_instead_of_admitting(
         "source-review-adjudicated",
         "source-review-adjudication-refused",
     ]
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "court_decision", "with_finding", "advisory", "held"),
+    [
+        (13, "reject", False, False, True),
+        (13, "reject", True, False, True),
+        (13, "escalate", False, False, True),
+        (13, "escalate", True, False, True),
+        (13, "clear", False, False, False),
+        (13, "clear", False, True, False),
+        (13, None, True, False, False),
+        (12, "reject", True, False, False),
+        (12, "escalate", False, False, False),
+    ],
+)
+async def test_held_source_review_keys_on_emitted_court_evidence(
+    policy_version: int,
+    court_decision: str | None,
+    with_finding: bool,
+    advisory: bool,
+    held: bool,
+) -> None:
+    """Only a v13 court reject or refusal hold keeps its built image."""
+    finding = _finding_payload("high") if with_finding else None
+    adjudication = (
+        None
+        if court_decision is None
+        else {
+            "decision": court_decision,
+            "reason": "final court decision",
+            "model": "z-ai/glm-5.3-flash",
+            "prompt_revision": "adjudicator-v3-policy-v13",
+            "notes_considered": 1,
+            "escalation_code": (
+                "adjudicator-failed" if court_decision == "escalate" else None
+            ),
+        }
+    )
+    observation = SourceReviewObservation(
+        ok=court_decision is None,
+        risk_level="high" if court_decision is None else None,
+        finding_digest=(
+            None
+            if finding is None
+            else SourceReviewFinding.model_validate(finding).canonical_digest()
+        ),
+        categories=("provider_bypass",) if court_decision is None else (),
+        failure_disposition=None if court_decision is None else "inconclusive",
+        finding=finding,
+        adjudication=adjudication,
+    )
+
+    async def challenge(*_):  # type: ignore[no-untyped-def]
+        raise AssertionError("no behavioral pack is configured")
+
+    async def review() -> SourceReviewObservation:
+        return observation
+
+    decision = await load_policy_engine(None).evaluate(
+        _context(challenge, review, policy_version=policy_version)
+    )
+    if advisory:
+        # The gate's image-binding advisory keeps the court clear attached.
+        decision = replace(
+            decision,
+            outcome=ScreeningOutcome.QUARANTINE,
+            evidence=(
+                *decision.evidence,
+                PolicyEvidence("stable-core", "image-binding-heuristic", "opaque"),
+            ),
+        )
+
+    assert decision.outcome == ScreeningOutcome.QUARANTINE
+    assert decision.adjudication == adjudication
+    assert is_held_source_review(decision) is held
+    if court_decision is not None:
+        # Every code the module emits on an adjudicated hold is recognised.
+        assert decision.evidence[0].code in HELD_SOURCE_REVIEW_CODES
+    assert "adjudicated-source-review-escalate" not in HELD_SOURCE_REVIEW_CODES

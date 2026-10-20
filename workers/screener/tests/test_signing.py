@@ -9,10 +9,12 @@ import pytest
 
 from ditto_screener.heartbeat import (
     DockerHealth,
+    FleetRelease,
     HostSpecs,
     ReviewSettingsStatus,
     ScreenerProgress,
     SystemMetrics,
+    fleet_release_signing_token,
 )
 from ditto_screener.signing import (
     heartbeat_signing_message,
@@ -31,6 +33,12 @@ from ditto_screening_protocol.router_source_screen import RouterSourceScreenOutc
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _ATTEMPT = UUID("776a3bb8-5847-40db-b2af-42f93f20233c")
+
+
+def test_v8_fixture_capability_extends_only_new_heartbeat_signature() -> None:
+    release = FleetRelease(builtin_policy_version=13, source_fixture_v1=True)
+    assert fleet_release_signing_token(release, protocol_version=7) == "13,-,-,-"
+    assert fleet_release_signing_token(release, protocol_version=8) == "13,-,-,-,1"
 
 
 def test_message_matches_platform_format() -> None:

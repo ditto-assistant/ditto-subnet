@@ -328,7 +328,9 @@ resource "google_compute_region_autoscaler" "screener_fleet" {
     # Platform's fenced controller is the sole normal writer. This independent
     # GCP mechanism is only a stale-controller safety net: it may add GCE
     # capacity for a published backlog but can never race the controller by
-    # deleting a worker. The controller drains and resizes back to zero.
+    # deleting a worker. The controller re-reads node leases after its fenced
+    # renew and deletes only idle instances (or resizes to zero when no GCE
+    # lease exists).
     mode         = "ONLY_SCALE_OUT"
     min_replicas = var.screener_fleet_min_replicas
     max_replicas = var.screener_fleet_max_replicas
@@ -346,8 +348,8 @@ resource "google_compute_region_autoscaler" "screener_fleet" {
 
   }
 
-  # The fenced controller owns this one field: OFF at zero GCE target and
-  # ONLY_SCALE_OUT only while bounded fallback capacity is active. Terraform
+  # The fenced controller keeps ONLY_SCALE_OUT, pausing it only around a
+  # fenced manual resize. The watchdog gates the backlog metric. Terraform
   # continues to own the policy bounds, cooldown, and backlog metric.
   lifecycle {
     ignore_changes = [autoscaling_policy[0].mode]

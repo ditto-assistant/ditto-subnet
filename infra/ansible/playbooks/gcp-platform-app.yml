@@ -27,6 +27,12 @@
 #   ansible-playbook -i infra/ansible/inventory/gcp.yml \
 #     infra/ansible/playbooks/gcp-platform-app.yml --limit ditto-platform-prod
 #
+# Caddy-only day-two convergence (no app environment or secret rendering):
+#   GCP_OSLOGIN_USER=… ansible-playbook -i infra/ansible/inventory/gcp.yml \
+#     infra/ansible/playbooks/gcp-platform-app.yml --limit ditto-platform-prod \
+#     --tags platform-caddy
+# The template is validated with the host's Caddy before installation/reload.
+#
 # Or by hand — `terraform -chdir=infra/terraform/stacks/gcp-platform output -raw <name>`:
 #
 #   GCP_OSLOGIN_USER=…                          your OS Login username
@@ -43,6 +49,10 @@
 # a host that had them set SILENTLY TURNS THE FEATURE OFF: always export all
 # four for prod.
 # ---------------------------------------------------------------------------
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_platform_app
+
 - name: Converge ditto-platform app VMs
   hosts: role_platform_app
   become: true

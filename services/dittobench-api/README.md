@@ -192,7 +192,10 @@ Before switching a deployment to `enforce`, watch for
 — those are the calls that will start failing. Under `enforce` the process
 refuses to start without a credential rather than 401ing every caller, and the
 published Compose default token is treated as unset, so enforcement requires a
-real per-host secret.
+real per-host secret. The inference-session broker follows the same mode: it
+still admits the published default under `shadow` (logging one would-reject
+line), and refuses it under `enforce`. In ditto-subnet's Compose stack, set
+`DITTOBENCH_CONTROL_AUTH_MODE` in `.env` and recreate `dittobench-api`.
 
 ## Endpoints
 
@@ -213,9 +216,11 @@ curl 'localhost:8000/v1/dataset?n=10'
 ### Validator capability negotiation
 
 `GET /v1/capabilities` is a read-only validator-control-plane endpoint that
-reports only public release identity and supported protocol numbers. It needs no
-operator secret: a shared bearer token would not authenticate the scorer because
-the scorer itself would possess it. Production Compose does not publish the
+reports only public release identity and supported protocol numbers. Like every
+control-plane route except `GET /health`, it takes the control-plane credential
+(see [Control-plane authentication](#control-plane-authentication)). That
+credential cannot authenticate the scorer's *answer*, though, because the scorer
+itself holds it. Production Compose does not publish the
 scorer port on the host. The validator instead binds the response to the
 immutable signed stack descriptor supplied by Compose:
 
@@ -225,9 +230,18 @@ immutable signed stack descriptor supplied by Compose:
   "source_revision": "0123456789abcdef0123456789abcdef01234567",
   "source_revision_origin": "binary",
   "source_revision_mismatch": false,
-  "supported_bench_versions": [2, 3]
+  "supported_bench_versions": [8, 9, 10, 11, 12, 13]
 }
 ```
+
+`supported_bench_versions` lists the versions in the advertised v8–v13 window
+that this build reports as production-ready (`supportedBenchVersions` in
+`cmd/dittobench-api/main.go`). It is empty when the v8 efficiency readiness
+check fails, and every scoring and practice request is then rejected. A
+deployment that can launch untrusted miner images (screened images or source
+builds) also reports it empty until its sandbox executor passes the isolation
+check (`runtimeSupportedBenchVersions`), so validators do not negotiate work
+that host cannot run safely.
 
 Release identity is **derived from the compiled binary**, not asserted by the
 environment. The image build links it in:
@@ -269,16 +283,16 @@ The endpoint fails closed with 503 when the winning identity is absent or
 malformed (including a deliberately stamped-but-malformed build). Validators
 park the scoring attempt when an older scorer returns 404, the endpoint is
 unreachable, the response is malformed, or the descriptor identity mismatches.
-They do not replay the score against v2; an operator must issue a validator
+They do not retry against another version; an operator must issue a validator
 retry from Backroom after correcting the scorer deployment.
 
-New validators send canonical work to `POST /v2/score`, where
-`bench_version` is required and must be `2` or `3`. The accepted response and
-every polled job echo `bench_version`; a completed report also echoes it at
-`report.details.bench_version`. Validators must reject disagreement at any
-layer. `POST /v1/score` remains available during the mixed-fleet migration and
-maps an omitted version to the exact historical v2 path. `/v1/submit` retains
-the same omission rule for public practice compatibility.
+Validators send canonical work to `POST /v2/score`, where `bench_version` is
+required and must be one of the advertised `supported_bench_versions`. The
+accepted response and every polled job echo `bench_version`; a completed report
+also echoes it at `report.details.bench_version`. Validators must reject
+disagreement at any layer. There is no `POST /v1/score`. Public practice
+(`POST /v1/submit`) defaults an omitted `bench_version` to v9 and applies the
+same supported-version check.
 
 ### `GET /v1/catalog?bench_version=`
 The Ditto tool catalog the harness receives on every `/run`. It defaults to v9
@@ -307,7 +321,7 @@ locked model:
 ```sh
 curl -X POST localhost:8000/v1/submit \
   -H 'Content-Type: application/json' \
-  -d '{"git_url":"https://github.com/<you>/<harness>","git_ref":"main","n":30}'
+  -d '{"git_url":"https://github.com/<you>/<harness>","git_ref":"<40-character-commit-sha>","n":30}'
 # {"run_id":"...","status":"queued","poll":"/v1/runs/..."}
 ```
 
@@ -318,11 +332,16 @@ rejected after clone:
 ```json
 {
   "git_url": "https://github.com/ditto-assistant/ditto-subnet",
-  "git_ref": "main",
+  "git_ref": "<40-character-commit-sha>",
   "git_subdir": "miners/dittobench-starter-kit",
   "run_size": "small"
 }
 ```
+
+The Git source path requires the full lowercase commit SHA (`git rev-parse HEAD`)
+after the commit has been pushed. Branches, tags, abbreviated SHAs, and an
+omitted `git_ref` are rejected. The sandbox fetches that object and verifies
+the checked-out `HEAD` before the Docker build begins.
 
 **Full pipeline (`run_size`)**: the complete SN118 evaluation. Generate a fresh
 anti-cheat dataset, push the haystack to the harness's `POST /seed`, run every
@@ -481,10 +500,10 @@ caller-supplied harness URLs, so it guards against abuse:
   API refuses to start when both are truthy.
   Imported archive and local runner tags are removed after each run so validator
   disks do not accumulate submission images.
-- Benchmark v7 and v8 require the screener-built, digest- and image-ID-bound
-  archive; the source-build fallback is retired. That contract governs
-  validator-side builds, so it applies to `git_url` and `tarball_url` on every
-  deployment. A `harness_url` practice submission builds nothing — the miner
+- Canonical scoring requires the screener-built, digest- and image-ID-bound
+  archive for every benchmark version. The sandbox also rejects a missing image
+  before fetching source, unless a local development caller explicitly enables
+  source builds in code. A `harness_url` practice submission builds nothing — the miner
   runs their own harness and this engine only drives and scores it — so it is
   outside the contract and remains the supported v8 practice path. The canonical
   validator path (`POST /v2/score`) still requires the screened image for every

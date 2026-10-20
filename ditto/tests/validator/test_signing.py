@@ -62,6 +62,7 @@ from ditto.validator.signing import (
     sign_top5_confirmation_job_request,
     top5_confirmation_job_signing_message,
     top5_confirmation_score_signing_message,
+    transcript_signing_message,
     verify_ledger_entry,
     verify_score_proof,
     verify_v9_confirmation_receipt,
@@ -621,6 +622,41 @@ def test_artifact_signature_binds_agent_nonce_and_timestamp() -> None:
         requested_at=requested_at,
     )
     assert not keypair.verify(other_agent, signature)
+
+
+def test_transcript_signature_binds_run_digest_nonce_and_timestamp() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    nonce = uuid4()
+    requested_at = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
+
+    def message(
+        agent_id: UUID,
+        run_id: str,
+        digest: str,
+        request_nonce: UUID,
+        timestamp: datetime,
+    ) -> bytes:
+        return transcript_signing_message(
+            validator_hotkey=keypair.ss58_address,
+            agent_id=agent_id,
+            run_id=run_id,
+            transcript_sha256=digest,
+            nonce=request_nonce,
+            requested_at=timestamp,
+        )
+
+    original = message(_AGENT, "run_1", "ab" * 32, nonce, requested_at)
+    signature = keypair.sign(original)
+    assert keypair.verify(original, signature)
+    changed_proofs = (
+        (uuid4(), "run_1", "ab" * 32, nonce, requested_at),
+        (_AGENT, "run_2", "ab" * 32, nonce, requested_at),
+        (_AGENT, "run_1", "cd" * 32, nonce, requested_at),
+        (_AGENT, "run_1", "ab" * 32, uuid4(), requested_at),
+        (_AGENT, "run_1", "ab" * 32, nonce, requested_at + timedelta(seconds=1)),
+    )
+    for changed in changed_proofs:
+        assert not keypair.verify(message(*changed), signature)
 
 
 def test_ledger_signature_binds_nonce_and_timestamp() -> None:
@@ -1557,6 +1593,26 @@ def test_ledger_entry_rejects_tampered_receipt() -> None:
     assert not verify_ledger_entry(entry.model_copy(update={"score_proofs": proofs}))
 
 
+@pytest.mark.parametrize("bench_version", [None, 6])
+def test_ledger_entry_rejects_unsigned_row_below_the_receipt_contract(
+    bench_version: int | None,
+) -> None:
+    forged = _signed_ledger_entry().model_copy(
+        update={
+            "bench_version": bench_version,
+            "composite": 1.0,
+            "signature": None,
+            "score_proofs": [],
+        }
+    )
+
+    assert not verify_ledger_entry(forged)
+
+
+def test_ledger_entry_rejects_signed_quorum_below_the_receipt_contract() -> None:
+    assert not verify_ledger_entry(_signed_ledger_entry(bench_version=6))
+
+
 def test_v9_ledger_entry_verifies_ordinary_signed_quorum() -> None:
     """Rollout eligibility must not make a valid v9 signature look invalid."""
     assert verify_ledger_entry(_signed_ledger_entry(bench_version=9))
@@ -1628,13 +1684,6 @@ def test_confirmation_receipt_guard_admits_every_confirmation_bench_version() ->
         assert not verify_v9_confirmation_receipt(entry)
 
 
-def test_legacy_unsigned_ledger_entry_remains_valid() -> None:
-    entry = _signed_ledger_entry().model_copy(
-        update={"bench_version": 6, "score_proofs": [], "signature": None}
-    )
-    assert verify_ledger_entry(entry)
-
-
 def test_v7_ledger_entry_requires_signed_quorum() -> None:
     entry = _signed_ledger_entry().model_copy(update={"score_proofs": []})
     assert not verify_ledger_entry(entry)
@@ -1692,4 +1741,56 @@ def test_protocol_v27_heartbeat_binds_the_weights_fold_only_when_present() -> No
     with pytest.raises(ValueError, match="requires heartbeat protocol v27"):
         heartbeat_signing_message(
             **{**common, "protocol_version": 26}, weights_fold=fold
+        )
+
+
+def test_protocol_v32_heartbeat_binds_host_specs_only_when_present() -> None:
+    from ditto.api_models.system_health import HostSpecs
+    from ditto.api_models.validator_weights_fold import WeightsFold
+
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    request["protocol_version"] = 32
+    common = dict(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=BenchmarkCapacity(
+            configured_slots=2, healthy_slots=["slot-0", "slot-1"]
+        ),
+        confirmation_progress=[],
+        updater_status=ValidatorUpdaterStatus(
+            enabled=True, channel="compat-2", state="idle", observed_at=1_784_020_800
+        ),
+    )
+    # A failed probe signs exactly what a v31 validator signs.
+    assert heartbeat_signing_message(**common).startswith(
+        b"ditto-validator-heartbeat:v23:"
+    )
+    specs = HostSpecs(
+        cpu_count=16,
+        cpu_physical_cores=8,
+        memory_total_mib=64_000,
+        disk_total_gib=500,
+        architecture="x86_64",
+    )
+    message = heartbeat_signing_message(**common, host_specs=specs)
+    assert message.startswith(b"ditto-validator-heartbeat:v32:")
+    assert b":16,8,64000,500,x86_64:" in message
+    shrunk = specs.model_copy(update={"memory_total_mib": 128_000})
+    assert message != heartbeat_signing_message(**common, host_specs=shrunk)
+    # The fold token keeps its position; an absent fold signs as empty.
+    fold = WeightsFold(
+        epoch_index=1,
+        ledger_digest="cd" * 32,
+        vector_digest="ab" * 32,
+        folded_at=1_784_020_790,
+    )
+    assert message != heartbeat_signing_message(
+        **common, host_specs=specs, weights_fold=fold
+    )
+    with pytest.raises(ValueError, match="require heartbeat protocol v32"):
+        heartbeat_signing_message(
+            **{**common, "protocol_version": 31}, host_specs=specs
         )

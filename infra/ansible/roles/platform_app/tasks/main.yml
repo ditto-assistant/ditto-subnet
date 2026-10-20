@@ -70,12 +70,6 @@
     state: present
     update_cache: true
 
-- name: Install skopeo for Targon candidate-image promotion
-  ansible.builtin.apt:
-    name: skopeo
-    state: present
-  when: platform_targon_public_url | default('') | length > 0
-
 - name: Ensure Docker is enabled and running
   ansible.builtin.systemd:
     name: docker
@@ -200,6 +194,28 @@
     platform_secrets: "{{ dict(platform_secret_reads.results | map(attribute='item.key') | zip(platform_secret_reads.results | map(attribute='stdout'))) }}"
   no_log: true
 
+- name: Read optional Backroom operator proof secret from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_backroom_platform_operator_proof }} --project={{ gcp_project }}"
+  register: platform_backroom_operator_proof_read
+  changed_when: false
+  no_log: true
+  when: secret_backroom_platform_operator_proof | length > 0
+
+- name: Refuse an invalid configured Backroom operator proof secret
+  ansible.builtin.assert:
+    that:
+      - platform_backroom_operator_proof_read.stdout is match('^[0-9a-f]{64}$')
+    fail_msg: "Configured Backroom operator proof secret must be exactly 64 lowercase hex bytes"
+  no_log: true
+  when:
+    - secret_backroom_platform_operator_proof | length > 0
+
+- name: Install Backroom operator proof secret
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'backroom_platform_operator_proof': platform_backroom_operator_proof_read.stdout}) }}"
+  no_log: true
+  when: secret_backroom_platform_operator_proof | length > 0
+
 # Optional secrets: only read when a host names the Secret Manager id, so an
 # unactivated host renders DITTO_LINK_CLIENT_SECRET= and DITTO_ROUTER_API_KEY= empty.
 - name: Read Ditto link client secret from Secret Manager
@@ -273,6 +289,28 @@
   no_log: true
   when: platform_screener_hotkey | length > 0
 
+# The role key is deliberately absent until an operator has added a Secret
+# Manager version and explicitly enables the staged audit rollout.
+- name: Read moderation audit signer when the rollout is enabled
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_moderation_audit_signing_key }} --project={{ gcp_project }}"
+  register: platform_moderation_audit_signing_key_read
+  changed_when: false
+  no_log: true
+  when: platform_moderation_audit_enabled | bool
+
+- name: Validate moderation audit signer before rendering the enabled rollout
+  ansible.builtin.assert:
+    that:
+      - platform_moderation_audit_signing_key_read.stdout is match('^[0-9a-fA-F]{64}$')
+  no_log: true
+  when: platform_moderation_audit_enabled | bool
+
+- name: Fold the moderation audit signer into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'moderation_audit_signing_key': platform_moderation_audit_signing_key_read.stdout}) }}"
+  no_log: true
+  when: platform_moderation_audit_enabled | bool
+
 - name: Read screener capacity-controller token from Secret Manager
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_screener_controller_api_token }} --project={{ gcp_project }}"
   register: platform_screener_controller_token_read
@@ -286,18 +324,30 @@
   no_log: true
   when: secret_screener_controller_api_token | length > 0
 
-- name: Read Targon API key from Secret Manager
-  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_targon_api_key }} --project={{ gcp_project }}"
-  register: platform_targon_api_key_read
+- name: Validate backup reader secret references before fetching
+  ansible.builtin.assert:
+    that:
+      - platform_database_backup_secret_project == 'ditto-subnet'
+      - secret_database_backup_reader_access_key_id == 'platform-pg-backup-reader-access-key-id'
+      - secret_database_backup_reader_secret_access_key == 'platform-pg-backup-reader-secret-access-key'
+    quiet: true
+  when: platform_database_backup_reader_enabled | bool
+
+- name: Read the separate backup metadata reader access key
+  ansible.builtin.command:
+    argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_access_key_id }}", "--project={{ platform_database_backup_secret_project }}"]
+  register: platform_backup_reader_access
   changed_when: false
   no_log: true
-  when: platform_targon_public_url | default('') | length > 0
+  when: platform_database_backup_reader_enabled | bool
 
-- name: Fold the Targon API key into the secrets map
-  ansible.builtin.set_fact:
-    platform_secrets: "{{ platform_secrets | combine({'targon_api_key': platform_targon_api_key_read.stdout}) }}"
+- name: Read the separate backup metadata reader secret
+  ansible.builtin.command:
+    argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_secret_access_key }}", "--project={{ platform_database_backup_secret_project }}"]
+  register: platform_backup_reader_secret
+  changed_when: false
   no_log: true
-  when: platform_targon_public_url | default('') | length > 0
+  when: platform_database_backup_reader_enabled | bool
 
 - name: Read Hippius access key id when miner avatars are configured
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_hippius_access_key_id }} --project={{ gcp_project }}"
@@ -318,6 +368,25 @@
     platform_secrets: "{{ platform_secrets | combine({'hippius_access_key_id': platform_hippius_access_key_read.stdout, 'hippius_secret_access_key': platform_hippius_secret_key_read.stdout}) }}"
   no_log: true
   when: platform_hippius_bucket | default('') | length > 0
+
+- name: Validate the enabled backup metadata reader before rendering
+  ansible.builtin.assert:
+    that:
+      - platform_backup_reader_access.stdout | trim | length > 0
+      - platform_backup_reader_secret.stdout | trim | length > 0
+      - platform_backup_reader_access.stdout | trim != platform_backup_reader_secret.stdout | trim
+      - platform_backup_reader_access.stdout | trim != (platform_secrets.hippius_access_key_id | default(''))
+      - platform_backup_reader_access.stdout | trim != (platform_secrets.hippius_secret_access_key | default(''))
+      - platform_backup_reader_secret.stdout | trim != (platform_secrets.hippius_access_key_id | default(''))
+      - platform_backup_reader_secret.stdout | trim != (platform_secrets.hippius_secret_access_key | default(''))
+  no_log: true
+  when: platform_database_backup_reader_enabled | bool
+
+- name: Fold only the read-only backup pair into Platform config
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'database_backup_reader_access': platform_backup_reader_access.stdout, 'database_backup_reader_secret': platform_backup_reader_secret.stdout}) }}"
+  no_log: true
+  when: platform_database_backup_reader_enabled | bool
 
 - name: Read Backblaze key id when the trace mirror is configured
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_backblaze_key_id }} --project={{ gcp_project }}"
@@ -599,6 +668,7 @@
 # A caddy-owned log dir so Caddy can both write AND roll (create new files). The
 # shared /opt/ditto/logs is deploy:ditto and not caddy-writable.
 - name: Ensure caddy log directory exists
+  tags: [platform-caddy]
   ansible.builtin.file:
     path: /opt/ditto/logs/caddy
     state: directory
@@ -607,15 +677,18 @@
     mode: "0755"
 
 - name: Write Caddyfile
+  tags: [platform-caddy]
   ansible.builtin.template:
     src: Caddyfile.j2
     dest: /etc/caddy/Caddyfile
     owner: root
     group: caddy
     mode: "0644"
+    validate: "caddy validate --adapter caddyfile --config %s"
   notify: reload caddy
 
 - name: Ensure Caddy is enabled and running
+  tags: [platform-caddy]
   ansible.builtin.systemd:
     name: caddy
     enabled: true

@@ -127,3 +127,14 @@ INFERENCE_ADMISSION_AT_CAPACITY = Counter(
     "Hosted-inference admissions declined as retryable backpressure, by lane and gate.",
     ("lane", "scope"),
 )
+
+# Fires on every 429 from the opt-in per-client-IP limit on unauthenticated
+# routes (``DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE``). ``route`` is the limited
+# router -- ``upload``, ``retrieval``, or ``public`` -- a closed set; the client
+# address stays off the label so a flood cannot inflate cardinality. A steady
+# non-zero rate on ``upload`` is worth a look: miners share that path.
+PUBLIC_RATE_LIMITED = Counter(
+    "ditto_public_rate_limited_total",
+    "Unauthenticated requests refused by the per-client-IP rate limit, by router.",
+    ("route",),
+)

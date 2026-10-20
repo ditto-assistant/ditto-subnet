@@ -135,7 +135,7 @@ def test_controller_deploy_releases_only_the_stopped_writer_epoch() -> None:
         ROOT / "services" / "screener-orchestrator" / "scripts" / "update-controller.sh"
     ).read_text()
 
-    stop = 'systemctl stop "$BUILDER_UNIT" "$CONTROLLER_UNIT"'
+    stop = 'systemctl stop "$CONTROLLER_UNIT"'
     release = 'release_lease "$prior_epoch"'
     start = 'systemctl start "$CONTROLLER_UNIT"'
     assert updater.index(stop) < updater.index(release) < updater.index(start)
@@ -147,76 +147,140 @@ def test_controller_deploy_releases_only_the_stopped_writer_epoch() -> None:
     assert f"{stop} || true" not in updater
 
 
-def test_capacity_controller_cannot_administer_compute_project_wide() -> None:
-    terraform = (GCP_ROOT / "screener-capacity-controller.tf").read_text()
-    assert 'role    = "roles/compute.instanceAdmin.v1"' not in terraform
-    assert '"compute.autoscalers.list"' in terraform
-    assert '"compute.autoscalers.get"' in terraform
-    assert '"compute.autoscalers.update"' in terraform
-    assert 'role_id = "dittoScreenerAutoscalerReader"' in terraform
-    reader_role = terraform.split(
-        'resource "google_project_iam_custom_role" '
-        '"screener_controller_autoscaler_reader"',
-        1,
-    )[1].split(
-        'resource "google_project_iam_member" "screener_controller_autoscaler_reader"',
-        1,
-    )[0]
-    assert '"compute.autoscalers.list"' in reader_role
-    assert '"compute.autoscalers.get"' not in reader_role
-    assert '"compute.autoscalers.update"' not in reader_role
-    reader_binding = terraform.split(
-        'resource "google_project_iam_member" "screener_controller_autoscaler_reader"',
-        1,
-    )[1].split("\n}\n", 1)[0]
-    assert "condition" not in reader_binding
-    updater_binding = terraform.split(
-        'resource "google_project_iam_member" "screener_controller_autoscaler_updater"',
-        1,
-    )[1].split('module "screener_capacity_controller_vm"', 1)[0]
-    updater_role = terraform.split(
-        'resource "google_project_iam_custom_role" '
-        '"screener_controller_autoscaler_updater"',
-        1,
-    )[1].split(
-        'resource "google_project_iam_member" "screener_controller_autoscaler_updater"',
-        1,
-    )[0]
-    assert '"compute.autoscalers.get"' in updater_role
-    assert '"compute.autoscalers.update"' in updater_role
-    assert '"compute.autoscalers.list"' not in updater_role
-    assert "only_ditto_screener_autoscaler" in updater_binding
-    assert "/autoscalers/ditto-screener-fleet" in updater_binding
-    assert '"compute.instanceGroupManagers.get"' in terraform
-    assert '"compute.instanceGroupManagers.update"' in terraform
-    assert '"compute.instanceGroupManagers.use"' in terraform
-    assert "compute.regionInstanceGroupManagers" not in terraform
-    assert "only_ditto_screener_fleet" in terraform
+# Issue #395: every applyable revision keeps the provider mutator on its
+# dedicated roles, so a broad-to-custom migration cannot land in two layers.
+CAPACITY_CONTROLLER = re.compile(
+    r"google_service_account\.screener_capacity_controller\b"
+    r"|ditto-screener-capacity@"
+)
+BROAD_ROLES = {
+    "roles/owner",
+    "roles/editor",
+    "roles/compute.admin",
+    "roles/compute.instanceAdmin",
+    "roles/compute.instanceAdmin.v1",
+}
+# Custom role -> (exact permissions, required binding condition suffix).
+CAPACITY_CONTROLLER_ROLES = {
+    "screener_controller_fleet_reconciler": (
+        {
+            "compute.instanceGroupManagers.get",
+            "compute.instanceGroupManagers.update",
+            "compute.instanceGroupManagers.use",
+        },
+        "/instanceGroupManagers/ditto-screener-fleet')",
+    ),
+    "screener_controller_autoscaler_reader": ({"compute.autoscalers.list"}, None),
+    "screener_controller_autoscaler_updater": (
+        {"compute.autoscalers.get", "compute.autoscalers.update"},
+        "/autoscalers/ditto-screener-fleet')",
+    ),
+}
+RESOURCE = re.compile(
+    r'^resource "(\w+)" "(\w+)" \{\n(.*?)^\}', re.MULTILINE | re.DOTALL
+)
 
 
-def test_capacity_controller_retires_targon_workers_but_release_builder_is_scoped() -> (
-    None
-):
+def _terraform_resources() -> list[tuple[str, str, str]]:
+    return [
+        (match[1], match[2], match[3])
+        for path in sorted((ROOT / "infra" / "terraform").rglob("*.tf"))
+        for match in RESOURCE.finditer(path.read_text())
+    ]
+
+
+def _attribute(body: str, name: str) -> str | None:
+    match = re.search(
+        rf"^\s*{name}\s*=\s*(\[.*?\]|[^\n]+)$", body, re.MULTILINE | re.DOTALL
+    )
+    return match.group(1).strip() if match else None
+
+
+def test_capacity_controller_holds_no_broad_or_project_wide_predefined_role() -> None:
+    project_roles: set[str] = set()
+    for kind, name, body in _terraform_resources():
+        members = _attribute(body, "members") or _attribute(body, "member")
+        if not kind.endswith(("_iam_member", "_iam_binding")) or not (
+            members and CAPACITY_CONTROLLER.search(members)
+        ):
+            continue
+        role = _attribute(body, "role")
+        custom = re.fullmatch(
+            r"google_project_iam_custom_role\.(\w+)\[0\]\.name", role or ""
+        )
+        literal = re.fullmatch(r'"(roles/[\w.]+)"', role or "")
+        assert custom or literal, f"{kind}.{name} binds an unresolvable role {role}"
+        assert not literal or literal.group(1) not in BROAD_ROLES, (
+            f"{kind}.{name} grants broad {role}"
+        )
+        if kind.startswith("google_project_iam_"):
+            assert custom, f"{kind}.{name} grants predefined {role} project-wide"
+            project_roles.add(custom.group(1))
+    assert project_roles == set(CAPACITY_CONTROLLER_ROLES)
+
+
+def test_capacity_controller_custom_roles_stay_exact_and_scoped() -> None:
+    resources = {(kind, name): body for kind, name, body in _terraform_resources()}
+    for name, (permissions, condition) in CAPACITY_CONTROLLER_ROLES.items():
+        role = resources["google_project_iam_custom_role", name]
+        assert (
+            set(re.findall(r'"([\w.]+)"', _attribute(role, "permissions") or ""))
+            == permissions
+        )
+        binding = resources["google_project_iam_member", name]
+        expression = _attribute(binding, "expression") or ""
+        if condition is None:
+            assert "condition" not in binding
+        else:
+            assert "resource.name.endsWith('/regions/${var.region}" in expression
+            assert expression.endswith(condition + '"')
+
+
+def test_infra_apply_requires_current_main_and_sealed_plan() -> None:
+    delivery = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "infra-plan-apply.yml").read_text()
+    )
+    plan_checkout = next(
+        step
+        for step in delivery["jobs"]["plan"]["steps"]
+        if "checkout" in step.get("uses", "")
+    )
+    assert plan_checkout["with"]["ref"] == "main"
+    apply = {step.get("name"): step for step in delivery["jobs"]["apply"]["steps"]}
+    assert (
+        'test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"'
+        in apply["Require plan commit to remain current main"]["run"]
+    )
+    assert (
+        "sha256sum -c tfplan.sha256"
+        in apply["Fetch and verify exact private plan"]["run"]
+    )
+
+
+def test_capacity_controller_retires_targon_builder_and_credential() -> None:
     intent = (GCP_ROOT / "prod.auto.tfvars").read_text()
     assert re.search(
         r"^enable_screener_capacity_controller\s*=\s*true$", intent, re.MULTILINE
     )
     role = ROOT / "infra" / "ansible" / "roles" / "screener_capacity_controller"
-    defaults = (role / "defaults" / "main.yml").read_text()
+    tasks = (role / "tasks" / "main.yml").read_text()
     controller_unit = (
         role / "templates" / "ditto-screener-capacity.service.j2"
     ).read_text()
-    builder_unit = (role / "templates" / "ditto-image-builder.service.j2").read_text()
-    assert "screener_capacity_targon_org_slug: ditto" in defaults
-    assert "--targon-org-slug" not in controller_unit
-    assert "--targon-api-key-file" not in controller_unit
-    assert "--targon-org-slug {{ screener_capacity_targon_org_slug }}" in builder_unit
-
-    targon_client = (
-        ROOT / "services" / "screener-orchestrator" / "screener_capacity" / "targon.py"
+    assert not (role / "templates" / "ditto-image-builder.service.j2").exists()
+    assert "ditto-image-builder" in tasks
+    assert "targon-api-key" in tasks
+    assert "--targon-" not in controller_unit
+    updater = (
+        ROOT / "services" / "screener-orchestrator" / "scripts" / "update-controller.sh"
     ).read_text()
-    assert 'base_url: str = "https://api.targon.com/tha/v3"' in targon_client
-    assert 'return f"/orgs/{slug}/workloads{suffix}"' in targon_client
+    assert 'systemctl start "$BUILDER_UNIT"' not in updater
+    assert 'systemctl stop "$RETIRED_BUILDER_UNIT" || return 1' in updater
+    assert 'systemctl disable "$RETIRED_BUILDER_UNIT"' in updater
+    assert 'rm -f -- "$RETIRED_BUILDER_UNIT_FILE" "$RETIRED_TARGON_KEY_FILE"' in updater
+    assert updater.index("retire_builder\n") < updater.index(
+        'if [[ "$previous_sha" == "$CONTROLLER_EXPECTED_SHA" ]]'
+    )
 
     platform_prod = (
         ROOT / "infra" / "ansible" / "host_vars" / "ditto-platform-prod.yml"

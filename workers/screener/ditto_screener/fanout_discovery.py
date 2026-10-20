@@ -6,17 +6,16 @@ benchmark specificity, or wrongdoing; legitimate caches/interpreters also match.
 
 from __future__ import annotations
 
-import io
 import re
 import tarfile
-import tokenize
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import suppress
 from pathlib import PurePosixPath
 
+from ditto_screener.source_masking import language_for_path, mask_python_code
 from ditto_screener.source_review import TarSourceRepository
-from ditto_screener.source_signals import _mask_string_literals, mask_comments
+from ditto_screener.source_signals import mask_comments, mask_string_literals
 
 REVISION = "shadow-semantic-discovery-v2"
 _GUIDANCE = (
@@ -108,26 +107,11 @@ def _answer_mutation_score(lines: list[str], index: int) -> int:
 
 
 def _code(path: str, text: str) -> str | None:
-    if not path.casefold().endswith(".py"):
-        return _mask_string_literals(mask_comments(text))
-    # Tokenization avoids apostrophes in Python comments desynchronizing the
-    # string masker. It reads syntax only; no submitted imports or execution.
-    lines = text.splitlines(keepends=True)
-    chars = [list(line) for line in lines]
-    try:
-        for token in tokenize.generate_tokens(io.StringIO(text).readline):
-            if token.type not in {tokenize.STRING, tokenize.COMMENT}:
-                continue
-            (start, col), (end, endcol) = token.start, token.end
-            for row in range(start - 1, min(end, len(chars))):
-                first = col if row == start - 1 else 0
-                last = endcol if row == end - 1 else len(chars[row])
-                for index in range(first, min(last, len(chars[row]))):
-                    if chars[row][index] not in "\r\n":
-                        chars[row][index] = " "
-    except (tokenize.TokenError, IndentationError, SyntaxError):
-        return None
-    return "".join("".join(line) for line in chars)
+    if language_for_path(path) == "python":
+        # Tokenization reads syntax only; no submitted imports or execution.
+        # A file that does not tokenize is reported unreadable, not guessed.
+        return mask_python_code(text)
+    return mask_string_literals(mask_comments(text, path), path)
 
 
 def _source(path: str) -> bool:

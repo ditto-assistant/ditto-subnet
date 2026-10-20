@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from ditto_screening_protocol import (
     AdjudicationCompletionReceipt,
     AdjudicationRunDiagnostic,
+    ScreenReviewAudit,
     SourceReviewAdjudication,
     SourceReviewAuthorityTransition,
     SourceReviewCausalEvidence,
@@ -62,6 +63,76 @@ _PASS_CLAUSES = {
         SourceReviewPassClause.EVALUATION_INDEPENDENT_RUNTIME
     ),
 }
+
+
+def test_inconclusive_review_audit_preserves_old_digest_and_bounds_new_labels() -> None:
+    legacy = {
+        "stage": "l2",
+        "reason_code": "l2-model-inconclusive",
+        "prompt_revision": "l2-v13",
+        "max_steps": 256,
+        "steps_used": 7,
+    }
+    old = ScreenReviewAudit.model_validate(legacy)
+    expected = old.model_dump(
+        mode="json",
+        exclude={
+            "dossier_complete",
+            "dossier_incomplete_components",
+            "model_categories",
+            "model_inconclusive_invariants",
+            "model_evidence_count",
+            "model_causal_role_count",
+            "model_disposition",
+            "resolution_basis",
+            "model_steps_observed",
+            "tool_calls_observed",
+            "budget_stop_reason",
+            "requested_model",
+            "response_provider",
+            "final_stage",
+            "cause_detail",
+            "model_tool_failure_subcode",
+            "max_elapsed_ms",
+            "elapsed_ms",
+        },
+    )
+    legacy_digest = hashlib.sha256(
+        json.dumps(expected, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert old.canonical_digest() == legacy_digest
+
+    diagnostic = ScreenReviewAudit.model_validate(
+        {
+            **legacy,
+            "dossier_complete": False,
+            "model_categories": ["benchmark_emulation"],
+            "model_inconclusive_invariants": ["i5_production_engine"],
+            "model_evidence_count": 1,
+            "model_causal_role_count": 2,
+        }
+    )
+    assert diagnostic.canonical_digest() != legacy_digest
+    component_audit = ScreenReviewAudit.model_validate(
+        {
+            **legacy,
+            "dossier_complete": False,
+            "dossier_incomplete_components": ["workspace_index", "binary_analysis"],
+        }
+    )
+    assert component_audit.dossier_incomplete_components == [
+        "workspace_index",
+        "binary_analysis",
+    ]
+    assert component_audit.canonical_digest() != legacy_digest
+    with pytest.raises(ValidationError):
+        ScreenReviewAudit.model_validate(
+            {**legacy, "model_categories": ["src/secret.py"]}
+        )
+    with pytest.raises(ValidationError):
+        ScreenReviewAudit.model_validate(
+            {**legacy, "dossier_incomplete_components": ["src/secret.py"]}
+        )
 
 
 def test_distribution_requires_pydantic_with_exclude_if_support() -> None:

@@ -15,6 +15,7 @@ import pytest
 
 import ditto_screener.adjudicator as adjudicator_module
 from ditto_screener.adjudicator import (
+    ADJUDICATOR_KEY_UNAVAILABLE_CODE,
     ADJUDICATOR_PROMPT_REVISION,
     SourceReviewAdjudicator,
     _adjudicator_tools_for_policy,
@@ -2038,8 +2039,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v11-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v11-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v13-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v13-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -2114,6 +2115,105 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
         tool["function"]["name"]
         for tool in _adjudicator_tools_for_policy(12, decision_only=True)
     ] == ["read_file", "submit_adjudication"]
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "failure_code"),
+    [
+        pytest.param(
+            "submit_clear",
+            {
+                "clear_clause": "model_authors_graded_slot",
+                "reason": "The model writes the reply.",
+                "reject_invariant": "i6_tool_execution_fidelity",
+            },
+            "verdict-invalid",
+            id="self-inconsistent-clear",
+        ),
+        pytest.param(
+            "submit_reject",
+            {"reject_invariant": "i6_tool_execution_fidelity"},
+            "verdict-invalid",
+            id="reject-without-reason",
+        ),
+        pytest.param(
+            "request_operator_review",
+            {"reason": ""},
+            "response-invalid",
+            id="operator-review-without-reason",
+        ),
+    ],
+)
+async def test_v13_failure_diagnostic_marks_verdict_tool_returned(
+    tmp_path: Path, name: str, arguments: dict[str, object], failure_code: str
+) -> None:
+    result = await _adjudicator(
+        _key(tmp_path), _transport([[_call(name, arguments)]])
+    ).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN], policy_version=13, ledger_final=True
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == failure_code
+    assert result.run_diagnostic.final_tool_call_returned is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["submit_adjudication", "submit_clear", "submit_reject", "request_operator_review"],
+)
+async def test_v13_failure_diagnostic_marks_verdict_in_mixed_batch(
+    tmp_path: Path, name: str
+) -> None:
+    calls = [
+        _call("read_file", {"path": "src/main.rs", "start_line": 4, "end_line": 6}),
+        _call(name, {"reason": "The source supports this decision."}),
+    ]
+    result = await _adjudicator(_key(tmp_path), _transport([calls])).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN], policy_version=13, ledger_final=True
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "tool-call-invalid"
+    assert result.run_diagnostic.final_tool_call_returned is True
+
+
+@pytest.mark.parametrize("read_only", [False, True], ids=["no-call", "read-file-only"])
+async def test_v13_failure_diagnostic_without_verdict_tool(
+    tmp_path: Path, read_only: bool
+) -> None:
+    calls = (
+        [_call("read_file", {"path": "src/main.rs", "start_line": 4, "end_line": 6})]
+        if read_only
+        else []
+    )
+    result = await _adjudicator(_key(tmp_path), _transport([calls] * 6)).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN], policy_version=13, ledger_final=True
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == (
+        "tool-call-invalid" if read_only else "response-invalid"
+    )
+    assert result.run_diagnostic.final_tool_call_returned is False
+
+
+@pytest.mark.parametrize("name", [[], {}], ids=["list", "object"])
+async def test_v13_failure_diagnostic_tolerates_unhashable_tool_name(
+    tmp_path: Path, name: object
+) -> None:
+    call = {"id": "invalid-1", "function": {"name": name, "arguments": "{}"}}
+    result = await _adjudicator(_key(tmp_path), _transport([[call]])).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN], policy_version=13, ledger_final=True
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "tool-call-invalid"
+    assert result.run_diagnostic.final_tool_call_returned is False
 
 
 async def test_v13_certifies_visible_endpoint_present_i6_violation(
@@ -2757,6 +2857,52 @@ async def test_a_missing_key_clears_rather_than_punishing_the_miner(
 
     assert result.decision == "escalate"
     assert result.clear_clause is None
+
+
+def _duplicate_path_archive(tmp_path: Path) -> str:
+    """An archive the miner controls and the court refuses to open."""
+    path = tmp_path / "duplicate.tar.gz"
+    with tarfile.open(path, "w:gz") as archive:
+        for _ in range(2):
+            member = tarfile.TarInfo("src/main.rs")
+            member.size = 2
+            archive.addfile(member, io.BytesIO(b"{}"))
+    return str(path)
+
+
+@pytest.mark.parametrize("key_state", ["unset", "missing", "group-readable", "short"])
+async def test_an_unusable_node_key_is_named_apart_from_the_archive(
+    tmp_path: Path, key_state: str
+) -> None:
+    """Only node configuration reaches the key code, whatever the archive holds."""
+    key = tmp_path / "key"
+    if key_state == "group-readable":
+        key.write_text("sk-test-private-adjudicator")
+        os.chmod(key, 0o644)
+    elif key_state == "short":
+        key.write_text("sk-short")
+        os.chmod(key, 0o600)
+    adjudicator = SourceReviewAdjudicator(
+        api_key_file=None if key_state == "unset" else str(key),
+        base_url="https://openrouter.test/api/v1",
+    )
+
+    for archive in (_archive(tmp_path), _duplicate_path_archive(tmp_path)):
+        result = await adjudicator.adjudicate(archive, notes=[_CONCERN])
+
+        assert result.decision == "escalate"
+        assert result.escalation_code == ADJUDICATOR_KEY_UNAVAILABLE_CODE
+
+
+async def test_an_archive_the_court_cannot_open_is_not_the_node_key_code(
+    tmp_path: Path,
+) -> None:
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(lambda _request: httpx.Response(500))
+    ).adjudicate(_duplicate_path_archive(tmp_path), notes=[_CONCERN])
+
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-unavailable"
 
 
 async def test_a_wall_clock_timeout_clears_rather_than_holding(

@@ -87,8 +87,8 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 		}
 	}
 	newest := NewestSupportedBenchVersion()
-	if newest != versions[len(versions)-1] || newest != BenchVersionV13 {
-		t.Fatalf("newest supported version = %d, want %d (last of %v)", newest, BenchVersionV13, versions)
+	if newest != versions[len(versions)-1] || newest != BenchVersionV14 {
+		t.Fatalf("newest supported version = %d, want %d (last of %v)", newest, BenchVersionV14, versions)
 	}
 	for _, v := range versions {
 		if !SupportedBenchVersion(v) {
@@ -111,7 +111,7 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 	if _, err := RotateSeedForVersion(1, newest+1); err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("rotation error must render the derived list %q: %v", want, err)
 	}
-	if got := SupportedBenchVersionList(); got != "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13" {
+	if got := SupportedBenchVersionList(); got != "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14" {
 		t.Fatalf("SupportedBenchVersionList() = %q", got)
 	}
 	// Epochs advance monotonically with the version so no two contracts share a

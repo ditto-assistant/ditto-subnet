@@ -99,7 +99,7 @@ describe('V9ContractRetestPanel', () => {
       replacement_queued: true,
       queue_position: 2,
       queue_allowed: false,
-      queue_blocking_reason: 'replacement score is already queued or pending',
+      queue_blocking_reason: 'replacement re-test is already queued behind current validator work',
     }
     render(
       <V9ContractRetestPanel

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "mode": "shadow",
+  "policy": {
+    "version": 1,
+    "revision": 7,
+    "genesis_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "netuid": 118,
+    "collector_hotkey": "5AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "collector_coldkey": "5BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "collector_policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "buckets": [
+      {
+        "bucket_id": "gamma",
+        "allocation_bps": 1000,
+        "holding_coldkey": "5CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+      }
+    ]
+  },
+  "policy_digest": "8de1bd1c15b1545b3750b793f2f53b4c03a009398703f1d4e0aead499520c159",
+  "identity": {
+    "genesis_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "netuid": 118,
+    "finalized_block": 101,
+    "finalized_block_hash": "0xabababababababababababababababababababababababababababababababab",
+    "uid": 42,
+    "hotkey": "5AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "owner_coldkey": "5BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "uid_hotkey": "5AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "subnet_owner_coldkey": "5DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+  }
+}

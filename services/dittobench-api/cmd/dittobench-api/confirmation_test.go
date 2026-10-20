@@ -415,7 +415,7 @@ func TestConfirmationExecuteRejectsInvalidFrozenContractBeforeExecution(t *testi
 			mutate: func(request *confirmationExecutionRequest) {
 				// The first version the scorer does not accept yet; v13 is a
 				// supported subject epoch.
-				request.BenchVersion = scoregates.BenchVersionV13 + 1
+				request.BenchVersion = scoregates.BenchVersionV14 + 1
 			},
 			message: "confirmation execution requires a supported confirmation bench version",
 		},

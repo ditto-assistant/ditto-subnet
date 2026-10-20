@@ -6,7 +6,6 @@ Per-test instantiation (no module-level ``app =`` global) keeps
 
 from __future__ import annotations
 
-import asyncio
 import html
 import logging
 import os
@@ -14,9 +13,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -64,12 +61,15 @@ from ditto.api_server.efficiency_settings import (
     EfficiencyBonusSettingsResolver,
 )
 from ditto.api_server.embedding import create_embedder
+from ditto.api_server.emission_eligibility import EmissionEligibilityResolver
 from ditto.api_server.endpoints import (
     admin_artifact_release_settings_router,
+    admin_ath_review_queue_slo_router,
     admin_ath_rulings_router,
     admin_attestation_router,
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
+    admin_claim_provenance_router,
     admin_coding_catalog_router,
     admin_coding_certifications_router,
     admin_coding_control_plane_router,
@@ -83,8 +83,11 @@ from ditto.api_server.endpoints import (
     admin_copy_court_router,
     admin_copy_review_router,
     admin_core_qualification_router,
+    admin_database_backup_router,
     admin_efficiency_bonus_settings_router,
+    admin_emission_eligibility_router,
     admin_hotkey_bans_router,
+    admin_inference_admission_router,
     admin_inference_concurrency_settings_router,
     admin_inference_observability_router,
     admin_inference_routes_router,
@@ -92,10 +95,12 @@ from ditto.api_server.endpoints import (
     admin_leaderboard_router,
     admin_lease_revocations_router,
     admin_miner_fees_router,
+    admin_outlier_escalation_router,
     admin_owner_router,
     admin_quarantine_router,
     admin_queue_policy_settings_router,
     admin_retirement_router,
+    admin_scoring_lease_settings_router,
     admin_scoring_readiness_router,
     admin_screener_capacity_router,
     admin_screener_fanout_shadow_router,
@@ -106,9 +111,14 @@ from ditto.api_server.endpoints import (
     admin_submission_deposit_address_router,
     admin_submission_settings_router,
     admin_traces_router,
+    admin_transcript_mirror_settings_router,
+    admin_treasury_quote_router,
+    admin_treasury_receipts_router,
+    admin_treasury_settings_router,
     admin_v13_private_generation_router,
     admin_v13_scorer_cohort_router,
     admin_validation_retry_router,
+    admin_validator_capacity_router,
     admin_validator_slot_settings_router,
     admin_validator_weights_router,
     attestation_router,
@@ -142,6 +152,9 @@ from ditto.api_server.endpoints import (
     validator_private_dataset,
     validator_router,
 )
+from ditto.api_server.endpoints import screener as screener_endpoints
+from ditto.api_server.endpoints import upload as upload_endpoints
+from ditto.api_server.endpoints import validator as validator_endpoints
 from ditto.api_server.endpoints.admin_benchmark_canary import (
     router as admin_benchmark_canary_router,
 )
@@ -172,15 +185,19 @@ from ditto.api_server.inference_routing import ProviderRouteRefresher
 from ditto.api_server.ledger_pin import LedgerPinLoop, LedgerPinMaterializer
 from ditto.api_server.middleware import (
     PublicCacheMiddleware,
+    PublicRateLimitMiddleware,
+    RequestBodyLimitMiddleware,
     RequestIDMiddleware,
     SizedGZipMiddleware,
     register_exception_handlers,
 )
 from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
+from ditto.api_server.miner_avatar import MAX_AVATAR_BYTES
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
 from ditto.api_server.runtime_profiles import RuntimeProfileStore
+from ditto.api_server.scoring_lease_settings import ScoringLeaseSettingsResolver
 from ditto.api_server.screener_capacity_event_janitor import (
     ScreenerCapacityEventJanitor,
 )
@@ -237,6 +254,44 @@ def _process_role() -> str:
             f"DITTO_ROLE must be {PLATFORM_ROLE!r} or {RELAY_ROLE!r}, got {role!r}"
         )
     return role
+
+
+# Multipart framing around a file part: boundaries, part headers, and the small
+# signed form fields that travel beside the tarball or avatar.
+_UPLOAD_FORM_OVERHEAD_BYTES = 1 << 20
+_AVATAR_FORM_OVERHEAD_BYTES = 64 << 10
+
+
+def _request_body_route_limits() -> tuple[tuple[str, int], ...]:
+    """Per-route body caps, each derived from the endpoint's own check.
+
+    Every other route gets ``config.request_body_max_bytes``. A route listed
+    here reads no more before it authenticates than its contract allows; the
+    multipart routes leave room for framing so the endpoint's exact file-size
+    check still answers a file just over its cap.
+    """
+    return (
+        (
+            r"/api/v1/upload/agent",
+            upload_endpoints.MAX_TARBALL_SIZE_BYTES + _UPLOAD_FORM_OVERHEAD_BYTES,
+        ),
+        (r"/api/v1/miner-avatars", MAX_AVATAR_BYTES + _AVATAR_FORM_OVERHEAD_BYTES),
+        (r"/api/v1/me/avatar", MAX_AVATAR_BYTES + _AVATAR_FORM_OVERHEAD_BYTES),
+        (
+            r"/api/v1/validator/agent/[^/]+/transcript/[^/]+",
+            validator_endpoints.TRANSCRIPT_MAX_BYTES,
+        ),
+        (r"/api/v1/validator/heartbeat", validator_endpoints.HEARTBEAT_MAX_BYTES),
+        (
+            r"/api/v1/validator/receipt-diagnostics",
+            validator_endpoints.RECEIPT_DIAGNOSTICS_MAX_BYTES,
+        ),
+        (
+            r"/api/v1/validator/weight-submission-receipt",
+            validator_endpoints.WEIGHT_RECEIPT_MAX_BYTES,
+        ),
+        (r"/api/v1/screener/heartbeat", screener_endpoints.HEARTBEAT_MAX_BYTES),
+    )
 
 
 def _efficiency_settings_ttl_seconds() -> float:
@@ -479,110 +534,30 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await emission_collector.start()
             app.state.source_emission_collector = emission_collector
 
+            from ditto.api_server.treasury_ledger import TreasuryLedgerSampler
+
+            treasury_ledger_sampler = TreasuryLedgerSampler(
+                app_state=app.state,
+                session_maker=app.state.session_maker,
+                enabled=app.state.config.treasury_ledger_sampler_enabled,
+            )
+            stack.push_async_callback(treasury_ledger_sampler.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await treasury_ledger_sampler.start()
+            app.state.treasury_ledger_sampler = treasury_ledger_sampler
+
+            from ditto.api_server.treasury_manual_loop import TreasuryManualLoop
+
+            app.state.treasury_manual_loop = TreasuryManualLoop(app.state)
+            stack.push_async_callback(app.state.treasury_manual_loop.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await app.state.treasury_manual_loop.start()
+
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
             if _process_role() == PLATFORM_ROLE:
                 await validator_names.start(app.state.session_maker)
 
-            targon_loop = None
-            if (
-                _process_role() == PLATFORM_ROLE
-                and config.targon is not None
-                and config.targon.enabled
-                and config.screener_auth.hotkey
-            ):
-                from ditto.api_server.targon_client import AsyncTargonClient
-                from ditto.api_server.targon_promote import (
-                    mint_access_token,
-                    promote_runtime_archive,
-                )
-                from ditto.api_server.targon_rental_loop import TargonRentalLoop
-
-                targon_client = AsyncTargonClient(
-                    api_key=config.targon.api_key,
-                    org_slug=config.targon.org_slug,
-                )
-                stack.push_async_callback(targon_client.aclose)
-
-                async def mint_token(service_account: str) -> str:
-                    return await asyncio.to_thread(mint_access_token, service_account)
-
-                async def promote_archive(
-                    source_key: str, destination: str, writer_token: str
-                ) -> str:
-                    return await promote_runtime_archive(
-                        storage=storage,
-                        source_key=source_key,
-                        destination=destination,
-                        access_token=writer_token,
-                    )
-
-                from ditto.api_server.cloudrun_client import AsyncCloudRunClient
-                from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
-                from ditto.api_server.screening_provider import ScreeningComputeProvider
-                from ditto.api_server.targon_provider import TargonComputeProvider
-
-                providers: list[ScreeningComputeProvider] = [
-                    TargonComputeProvider(targon_client, config.targon)
-                ]
-                if config.cloudrun is not None and config.cloudrun.enabled:
-                    cloudrun_client = AsyncCloudRunClient(
-                        project=config.cloudrun.project,
-                        region=config.cloudrun.region,
-                    )
-                    stack.push_async_callback(cloudrun_client.aclose)
-                    providers.append(
-                        CloudRunComputeProvider(
-                            cloudrun_client,
-                            config.cloudrun,
-                            config.targon,
-                        )
-                    )
-                from ditto.api_server.builder_image import (
-                    resolve_submission_builder_image,
-                )
-                from ditto.api_server.targon_screening import (
-                    finalize_targon_screen_and_pin_dataset,
-                )
-
-                attester = config.screener_auth.hotkey
-                assert attester is not None
-
-                async def complete_screen(attempt_id: UUID) -> None:
-                    async with app.state.session_maker() as session:
-                        await finalize_targon_screen_and_pin_dataset(
-                            session,
-                            storage=storage,
-                            screener_hotkey=attester,
-                            attempt_id=attempt_id,
-                            now=datetime.now(UTC),
-                            generator=generator,
-                            chain=chain,
-                        )
-
-                async def traces_put(key: str, body: bytes, content_type: str) -> str:
-                    if traces_hippius is None:
-                        return ""
-                    return await traces_hippius.put_object(
-                        key=key, body=body, content_type=content_type
-                    )
-
-                targon_loop = TargonRentalLoop(
-                    session_maker=app.state.session_maker,
-                    config=config.targon,
-                    targon=targon_client,
-                    screener_hotkey=attester,
-                    promote_archive=promote_archive,
-                    mint_token=mint_token,
-                    providers=providers,
-                    complete_screen=complete_screen,
-                    resolve_builder_image=resolve_submission_builder_image,
-                    storage=storage,
-                    traces_put=traces_put if traces_hippius is not None else None,
-                )
-                stack.push_async_callback(targon_loop.aclose)
-                await targon_loop.start()
-            app.state.targon_rental_loop = targon_loop
         except Exception as e:
             raise ApiServerLifespanError(
                 f"failed to open dependencies during startup: {e}"
@@ -642,6 +617,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Served on the scoring ledger, so a change reaches the fleet on its next
     # poll instead of on a validator release.
     app.state.burn_settings = BurnSettingsResolver()
+    app.state.emission_eligibility = EmissionEligibilityResolver()
     app.state.continual_retest_settings = ContinualRetestSettingsResolver()
     app.state.queue_policy_settings = QueuePolicySettingsResolver()
     # Scheduled screening-policy activation: the required version rises to the
@@ -650,6 +626,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # no activation is due (or in unit tests without a session maker).
     app.state.screener_policy_activation = ScreenerPolicyActivationResolver()
     app.state.inference_concurrency_settings = InferenceConcurrencySettingsResolver()
+    # Operator-revisioned scoring lease TTL (#1156). Stamped only onto NEW
+    # canonical and replacement tickets; falls back to the shipped 180 minutes.
+    app.state.scoring_lease_settings = ScoringLeaseSettingsResolver()
     app.state.runtime_profiles = RuntimeProfileStore()
     # Exact public verification profiles are release assets. Provider
     # credentials never enter this registry; claim-time grants remain the only
@@ -682,18 +661,36 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # built once and cached independently, so a 200KB operations cache HIT
     # does not burn CPU recompressing the same user-agnostic bytes.
     app.add_middleware(SizedGZipMiddleware, minimum_size=1000, compresslevel=6)
+    # Opt-in per-client-IP limit on the unauthenticated expensive routes. Inside
+    # the public cache so cache hits never spend a client's budget; absent
+    # entirely at the default of 0.
+    if config.public_rate_limit_per_minute > 0:
+        app.add_middleware(
+            PublicRateLimitMiddleware, per_minute=config.public_rate_limit_per_minute
+        )
     # PublicCacheMiddleware wraps gzip. Cache hits skip both endpoint/DB work
     # and compression while request-id logging still records every request.
     app.add_middleware(PublicCacheMiddleware)
     from ditto.api_server.admin_activity import AdminActivityMiddleware
 
     app.add_middleware(AdminActivityMiddleware)
+    # Bodies are bounded before anything reads them -- the admin audit, the
+    # multipart spool, an endpoint's own check -- and just inside the request
+    # id so a 413 still carries its correlation id (ditto-subnet#2770).
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        default_max_bytes=config.request_body_max_bytes,
+        route_max_bytes=_request_body_route_limits(),
+    )
     app.add_middleware(RequestIDMiddleware)
 
     register_exception_handlers(app)
 
     from ditto.api_server.endpoints.public_admin_activity import (
         router as activity_router,
+    )
+    from ditto.api_server.endpoints.public_treasury_activity import (
+        router as treasury_activity_router,
     )
 
     app.include_router(health_router)
@@ -707,6 +704,21 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         app.include_router(inference_router, prefix="/api/v1")
         return app
     app.include_router(activity_router, prefix="/api/v1")
+    app.include_router(treasury_activity_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.public_treasury_allocation import (
+        router as treasury_allocation_router,
+    )
+
+    app.include_router(treasury_allocation_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.public_treasury_ledger import (
+        admin_router as admin_treasury_ledger_router,
+    )
+    from ditto.api_server.endpoints.public_treasury_ledger import (
+        router as treasury_ledger_router,
+    )
+
+    app.include_router(treasury_ledger_router, prefix="/api/v1")
+    app.include_router(admin_treasury_ledger_router, prefix="/api/v1")
     app.include_router(attestation_router, prefix="/api/v1")
     app.include_router(name_claims_router, prefix="/api/v1")
     app.include_router(miner_avatars_router, prefix="/api/v1")
@@ -738,14 +750,17 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(scoring_router, prefix="/api/v1")
     app.include_router(public_router, prefix="/api/v1")
     app.include_router(admin_artifact_release_settings_router, prefix="/api/v1")
+    app.include_router(admin_transcript_mirror_settings_router, prefix="/api/v1")
     app.include_router(admin_attestation_router, prefix="/api/v1")
     app.include_router(admin_benchmark_rollout_router, prefix="/api/v1")
     app.include_router(admin_benchmark_canary_router, prefix="/api/v1")
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_policy_activation_router, prefix="/api/v1")
     app.include_router(admin_v13_private_generation_router, prefix="/api/v1")
+    app.include_router(admin_inference_admission_router, prefix="/api/v1")
     app.include_router(admin_v13_scorer_cohort_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
+    app.include_router(admin_scoring_lease_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")
@@ -759,13 +774,17 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_validation_retry_router, prefix="/api/v1")
     app.include_router(admin_retirement_router, prefix="/api/v1")
     app.include_router(admin_validator_slot_settings_router, prefix="/api/v1")
+    app.include_router(admin_validator_capacity_router, prefix="/api/v1")
     app.include_router(admin_scoring_readiness_router, prefix="/api/v1")
     app.include_router(admin_screener_review_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_fanout_shadow_router, prefix="/api/v1")
     app.include_router(admin_l2_report_canary_router, prefix="/api/v1")
     app.include_router(admin_screener_capacity_router, prefix="/api/v1")
+    app.include_router(admin_database_backup_router, prefix="/api/v1")
     app.include_router(admin_screening_infra_retry_router, prefix="/api/v1")
     app.include_router(admin_source_review_queue_slo_router, prefix="/api/v1")
+    app.include_router(admin_ath_review_queue_slo_router, prefix="/api/v1")
+    app.include_router(admin_outlier_escalation_router, prefix="/api/v1")
     app.include_router(admin_submission_settings_router, prefix="/api/v1")
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
@@ -782,7 +801,25 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_core_qualification_router, prefix="/api/v1")
+    app.include_router(admin_claim_provenance_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
+    app.include_router(admin_emission_eligibility_router, prefix="/api/v1")
+    app.include_router(admin_treasury_settings_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.admin_treasury_runtime import (
+        router as treasury_runtime_router,
+    )
+
+    app.include_router(treasury_runtime_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.admin_runtime_interface import (
+        router as runtime_interface_router,
+    )
+
+    app.include_router(runtime_interface_router, prefix="/api/v1")
+    app.include_router(admin_treasury_receipts_router, prefix="/api/v1")
+    app.include_router(admin_treasury_quote_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.admin_treasury_manual import router as manual_router
+
+    app.include_router(manual_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
     app.include_router(admin_conversation_router, prefix="/api/v1")
     app.include_router(screener_conversation_router, prefix="/api/v1")

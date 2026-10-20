@@ -1,0 +1,14 @@
+[Unit]
+Description=SN118 daily GM credit read and top-up request
+
+[Service]
+Type=oneshot
+User=sn118-treasury-planner
+Group=sn118-treasury-planner
+UMask=0077
+LoadCredential=gm_api_key:/etc/sn118-treasury/gm-api-key
+ExecStart=/opt/sn118-treasury/.venv/bin/python /opt/sn118-treasury/scripts/treasury_daily.py --policy-file /etc/sn118-treasury/daily-policy.json --gm-api-key-file %d/gm_api_key --outbox /var/lib/sn118-treasury/outbox
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/sn118-treasury/outbox

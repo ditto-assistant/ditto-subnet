@@ -20,6 +20,17 @@ from uuid import UUID
 from pydantic import BaseModel, ValidationError
 
 from ditto.api_models.agent_status import SCOREABLE_AGENT_STATUSES
+from ditto.api_models.claim_provenance_cases import (
+    CATALOG_COMPLETION_LIMIT,
+    SCORER_NOTE_LIMIT,
+    SCORER_NOTE_MAX_CHARS,
+    WITHHELD_SCORER_NOTE,
+    CaseCatalog,
+    CaseCatalogCompletion,
+    CaseClaimProvenance,
+    CaseGateNote,
+    ClaimProvenanceCase,
+)
 from ditto.api_models.gate_evidence import (
     GATE_EVIDENCE_CONTRACT_VERSION,
     GATE_EVIDENCE_MIN_BENCH_VERSION,
@@ -434,6 +445,130 @@ def gate_note_ids_for(*, agent_id: UUID, scores: list[Any]) -> frozenset[str]:
     return frozenset(ids)
 
 
+def is_flagged_case(case: CaseScore) -> bool:
+    """The stored projection's rule: a would-be zero under enforce, or discounted.
+
+    Shared with :func:`build_gate_evidence` so the operator per-case read's
+    default filter matches the public ``flagged_case_count`` exactly.
+    """
+    cost_factor = _cost_factor(case)
+    return _would_zero(case_gate_notes(case)) or (
+        cost_factor is not None and cost_factor < 1.0
+    )
+
+
+def operator_case_provenance(
+    case: CaseScore,
+    *,
+    case_index: int,
+    agent_id: UUID,
+    bench_version: int,
+    validator_hotkey: str,
+    run_id: str,
+) -> ClaimProvenanceCase:
+    """One persisted per-case record as the operator-only read shows it.
+
+    Verdicts, counts and digests only: ``expected``, ``called`` and every
+    response field stay out. Gate notes carry the same ``note_id`` an owner
+    dispute cites, so an operator can match a citation to its evidence.
+    """
+    stored_case_id = case.case_id[:200] or None
+    gate_notes = [
+        CaseGateNote(
+            gate=note,
+            zeroing=GATE_FINDINGS[note].zeroing,
+            note_id=gate_note_id(
+                agent_id=agent_id,
+                bench_version=bench_version,
+                validator_hotkey=validator_hotkey,
+                run_id=run_id,
+                case_index=case_index,
+                case_id=stored_case_id,
+                gate=note,
+            ),
+        )
+        for note in case_gate_notes(case)
+    ]
+    claim = case.claim_provenance
+    catalog = case.catalog
+    return ClaimProvenanceCase(
+        case_index=case_index,
+        case_id=case.case_id,
+        category=case.category,
+        kind=case.kind,
+        score=case.score,
+        correct=case.correct,
+        gate_notes=gate_notes,
+        claim_provenance=(
+            CaseClaimProvenance(
+                posture=claim.posture,
+                findings=list(claim.findings),
+                completions=claim.completions,
+                unattributed_calls=claim.unattributed_calls,
+                tool_results=claim.tool_results,
+                claim_tokens=claim.claim_tokens,
+                complete=claim.complete,
+                model_emitted=claim.model_emitted,
+                answer_in_prompt=claim.answer_in_prompt,
+            )
+            if claim is not None
+            else None
+        ),
+        catalog=(
+            CaseCatalog(
+                catalog_present=catalog.catalog_present,
+                catalog_present_lower_bound=catalog.catalog_present_lower_bound,
+                tools_offered=len(catalog.tools_offered),
+                completions_total=catalog.completions_total,
+                completions_with_catalog=catalog.completions_with_catalog,
+                claim_attributed_completions=catalog.claim_attributed_completions,
+                claim_corroborated_completions=catalog.claim_corroborated_completions,
+                complete=catalog.complete,
+                findings=list(catalog.findings),
+                completions=[
+                    CaseCatalogCompletion(
+                        attribution_source=completion.attribution_source,
+                        claim_corroborated=completion.claim_corroborated,
+                        after_last_tool_result=completion.after_last_tool_result,
+                        tool_choice=completion.tool_choice,
+                        tools_offered=completion.tools_offered,
+                        tools_choosable=completion.tools_choosable,
+                        model_emitted_tool_calls=list(
+                            completion.model_emitted_tool_calls
+                        ),
+                        catalog_sha256=completion.catalog_sha256,
+                        system_span_sha256=completion.system_span_sha256,
+                    )
+                    for completion in catalog.completions[:CATALOG_COMPLETION_LIMIT]
+                ],
+                completions_truncated=(
+                    len(catalog.completions) > CATALOG_COMPLETION_LIMIT
+                ),
+            )
+            if catalog is not None
+            else None
+        ),
+        relation=case.relation or None,
+        twin_group=case.twin_group or None,
+        cost_factor=_cost_factor(case),
+        scorer_notes=[
+            _operator_scorer_note(note) for note in case.notes[:SCORER_NOTE_LIMIT]
+        ],
+    )
+
+
+def _operator_scorer_note(note: str) -> str:
+    """Forward a stored scorer note unless it quotes a case value.
+
+    The scorers interpolate hidden case values with Go's ``%q`` (the v13
+    forbidden argument value, the bait tool name, the memory distractor), so a
+    double quote marks a note that may carry answer-key material.
+    """
+    if '"' in note:
+        return WITHHELD_SCORER_NOTE
+    return note[:SCORER_NOTE_MAX_CHARS]
+
+
 __all__ = [
     "GATE_NOTE_DISPUTE_STATUSES",
     "TWIN_NOTE_MARKERS",
@@ -442,6 +577,8 @@ __all__ = [
     "case_gate_notes",
     "gate_note_id",
     "gate_note_ids_for",
+    "is_flagged_case",
+    "operator_case_provenance",
     "overall_posture",
     "owner_gate_notes",
     "persisted_case_dump",

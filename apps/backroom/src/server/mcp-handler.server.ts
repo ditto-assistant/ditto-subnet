@@ -1,9 +1,11 @@
 import '@tanstack/react-start/server-only'
+import { observerGrant, observerRequestAllowed } from './treasury-observer-access.server'
 
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { accessLevelForEmail } from '../lib/auth.policy'
 import {
+  BACKROOM_CHALLENGE_SCOPE,
   BACKROOM_READ_SCOPE,
   createBackroomMcpServer,
   type BackroomEnv,
@@ -36,7 +38,7 @@ export function expiredSessionResponse(request: Request) {
       status: 401,
       headers: {
         'Cache-Control': 'no-store',
-        'WWW-Authenticate': `Bearer error="invalid_token", error_description="The Backroom staff session expired", scope="${BACKROOM_READ_SCOPE}", resource_metadata="${resourceMetadata}"`,
+        'WWW-Authenticate': `Bearer error="invalid_token", error_description="The Backroom staff session expired", scope="${BACKROOM_CHALLENGE_SCOPE}", resource_metadata="${resourceMetadata}"`,
       },
     },
   )
@@ -70,10 +72,17 @@ export class BackroomMcpHandler extends WorkerEntrypoint<
         { status: 403, headers: { 'Cache-Control': 'no-store' } },
       )
     }
-    if (!hasReadAccess(props)) {
+    let observer = false
+    try { observer = observerGrant(props.scopes) } catch {
+      return Response.json({ error: 'access_denied' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
+    }
+    if (observer && (props.session.accessLevel !== 'write' || !await observerRequestAllowed(request))) {
+      return Response.json({ error: 'access_denied' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
+    }
+    if (!observer && !hasReadAccess(props)) {
       return insufficientScopeResponse(request, BACKROOM_READ_SCOPE)
     }
-    const requiredScopes = await requiredScopesForRequest(request)
+    const requiredScopes = observer ? [] : await requiredScopesForRequest(request)
     for (const scope of requiredScopes) {
       if (!props.scopes.includes(scope)) {
         return insufficientScopeResponse(request, scope)
@@ -86,6 +95,10 @@ export class BackroomMcpHandler extends WorkerEntrypoint<
       enableJsonResponse: true,
     })
     await server.connect(transport)
-    return transport.handleRequest(request)
+    const response = await transport.handleRequest(request)
+    if (!observer) return response
+    const privateResponse = new Response(response.body, response)
+    privateResponse.headers.set('Cache-Control', 'no-store')
+    return privateResponse
   }
 }

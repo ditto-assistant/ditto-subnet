@@ -127,6 +127,27 @@ unreadable the worker keeps the previous `LastUpdate` cadence.
 
 ## Verification and rollout
 
+### Gamma allocation for every validator
+
+Platform publishes one signed Gamma policy and immutable epoch ledger for all
+validators. The pin's `fleet` is our managed activation evidence, not an
+allowlist of validators permitted to follow that ledger. An independent
+protocol-30 validator needs a fresh authenticated heartbeat but does not need
+our local approval file or membership in our managed roster.
+
+The validator and Pylon adapter both verify the supplied policy's coldkey
+signature, epoch, finalized collector identity and exact service allocation.
+Pylon repeats these checks inside the queued task and before the normalized
+commit. A managed member still requires its locally armed approval; explicitly
+configured independent deployments also must match their local approval.
+Missing or partial explicit configuration never becomes a follower fallback.
+There is no legacy submission fallback after an enforcing pin is encountered.
+
+Both the validator and Pylon image must update for independent followers to
+use this path. Older adapters refuse safely even after Platform's ledger API
+is repaired. Successful deployment is not evidence of fresh chain weights;
+verify each validator's commit/reveal state through Backroom diagnostics.
+
 Run `uv run pytest ditto/tests/test_pylon_epoch_schedule.py` and build Pylon with
 the exact named TurboBT context used by Compose/release. Then run
 `bash scripts/test-pylon-epoch-schedule.sh <image>`: the installed-image tests
@@ -176,6 +197,13 @@ but before proof of finalization remains uncertain and is never silently retried
 a new epoch may create a fresh request. None of these states proves reveal or
 payment. Platform separately verifies the finalized chain lifecycle.
 
+The queued treasury guard adapts TurboBT's public wire shapes before checking
+the approved identity: the no-argument finalized-head RPC uses `[]`, its
+32-byte hash becomes canonical hex, and the `Owner`, `SubnetOwner`, and `Keys`
+AccountId32 results become SS58 format 42. Malformed values still refuse;
+UID/epoch storage is never converted into an address. Every identity and epoch
+check remains at the same fresh finalized hash under the existing deadline.
+
 GET the collection with `after_task_id` and `limit` (1–100) recovers unacknowledged
 receipts after validator restart. GET `/{request_id}` retrieves one receipt.
 POST `/{request_id}/ack` requires the request digest, attempt ID and exact
@@ -215,3 +243,9 @@ its evidence. The installed-image migration test rehearses a populated legacy
 task database, repeated upgrade, version-marker downgrade, and re-upgrade.
 This does not replace the required Backroom `disclosure=never` containment
 before reverting source-release behavior.
+
+Independent followers authenticate the approval against the public Finney/SN118
+collector coldkey shipped in the protocol package, never a signer supplied by
+the request. Allocation changes must carry that coldkey's valid signature;
+a collector rebind requires an audited software update. Managed activation
+continues to require the exact locally pinned policy and transport proof.

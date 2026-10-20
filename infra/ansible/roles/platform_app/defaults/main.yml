@@ -95,6 +95,18 @@ platform_inference_relay_ports: []
 # uploads back to Python without disturbing the already-live inference plane.
 platform_upload_admission_relay_enabled: false
 
+# Defense-in-depth limit for unauthenticated Platform reads and uploads. The
+# Python API owns this limiter; when positive, Caddy keeps the two Go upload
+# admission routes on Python as well so they cannot bypass the same setting.
+# Deliberate operator activation only, after sizing for legitimate shared IPs.
+platform_public_rate_limit_per_minute: 0
+
+# Hard cap on a request body before Caddy proxies it. 32 MiB is the default
+# application ceiling and the transcript cap, and it covers the default 20 MiB
+# upload tarball. Raise this together with DITTO_MAX_TARBALL_SIZE_BYTES when
+# that cap, plus multipart framing, exceeds 32 MiB.
+platform_request_body_max_size: 32MiB
+
 # Additional public hostnames served by the same Caddy vhost. Keep aliases in
 # host_vars so each environment explicitly owns its certificate/SNI surface.
 platform_alias_domains: []
@@ -123,6 +135,10 @@ platform_storage_region: auto
 # Host vars pin the live bucket name and the regional cache closest to the
 # Platform VMs. Access keys must start with hip_.
 platform_hippius_endpoint: "https://s3.hippius.com"
+platform_database_backup_reader_enabled: false
+platform_database_backup_secret_project: ditto-subnet
+secret_database_backup_reader_access_key_id: platform-pg-backup-reader-access-key-id
+secret_database_backup_reader_secret_access_key: platform-pg-backup-reader-secret-access-key
 platform_hippius_region: decentralized
 platform_hippius_bucket: ""
 secret_hippius_access_key_id: platform-hippius-access-key-id
@@ -231,30 +247,20 @@ platform_caddy_email: peyton@omniaura.ai
 # Shared Secret Manager secret ids (per-env ones are set in host_vars).
 secret_db_password: platform-db-password
 secret_hmac_secret: platform-storage-hmac-secret
+platform_moderation_audit_enabled: false
+secret_moderation_audit_signing_key: platform-moderation-audit-signing-key
 secret_github_deploy_key: platform-github-deploy-key
 # Shared with trusted internal operator tools. The value already exists in
 # Secret Manager; Terraform only grants this VM's runtime identity read access.
 secret_admin_api_token: ADMIN_API_PASSWORD
+secret_backroom_platform_operator_proof: ""
+# Manual bridge activation is separate from Gamma weights and recurring timers.
+platform_treasury_manual_enabled: false
+platform_treasury_manual_project: sn118-gamma-custody
+platform_treasury_manual_request_topic: sn118-manual-requests
+platform_treasury_manual_report_subscription: sn118-manual-reports
 # Separate bearer used only by the provider-mutating capacity controller.
 secret_screener_controller_api_token: ""
-# Targon Rentals. Empty public URL disables the in-process rental loop.
-secret_targon_api_key: TARGON_API_KEY
-platform_targon_public_url: ""
-platform_targon_submission_builder_image: ""
-platform_targon_org_slug: ditto
-platform_targon_resource: cpu-small
-platform_targon_candidate_push_sa: ""
-platform_targon_candidate_pull_sa: ""
-platform_targon_bootstrap_sa: ""
-platform_targon_source_review_secret: ""
-platform_targon_fanout_shadow_secret: ""
-platform_targon_environment: prod
-platform_targon_max_inflight: 10
-platform_targon_smoke_provision_timeout_seconds: 30
-platform_cloudrun_project: ""
-platform_cloudrun_region: us-central1
-platform_cloudrun_untrusted_sa: ""
-platform_cloudrun_invoker_sa: ""
 
 # Platform-owned inference stays dark until the coordinated rollout enables it.
 platform_inference_proxy_enabled: false
@@ -303,6 +309,9 @@ platform_inference_reviewed_calibration_manifest_sha256: "b8c11eff829c4c85b4b1af
 # is the Secret Manager id of the shared bearer token.
 platform_screener_hotkey: ""
 secret_screener_api_token: ""
+# Accept that shared bearer on /screener/*. Rotating per-node tokens are
+# unaffected; stays true until the GCE overflow fleet stops booting with it.
+platform_screener_legacy_bearer_enabled: true
 secret_platform_perplexity_key: "PERPLEXITY_API_KEY"
 
 # Docker apt repo (Debian).

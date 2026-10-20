@@ -54,10 +54,13 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import asyncpg
+
+if TYPE_CHECKING:
+    from alembic.config import Config
 
 # ─── Ambient container ───────────────────────────────────────────────────────
 
@@ -322,6 +325,22 @@ def migration_fingerprint() -> str:
     return digest.hexdigest()
 
 
+def _alembic_config() -> Config:
+    """The Alembic config for an in-process run inside a test worker.
+
+    ``configure_logger=False`` keeps ``alembic/env.py`` from calling
+    ``fileConfig``. That call disables every logger already imported, so the
+    worker that built the template would drop the ``ditto.*`` warnings that
+    ``caplog`` tests assert on for the rest of its session.
+    """
+    from alembic.config import Config
+
+    cfg = Config(str(_REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(_REPO_ROOT / "alembic"))
+    cfg.attributes["configure_logger"] = False
+    return cfg
+
+
 def _run_alembic_upgrade(target: Dsn, revision: str = "head") -> None:
     """Apply the real migration chain -- not ``Base.metadata.create_all``.
 
@@ -332,16 +351,12 @@ def _run_alembic_upgrade(target: Dsn, revision: str = "head") -> None:
     ``alembic/env.py`` reads ``POSTGRES_*`` and calls ``asyncio.run`` itself,
     so this must be invoked from synchronous context with no running loop.
     """
-    from alembic.config import Config
-
     from alembic import command
 
     previous = {k: os.environ.get(k) for k in target.env}
     os.environ.update(target.env)
     try:
-        cfg = Config(str(_REPO_ROOT / "alembic.ini"))
-        cfg.set_main_option("script_location", str(_REPO_ROOT / "alembic"))
-        command.upgrade(cfg, revision)
+        command.upgrade(_alembic_config(), revision)
     finally:
         for key, value in previous.items():
             if value is None:
@@ -559,11 +574,29 @@ async def _build_reset_sql(conn: asyncpg.Connection) -> str:
     if not tables:  # pragma: no cover - means the template never migrated
         raise PostgresUnavailable("no public tables found; template is not migrated")
 
-    body = [
+    # Test-fixture reset deliberately has owner privileges on this worker's
+    # isolated clone. Bypass only the new statement-level history guard while
+    # resetting, then restore it in this same atomic DO block. Tests themselves
+    # still run with the production trigger enabled.
+    runtime_guard = "treasury_runtime_revisions" in tables
+    body = (
+        [
+            "  ALTER TABLE public.treasury_runtime_revisions "
+            "DISABLE TRIGGER treasury_runtime_no_truncate;"
+        ]
+        if runtime_guard
+        else []
+    )
+    body += [
         "  TRUNCATE "
         + ", ".join(f'public."{name}"' for name in tables)
         + " RESTART IDENTITY CASCADE;"
     ]
+    if runtime_guard:
+        body.append(
+            "  ALTER TABLE public.treasury_runtime_revisions "
+            "ENABLE TRIGGER treasury_runtime_no_truncate;"
+        )
     for name in tables:
         seed = await conn.fetchval(
             f'SELECT json_agg(t)::text FROM public."{name}" t'  # noqa: S608

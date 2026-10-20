@@ -12,10 +12,9 @@ import { pushEntityRoute } from "../../stores/routeStore";
 import { HandleBadge } from "../ui/HandleBadge";
 import { MinerAvatar } from "../ui/MinerAvatar";
 import {
-  isSourceReviewIncomplete,
+  deferredReviewSummary,
   policyScreeningLabel,
   SCREENING_INCOMPLETE_LABEL,
-  SOURCE_REVIEW_INCOMPLETE_NOTE,
 } from "../pipeline/status";
 import type { FleetReport } from "../../types/fleet";
 import type { CodingShadowScore } from "../../types/leaderboard";
@@ -35,6 +34,7 @@ import {
   integrityReviewView,
   pipelineAgentVersionLabel,
   pipelineColumnViews,
+  parkedReading,
   pipelineRescoreState,
   policyRescreenView,
   queueGateLabel,
@@ -391,17 +391,22 @@ function PipelineCard(props: {
   );
 }
 
-/** Flag a waiting submission whose retry state needs a human (exhausted) or
- * is waiting out a cooldown; other states advance on their own (7926–7935). */
+/** Flag a waiting submission that is parked (whose failure it was) or is
+ * waiting out a cooldown; other states advance on their own (7926–7935).
+ *
+ * The parked reading comes from the API's retry_disposition. One badge for both
+ * cases used to leave a miner unable to tell a fleet outage from a dead
+ * artifact, which is the whole point of #604. */
 function RetryChip(props: { entry: PipelineEntryExt }): JSX.Element {
+  const parked = createMemo(() => parkedReading(props.entry));
   return (
     <>
-      <Show when={props.entry.retry_state === "exhausted"}>
+      <Show when={parked()}>
         <span
-          class="retry-chip exhausted"
-          title="Every remaining validator spent its retry budget. Grant a retry after verified infrastructure failure, or withdraw an agent-attributable exhaustion from the validator queue."
+          class={"retry-chip " + (parked()?.tone === "terminal" ? "exhausted" : "hold")}
+          title={parked()?.title}
         >
-          Stuck · needs operator
+          {parked()?.label}
         </span>
       </Show>
       <Show when={props.entry.retry_state === "cooling_down"}>
@@ -601,7 +606,7 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
   );
 }
 
-/** The conditional post-scoring source-integrity branch (weekend drift
+/** The conditional post-scoring deferred source-review branch (weekend drift
  * #623/#635; markup 2833–2838, renderIntegrityReviewBranch 8330–8359). Only
  * leaderboard qualifiers and robust anomaly holds enter it — the aside says
  * so instead of implying every submission passes through review. */
@@ -619,9 +624,9 @@ export function IntegrityReviewBranch(props: {
     <details class="pipeline-review-branch" aria-labelledby="pipeline-review-title">
       <summary class="pipeline-review-summary">
         <span>
-          <span class="pipeline-review-eyebrow">Conditional after scoring</span>
+          <span class="pipeline-review-eyebrow">Held submissions</span>
           <strong class="pipeline-review-title" id="pipeline-review-title">
-            Deferred source review
+            Under review
           </strong>
         </span>
         <span class="pipeline-review-count" id="pipeline-review-count">
@@ -629,9 +634,9 @@ export function IntegrityReviewBranch(props: {
         </span>
       </summary>
       <p class="pipeline-review-copy">
-        Only leaderboard qualifiers and robust anomaly holds enter this branch. A hold is neutral
-        when the automated review only ran out of budget before finishing; the row says so. Other
-        admitted submissions go directly through validator scoring.
+        Source review runs in full before scoring. A submission held by that review, or by an
+        operator review of a high score, waits here, and being held is not a finding. Each row names
+        why it is held and what the automated review concluded; only a raised concern is flagged.
       </p>
       <div class="pipeline-review-items" id="pipeline-review-items">
         <Show
@@ -641,11 +646,7 @@ export function IntegrityReviewBranch(props: {
           <Show when={!props.loading} fallback={<div class="pipeline-empty">Loading…</div>}>
             <Show
               when={shown().length > 0}
-              fallback={
-                <div class="pipeline-empty">
-                  No submissions are held for deferred source review.
-                </div>
-              }
+              fallback={<div class="pipeline-empty">No submissions are held for review.</div>}
             >
               <For each={shown()}>
                 {(item) => (
@@ -659,7 +660,7 @@ export function IntegrityReviewBranch(props: {
                       agentName(item.entry.name) +
                       ", " +
                       agentVersionLabel(item.entry.version) +
-                      " deferred source review details"
+                      " review details"
                     }
                     onClick={(ev) => cardClick(ev, String(item.entry.agent_id || ""))}
                   >
@@ -680,10 +681,12 @@ export function IntegrityReviewBranch(props: {
                     <span class="pipeline-item-priority-detail">
                       {integrityReviewReason(item.entry)}
                     </span>
-                    <Show when={isSourceReviewIncomplete(item.entry)}>
-                      <span class="pipeline-item-priority-detail">
-                        {SOURCE_REVIEW_INCOMPLETE_NOTE}
-                      </span>
+                    <Show when={deferredReviewSummary(item.entry)}>
+                      {(summary) => (
+                        <span class="pipeline-item-priority-detail deferred-review-summary">
+                          {summary()}
+                        </span>
+                      )}
                     </Show>
                   </a>
                 )}

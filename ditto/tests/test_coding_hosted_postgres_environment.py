@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from ditto.tests.ansible_playbooks import converge_play
+
 ROOT = Path(__file__).parents[2]
 ROLE = ROOT / "infra/ansible/roles/coding_hosted_postgres_environment"
 TASKS = (ROLE / "tasks/main.yml").read_text()
@@ -154,10 +156,8 @@ def test_each_reader_gets_its_own_owner_only_copy_for_the_admitted_principal() -
 
 
 def test_playbook_group_connection_and_ci_registration() -> None:
-    (play,) = yaml.safe_load(
-        (
-            ROOT / "infra/ansible/playbooks/gcp-coding-hosted-postgres-environment.yml"
-        ).read_text()
+    play = converge_play(
+        ROOT / "infra/ansible/playbooks/gcp-coding-hosted-postgres-environment.yml"
     )
     assert play["hosts"] == "role_coding_hosted"
     assert play["roles"] == ["coding_hosted_postgres_environment"]
@@ -167,10 +167,12 @@ def test_playbook_group_connection_and_ci_registration() -> None:
     assert set(group) == {
         "gcp_project",
         "gcp_region",
-        "gcp_zone",
         "ansible_user",
         "ansible_ssh_common_args",
     }
+    # The IAP tunnel's zone is each discovered instance's own, not a group value.
+    inventory = yaml.safe_load((ROOT / "infra/ansible/inventory/gcp.yml").read_text())
+    assert inventory["compose"]["gcp_zone"] == "zone"
     assert "gcloud compute start-iap-tunnel" in group["ansible_ssh_common_args"]
     workflow = (ROOT / ".github/workflows/infra-ci.yml").read_text()
     assert "playbooks/gcp-coding-hosted-postgres-environment.yml" in workflow

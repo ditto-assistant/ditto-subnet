@@ -92,6 +92,42 @@ describe("getJSON", () => {
     expect((error as DOMException).name).toBe("AbortError");
   });
 
+  it("allows a cold public data read past 8s but aborts it after 30s", async () => {
+    vi.useFakeTimers();
+    const mock = stubFetch(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        }),
+    );
+    const pending = getJSON("/public/leaderboard");
+    const guard = pending.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(8000);
+    const call = mock.mock.calls[0];
+    expect(call).toBeDefined();
+    expect((call as Parameters<FetchFn>)[1].signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(22_000);
+    const error = await guard;
+    expect(error).toBeInstanceOf(DOMException);
+    expect((error as DOMException).name).toBe("AbortError");
+  });
+
+  it("returns a public data response that arrives after 8s", async () => {
+    vi.useFakeTimers();
+    stubFetch(
+      () =>
+        new Promise<Response>((resolve) => {
+          setTimeout(() => resolve(jsonResponse({ entries: ["miner"] })), 12_000);
+        }),
+    );
+    const pending = getJSON<{ entries: string[] }>("/public/leaderboard");
+    await vi.advanceTimersByTimeAsync(12_000);
+    await expect(pending).resolves.toEqual({ entries: ["miner"] });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("clears the timeout once the response arrives", async () => {
     vi.useFakeTimers();
     stubFetch(() => Promise.resolve(jsonResponse({})));

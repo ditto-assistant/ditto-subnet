@@ -43,7 +43,7 @@ env:
   OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
   COMPATIBILITY_EPOCH: "2"
   UPDATE_PROTOCOL: "1"
-  HEARTBEAT_PROTOCOL: "27"
+  HEARTBEAT_PROTOCOL: "32"
   COMPOSE_SCHEMA: "1"
   SCREENER_FLEET_UPDATE_PROTOCOL: "1"
 
@@ -259,7 +259,7 @@ jobs:
 
       - name: Install uv
         if: steps.release-head.outputs.current == 'true'
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v3
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v3
         with:
           enable-cache: true
 
@@ -408,7 +408,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install uv for coding practice verification
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
 
@@ -431,7 +431,7 @@ jobs:
             ${{ runner.os }}-coding-starter-kit-
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Gate coding starter kit release on exact merge source
         run: |
@@ -446,7 +446,7 @@ jobs:
       # Layer cache shared with pull-request CI: on the common release where
       # the miner trees are untouched, the whole build resolves from cache.
       - name: Build coding starter kit image from exact merge source
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: miners/dittobench-coding-starter-kit
           tags: dittobench-coding-starter-kit:release-gate
@@ -467,7 +467,7 @@ jobs:
 
       # load: the route probe below runs this tag from the local daemon.
       - name: Build unified starter kit image from exact merge source
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: miners
           file: miners/dittobench-unified-starter-kit/Dockerfile
@@ -518,7 +518,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v3
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v3
         with:
           enable-cache: true
 
@@ -656,7 +656,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
 
@@ -693,7 +693,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v3
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v3
         with:
           enable-cache: true
 
@@ -728,7 +728,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v3
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v3
         with:
           enable-cache: true
 
@@ -971,7 +971,9 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   deploy-screener-controller:
-    needs: [plan, release, deploy_platform, build-submission-builder]
+    # A reviewed release tag must be opted in separately. The legacy ENABLED
+    # flag is already true in production, so it cannot authorize this rollout.
+    needs: [plan, release, deploy_platform]
     if: >-
       always() &&
       needs.plan.result == 'success' &&
@@ -979,7 +981,8 @@ jobs:
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.screener_orchestrator == 'true' &&
       vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true' &&
-      needs.build-submission-builder.result == 'success' &&
+      vars.SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG != '' &&
+      vars.SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG == needs.release.outputs.tag &&
       (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
     permissions:
       contents: read
@@ -987,20 +990,19 @@ jobs:
     uses: ./.github/workflows/screener-controller-deploy.yml
     with:
       revision: ${{ needs.release.outputs.commit_sha }}
+      approved_tag: ${{ vars.SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG }}
+      release_tag: ${{ needs.release.outputs.tag }}
     secrets: inherit
 
   build-screener:
-    # A controller deploy restarts the single-writer image-builder service.
-    # Finish that rollout before queuing a trusted Targon build so the restart
-    # cannot orphan the rental behind its 45-minute Platform lease.
-    needs: [plan, release, deploy_platform, deploy-screener-controller]
+    # Build the exact release checkout on the trusted GitHub runner.
+    needs: [plan, release, deploy_platform]
     if: >-
       always() &&
       needs.plan.result == 'success' &&
       needs.release.result == 'success' &&
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.screener == 'true' &&
-      (needs.deploy-screener-controller.result == 'success' || needs.deploy-screener-controller.result == 'skipped') &&
       (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -1022,68 +1024,30 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - name: Ask Platform for a Targon Kaniko build
-        id: targon
+      - name: Register the trusted release image build
+        id: image_build
         env:
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
         run: |
           set -euo pipefail
           token_file="$RUNNER_TEMP/screener-controller-token"
           umask 077
-          if ! gcloud secrets versions access latest \
+          gcloud secrets versions access latest \
             --secret=screener-controller-api-token-prod \
-            --project=ditto-app-dev >"$token_file"; then
-            echo "::error::controller token unavailable; no provider authorized a fallback"
-            exit 1
-          fi
+            --project=ditto-app-dev >"$token_file"
           payload="$(jq -cn --arg sha "$SOURCE_SHA" '{component:"screener",source_sha:$sha,reason:"Build the reviewed monorepo release image"}')"
-          if ! response="$(curl -fsS \
+          response="$(curl -fsS \
             -H "Authorization: Bearer $(<"$token_file")" \
             -H 'Content-Type: application/json' \
             --data "$payload" \
-            https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds)"; then
-            echo "::error::Platform build queue unavailable; no provider authorized a fallback"
-            exit 1
-          fi
-          build_id="$(jq -er .build_id <<<"$response")"
-          echo "build_id=$build_id" >>"$GITHUB_OUTPUT"
-          for _ in $(seq 1 200); do
-            if ! response="$(curl -fsS \
-              -H "Authorization: Bearer $(<"$token_file")" \
-              "https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds/$build_id")"; then
-              echo "::warning::Platform build poll unavailable; retrying without authorizing a fallback"
-              sleep 15
-              continue
-            fi
-            if ! status="$(jq -er .status <<<"$response")"; then
-              echo "::warning::Platform build poll returned an invalid response; retrying"
-              sleep 15
-              continue
-            fi
-            case "$status" in
-              succeeded)
-                echo "mode=targon" >>"$GITHUB_OUTPUT"
-                echo "digest=$(jq -er .image_digest <<<"$response")" >>"$GITHUB_OUTPUT"
-                exit 0
-                ;;
-              fallback_required)
-                echo "mode=fallback" >>"$GITHUB_OUTPUT"
-                echo "reason=$(jq -r '.error_code // "TARGON_BUILD_FAILED"' <<<"$response")" >>"$GITHUB_OUTPUT"
-                echo "controller_epoch=$(jq -er .controller_epoch <<<"$response")" >>"$GITHUB_OUTPUT"
-                exit 0
-                ;;
-              failed|canceled)
-                echo "::error::Platform ended trusted build with terminal status $status"
-                exit 1
-                ;;
-            esac
-            sleep 15
-          done
-          echo "::error::Targon build timed out without a Platform-issued fallback"
-          exit 1
+            https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds)"
+          echo "build_id=$(jq -er .build_id <<<"$response")" >>"$GITHUB_OUTPUT"
+          echo "epoch=$(jq -er .controller_epoch <<<"$response")" >>"$GITHUB_OUTPUT"
+          echo "status=$(jq -er .status <<<"$response")" >>"$GITHUB_OUTPUT"
+          echo "digest=$(jq -r '.image_digest // ""' <<<"$response")" >>"$GITHUB_OUTPUT"
 
-      - name: Build on the existing runner when Targon is unavailable
-        if: steps.targon.outputs.mode == 'fallback'
+      - name: Build the screener image on the trusted runner
+        if: steps.image_build.outputs.status != 'succeeded'
         env:
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
         run: |
@@ -1093,7 +1057,7 @@ jobs:
           existing_digest="$(gcloud artifacts docker images describe "$image" \
             --format='value(image_summary.digest)' 2>/dev/null || true)"
           if [[ "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "reusing immutable fallback image: $SCREENER_REPOSITORY@$existing_digest"
+            echo "reusing immutable release image: $SCREENER_REPOSITORY@$existing_digest"
           else
             docker build \
               --file workers/screener/Dockerfile \
@@ -1105,34 +1069,34 @@ jobs:
       - name: Record immutable screener image identity
         env:
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
-          TARGON_DIGEST: ${{ steps.targon.outputs.digest }}
-          BUILD_ID: ${{ steps.targon.outputs.build_id }}
-          BUILD_EPOCH: ${{ steps.targon.outputs.controller_epoch }}
+          BUILD_ID: ${{ steps.image_build.outputs.build_id }}
+          BUILD_EPOCH: ${{ steps.image_build.outputs.epoch }}
+          BUILD_STATUS: ${{ steps.image_build.outputs.status }}
+          BUILD_DIGEST: ${{ steps.image_build.outputs.digest }}
         run: |
           set -euo pipefail
           digest="$(gcloud artifacts docker images describe \
             "$SCREENER_REPOSITORY:sha-$SOURCE_SHA" \
             --format='value(image_summary.digest)')"
-          if [ -n "$TARGON_DIGEST" ] && [ "$digest" != "$TARGON_DIGEST" ]; then
-            echo "::error::Targon-reported digest does not match Artifact Registry"
-            exit 1
-          fi
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          if [ -n "$BUILD_ID" ] && [ -z "$TARGON_DIGEST" ]; then
-            token_file="$RUNNER_TEMP/screener-controller-token"
-            payload="$(jq -cn \
-              --arg epoch "$BUILD_EPOCH" \
-              --arg digest "$digest" \
-              --arg resource "github-run-${GITHUB_RUN_ID}" \
-              '{environment:"prod",controller_epoch:$epoch,status:"succeeded",provider:"gcp",provider_resource_id:$resource,image_digest:$digest,error_code:null}')"
-            curl -fsS --retry 5 --retry-all-errors --retry-delay 2 \
-              -H "Authorization: Bearer $(<"$token_file")" \
-              -H 'Content-Type: application/json' \
-              --request PUT \
-              --data "$payload" \
-              "https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds/$BUILD_ID" \
-              >/dev/null
+          if [[ "$BUILD_STATUS" == "succeeded" ]]; then
+            [[ "$BUILD_DIGEST" == "$digest" ]]
+            echo "reusing Platform-registered screener image: $SCREENER_REPOSITORY@$digest"
+            exit 0
           fi
+          [[ "$BUILD_STATUS" == "fallback_required" ]]
+          payload="$(jq -cn \
+            --arg epoch "$BUILD_EPOCH" \
+            --arg digest "$digest" \
+            --arg resource "github-run-${GITHUB_RUN_ID}" \
+            '{environment:"prod",controller_epoch:$epoch,status:"succeeded",provider:"gcp",provider_resource_id:$resource,image_digest:$digest,error_code:null}')"
+          curl -fsS --retry 5 --retry-all-errors --retry-delay 2 \
+            -H "Authorization: Bearer $(<"$RUNNER_TEMP/screener-controller-token")" \
+            -H 'Content-Type: application/json' \
+            --request PUT \
+            --data "$payload" \
+            "https://platform-api.heyditto.ai/api/v1/screener/controller/trusted-image-builds/$BUILD_ID" \
+            >/dev/null
           echo "screener image: $SCREENER_REPOSITORY@$digest"
 
   assemble-screener-fleet-release:
@@ -1143,10 +1107,11 @@ jobs:
       needs.release.result == 'success' &&
       needs.release.outputs.released == 'true' &&
       (needs.plan.outputs.screener == 'true' || needs.plan.outputs.screener_orchestrator == 'true') &&
-      needs.build-submission-builder.result == 'success' &&
+      needs.build-submission-builder.result != 'cancelled' &&
       (needs.build-screener.result == 'success' ||
        (needs.plan.outputs.screener != 'true' && needs.build-screener.result == 'skipped'))
     runs-on: ubuntu-24.04
+    environment: prod
     permissions:
       contents: read
       packages: write
@@ -1161,7 +1126,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1174,6 +1139,7 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Render the immutable fleet manifest
+        id: fleet_manifest
         env:
           BUILDER_DIGEST: ${{ needs.build-submission-builder.outputs.digest }}
         run: |
@@ -1182,12 +1148,49 @@ jobs:
             --version "${{ needs.release.outputs.version }}" \
             --revision "${{ needs.release.outputs.commit_sha }}" \
             --update-protocol "$SCREENER_FLEET_UPDATE_PROTOCOL" \
-            --submission-builder-image "$SUBMISSION_BUILDER_REPOSITORY@$BUILDER_DIGEST"
+            --submission-builder-image "${BUILDER_DIGEST:+$SUBMISSION_BUILDER_REPOSITORY@$BUILDER_DIGEST}" \
+            --submission-builder-fallback-file release/screener-fleet-builder.digest \
+            --github-output "$GITHUB_OUTPUT"
           test "$(grep -c '^' build/screener-fleet-release/manifest.env)" = 5
+
+      - name: Authenticate fallback image verification
+        id: fallback_registry_auth
+        if: steps.fleet_manifest.outputs.builder_source == 'fallback'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SUBNET_BUILD_SA }}
+          token_format: access_token
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Set up gcloud for fallback image verification
+        if: steps.fleet_manifest.outputs.builder_source == 'fallback'
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Verify the exact fallback builder image exists
+        if: steps.fleet_manifest.outputs.builder_source == 'fallback'
+        env:
+          BUILDER_IMAGE: ${{ steps.fleet_manifest.outputs.builder_image }}
+          REGISTRY_ACCESS_TOKEN: ${{ steps.fallback_registry_auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          # Keep the credential outside the Docker build context and remove it
+          # on either lookup success or failure before descriptor publication.
+          token_file="$(mktemp "$RUNNER_TEMP/fallback-registry-token.XXXXXX")"
+          trap 'rm -f "$token_file"' EXIT
+          printf '%s' "$REGISTRY_ACCESS_TOKEN" > "$token_file"
+          unset REGISTRY_ACCESS_TOKEN
+          resolved_digest="$(gcloud artifacts docker images describe "$BUILDER_IMAGE" \
+            --project ditto-app-dev \
+            --format='value(image_summary.digest)' \
+            --access-token-file "$token_file" \
+            --quiet)"
+          test "$resolved_digest" = "${BUILDER_IMAGE##*@}"
 
       - name: Build and publish the immutable fleet descriptor
         id: descriptor
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.screener-fleet-release
@@ -1275,7 +1278,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1286,7 +1289,7 @@ jobs:
 
       - name: Build and publish the native amd64 validator manifest
         id: validator
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -1325,7 +1328,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1336,7 +1339,7 @@ jobs:
 
       - name: Build and publish the native arm64 validator manifest
         id: validator
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -1374,7 +1377,7 @@ jobs:
       digest: ${{ steps.validator.outputs.digest }}
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1426,10 +1429,10 @@ jobs:
           persist-credentials: false
 
       - name: Set up QEMU for both release platforms
-        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1440,7 +1443,7 @@ jobs:
 
       - name: Build and publish the sandbox daemon index
         id: sandbox-docker
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.sandbox-docker
@@ -1479,7 +1482,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1490,7 +1493,7 @@ jobs:
 
       - name: Build and publish the patched Pylon image
         id: pylon
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.pylon
@@ -1612,7 +1615,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1623,7 +1626,7 @@ jobs:
 
       - name: Build and publish the native amd64 scorer manifest
         id: dittobench-api
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: services/dittobench-api/Dockerfile
@@ -1681,7 +1684,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1695,7 +1698,7 @@ jobs:
 
       - name: Build and publish the native coding executor scorer image
         id: scorer
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: services/dittobench-api/Dockerfile
@@ -1781,7 +1784,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1792,7 +1795,7 @@ jobs:
 
       - name: Build and publish the native arm64 scorer manifest
         id: dittobench-api
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: services/dittobench-api/Dockerfile
@@ -1843,10 +1846,10 @@ jobs:
           persist-credentials: false
 
       - name: Set up QEMU for the retired compatibility image
-        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1860,7 +1863,7 @@ jobs:
       # scorer and validator; it is not part of the active inference path.
       - name: Build and publish the retired relay compatibility index
         id: model-relay
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ env.MODEL_RELAY_COMPAT_DIR }}
           file: ${{ env.MODEL_RELAY_COMPAT_DIR }}/Dockerfile
@@ -1910,7 +1913,7 @@ jobs:
       scorer_digest: ${{ steps.dittobench-api.outputs.digest }}
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -2211,7 +2214,7 @@ jobs:
               .source_revision == $sha and
               .software_version == $version and
               (.source_revision_mismatch | not) and
-              (.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13])
+              (.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13, 14])
             ' >/dev/null
           for bench_version in 8 9; do
             headers_file="$(mktemp)"
@@ -2271,7 +2274,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v3
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v3
         with:
           enable-cache: true
 
@@ -2285,7 +2288,7 @@ jobs:
         run: uv sync --locked --group dev
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -2493,7 +2496,7 @@ jobs:
 
       - name: Build and publish the immutable stack descriptor
         id: stack
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.stack-release
@@ -2580,12 +2583,12 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v3
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v3
         with:
           enable-cache: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -2668,10 +2671,10 @@ jobs:
       packages: read
     steps:
       - name: Set up QEMU for the arm64 runtime smoke
-        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -2730,7 +2733,7 @@ jobs:
       packages: write
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -2783,7 +2786,7 @@ jobs:
       packages: write
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

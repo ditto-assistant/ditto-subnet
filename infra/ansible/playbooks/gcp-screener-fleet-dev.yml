@@ -1,4 +1,8 @@
 ---
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_screener_fleet_dev
+
 - name: Rehearse dedicated screener host preparation without production authority
   hosts: role_screener_fleet_dev
   become: true
@@ -19,7 +23,7 @@
 
     - name: Verify rehearsal mode installed no screener systemd units
       ansible.builtin.stat:
-        path: /etc/systemd/system/ditto-screener-fleet-agent.service
+        path: /etc/systemd/system/ditto-screener-worker@.service
       register: screener_dev_runtime_unit
       failed_when: screener_dev_runtime_unit.stat.exists
 

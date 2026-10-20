@@ -34,10 +34,10 @@ afterEach(() => {
   document.body.classList.remove("entity-page");
 });
 
-function renderPanel(names: Record<string, string> = {}): void {
+function renderPanel(names: Record<string, string> = {}, rows: typeof entries = entries): void {
   render(() => (
     <EntityPanel
-      entries={() => entries}
+      entries={() => rows}
       operations={() => operations}
       validatorNames={() => names}
       currentBench={() => 7}
@@ -132,6 +132,31 @@ describe("EntityPanel miner tenant", () => {
     expect(document.activeElement).toBe(document.getElementById("modal-close"));
   });
 
+  it("labels an unranked provisional run instead of printing a null rank", () => {
+    // Ineligible rows (e.g. a smoke run below the case floor) get rank null.
+    const base = leaderboard.entries?.[0];
+    if (!base) throw new Error("fixture has no leaderboard entries");
+    const hotkey = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
+    const rows = rankEntries([
+      ...(leaderboard.entries ?? []),
+      {
+        ...base,
+        agent_id: "00000000-0000-4000-8000-00000000abcd",
+        miner_hotkey: hotkey,
+        finalized: false,
+        eligible: false,
+        n: 12,
+        score_count: 1,
+        score_quorum: 3,
+      },
+    ]);
+    renderPanel({}, rows);
+    visit("/#/overview?miner=" + hotkey);
+    const chip = document.getElementById("d-bench")?.textContent ?? "";
+    expect(chip).toBe("Unranked · 1 of 3 scores");
+    expect(chip).not.toContain("null");
+  });
+
   it("summarizes the standing and links the full page and the best submission", () => {
     renderPanel();
     visit("/#/overview?miner=" + topEntry.miner_hotkey);
@@ -155,6 +180,32 @@ describe("EntityPanel miner tenant", () => {
     visit("/#/overview?miner=" + topEntry.miner_hotkey);
     expect(document.getElementById("d-consensus")).toBeNull();
     expect(document.getElementById("d-stats")?.textContent).not.toContain("Consensus (k=");
+  });
+
+  it("ranks a miner within its own tier, finalized or provisional", () => {
+    const raw = leaderboard.entries ?? [];
+    // Two finalized rows and one provisional row: the provisional row takes P1
+    // on its own counter and must not read as "#1 of 3" next to the leader.
+    const tiered = rankEntries([
+      { ...raw[0]!, finalized: true },
+      { ...raw[1]!, finalized: true },
+      { ...raw[2]!, finalized: false },
+    ]);
+    render(() => (
+      <EntityPanel
+        entries={() => tiered}
+        operations={() => operations}
+        validatorNames={() => ({})}
+        currentBench={() => 7}
+        settledView={() => false}
+      />
+    ));
+    const rankOf = (hotkey: string) => {
+      visit("/#/overview?miner=" + hotkey);
+      return document.getElementById("d-stats")?.textContent ?? "";
+    };
+    expect(rankOf(tiered[2]!.miner_hotkey)).toContain("P1 of 1");
+    expect(rankOf(tiered[1]!.miner_hotkey)).toContain("#2 of 2");
   });
 
   it("folds the composite derivation away without dropping it", () => {
@@ -259,7 +310,7 @@ describe("EntityPanel miner profile card", () => {
     await waitFor(() => expect(rows().length).toBe(2));
     // The submissions page vocabulary, not the raw wire status.
     expect(rows()[0]?.textContent).toContain("Scored");
-    expect(rows()[1]?.textContent).toContain("Deferred source review");
+    expect(rows()[1]?.textContent).toContain("Under review");
     expect(rows()[1]?.textContent).not.toContain("under_review");
     const link = rows()[0]?.querySelector('a[data-entity-link="agent"]');
     expect(link).toHaveTextContent("luffy0");

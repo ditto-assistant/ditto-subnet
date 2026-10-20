@@ -1,0 +1,117 @@
+{
+  "instruction_lines": 1229,
+  "changed_i64_const_instructions": 22,
+  "all_other_instructions_identical": true,
+  "changes": [
+    {
+      "line": 19,
+      "live": "i64.const -7833427790918537979",
+      "candidate": "i64.const 6421272417105727014"
+    },
+    {
+      "line": 42,
+      "live": "i64.const 3977398931",
+      "candidate": "i64.const 1039211609"
+    },
+    {
+      "line": 47,
+      "live": "i64.const 44032",
+      "candidate": "i64.const 49408"
+    },
+    {
+      "line": 52,
+      "live": "i64.const 2621440",
+      "candidate": "i64.const 13565952"
+    },
+    {
+      "line": 57,
+      "live": "i64.const 1207959552",
+      "candidate": "i64.const 1426063360"
+    },
+    {
+      "line": 85,
+      "live": "i64.const -7638104968020361216",
+      "candidate": "i64.const 144115188075855872"
+    },
+    {
+      "line": 92,
+      "live": "i64.const -400894597526733931",
+      "candidate": "i64.const -1790031425022470449"
+    },
+    {
+      "line": 186,
+      "live": "i64.const 344987824233108772",
+      "candidate": "i64.const -6372630596317174565"
+    },
+    {
+      "line": 323,
+      "live": "i64.const -3652476977763897393",
+      "candidate": "i64.const 271895352313447563"
+    },
+    {
+      "line": 369,
+      "live": "i64.const 3517567123489861682",
+      "candidate": "i64.const 8429408220573350652"
+    },
+    {
+      "line": 377,
+      "live": "i64.const -4779631694142979099",
+      "candidate": "i64.const 1079941759907953101"
+    },
+    {
+      "line": 471,
+      "live": "i64.const -2381132760026289725",
+      "candidate": "i64.const -5269400019030100657"
+    },
+    {
+      "line": 608,
+      "live": "i64.const -3652476977763897393",
+      "candidate": "i64.const 271895352313447563"
+    },
+    {
+      "line": 654,
+      "live": "i64.const 3517567123489861682",
+      "candidate": "i64.const 8429408220573350652"
+    },
+    {
+      "line": 662,
+      "live": "i64.const -2381132760026289725",
+      "candidate": "i64.const -5269400019030100657"
+    },
+    {
+      "line": 756,
+      "live": "i64.const -400894597526733931",
+      "candidate": "i64.const -1790031425022470449"
+    },
+    {
+      "line": 893,
+      "live": "i64.const -3652476977763897393",
+      "candidate": "i64.const 271895352313447563"
+    },
+    {
+      "line": 939,
+      "live": "i64.const 3517567123489861682",
+      "candidate": "i64.const 8429408220573350652"
+    },
+    {
+      "line": 947,
+      "live": "i64.const 344987824233108772",
+      "candidate": "i64.const -6372630596317174565"
+    },
+    {
+      "line": 1041,
+      "live": "i64.const -4779631694142979099",
+      "candidate": "i64.const 1079941759907953101"
+    },
+    {
+      "line": 1178,
+      "live": "i64.const -3652476977763897393",
+      "candidate": "i64.const 271895352313447563"
+    },
+    {
+      "line": 1224,
+      "live": "i64.const 3517567123489861682",
+      "candidate": "i64.const 8429408220573350652"
+    }
+  ]
+}

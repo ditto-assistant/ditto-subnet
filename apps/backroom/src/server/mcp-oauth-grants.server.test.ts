@@ -1,11 +1,15 @@
-import OAuthProvider, {
+import {
   getOAuthApi,
   type OAuthHelpers,
   type OAuthProviderOptions,
 } from '@cloudflare/workers-oauth-provider'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+// Exercise the actual Worker OAuth/request-local binding path. SSR routing is
+// outside this grant test; its own staff-cookie guards do not accept MCP tokens.
+vi.mock('@tanstack/react-start/server-entry', () => ({ default: { fetch: async () => new Response('console', { status: 404 }) } }))
+import worker from '../server'
 
 // `cloudflare:workers` is aliased to a test stub in vitest.config.ts; node's
 // loader cannot resolve the Workers-runtime module the provider library and the
@@ -13,9 +17,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BackroomSession } from '../lib/auth.types'
 import { sealToken } from './crypto.server'
 import { BackroomMcpHandler } from './mcp-handler.server'
+import { BACKROOM_TREASURY_OBSERVE_SCOPE as OBSERVE } from './treasury-observer-access.server'
 import {
-  beginMcpAuthorization,
-  completeMcpAuthorization,
   getMcpConsentDetails,
   listMcpGrants,
   mcpTokenExchange,
@@ -49,6 +52,15 @@ const session: BackroomSession = {
   issuedAt: Date.now(),
   expiresAt: Date.now() + 7 * 24 * 60 * 60_000,
 }
+
+beforeEach(() => {
+  // Actual Worker entry uses the Workers Cache API; an empty cache exercises
+  // the real KV/provider path rather than bypassing its token revocation check.
+  vi.stubGlobal('caches', { default: {
+    match: async () => undefined, put: async () => {}, delete: async () => true,
+  } })
+})
+afterEach(() => vi.unstubAllGlobals())
 
 function memoryKv() {
   const store = new Map<string, string>()
@@ -97,12 +109,11 @@ function harness() {
     allowImplicitFlow: false,
     allowPlainPKCE: false,
     refreshTokenTTL: 7 * 24 * 60 * 60,
-    tokenExchangeCallback: (callback) => mcpTokenExchange(callback),
+    tokenExchangeCallback: (callback) => mcpTokenExchange(callback, Date.now(), env),
   }
-  const provider = new OAuthProvider(options)
   const oauth = getOAuthApi(options, env) as OAuthHelpers
   const ctx = { waitUntil() {}, passThroughOnException() {}, props: {} } as unknown as ExecutionContext
-  return { kv, env, provider, oauth, ctx }
+  return { kv, env, oauth, ctx }
 }
 
 async function pkcePair() {
@@ -125,7 +136,7 @@ async function authorize(
   h: Harness,
   clientId: string,
   requestedScope: string,
-  accessLevel: 'read' | 'artifact' | 'write' | 'full',
+  accessLevel: 'read' | 'artifact' | 'write' | 'full' | 'observe',
   sessionOverrides: Partial<BackroomSession> = {},
 ) {
   const { verifier, challenge } = await pkcePair()
@@ -140,11 +151,15 @@ async function authorize(
     code_challenge_method: 'S256',
     resource: `${origin}/mcp`,
   }).toString()
-  const begin = await beginMcpAuthorization(new Request(authorize), h.oauth, secret)
+  const begin = await worker.fetch(new Request(authorize), h.env, h.ctx)
+  if (begin.status !== 302) {
+    const error = await begin.json() as { error_description: string }
+    throw new Error(`Authorization refused HTTP ${begin.status}: ${error.error_description}`)
+  }
   const requestToken =
     new URL(begin.headers.get('location') ?? '').searchParams.get('request') ?? ''
   const details = await getMcpConsentDetails(requestToken, origin, secret)
-  const complete = await completeMcpAuthorization(
+  const complete = await worker.fetch(
     new Request(`${origin}/oauth/authorize/complete`, {
       method: 'POST',
       headers: {
@@ -154,15 +169,18 @@ async function authorize(
       },
       body: JSON.stringify({ requestToken, csrf: details.csrf, decision: 'allow', accessLevel }),
     }),
-    { ...h.env, OAUTH_PROVIDER: h.oauth },
+    h.env,
+    h.ctx,
   )
+  if (complete.status !== 200) throw new Error(`Authorization refused HTTP ${complete.status}`)
   const { redirectTo } = (await complete.json()) as { redirectTo: string }
+  expect(new URL(redirectTo).searchParams.get('state')).toBe('client-state')
   const code = new URL(redirectTo).searchParams.get('code') ?? ''
   return { details, code, verifier }
 }
 
 async function exchangeCode(h: Harness, clientId: string, code: string, verifier: string) {
-  return h.provider.fetch(
+  return worker.fetch(
     new Request(`${origin}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -183,7 +201,7 @@ async function connect(
   h: Harness,
   clientId: string,
   requestedScope: string,
-  accessLevel: 'read' | 'artifact' | 'write' | 'full',
+  accessLevel: 'read' | 'artifact' | 'write' | 'full' | 'observe',
   sessionOverrides: Partial<BackroomSession> = {},
 ) {
   const { details, code, verifier } = await authorize(
@@ -205,7 +223,7 @@ async function connect(
 }
 
 async function refresh(h: Harness, clientId: string, refreshToken: string, scope?: string) {
-  return h.provider.fetch(
+  return worker.fetch(
     new Request(`${origin}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -255,6 +273,130 @@ async function registerClient(h: Harness) {
 }
 
 describe('Backroom MCP OAuth grants (issue #2080)', () => {
+  it.each([
+    '/.well-known/oauth-protected-resource',
+    '/.well-known/oauth-protected-resource/mcp',
+    '/.well-known/oauth-authorization-server',
+    '/.well-known/oauth-authorization-server/mcp',
+  ])('authorizes every scope advertised at %s as an ordinary grant', async (path) => {
+    const h = harness()
+    const clientId = await registerClient(h)
+    const metadata = await worker.fetch(new Request(`${origin}${path}`), h.env, h.ctx)
+    expect(metadata.status).toBe(200)
+    const { scopes_supported: scopes } = await metadata.json() as { scopes_supported: string[] }
+    expect(scopes).toEqual(FULL)
+
+    // General clients can request the whole discovery list. Drive the actual
+    // Worker through consent and PKCE exchange, without relaxing exclusivity.
+    const connection = await connect(h, clientId, scopes.join(' '), 'full')
+    expect(connection.details).toMatchObject({ requestedScopes: FULL, canRequestArtifact: true, canRequestWrite: true })
+    expect(connection.details.observerOnly).toBeUndefined()
+    expect(connection.scope.split(' ')).toEqual(FULL)
+    expect((await tokenProps(h, connection.access_token)).grant.props.scopes).toEqual(FULL)
+  })
+
+  it('issues and refreshes a receipt-only grant without inheriting general read or write', async () => {
+    const h = harness()
+    const clientId = await registerClient(h)
+    const connection = await connect(h, clientId, OBSERVE, 'observe')
+    expect(connection.scope).toBe(OBSERVE)
+    expect(connection.details).toMatchObject({ observerOnly: true, requestedScopes: [OBSERVE], canRequestArtifact: false, canRequestWrite: false })
+    const issued = await tokenProps(h, connection.access_token)
+    expect(issued.grant.props.scopes).toEqual([OBSERVE])
+    const renewed = await refresh(h, clientId, connection.refresh_token)
+    expect(renewed.status).toBe(200)
+    const body = await renewed.json() as { access_token: string; refresh_token: string; scope: string }
+    expect(body.scope).toBe(OBSERVE)
+    expect((await tokenProps(h, body.access_token)).grant.props.scopes).toEqual([OBSERVE])
+    // Direct broad refresh attempts cannot import read, artifact or write.
+    const widened = await refresh(h, clientId, body.refresh_token, [...FULL, OBSERVE].join(' '))
+    // The actual provider intersects requested refresh scope before its
+    // callback. A broad wire request succeeds only as the existing sole scope.
+    expect(widened.status).toBe(200)
+    const capped = await widened.json() as { access_token: string; scope: string }
+    expect(capped.scope).toBe(OBSERVE)
+    expect((await tokenProps(h, capped.access_token)).grant.props.scopes).toEqual([OBSERVE])
+    const listing = await listMcpGrants(new Request(`${origin}/oauth/grants`, { headers: { Cookie: await sessionCookie() } }), { ...h.env, OAUTH_PROVIDER: h.oauth })
+    expect(await listing.json()).toMatchObject({ grants: [expect.objectContaining({ scopes: [OBSERVE], accessLevel: 'treasury-observer' })] })
+  })
+
+  it('refuses mixed observer authorization and implicit generic selections', async () => {
+    const h = harness()
+    const clientId = await registerClient(h)
+    await expect(authorize(h, clientId, `${OBSERVE} ${BACKROOM_READ_SCOPE}`, 'observe')).rejects.toThrow('cannot be mixed')
+    await expect(authorize(h, clientId, [...FULL, OBSERVE].join(' '), 'full')).rejects.toThrow('cannot be mixed')
+    for (const choice of ['read', 'artifact', 'write', 'full'] as const) {
+      await expect(authorize(h, clientId, OBSERVE, choice)).rejects.toThrow('HTTP 403')
+    }
+    h.env.BACKROOM_ADMIN_EMAILS = ''
+    await expect(authorize(h, clientId, OBSERVE, 'observe')).rejects.toThrow('HTTP 403')
+    expect((await h.oauth.listUserGrants(session.uid)).items).toEqual([])
+  })
+
+  it('rechecks dedicated staff authority at both code exchange and refresh', async () => {
+    const h = harness()
+    const clientId = await registerClient(h)
+    const authorized = await authorize(h, clientId, OBSERVE, 'observe')
+    h.env.BACKROOM_ADMIN_EMAILS = ''
+    const refused = await exchangeCode(h, clientId, authorized.code, authorized.verifier)
+    expect(refused.status).toBe(400)
+    expect(await refused.json()).toMatchObject({ error: 'invalid_grant' })
+    h.env.BACKROOM_ADMIN_EMAILS = session.email
+    const connection = await connect(h, clientId, OBSERVE, 'observe')
+    h.env.BACKROOM_BLOCKED_EMAILS = session.email
+    expect((await refresh(h, clientId, connection.refresh_token)).status).toBe(400)
+  })
+
+  it('binds the actual Worker token callback to each request and enforces direct bearer calls', async () => {
+    const h = harness()
+    const clientId = await registerClient(h)
+    const authorized = await authorize(h, clientId, OBSERVE, 'observe')
+    const tokenRequest = new Request(`${origin}/token`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'authorization_code', code: authorized.code,
+        redirect_uri: redirectUri, client_id: clientId, code_verifier: authorized.verifier }) })
+    const issued = await worker.fetch(tokenRequest, h.env, h.ctx)
+    expect(issued.status).toBe(200)
+    const tokens = await issued.json() as { access_token: string; refresh_token: string; scope: string }
+    expect(tokens.scope).toBe(OBSERVE)
+    const invoke = (method: string, params: Record<string, unknown> = {}, bindings = h.env) => worker.fetch(new Request(`${origin}/mcp`, {
+      method: 'POST', headers: { Authorization: `Bearer ${tokens.access_token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    }), bindings, h.ctx)
+    const discovery = await invoke('tools/list')
+    expect(discovery.status).toBe(200)
+    expect(discovery.headers.get('Cache-Control')).toBe('no-store')
+    expect(await discovery.json()).toMatchObject({ result: { tools: [expect.objectContaining({ name: 'get_treasury_settings' }), expect.objectContaining({ name: 'record_treasury_receipt' })] } })
+    for (const method of ['resources/list', 'resources/read']) expect((await invoke(method)).status).toBe(403)
+    expect((await invoke('tools/call', { name: 'record_treasury_settings', arguments: {} })).status).toBe(403)
+    expect((await invoke('tools/list', {}, { ...h.env, BACKROOM_ADMIN_EMAILS: '' })).status).toBe(403)
+    const refreshRequest = () => new Request(`${origin}/token`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: clientId }) })
+    // Alternating bindings cannot leave a global provider closure with the
+    // previous request's elevated authority. Refusal must use this request.
+    const denied = await worker.fetch(refreshRequest(), { ...h.env, BACKROOM_ADMIN_EMAILS: '' }, h.ctx)
+    expect(denied.status).toBe(400)
+    expect(await denied.json()).toMatchObject({ error: 'invalid_grant' })
+    const allowed = await worker.fetch(refreshRequest(), h.env, h.ctx)
+    expect(allowed.status).toBe(200)
+    expect(await allowed.json()).toMatchObject({ scope: OBSERVE })
+  })
+
+  it('revokes dedicated access/refresh and replaces prior full grants for the same client', async () => {
+    const h = harness()
+    const clientId = await registerClient(h)
+    const old = await connect(h, clientId, FULL.join(' '), 'full')
+    const dedicated = await connect(h, clientId, OBSERVE, 'observe')
+    expect(await h.oauth.unwrapToken(old.access_token)).toBeNull()
+    expect((await refresh(h, clientId, old.refresh_token)).status).toBe(400)
+    const { grantId } = await tokenProps(h, dedicated.access_token)
+    const revoke = await revokeMcpGrant(new Request(`${origin}/oauth/grants/revoke`, {
+      method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', Cookie: await sessionCookie() }, body: JSON.stringify({ grantId }),
+    }), { ...h.env, OAUTH_PROVIDER: h.oauth })
+    expect(revoke.status).toBe(200)
+    expect(await h.oauth.unwrapToken(dedicated.access_token)).toBeNull()
+    expect((await refresh(h, clientId, dedicated.refresh_token)).status).toBe(400)
+  })
+
   it('never returns write to a read-only request, even when consent picks full', async () => {
     const h = harness()
     const clientId = await registerClient(h)

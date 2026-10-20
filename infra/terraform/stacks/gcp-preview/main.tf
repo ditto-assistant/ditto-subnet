@@ -52,6 +52,7 @@ resource "google_service_account" "runtime" {
 }
 
 resource "google_service_account" "bake" {
+  count        = var.enable_preview_bake ? 1 : 0
   account_id   = "sn118-preview-bake"
   display_name = "GitHub SN118 preview base image bake"
 }
@@ -113,9 +114,10 @@ resource "google_service_account_iam_member" "controller_signs_urls" {
 # default-branch build code has no identity to attach at all, and this bake
 # identity cannot confer one.
 resource "google_project_iam_member" "bake_compute" {
+  count   = var.enable_preview_bake ? 1 : 0
   project = var.project
   role    = "roles/compute.instanceAdmin.v1"
-  member  = "serviceAccount:${google_service_account.bake.email}"
+  member  = "serviceAccount:${google_service_account.bake[0].email}"
 }
 
 # Scoped to its own environment rather than to the controller's, so the bake
@@ -124,7 +126,8 @@ resource "google_project_iam_member" "bake_compute" {
 # the default branch: the subject is environment-scoped, not ref-scoped, so a
 # wider policy would let any branch run modified bake code with this identity.
 resource "google_service_account_iam_member" "bake_wif" {
-  service_account_id = google_service_account.bake.name
+  count              = var.enable_preview_bake ? 1 : 0
+  service_account_id = google_service_account.bake[0].name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/${local.bake_subject}"
 }

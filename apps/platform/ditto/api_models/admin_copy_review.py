@@ -105,11 +105,34 @@ class AdminCopySimilarityEvidence(BaseModel):
     decision_role: str
 
 
+class AdminCopyLanguageInventory(BaseModel):
+    """Private per-artifact language mix of the fingerprinted members.
+
+    Counts are keyed by a fixed language label (``rust``, ``python``,
+    ``typescript``, ``go``, ``unknown``, ...) detected from file extension,
+    file name, or a ``#!`` line; never a path or any content. Members dropped
+    as stock starter-kit content or generated lockfiles are counted only in
+    ``excluded_*``. The normalized-source and prompt channels canonicalize
+    Rust/C-style syntax, so an artifact that is mostly another language gets
+    weaker evidence from them: a miss there is not exculpatory. Provenance
+    only; it never changes a decision.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    version: str
+    files: dict[str, int]
+    bytes: dict[str, int]
+    excluded_files: int | None = None
+    excluded_bytes: int | None = None
+
+
 class AdminCopyReviewCurrentComparison(BaseModel):
     availability: Literal["available"]
     bulk_eligible: bool
     algorithm_version: str
     lexical_fingerprint_version: int
+    line_fingerprint_version: str | None = None
     normalized_source_fingerprint_version: str
     prompt_fingerprint_version: str
     canonical_reference_revision: str
@@ -122,11 +145,17 @@ class AdminCopyReviewCurrentComparison(BaseModel):
     exact_byte_match: bool
     normalized_source_match: bool
     lexical: AdminCopySimilarityEvidence
+    line: AdminCopySimilarityEvidence | None = None
+    """Line sub-sketch of the lexical fingerprint; triggers beside ``lexical``."""
     structural: AdminCopySimilarityEvidence
     prompt: AdminCopySimilarityEvidence
     triggered: bool
     triggered_signal: str | None
     current_decision: str
+    candidate_languages: AdminCopyLanguageInventory | None = None
+    """Held agent's language inventory; null when not recorded for the row."""
+    reference_languages: AdminCopyLanguageInventory | None = None
+    """Matched agent's language inventory; null when not recorded for the row."""
 
 
 class AdminCopyReviewComparisonUnavailable(BaseModel):
@@ -207,6 +236,9 @@ class AdminCopyReviewAction(BaseModel):
     previous_status: str | None = None
     artifact_sha256: str | None = None
     score_count: int | None = None
+    reconciled_quarantine_ids: list[UUID] = Field(default_factory=list)
+    """Active screening quarantines this terminal ruling closed in the same
+    transaction (ditto-subnet#2038). Empty for every other action."""
 
 
 class AdminCopyReviewAudit(BaseModel):
@@ -255,6 +287,12 @@ class AdminSourceDiffManifest(BaseModel):
     # True when more files exist than the manifest bound returns; file_count
     # still reflects the real total so the omission is never silent.
     truncated: bool
+    # Readable text files the bounded source read skipped in EITHER artifact
+    # (combined text budget or file cap). They were NOT compared, so they appear
+    # in no ``files`` row or count; ``file_count`` covers compared paths only.
+    omitted_file_count: int = 0
+    # The first MAX_OMITTED_PATHS omitted paths, sorted.
+    omitted_paths: list[str] = Field(default_factory=list)
 
 
 class AdminSourceDiffFileDetail(BaseModel):
@@ -298,6 +336,9 @@ class AdminCopyReviewResolveResponse(BaseModel):
     review: AdminCopyReviewItem
     agent_status: str
     idempotent: bool
+    reconciled_quarantine_ids: list[UUID] = Field(default_factory=list)
+    """Active screening quarantines a terminal reject closed atomically with
+    the ruling; each keeps its own resolution and review-event audit rows."""
 
 
 class AdminCopyReviewPrecedent(BaseModel):

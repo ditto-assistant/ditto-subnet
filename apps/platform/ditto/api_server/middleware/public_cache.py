@@ -265,7 +265,11 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
             if not started:
                 started = True
                 return {"type": "http.request", "body": b"", "more_body": False}
-            return {"type": "http.disconnect"}
+            # This internal refresh has no client to disconnect. Advertising
+            # one here cancels StreamingResponse after its first chunk, then
+            # caches a truncated body as a successful 200 response.
+            await asyncio.Future()
+            raise AssertionError("unreachable")
 
         async def send(message: Message) -> None:
             nonlocal status, raw_headers

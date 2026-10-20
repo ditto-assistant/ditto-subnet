@@ -1,0 +1,63 @@
+{
+  "$comment": "Top-level request fields on the ticket-bound chat completions lane. Platform (apps/platform/ditto/api_server/endpoints/inference.py) and the model relay (services/model-relay/internal/inference/schema.go) each have a test asserting their field sets equal this table exactly; refused reasons are the text the 400 returns. Any field not listed is refused with 400 \"unsupported inference parameter: <names>\". Explained in docs/MINER.md#inference-request-contract.",
+  "forwarded": [
+    "frequency_penalty",
+    "logit_bias",
+    "logprobs",
+    "messages",
+    "min_p",
+    "parallel_tool_calls",
+    "prediction",
+    "presence_penalty",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "stream",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_a",
+    "top_k",
+    "top_p",
+    "verbosity"
+  ],
+  "forwarded_value_limits": {
+    "stream": "only false is accepted; true is refused because this lane answers with a single non-streaming response"
+  },
+  "pinned": {
+    "best_of": "removed; the provider is always asked for exactly one completion (must still be an integer >= 1)",
+    "include_reasoning": "removed so the pinned reasoning exclude=true cannot be overridden",
+    "max_completion_tokens": "folded into max_tokens and clamped down to the ticket output ceiling",
+    "max_tokens": "clamped down to the ticket output ceiling (must be an integer >= 1)",
+    "model": "replaced with the ticket-locked model",
+    "n": "forced to 1 (must still be an integer >= 1)",
+    "prompt_cache_key": "removed; shared provider cache buckets would allow cross-miner interference",
+    "reasoning": "replaced with the benchmark reasoning block: fixed medium on v7/v8; from v9 the agent may choose low, medium, or high (default medium); exclude is always true",
+    "reasoning_effort": "from v9 canonicalized into reasoning (must agree with reasoning.effort when both are sent), then removed; ignored before v9",
+    "service_tier": "removed; a priority tier is compute the ticket did not grant",
+    "usage": "removed; trusted cost comes from the provider response usage block"
+  },
+  "dropped": {
+    "metadata": "stripped; identifies the agent to a third party and never affects the completion",
+    "preset": "stripped; the platform pins the provider route",
+    "provider": "stripped; the platform pins the provider route",
+    "route": "stripped; the platform pins the provider route",
+    "safety_identifier": "stripped; identifies the agent to a third party and never affects the completion",
+    "store": "stripped; contradicts the pinned no-retention posture",
+    "stream_options": "stripped; only meaningful with stream: true, which is refused",
+    "user": "stripped; identifies the agent to a third party and never affects the completion"
+  },
+  "refused": {
+    "audio": "this lane serves text completions only",
+    "function_call": "use tool_choice instead",
+    "functions": "use tools instead",
+    "modalities": "this lane serves text completions only",
+    "models": "the model is pinned by the ticket, not chosen by the request",
+    "plugins": "server-side plugins are not available on this lane",
+    "top_logprobs": "logprobs is supported but top_logprobs is not: it would exceed this lane's response size limit",
+    "transforms": "prompt transforms would change benchmark semantics",
+    "web_search_options": "server-side web search is not available on this lane"
+  }
+}

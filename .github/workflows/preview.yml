@@ -49,7 +49,7 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || inputs.sha || inputs.ref || github.sha }}
 
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Resolve profiles at the checked-out SHA
         id: resolve
@@ -114,7 +114,7 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.plan.outputs.sha }}
 
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Prove overlay cheatcodes
         run: uv run --locked pytest ditto/tests/preview -q

@@ -50,8 +50,8 @@ screener_build_timeout_seconds: 2700
 # Retained only for explicit decomposed-lane tests; production workers build
 # locally and do not delegate their leased work back to Platform.
 screener_remote_build_timeout_seconds: 1500
-# A worker lease owns the whole build/runtime/review lifecycle. Cloud Run and
-# Targon are separate decomposed capacity lanes, not a worker-side dependency.
+# A worker lease owns the whole build/runtime/review lifecycle. Retired
+# decomposed capacity lanes are not a worker-side dependency.
 screener_remote_build_mode: off
 screener_run_timeout_seconds: 120
 screener_build_memory: 2g

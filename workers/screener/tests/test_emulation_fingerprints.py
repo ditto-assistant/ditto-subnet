@@ -13,7 +13,41 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ditto_screener.source_signals import find_benchmark_emulation_fingerprints
+
+
+@pytest.mark.parametrize("decoy_count", [6, 60])
+def test_comment_padding_cannot_hide_late_high_fingerprints(decoy_count: int) -> None:
+    files = [
+        (f"src/a{index:03}.py", "# phrasing probe-selected over trial N\n" * 4)
+        for index in range(decoy_count)
+    ] + [("src/zz.rs", _RUST_EMULATOR)]
+    report: dict[str, object] = {}
+
+    findings = find_benchmark_emulation_fingerprints(files, selection_report=report)
+
+    kinds = [finding["kind"] for finding in findings]
+    assert {"bench-version-equality-gate", "zero-token-answer-constructor"} <= set(
+        kinds
+    )
+    assert kinds.count("self-reported-benchmark-fitting") == 6
+    assert len(findings) <= 24
+    severities = [finding["severity"] for finding in findings]
+    assert severities == sorted(severities, key={"high": 0, "medium": 1, "low": 2}.get)
+    assert report["truncated"] is True
+    assert report["omitted_count"] == report["candidate_count"] - len(findings)
+    assert report["omitted_by_kind"]["self-reported-benchmark-fitting"] == (
+        4 * decoy_count - 6
+    )
+    assert [lead["saturated_kind"] for lead in report["saturation_leads"]] == [
+        "self-reported-benchmark-fitting"
+    ]
+    # Input order cannot affect the selected dossier, and no source is exposed.
+    assert findings == find_benchmark_emulation_fingerprints(reversed(files))
+    assert "phrasing" not in json.dumps(report)
+
 
 _RUST_EMULATOR = """\
 // Ported from universe/world.go and the conversational.go generator so we
@@ -1348,3 +1382,264 @@ def test_keep_preference_findings_never_leak_matched_source_text() -> None:
         assert finding["category"] == "benchmark_emulation"
         for location in finding["locations"]:
             assert set(location) == {"path", "line", "role"}
+
+
+# Maintainer counterexample (review of #2567 at 556268ba9): nothing runnable
+# names scripts/ or the module, yet /run serves it through an encoded path.
+RUNTIME_LOADED_TEST_MODULE = [
+    (
+        "Dockerfile",
+        "FROM python:3.12\n"
+        "COPY . /app\n"
+        "WORKDIR /app\n"
+        "ENV CASE_MODULE_B64=c2NyaXB0cy90ZXN0X3JlaGVhcnNhbC5weQ==\n"
+        'CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]\n',
+    ),
+    (
+        "app.py",
+        "import base64\n"
+        "import os\n"
+        "import runpy\n"
+        "\n"
+        "loaded = runpy.run_path(\n"
+        '    base64.b64decode(os.environ["CASE_MODULE_B64"]).decode()\n'
+        ")\n"
+        "\n"
+        "\n"
+        "def run(question):\n"
+        '    return loaded["answer_case"](question)\n',
+    ),
+    (
+        "scripts/test_rehearsal.py",
+        "def answer_case(question):\n"
+        "    answer = lookup(question)\n"
+        "    return answer\n",
+    ),
+]
+
+
+def test_a_test_named_module_loaded_at_run_time_stays_fingerprinted() -> None:
+    # Source text cannot prove a test-named module is never served, so it is
+    # scanned like any other executable source.
+    findings = find_benchmark_emulation_fingerprints(RUNTIME_LOADED_TEST_MODULE)
+
+    assert {
+        str(location["path"])
+        for finding in findings
+        if finding["kind"] == "sync-answer-constructor"
+        for location in finding["locations"]  # type: ignore[attr-defined]
+    } == {"scripts/test_rehearsal.py"}
+
+
+_CFG_TEST_ZERO_TOKEN_REPLY = """\
+pub fn serve() {}
+
+#[cfg(test)]
+mod tests {
+    pub fn build_reply(question: &str) -> RunResponse {
+        RunResponse {
+            answer: question.to_string(),
+            prompt_tokens: 0,
+            output_tokens: 0,
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize(
+    "dockerfile",
+    [
+        "FROM rust:1\nCOPY . .\nRUN cargo build --locked --release\n",
+        'FROM rust:1\nARG P=RUST\nARG C=--c\nENV ${P}FLAGS="${C}fg test"\n'
+        "COPY . .\nRUN cargo build --release\n",
+        "FROM rust:1\nCOPY . .\n"
+        "RUN export RUSTFLAGS=$(echo LS1jZmcgdGVzdA== | base64 -d) && cargo build\n",
+        "FROM ghcr.io/example/rust-with-test-flags:1\nCOPY . .\n"
+        "RUN cargo build --release\n",
+        "FROM rust:1\nCOPY . .\nRUN curl -fsS https://example.invalid/setup | sh\n"
+        "RUN cargo build --release\n",
+    ],
+    ids=["plain-release", "arg-split-env", "decoded-flags", "base-image", "fetched"],
+)
+def test_cfg_test_items_stay_fingerprinted_whatever_the_build_shows(
+    dockerfile: str,
+) -> None:
+    # A base image, a fetched script, or a computed value can turn cfg(test)
+    # on without any text the archive shows, so no build proves a test item
+    # inert.
+    files = [
+        ("src/reply.rs", _CFG_TEST_ZERO_TOKEN_REPLY),
+        ("Cargo.toml", '[package]\nname = "serve"\n'),
+        ("Dockerfile", dockerfile),
+    ]
+
+    assert "zero-token-answer-constructor" in {
+        finding["kind"] for finding in find_benchmark_emulation_fingerprints(files)
+    }
+
+
+# Policy-v13 I7 executor and router shapes from the 2026-10-02 ATH sweep. Each
+# emulator mirrors a rejected artifact's served code; each honest twin keeps the
+# permitted look-alike (exact-repeat stop with a model authorizer, a full-catalog
+# advisory route, plain field documentation) and must stay silent.
+
+_PY_TOOL_NAME_CAP = """
+MAX_SAME_TOOL = 3
+
+def dispatch(calls, tool_counts, messages):
+    for name, args in calls:
+        if tool_counts.get(name, 0) >= MAX_SAME_TOOL:
+            note = f"{name} will not run again; answer from the results above."
+            messages.append({"role": "tool", "content": note})
+            continue
+        execute(name, args)
+"""
+
+_PY_EXACT_REPEAT_STOP = """
+def dispatch(calls, ledger, repeat_authorizer):
+    for name, args in calls:
+        key = (name, canonical(args))
+        if key in completed and not repeat_authorizer(name, args):
+            record_blocked(name, args, "blocked_before_execution: unsafe exact repeat")
+            continue
+        execute(name, args)
+"""
+
+_PY_SUCCESS_MEMO = """
+async def execute(self, call):
+    prior_success = self.successful.get(key)
+    if prior_success is not None:
+        note = "Not sent again: identical to an earlier successful call."
+        return ToolResult(call.call_id, note)
+    return await self._endpoint(call)
+"""
+
+_PY_SUCCESS_MEMO_WITH_AUTHORIZER = _PY_SUCCESS_MEMO.replace(
+    "    if prior_success is not None:",
+    "    if prior_success is not None and not self.repeat_authorizer(call):",
+)
+
+_PY_CATALOG_RETIRED = """
+READ_COMPLETE_PROMPT = (
+    "For this single-lookup request no further capability is offered."
+)
+
+def boundary(state, completed):
+    for call, resp in completed:
+        if state.retire_after_read and call.name in EXTERNAL_READS:
+            _disable_tools(state)
+            return READ_COMPLETE_PROMPT
+"""
+
+_PY_STICKY_VETO = """
+# Once declined, this stays true for the rest of the request.
+coordinate_declined = False
+for item in prepared:
+    if item.name in outward_lookups and (coordinate_declined or seeks_coordinate(item)):
+        coordinate_declined = True
+        result = "That value is in the records or nowhere."
+"""
+
+_RUST_UNSURE_ROUTE = r"""
+const ROUTE_POLICY: &str = "Classify the message as records or action. \
+If you are unsure, write records, since that route can still search memory.";
+"""
+
+_RUST_UNSURE_ROUTE_HONEST = r"""
+const ROUTE_POLICY: &str = "Classify the message. \
+If you are unsure, keep the complete catalog and let the deciding model choose.";
+"""
+
+_PY_ARGUMENT_GRAMMAR = """
+_UPDATE_MEMORY_CONTENT_DESCRIPTION = (
+    "This wire grammar is mandatory: never omit the copula. "
+    "SCALAR OUTPUT SHAPE: <changed subject> is/are <new value>."
+)
+"""
+
+_PY_FIELD_DOCS = """
+_UPDATE_MEMORY_CONTENT_DESCRIPTION = (
+    "The replacement text for the selected record; "
+    "the record id chooses the destination."
+)
+"""
+
+_PY_REVIEW_TEMPLATE = """
+WRITE_REVIEW_PROMPT = (
+    "Reduce the assertion to '<the thing> is <value>.' and compare word for word."
+)
+REVIEW_TURNS = {"update_memory": WRITE_REVIEW_PROMPT}
+"""
+
+_PY_FITTING_COMMENT = """
+# Advisory router wording (probe-selected; see experiments/declarative_ack_20260918).
+ROUTER_GUIDANCE = "Answer from the records."
+"""
+
+
+@pytest.mark.parametrize(
+    ("kind", "path", "emulator", "honest"),
+    [
+        (
+            "tool-name-execution-cap",
+            "agent.py",
+            _PY_TOOL_NAME_CAP,
+            _PY_EXACT_REPEAT_STOP,
+        ),
+        (
+            "successful-duplicate-suppression",
+            "app/executor.py",
+            _PY_SUCCESS_MEMO,
+            _PY_SUCCESS_MEMO_WITH_AUTHORIZER,
+        ),
+        (
+            "catalog-retired-after-step",
+            "loop.py",
+            _PY_CATALOG_RETIRED,
+            _PY_EXACT_REPEAT_STOP,
+        ),
+        (
+            "sticky-capability-veto",
+            "app/service.py",
+            _PY_STICKY_VETO,
+            _PY_EXACT_REPEAT_STOP,
+        ),
+        (
+            "uncertainty-narrows-route",
+            "src/agent/tool_policy.rs",
+            _RUST_UNSURE_ROUTE,
+            _RUST_UNSURE_ROUTE_HONEST,
+        ),
+        (
+            "tool-argument-grammar-sheet",
+            "catalog_compat.py",
+            _PY_ARGUMENT_GRAMMAR,
+            _PY_FIELD_DOCS,
+        ),
+        (
+            "review-turn-argument-template",
+            "agent2.py",
+            _PY_REVIEW_TEMPLATE,
+            _PY_FIELD_DOCS,
+        ),
+        (
+            "self-reported-benchmark-fitting",
+            "agent2.py",
+            _PY_FITTING_COMMENT,
+            _PY_FIELD_DOCS,
+        ),
+    ],
+)
+def test_policy_v13_executor_and_router_shapes_are_leads(
+    kind: str, path: str, emulator: str, honest: str
+) -> None:
+    assert kind in _kinds(find_benchmark_emulation_fingerprints([(path, emulator)]))
+    assert kind not in _kinds(find_benchmark_emulation_fingerprints([(path, honest)]))
+
+
+def test_executor_shape_leads_carry_locations_not_source_text() -> None:
+    findings = find_benchmark_emulation_fingerprints([("agent.py", _PY_TOOL_NAME_CAP)])
+    cap = [f for f in findings if f["kind"] == "tool-name-execution-cap"]
+    assert cap and cap[0]["severity"] == "high"
+    assert "will not run" not in json.dumps(cap)

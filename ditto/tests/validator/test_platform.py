@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -61,9 +62,13 @@ from ditto.api_models.validator import (
     JobRequest,
     JobResponse,
     LedgerEntry,
+    LedgerResponse,
     LedgerScoreProof,
     ScoreReport,
     ValidatorHeartbeatRequest,
+)
+from ditto.tests.validator.test_v9_reward_projection import (
+    _entry as _v9_confirmed_entry,
 )
 from ditto.validator.errors import PlatformError, PlatformInfrastructureError
 from ditto.validator.platform import PlatformClient
@@ -74,6 +79,7 @@ from ditto.validator.signing import (
     ledger_signing_message,
     sign_coding_certification,
     sign_score,
+    transcript_signing_message,
 )
 
 _SELECTION_VECTOR_PATH = (
@@ -2047,9 +2053,9 @@ async def test_ledger_accepts_mixed_verified_v8_and_v9_rows() -> None:
     assert [entry.bench_version for entry in ledger.entries] == [8, 9]
 
 
-@pytest.mark.parametrize("bench_version", [7, 9])
+@pytest.mark.parametrize("bench_version", [None, 1, 6, 7, 9])
 async def test_ledger_rejects_entry_without_verifiable_quorum_receipts(
-    bench_version: int,
+    bench_version: int | None,
 ) -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
@@ -2090,6 +2096,186 @@ async def test_ledger_rejects_entry_without_verifiable_quorum_receipts(
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(PlatformError, match="score proof verification failed"):
             await PlatformClient(config, http, keypair).get_ledger()  # type: ignore[arg-type]
+
+
+_HELD_ID = UUID("00000000-0000-4000-8000-0000000000a1")
+_RUNNER_UP_ID = UUID("00000000-0000-4000-8000-0000000000b2")
+
+
+def _provisional_ledger_payload(provisional: dict[str, Any]) -> dict[str, Any]:
+    """A protocol-28 epoch pin: one verified payable runner-up plus a held
+    crown incumbent served only as ``provisional_incumbent``."""
+    runner_up = _signed_ledger_payload(
+        bench_version=12, agent_id=_RUNNER_UP_ID, miner_hotkey="5Runner" + "x" * 41
+    )
+    return {
+        "entries": [runner_up],
+        "count": 1,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "stale": False,
+        "age_seconds": 0,
+        "active_bench_version": 12,
+        "epoch_index": 25029,
+        "pinned_block": 9033831,
+        "crown_mode": "incumbent",
+        "crown_incumbent_agent_id": str(provisional["agent_id"]),
+        "provisional_incumbent": provisional,
+        "reward_eligibility_mode": "enforce",
+    }
+
+
+def _held() -> dict[str, Any]:
+    return _signed_ledger_payload(
+        bench_version=12, agent_id=_HELD_ID, miner_hotkey="5Held" + "x" * 43
+    )
+
+
+async def _get_ledger(payload: dict[str, Any]) -> LedgerResponse:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        return await PlatformClient(config, http, keypair).get_ledger()  # type: ignore[arg-type]
+
+
+def _without_proofs(held: dict[str, Any]) -> None:
+    held["score_proofs"] = []
+
+
+def _below_receipt_contract(held: dict[str, Any]) -> None:
+    held["score_proofs"] = []
+    held["bench_version"] = None
+
+
+def _below_quorum(held: dict[str, Any]) -> None:
+    held["score_proofs"] = held["score_proofs"][:2]
+
+
+def _forged_signature(held: dict[str, Any]) -> None:
+    # The served row still matches its median receipt field for field; only
+    # the signature over that receipt is not the validator's.
+    held["score_proofs"][1]["signature"] = "cd" * 64
+    held["signature"] = "cd" * 64
+
+
+def _inflated_composite(held: dict[str, Any]) -> None:
+    held["composite"] = 0.99
+
+
+def _bound_to_another_row(held: dict[str, Any]) -> None:
+    # Genuine receipts, but signed for a different agent on the same ledger.
+    other = _signed_ledger_payload(
+        bench_version=12, agent_id=_RUNNER_UP_ID, miner_hotkey=held["miner_hotkey"]
+    )
+    held.update({**other, "agent_id": held["agent_id"]})
+
+
+def _bound_to_another_lease(held: dict[str, Any]) -> None:
+    # Each receipt is signed over its exact ticket deadline, the lease the
+    # score was produced under; replaying it under another epoch's lease must
+    # break the signature.
+    for proof in held["score_proofs"]:
+        deadline = datetime.fromisoformat(proof["ticket_deadline"])
+        proof["ticket_deadline"] = (deadline + timedelta(days=1)).isoformat()
+
+
+def _bound_to_another_validator(held: dict[str, Any]) -> None:
+    # The median receipt claims a validator hotkey that did not sign it.
+    impostor = bittensor.Keypair.create_from_uri("//PlatformLedgerImpostor")
+    held["score_proofs"][1]["validator_hotkey"] = impostor.ss58_address
+    held["validator_hotkey"] = impostor.ss58_address
+
+
+def _duplicate_validator(held: dict[str, Any]) -> None:
+    held["score_proofs"][0] = dict(held["score_proofs"][1])
+
+
+def _relabelled_bench_version(held: dict[str, Any]) -> None:
+    # Genuine v12 receipts relabelled as another benchmark contract.
+    held["bench_version"] = 11
+    for proof in held["score_proofs"]:
+        proof["bench_version"] = 11
+
+
+async def test_ledger_accepts_verified_provisional_incumbent() -> None:
+    ledger = await _get_ledger(_provisional_ledger_payload(_held()))
+
+    assert ledger.provisional_incumbent is not None
+    assert ledger.provisional_incumbent.agent_id == _HELD_ID
+    assert ledger.crown_incumbent_agent_id == _HELD_ID
+    assert [entry.agent_id for entry in ledger.entries] == [_RUNNER_UP_ID]
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        _without_proofs,
+        _below_receipt_contract,
+        _below_quorum,
+        _forged_signature,
+        _inflated_composite,
+        _bound_to_another_row,
+        _bound_to_another_lease,
+        _bound_to_another_validator,
+        _duplicate_validator,
+        _relabelled_bench_version,
+    ],
+)
+async def test_ledger_rejects_provisional_incumbent_without_verifiable_proof(
+    tamper: Any,
+) -> None:
+    """#2576: the held incumbent is never paid but still decides the crown,
+    tail and score-ceiling cohort, so an unverifiable one rejects the whole
+    ledger exactly as an unverifiable payable row does."""
+    held = _held()
+    tamper(held)
+
+    with pytest.raises(PlatformError, match="score proof verification failed") as exc:
+        await _get_ledger(_provisional_ledger_payload(held))
+    assert str(_HELD_ID) in str(exc.value)
+
+
+async def test_v9_enforce_ledger_accepts_confirmed_provisional_incumbent() -> None:
+    held = _v9_confirmed_entry().model_dump(mode="json")
+    payload = {
+        **_provisional_ledger_payload(held),
+        "entries": [],
+        "count": 0,
+        "v9_confirmation_mode": "enforce",
+    }
+
+    ledger = await _get_ledger(payload)
+
+    assert ledger.provisional_incumbent is not None
+    assert ledger.provisional_incumbent.v9_confirmation is not None
+
+
+async def test_v9_enforce_ledger_rejects_unconfirmed_provisional_incumbent() -> None:
+    held = _v9_confirmed_entry().model_dump(mode="json")
+    del held["v9_confirmation"]
+    payload = {
+        **_provisional_ledger_payload(held),
+        "entries": [],
+        "count": 0,
+        "v9_confirmation_mode": "enforce",
+    }
+
+    with pytest.raises(PlatformError, match="without full confirmation"):
+        await _get_ledger(payload)
+
+
+async def test_ledger_rejects_provisional_v9_receipt_without_enforce_marker() -> None:
+    held = _v9_confirmed_entry().model_dump(mode="json")
+    payload = {**_provisional_ledger_payload(held), "entries": [], "count": 0}
+
+    with pytest.raises(PlatformError, match="without enforce marker"):
+        await _get_ledger(payload)
 
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -2426,10 +2612,18 @@ def _score_report() -> ScoreReport:
     )
 
 
-async def test_submit_score_parks_empty_502_as_infrastructure() -> None:
+async def test_submit_score_parks_persistent_502_after_bounded_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
     attempts = 0
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
 
     def handler(_: httpx.Request) -> httpx.Response:
         nonlocal attempts
@@ -2448,21 +2642,31 @@ async def test_submit_score_parks_empty_502_as_infrastructure() -> None:
                 agent_id,
                 signature="ab" * 64,
                 report=_score_report(),
+                ticket_deadline=datetime.now(UTC) + timedelta(hours=1),
             )
 
-    assert attempts == 1
+    assert attempts == 6
+    assert sleeps == [2.0, 8.0, 20.0, 45.0, 90.0]
 
 
-async def test_submit_score_does_not_replay_transient_502() -> None:
+async def test_submit_score_replays_identical_body_after_transient_502(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
-    attempts = 0
+    bodies: list[bytes] = []
 
-    def handler(_: httpx.Request) -> httpx.Response:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content)
+        if len(bodies) == 1:
             return httpx.Response(502, text="")
+        if len(bodies) == 2:
+            raise httpx.ConnectError("relay restarting")
         return httpx.Response(
             200,
             json={
@@ -2477,14 +2681,85 @@ async def test_submit_score_does_not_replay_transient_502() -> None:
         validator_hotkey=keypair.ss58_address,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        with pytest.raises(
-            PlatformInfrastructureError, match="score rejected \\(502\\)"
-        ):
+        response = await PlatformClient(cast(Any, config), http, keypair).submit_score(
+            agent_id,
+            signature="ab" * 64,
+            report=_score_report(),
+            ticket_deadline=datetime.now(UTC) + timedelta(hours=1),
+        )
+
+    assert response.accepted is True
+    assert len(bodies) == 3
+    assert bodies[0] == bodies[1] == bodies[2]
+
+
+async def test_submit_score_stops_retrying_before_the_lease_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    attempts = 0
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(503, text="")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="\\(503\\)"):
             await PlatformClient(cast(Any, config), http, keypair).submit_score(
-                agent_id, signature="ab" * 64, report=_score_report()
+                agent_id,
+                signature="ab" * 64,
+                report=_score_report(),
+                ticket_deadline=datetime.now(UTC) + timedelta(seconds=45),
             )
 
-    assert attempts == 1
+    # 45s of lease minus the 30s margin leaves room only for the 2s and 8s waits.
+    assert sleeps == [2.0, 8.0]
+    assert attempts == 3
+
+
+async def test_submit_score_retries_through_a_naive_ticket_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    attempts = 0
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(502, text="")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="\\(502\\)"):
+            await PlatformClient(cast(Any, config), http, keypair).submit_score(
+                agent_id,
+                signature="ab" * 64,
+                report=_score_report(),
+                ticket_deadline=datetime(2099, 1, 1),
+            )
+
+    assert attempts == 6
 
 
 async def test_submit_score_4xx_stays_a_scoring_error() -> None:
@@ -2508,7 +2783,7 @@ async def test_submit_score_4xx_stays_a_scoring_error() -> None:
     assert type(caught.value) is PlatformError
 
 
-async def test_submit_transcript_puts_raw_bytes_with_hotkey_header() -> None:
+async def test_submit_transcript_puts_raw_bytes_with_signed_proof() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
     body = b'{"run_id":"run_1","cases":[]}'
@@ -2520,6 +2795,23 @@ async def test_submit_transcript_puts_raw_bytes_with_hotkey_header() -> None:
         )
         assert request.headers["X-Validator-Hotkey"] == keypair.ss58_address
         assert request.content == body
+        digest = hashlib.sha256(body).hexdigest()
+        nonce = UUID(request.headers["X-Validator-Transcript-Nonce"])
+        requested_at = datetime.fromisoformat(
+            request.headers["X-Validator-Transcript-Requested-At"]
+        )
+        assert request.headers["X-Validator-Transcript-Sha256"] == digest
+        assert keypair.verify(
+            transcript_signing_message(
+                validator_hotkey=keypair.ss58_address,
+                agent_id=agent_id,
+                run_id="run_1",
+                transcript_sha256=digest,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+            bytes.fromhex(request.headers["X-Validator-Transcript-Signature"]),
+        )
         return httpx.Response(
             200,
             json={

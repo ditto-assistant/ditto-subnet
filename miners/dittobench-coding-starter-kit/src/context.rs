@@ -276,7 +276,7 @@ mod tests {
             .position(|message| message.role == "assistant")
             .map_or(&[][..], |index| &messages[index..]);
         let (pairs, remainder) = suffix.as_chunks::<2>();
-        assert!(remainder.is_empty());
+        assert_eq!(remainder, &[][..]);
         for pair in pairs {
             assert_eq!(pair[0].role, "assistant");
             assert_eq!(pair[1].role, "tool");

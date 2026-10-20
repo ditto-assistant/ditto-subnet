@@ -22,6 +22,10 @@ from ditto.api_models.inference_concurrency_settings import (
     MAX_CHAT_TOKEN_BUDGET,
     MAX_EMBEDDING_GLOBAL_CONCURRENCY,
 )
+from ditto.api_server.ath_review_queue_slo_config import (
+    AthReviewQueueSloConfig,
+    parse_ath_review_queue_slo_config_from_env,
+)
 from ditto.api_server.coding_hosted_signer_config import (
     HostedControlSignerConfig,
     check_hosted_signer_config,
@@ -58,6 +62,12 @@ from ditto.api_server.validator_names import (
 )
 from ditto.chain import ChainConfig, parse_chain_config_from_env
 from ditto.db import PostgresConfig, parse_postgres_config_from_env
+from ditto_screening_protocol.treasury import TreasuryEmissionPolicy
+from ditto_screening_protocol.treasury_approval import (
+    TreasuryPolicyApproval,
+    verify_policy_approval,
+    verify_public_signature,
+)
 
 # Substrate SS58 base58 alphabet, 47-48 chars. Same shape Pydantic
 # enforces on the wire; mirrored here so a bad payment address fails
@@ -80,6 +90,12 @@ def _http_origin(value: str) -> tuple[str, str, int] | None:
 DEFAULT_CAPACITY_EVENT_RETENTION_DAYS = 30
 # Floor for a non-zero window so a typo cannot erase incident-review history.
 MIN_CAPACITY_EVENT_RETENTION_DAYS = 7
+# Transport cap on a request body with no tighter route cap. 32 MiB matches the
+# largest body any endpoint accepts today (a validator's transcript) and clears
+# the 16 MiB canonical private-v2 publication receipt an admin registers. The
+# floor keeps a typo from refusing every ordinary JSON request.
+DEFAULT_REQUEST_BODY_MAX_BYTES = 32 << 20
+MIN_REQUEST_BODY_MAX_BYTES = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -90,7 +106,10 @@ class ScreenerAuthConfig:
     """Dedicated screener SS58 hotkey. It does not need an on-chain permit."""
 
     api_token: str | None
-    """Bearer token required on every screener request."""
+    """Legacy fleet-wide bearer token paired with ``hotkey``."""
+
+    legacy_bearer_enabled: bool = True
+    """Accept ``api_token`` for ``hotkey``; per-node tokens are unaffected."""
 
     controller_api_token: str | None = None
     """Least-privilege token allowed to reconcile nodes and capacity only."""
@@ -110,6 +129,10 @@ class ScreenerAuthConfig:
     @property
     def enabled(self) -> bool:
         return self.hotkey is not None and self.api_token is not None
+
+    @property
+    def legacy_bearer_accepted(self) -> bool:
+        return self.legacy_bearer_enabled and self.enabled
 
 
 @dataclass(frozen=True)
@@ -256,55 +279,6 @@ class EfficiencyBonusConfig:
 
 
 @dataclass(frozen=True)
-class TargonRentalConfig:
-    """Create Kaniko, runtime-smoke, and L1 rentals from the Platform process."""
-
-    api_key: str = field(repr=False)
-    org_slug: str
-    resource: str
-    public_platform_url: str
-    submission_builder_image: str
-    candidate_writer_sa: str
-    candidate_reader_sa: str
-    bootstrap_sa: str
-    source_review_secret_resource: str
-    fanout_shadow_secret_resource: str = ""
-    environment: str = "prod"
-    interval_seconds: float = 15.0
-    provision_timeout_seconds: float = 600.0
-    smoke_provision_timeout_seconds: float = 30.0
-    """Targon-first smoke wait. Kaniko keeps ``provision_timeout_seconds``."""
-    build_timeout_seconds: float = 1500.0
-    runtime_timeout_seconds: float = 180.0
-    source_review_timeout_seconds: float = 3600.0
-    max_inflight: int = 10
-    """Cap on concurrent Targon rentals (Kaniko, smoke, and L1 combined)."""
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.api_key) and bool(self.submission_builder_image)
-
-
-@dataclass(frozen=True)
-class CloudRunScreeningConfig:
-    """GCP Cloud Run fallback for Kaniko Jobs, L1 Jobs, and smoke Services."""
-
-    project: str
-    region: str
-    untrusted_sa_email: str
-    platform_invoker_sa_email: str
-
-    @property
-    def enabled(self) -> bool:
-        return bool(
-            self.project
-            and self.region
-            and self.untrusted_sa_email
-            and self.platform_invoker_sa_email
-        )
-
-
-@dataclass(frozen=True)
 class ApiServerConfig:
     """Resolved configuration for the API server process.
 
@@ -366,6 +340,16 @@ class ApiServerConfig:
 
     validator_compatibility: ValidatorCompatibilityConfig
     """Validator release and heartbeat requirements for scoring tickets."""
+
+    treasury_shadow_policy: TreasuryEmissionPolicy | None = None
+    """Optional public proposal for finalized shadow observation, never funding."""
+
+    treasury_shadow_approval: TreasuryPolicyApproval | None = None
+    treasury_approved_policy_digest: str | None = None
+    treasury_approved_collector_policy_digest: str | None = None
+    """Optional offline proposal proof and immutable public digest; no funding."""
+    treasury_weight_enforcement: bool = False
+    """Explicit deploy opt-in; signed complete fleet and epoch proof still required."""
 
     private_preparation: PrivatePreparationConfig = field(
         default_factory=PrivatePreparationConfig
@@ -525,114 +509,28 @@ class ApiServerConfig:
     """Observability-only overdue thresholds for the ordinary source-review
     queue-age SLO (ditto-subnet#2042). Both thresholds default unset."""
 
-    targon: TargonRentalConfig | None = None
-    """In-process Targon rental loop. Disabled when the API key is absent."""
-
-    cloudrun: CloudRunScreeningConfig | None = None
-    """Cloud Run Jobs/Service fallback. Disabled when project/SA env is absent."""
+    ath_review_queue_slo: AthReviewQueueSloConfig = field(
+        default_factory=AthReviewQueueSloConfig
+    )
+    """Observability-only overdue thresholds for the ATH-hold and copy-review
+    queue-age SLO (ditto-subnet#2042, slice 2). Every threshold defaults unset."""
 
     source_emission_confirmation_enabled: bool = True
     """Allow verified payout attribution to arm the embargo; collection stays on."""
 
+    treasury_ledger_sampler_enabled: bool = True
+    """Record one public Gamma collector reading per epoch (read-only chain state)."""
 
-def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig | None:
-    api_key = os.environ.get("DITTO_TARGON_API_KEY", "").strip()
-    if not api_key:
-        key_file = os.environ.get("DITTO_TARGON_API_KEY_FILE", "").strip()
-        if not key_file:
-            return None
-        try:
-            api_key = Path(key_file).read_text().strip()
-        except OSError as error:
-            raise ApiServerConfigError(
-                "DITTO_TARGON_API_KEY_FILE is unreadable"
-            ) from error
-    if len(api_key) < 32:
-        raise ApiServerConfigError("DITTO_TARGON_API_KEY is invalid")
-    public_url = os.environ.get("DITTO_TARGON_PUBLIC_PLATFORM_URL", "").strip()
-    builder_image = os.environ.get("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", "").strip()
-    image_name = builder_image.rsplit("/", 1)[-1]
-    if builder_image and "@" not in image_name and ":" not in image_name:
-        if not re.fullmatch(r"[0-9a-f]{40}", commit_hash):
-            raise ApiServerConfigError(
-                "Targon builder image tag requires a 40-character commit hash"
-            )
-        builder_image = f"{builder_image}:sha-{commit_hash}"
-    if not public_url.startswith("https://") or not builder_image:
-        raise ApiServerConfigError(
-            "Targon rentals require DITTO_TARGON_PUBLIC_PLATFORM_URL and "
-            "DITTO_TARGON_SUBMISSION_BUILDER_IMAGE"
-        )
-    return TargonRentalConfig(
-        api_key=api_key,
-        org_slug=os.environ.get("DITTO_TARGON_ORG_SLUG", "ditto").strip(),
-        resource=os.environ.get("DITTO_TARGON_RESOURCE", "cpu-small").strip(),
-        public_platform_url=public_url.rstrip("/"),
-        submission_builder_image=builder_image,
-        candidate_writer_sa=os.environ.get(
-            "DITTO_TARGON_CANDIDATE_PUSH_SA", ""
-        ).strip(),
-        candidate_reader_sa=os.environ.get(
-            "DITTO_TARGON_CANDIDATE_PULL_SA", ""
-        ).strip(),
-        bootstrap_sa=os.environ.get("DITTO_TARGON_BOOTSTRAP_SA", "").strip(),
-        source_review_secret_resource=os.environ.get(
-            "DITTO_TARGON_SOURCE_REVIEW_SECRET", ""
-        ).strip(),
-        fanout_shadow_secret_resource=os.environ.get(
-            "DITTO_TARGON_FANOUT_SHADOW_SECRET", ""
-        ).strip(),
-        environment=os.environ.get("DITTO_TARGON_ENVIRONMENT", "prod").strip()
-        or "prod",
-        max_inflight=_parse_targon_max_inflight(),
-        smoke_provision_timeout_seconds=_parse_targon_smoke_provision_timeout(),
-    )
+    public_rate_limit_per_minute: int = 0
+    """Per-client-IP requests per minute on the unauthenticated upload,
+    retrieval, and public read routes (``DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE``).
+    ``0``, the default, installs no limiter. See
+    :mod:`ditto.api_server.middleware.public_rate_limit`."""
 
-
-def _parse_targon_smoke_provision_timeout() -> float:
-    raw = (
-        os.environ.get("DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS", "30").strip()
-        or "30"
-    )
-    try:
-        value = float(raw)
-    except ValueError as error:
-        raise ApiServerConfigError(
-            "DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS must be a number"
-        ) from error
-    if value < 0 or value > 600:
-        raise ApiServerConfigError(
-            "DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS must be between 0 and 600"
-        )
-    return value
-
-
-def _parse_targon_max_inflight() -> int:
-    raw = os.environ.get("DITTO_TARGON_MAX_INFLIGHT", "10").strip() or "10"
-    try:
-        value = int(raw)
-    except ValueError as error:
-        raise ApiServerConfigError(
-            "DITTO_TARGON_MAX_INFLIGHT must be an integer"
-        ) from error
-    if value < 1:
-        raise ApiServerConfigError("DITTO_TARGON_MAX_INFLIGHT must be >= 1")
-    return value
-
-
-def _parse_cloudrun_screening_config_from_env() -> CloudRunScreeningConfig | None:
-    project = os.environ.get("DITTO_CLOUDRUN_PROJECT", "").strip()
-    untrusted = os.environ.get("DITTO_CLOUDRUN_UNTRUSTED_SA", "").strip()
-    invoker = os.environ.get("DITTO_CLOUDRUN_INVOKER_SA", "").strip()
-    if not project or not untrusted or not invoker:
-        return None
-    return CloudRunScreeningConfig(
-        project=project,
-        region=os.environ.get("DITTO_CLOUDRUN_REGION", "us-central1").strip()
-        or "us-central1",
-        untrusted_sa_email=untrusted,
-        platform_invoker_sa_email=invoker,
-    )
+    request_body_max_bytes: int = DEFAULT_REQUEST_BODY_MAX_BYTES
+    """Byte cap on any request body without a tighter route cap
+    (``DITTO_REQUEST_BODY_MAX_BYTES``). See
+    :mod:`ditto.api_server.middleware.request_body_limit`."""
 
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -708,6 +606,10 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     )
     screener_hotkey = os.environ.get("SCREENER_HOTKEY") or None
     screener_api_token = os.environ.get("SCREENER_API_TOKEN") or None
+    screener_legacy_bearer_enabled = (
+        os.environ.get("SCREENER_LEGACY_BEARER_ENABLED", "true").strip().lower()
+        in _TRUTHY
+    )
     screener_controller_api_token = (
         os.environ.get("SCREENER_CONTROLLER_API_TOKEN") or None
     )
@@ -970,9 +872,46 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     if top5_backoff_cap < max(1, top5_backoff_base):
         raise ApiServerConfigError("TOP5_RESCORE_BACKOFF_CAP must be >= max(1, base)")
 
-    targon = _parse_targon_rental_config_from_env(commit_hash)
-    cloudrun = _parse_cloudrun_screening_config_from_env()
+    try:
+        public_rate_limit_per_minute = int(
+            os.environ.get("DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE", "0")
+        )
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE must be an integer"
+        ) from error
+    if public_rate_limit_per_minute < 0:
+        raise ApiServerConfigError(
+            "DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE must be non-negative (0 disables)"
+        )
 
+    try:
+        request_body_max_bytes = int(
+            os.environ.get(
+                "DITTO_REQUEST_BODY_MAX_BYTES", str(DEFAULT_REQUEST_BODY_MAX_BYTES)
+            )
+        )
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "DITTO_REQUEST_BODY_MAX_BYTES must be an integer"
+        ) from error
+    if request_body_max_bytes < MIN_REQUEST_BODY_MAX_BYTES:
+        raise ApiServerConfigError(
+            "DITTO_REQUEST_BODY_MAX_BYTES must be at least "
+            f"{MIN_REQUEST_BODY_MAX_BYTES}"
+        )
+
+    treasury_policy = parse_treasury_shadow_policy()
+    treasury_approval, treasury_approved_digest, collector_policy_digest = (
+        parse_treasury_shadow_approval(treasury_policy)
+    )
+    treasury_mode = os.environ.get("DITTO_TREASURY_WEIGHT_ENFORCEMENT", "false")
+    if treasury_mode not in {"true", "false"}:
+        raise ApiServerConfigError("invalid treasury weight enforcement mode")
+    if treasury_mode == "true" and treasury_approval is None:
+        raise ApiServerConfigError(
+            "treasury weight enforcement requires offline approval"
+        )
     return ApiServerConfig(
         conversation_shadow_enabled=os.environ.get(
             "DITTO_CONVERSATION_SHADOW_ENABLED", "false"
@@ -984,6 +923,15 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             os.environ.get("DITTO_SOURCE_EMISSION_CONFIRMATION_ENABLED", "true").lower()
             in _TRUTHY
         ),
+        treasury_ledger_sampler_enabled=(
+            os.environ.get("DITTO_TREASURY_LEDGER_SAMPLER_ENABLED", "true").lower()
+            in _TRUTHY
+        ),
+        treasury_shadow_policy=treasury_policy,
+        treasury_shadow_approval=treasury_approval,
+        treasury_approved_policy_digest=treasury_approved_digest,
+        treasury_approved_collector_policy_digest=collector_policy_digest,
+        treasury_weight_enforcement=treasury_mode == "true",
         host=host,
         port=port,
         log_level=log_level,
@@ -996,11 +944,10 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         embedding=parse_embedding_config_from_env(),
         data_pipeline=parse_data_pipeline_config_from_env(),
         private_preparation=parse_private_preparation_config(),
-        targon=targon,
-        cloudrun=cloudrun,
         screener_auth=ScreenerAuthConfig(
             hotkey=screener_hotkey,
             api_token=screener_api_token,
+            legacy_bearer_enabled=screener_legacy_bearer_enabled,
             controller_api_token=screener_controller_api_token,
             bootstrap_ttl_seconds=screener_bootstrap_ttl_seconds,
             node_token_ttl_seconds=screener_node_token_ttl_seconds,
@@ -1038,7 +985,60 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         top5_backoff_cap=top5_backoff_cap,
         efficiency_bonus=efficiency_bonus,
         source_review_queue_slo=parse_source_review_queue_slo_config_from_env(),
+        ath_review_queue_slo=parse_ath_review_queue_slo_config_from_env(),
+        public_rate_limit_per_minute=public_rate_limit_per_minute,
+        request_body_max_bytes=request_body_max_bytes,
     )
+
+
+def parse_treasury_shadow_policy() -> TreasuryEmissionPolicy | None:
+    """Public known-field proposal only; absence performs no collector RPC reads."""
+    raw = os.environ.get("DITTO_TREASURY_SHADOW_POLICY_JSON", "").strip()
+    if not raw:
+        return None
+    if len(raw.encode()) > 8192:
+        raise ApiServerConfigError("treasury shadow policy exceeds 8192 bytes")
+    try:
+        return TreasuryEmissionPolicy.model_validate_json(raw)
+    except ValueError:
+        # Do not echo arbitrary operator input into boot logs.
+        raise ApiServerConfigError("invalid public treasury shadow policy") from None
+
+
+def parse_treasury_shadow_approval(
+    proposal: TreasuryEmissionPolicy | None,
+) -> tuple[TreasuryPolicyApproval | None, str | None, str | None]:
+    path = os.environ.get("DITTO_TREASURY_SHADOW_APPROVAL_FILE", "").strip()
+    expected = os.environ.get("DITTO_TREASURY_APPROVED_POLICY_DIGEST", "").strip()
+    collector_expected = os.environ.get(
+        "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST", ""
+    ).strip()
+    if not path and not expected and not collector_expected:
+        return None, None, None
+    if not path or not expected or not collector_expected or proposal is None:
+        raise ApiServerConfigError(
+            "treasury approval requires file, immutable digests and public proposal"
+        )
+    try:
+        with Path(path).open("rb") as stream:
+            raw = stream.read(8193)
+        if len(raw) > 8192:
+            raise ValueError("approval exceeds bound")
+        approval = TreasuryPolicyApproval.model_validate_json(raw)
+        verified = verify_policy_approval(
+            approval,
+            expected_policy_digest=expected,
+            expected_collector_policy_digest=collector_expected,
+            verify_signature=verify_public_signature,
+        )
+        if verified != proposal:
+            raise ValueError("approval differs from observer proposal")
+    except (OSError, ValueError):
+        # Paths, arbitrary file contents and crypto errors do not enter boot logs.
+        raise ApiServerConfigError(
+            "invalid offline treasury proposal approval"
+        ) from None
+    return approval, expected, collector_expected
 
 
 def parse_ditto_link_config_from_env() -> DittoLinkConfig:
@@ -1112,22 +1112,19 @@ def check_config(config: ApiServerConfig) -> None:
             f"got {config.log_level!r}"
         )
     auth = config.screener_auth
-    if (auth.hotkey is None) != (auth.api_token is None):
+    # The hotkey alone still attests Platform-finalized screens, so it may stand
+    # without the shared bearer once that bearer is switched off.
+    if (auth.hotkey is None) != (auth.api_token is None) and (
+        auth.hotkey is None or auth.legacy_bearer_enabled
+    ):
         raise ApiServerConfigError(
-            "SCREENER_HOTKEY and SCREENER_API_TOKEN must be set together"
+            "SCREENER_HOTKEY and SCREENER_API_TOKEN must be set together unless "
+            "SCREENER_LEGACY_BEARER_ENABLED=false leaves SCREENER_HOTKEY alone"
         )
     if auth.hotkey is not None and not _SS58_RE.fullmatch(auth.hotkey):
         raise ApiServerConfigError("SCREENER_HOTKEY is not a valid SS58 address")
     if auth.api_token is not None and len(auth.api_token) < 32:
         raise ApiServerConfigError("SCREENER_API_TOKEN must be at least 32 characters")
-    if config.targon is not None and (
-        config.cloudrun is None or not config.cloudrun.enabled
-    ):
-        raise ApiServerConfigError(
-            "Targon screening requires Cloud Run fallback; set "
-            "DITTO_CLOUDRUN_PROJECT, DITTO_CLOUDRUN_UNTRUSTED_SA, and "
-            "DITTO_CLOUDRUN_INVOKER_SA"
-        )
     if auth.controller_api_token is not None and len(auth.controller_api_token) < 32:
         raise ApiServerConfigError(
             "SCREENER_CONTROLLER_API_TOKEN must be at least 32 characters"

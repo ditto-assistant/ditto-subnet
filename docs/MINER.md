@@ -21,6 +21,7 @@ improving the best artifact, not for serving live inference.
 - [Verify and submit](#verify-and-submit)
 - [Track your submission](#track-your-submission)
 - [Scoring and emissions](#scoring-and-emissions)
+- [Inference request contract](#inference-request-contract)
 - [What counts as cheating](#what-counts-as-cheating)
 - [Link a rotated hotkey](#link-a-rotated-hotkey)
 - [Claim a public handle](#claim-a-public-handle)
@@ -205,6 +206,20 @@ The archive must be a gzip-compressed tarball no larger than 20 MiB, with its
 or special files. Cargo metadata is part of the Rust reference implementation,
 not a submission requirement.
 
+Each source file (`.py`, `.rs`, `.go`, `.c`/`.cpp`/`.h`, `.ts`/`.js` and
+similar) must stay within **10,000 lines**, **1 MiB**, and **4,000 characters
+on any one line**. A reviewer reads source 400 lines at a time, so larger files
+cannot be reviewed and leave screening unable to clear the submission. Split
+large files. The one exception is an **unmodified** upstream release file whose
+SHA-256 is on the vendored allowlist
+(`packages/ditto-screening-protocol/ditto_screening_protocol/data/vendored_upstream_allowlist.json`,
+currently QuickJS-ng 0.16.2 `quickjs.c`, SQLite 3.46.1 amalgamation files and
+cpp-httplib 0.18.3 `httplib.h`). Any edit to such a file makes it your own
+source again. Data files (`.json`, `.txt`, model weights) are not counted.
+Platform rejects uploads that break these limits from **2026-10-25 00:00 UTC**,
+and `ditto verify` warns until then. Submissions uploaded earlier are not
+affected.
+
 Submit to Finney:
 
 ```sh
@@ -214,6 +229,12 @@ uv run ditto --network finney upload \
   --coldkey default \
   --hotkey default
 ```
+
+The CLI signs each `/upload/check` and `/upload/agent` request with a fresh
+UUID nonce and the current Unix time. Platform accepts the signature for five
+minutes. Keep the machine clock synchronized and update an older CLI before
+submitting; a saved finalized payment proof can still be recovered with the
+updated CLI without paying again.
 
 The CLI runs preflight and obtains a platform admission reservation before it
 displays pricing or sends payment. An unpaid reservation gives that coldkey an
@@ -286,6 +307,18 @@ submission until the platform's exact UTC retry time. Because the CLI runs the
 pre-check first, that rejection happens before funds move. It does not delay
 recovery of the already-paid upload described above.
 
+The cooldown rejection keeps that scheduled timestamp and also reports
+`Please try again in X hours and Y minutes.` The countdown uses Platform's
+clock and rounds a positive wait up to the next minute.
+
+An ordinary upload with the same tarball SHA-256 as a paid submission owned
+by your coldkey is rejected before payment, even from another hotkey. It
+reports: `The previous submission cannot be resubmitted. Please try again
+after updating.` Update and repackage the harness before submitting again.
+The existing explicit `--allow-identical-rescore` option still permits buying
+another seeded evaluation after the owner cooldown. Exact recovery of a
+previously paid upload continues to return its original submission identity.
+
 ## Track your submission
 
 ```sh
@@ -352,8 +385,10 @@ result.
   only ever lowers the bar, never raises it, and the leaderboard's "beat this
   to contend" figure already includes it. A near-miss is settled by re-scoring
   both agents on shared seeds rather than dataset luck.
-- Competitive weight is distributed 65% / 14% / 10% / 7% / 4% to the champion
-  and next four distinct miners, respectively. Evidence-tied occupied positions
+- Competitive weight is distributed to the champion and next four distinct
+  miners by the payout curve the public leaderboard reports as `rank_shares`
+  (default 65% / 14% / 10% / 7% / 4%; operators can set another curve, which
+  validators fold once the whole fleet runs protocol 31). Evidence-tied occupied positions
   pool their shares. If at least two highest-scoring miners are evidence-tied and
   the dethrone threshold cannot be exceeded within the score range, they form an
   uncapped joint crown and split the full competitive pool equally, including
@@ -377,6 +412,45 @@ Scores, signatures, and each run's graded transcript are published so results
 can be independently checked: regenerate the dataset from the published seed,
 re-run the public grader over the transcript, and the numbers must match the
 signed composite.
+
+## Inference request contract
+
+Scored chat requests go through the ticket-bound OpenAI-compatible lane, which
+decides the fate of every top-level request field. The machine-readable table,
+with a note per field, is
+[`inference-request-fields.json`](inference-request-fields.json); Platform and
+model-relay tests fail if either implementation drifts from it.
+
+| Fate | Fields | Effect |
+|---|---|---|
+| Forwarded | `messages`, `tools`, `tool_choice`, `parallel_tool_calls`, `temperature`, `top_p`, `top_k`, `min_p`, `top_a`, `seed`, `stop`, `frequency_penalty`, `presence_penalty`, `repetition_penalty`, `logit_bias`, `logprobs`, `response_format`, `structured_outputs`, `prediction`, `verbosity`, `stream` | Sent unchanged once a malformed value is ruled out. `stream` must be `false` or absent. |
+| Pinned | `model`, `max_tokens`, `max_completion_tokens`, `n`, `best_of`, `reasoning`, `reasoning_effort`, `include_reasoning`, `service_tier`, `usage`, `prompt_cache_key` | Accepted, then replaced or removed: the ticket's model, output ceiling (clamped down, never refused), one completion, and reasoning contract govern. |
+| Dropped | `user`, `metadata`, `safety_identifier`, `store`, `stream_options`, `provider`, `route`, `preset` | Accepted and stripped; they affect neither the completion nor the response. |
+
+These fields are refused with a 400 whose detail names the field and reason:
+
+| Field | Reason returned |
+|---|---|
+| `models` | the model is pinned by the ticket, not chosen by the request |
+| `transforms` | prompt transforms would change benchmark semantics |
+| `plugins` | server-side plugins are not available on this lane |
+| `web_search_options` | server-side web search is not available on this lane |
+| `functions` | use tools instead |
+| `function_call` | use tool_choice instead |
+| `audio` | this lane serves text completions only |
+| `modalities` | this lane serves text completions only |
+| `top_logprobs` | logprobs is supported but top_logprobs is not: it would exceed this lane's response size limit |
+
+Any other top-level field is refused as `unsupported inference parameter:
+<names>`. Reasoning `exclude` is always `true`. Bench v7/v8 fix effort at
+`medium`; from v9 the agent may choose `low`, `medium`, or `high` (see the
+scoring engine's `PROTOCOL.md`, "V9 reasoning effort is an agent strategy").
+
+**One rejected request fails the scored run.** Every 4xx other than 429 counts
+against complete token usage, which Bench v7 and later require, so a single
+refused or malformed field fails the whole run with the terminal, non-retried
+code `inference_request_rejected`. Check your request shape against this
+table before submitting; do not probe the lane from a scored run.
 
 ## What counts as cheating
 
@@ -543,10 +617,15 @@ the two directly linked hotkeys.
   hotkey's work only**, including byte-identical and repacked generations.
   Screening against every other miner is
   unchanged.
-- It does **not** grant an additional emission slot. Emission positions are one
-  per distinct agent no matter how many keys you hold, and this link is not an
-  input to that calculation. Rotating keys and attesting the link does not put
-  two of your agents in the weight vector.
+- It does **not** grant a second emission slot. The weight fold pays one
+  position per owner family: a payment coldkey, or hotkeys joined by an
+  owner-link attestation. The link is an input to that collapse. Rotating
+  keys and attesting the link keeps both hotkeys in one slot; it does not
+  put two of your agents in the weight vector.
+- That slot is paid to the best family member whose hotkey is registered
+  now. A deregistered hotkey cannot hold it. After a rotation, register the
+  new hotkey or the family earns nothing until you do. The copy-review
+  exemption above does not require the old hotkey to stay registered.
 - Links are recorded and auditable. If a key is sold or compromised, contact
   an operator and quote the attestation ID so the link can be revoked. The
   current miner CLI creates links; it does not provide self-service revocation.
@@ -601,10 +680,15 @@ The platform collapses version and filler tokens, so `Jupiter`,
 only claim a stem you have already used on a submission.
 
 A claim starts `pending`. It becomes `upheld` after **three** distinct
-entrenched miner families endorse it. Entrenched means the endorser already
-has a full-benchmark scored agent family whose earliest upload is at least
-seven days old — not a brand-new hotkey. Your own family cannot endorse
-yourself.
+entrenched miner families endorse it. Entrenched means the endorser's owner
+family already has a full-benchmark scored agent (status `scored`, a
+full-benchmark score above zero) that was uploaded at least seven days ago —
+not a brand-new hotkey. The seven days count from the family's earliest
+full-benchmark scored upload, not its earliest upload of any kind: a family
+that first uploaded a month ago but got its first full-benchmark score two
+days ago cannot endorse yet. Hotkeys in one owner family (same payment
+coldkey or an active owner attestation) share that history. Your own family
+cannot endorse yourself.
 
 An upheld claim is a strong action, so it requires those three distinct
 families. Once upheld it:
@@ -717,6 +801,21 @@ one-shot signed actions still happen in the CLI. The hosted MCP at
 `https://dittobench.ai/mcp` returns those `ditto` commands instead of
 signing remotely.
 
+The **Submissions** tab shows each upload's submission version (`v1`, `v2`,
+and so on), status, and time. Older submissions without a stored version show
+**Unversioned**. With the `download` scope, use **Download** to recover the
+original submitted archive, including rejected or held submissions. The link
+expires after five minutes and only your hotkey's submissions are accessible.
+Existing sessions without `download` must sign in again with Download enabled.
+New dashboard sign-ins and MCP authorizations request that permission by default.
+For read-only access, disable Download in a new dashboard sign-in or have the
+MCP client request only the `read` scope.
+
+The miner MCP exposes the same download as `get_my_submission_artifact` with
+an `agent_id`, and `list_my_submissions` includes each submission's version.
+The authenticated HTTP route is `GET /api/v1/me/agents/{agent_id}/artifact`.
+These owner downloads do not change the public source release policy.
+
 Public miner profiles are `/miner/<hotkey>` and `/h/<handle>`. X, GitHub,
 and Discord are optional.
 
@@ -825,4 +924,5 @@ scores, and payment record are kept, but a hotkey absent from the SN118
 metagraph cannot receive weight and is excluded from the weight fold.
 Registering the same hotkey again restores eligibility automatically. A
 different hotkey is a separate miner identity and requires a new signed, paid
-upload.
+upload, unless you attest an owner link to the previous hotkey. The link
+shares one slot, and the best registered hotkey in that family holds it.

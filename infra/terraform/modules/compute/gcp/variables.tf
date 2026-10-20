@@ -48,6 +48,12 @@ variable "labels" {
 
 # --- GCP-specific extensions (all defaulted; do not break the contract) -----
 
+variable "deletion_protection" {
+  description = "GCE deletion protection. Disable only in a separately reviewed retirement plan after recovery verification; Terraform prevent_destroy remains enforced."
+  type        = bool
+  default     = true
+}
+
 variable "project" {
   description = "GCP project ID. Defaults to the provider's configured project when empty."
   type        = string
@@ -94,6 +100,22 @@ variable "data_disk_type" {
   description = "Data disk type. pd-balanced gives good IOPS/$ for Postgres."
   type        = string
   default     = "pd-balanced"
+}
+
+variable "boot_disk_snapshot_policy" {
+  description = "Optional regional snapshot policy name or self-link for the boot disk."
+  type        = string
+  default     = ""
+}
+
+variable "data_disk_snapshot_policy" {
+  description = "Optional regional snapshot policy name or self-link for the separate data disk."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.data_disk_snapshot_policy == "" || var.data_disk_gb > 0
+    error_message = "A data disk snapshot policy requires a data disk."
+  }
 }
 
 variable "service_account_email" {

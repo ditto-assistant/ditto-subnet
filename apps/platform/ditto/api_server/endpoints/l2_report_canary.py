@@ -4,22 +4,54 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
 import secrets
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.l2_report_canary import (
+    CanonicalFixtureRegisterRequest,
+    CanonicalFixtureReviewRequest,
+    CanonicalFixtureScheduleRequest,
     L2CanaryClaimRequest,
     L2CanaryClaimResponse,
     L2CanaryCompleteRequest,
     L2CanaryCompleteResponse,
+    L2CanaryGuardCheck,
+    L2CanaryGuardName,
+    L2CanaryPinnedScheduleRequest,
+    L2CanaryPreflightView,
+    L2CanaryScheduleBase,
     L2CanaryScheduleRequest,
     L2CanaryView,
+)
+from ditto.api_models.screener_node_settings import ScreenerNodeChannelSettings
+from ditto.api_models.screener_review_settings import (
+    L2_REPORT_CANARY_SCOPE_PREFIX,
+    EffectiveScreenerReviewSettings,
+    ScreenerReviewSettings,
+    is_l2_report_canary_scope,
+)
+from ditto.api_models.system_health import fleet_release_from_heartbeat_envelope
+from ditto.api_server.attestation import expected_netuid
+from ditto.api_server.canonical_starter_control import (
+    ARCHIVE_BYTES,
+    ARCHIVE_SHA256,
+    DOCKERFILE_SHA256,
+    OBJECT_KEY,
+    RELEASE,
+    RELEASE_COMMIT,
+    SOURCE_TREE,
+    archive_bytes,
 )
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -28,27 +60,201 @@ from ditto.api_server.endpoints.screener import (
     _resolve_effective_review_settings,
     require_screener,
 )
+from ditto.api_server.operator_proof import require_operator_proof
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
-from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.source_inspect import MAX_TARBALL_BYTES
+from ditto.api_server.storage import S3StorageClient, StorageError
 from ditto.db.models import (
     Agent,
+    AthReview,
+    AthReviewAction,
     Score,
+    ScreenerHeartbeat,
     ScreenerL2ReportCanary,
     ScreenerNode,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
+    ScreeningReviewEvent,
 )
 from ditto.db.queries.benchmark_rollout import arrival_bench_version
+from ditto.db.queries.screener_node_settings import (
+    resolve_screener_node_channel_settings,
+)
+from ditto.db.queries.screening import (
+    claim_canary_scopes,
+    has_claimable_screening_work,
+)
+from ditto_screening_protocol import ScreenerReviewSettingsOverride
 
 admin_router = APIRouter(prefix="/admin/screener-l2-report-canaries", tags=["admin"])
 screener_router = APIRouter(prefix="/screener/l2-report-canaries", tags=["screener"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 ScreenerDep = Annotated[str, Depends(require_screener)]
-_LEASE = timedelta(minutes=45)
+_MIN_LEASE = timedelta(minutes=45)
+# L1 and L2 each have their own aggregate deadline in the report-only lane.
+# Source-only replays also need time to download, validate, and submit the report.
+_SOURCE_ONLY_OVERHEAD = timedelta(minutes=10)
+_FIXTURE_BUILD_OVERHEAD = timedelta(minutes=60)
+# Full-runtime replays additionally build and probe an untrusted image and run
+# bounded private challenges before the source-review result is complete.
+_FULL_RUNTIME_OVERHEAD = timedelta(minutes=60)
+_FULL_RUNTIME_MIN_RELEASE = (0, 317, 2)
+_MAX_PARALLEL_SOURCE_ONLY = 4
+_WORKER_HEARTBEAT_MAX_AGE = timedelta(minutes=5)
+# Idle workers poll every 30 seconds, so a node that keeps holding queued
+# canaries for production would otherwise log twice a minute per worker.
+_PRODUCTION_HOLD_LOG_INTERVAL_SECONDS = 60.0
+# Monotonic time of the last production-hold log line per (node, reason).
+_production_hold_logged_at: dict[tuple[str, str], float] = {}
+
+logger = logging.getLogger(__name__)
+
+
+def _canary_lease(
+    *,
+    source_review_timeout_seconds: int,
+    l2_timeout_seconds: int,
+    run_mode: str,
+    source_kind: str = "submission",
+) -> timedelta:
+    overhead = (
+        _FULL_RUNTIME_OVERHEAD if run_mode == "full_runtime" else _SOURCE_ONLY_OVERHEAD
+    )
+    if source_kind == "canonical_starter_fixture":
+        overhead = _FIXTURE_BUILD_OVERHEAD
+    return max(
+        _MIN_LEASE,
+        timedelta(seconds=source_review_timeout_seconds + l2_timeout_seconds)
+        + overhead,
+    )
 
 
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _canary_posture(
+    revision: ScreenerReviewSettingsRevision,
+) -> EffectiveScreenerReviewSettings | None:
+    """Return a canary-namespace revision as a posture, or ``None`` if unusable."""
+    if (
+        not is_l2_report_canary_scope(revision.scope)
+        or revision.settings.get("mode") == "inherit"
+    ):
+        return None
+    try:
+        settings = ScreenerReviewSettings.model_validate_json(
+            json.dumps(revision.settings)
+        )
+    except ValueError:
+        return None
+    return EffectiveScreenerReviewSettings(
+        revision=revision.revision,
+        scope=revision.scope,
+        settings=settings,
+        checksum=revision.checksum,
+    )
+
+
+async def _schedulable_review_settings_pin(
+    session: AsyncSession, revision: int
+) -> EffectiveScreenerReviewSettings:
+    """Accept only an isolated canary posture, never one production resolves."""
+    row = await session.get(ScreenerReviewSettingsRevision, revision)
+    if row is None:
+        # 422, not 404: Backroom reads a 404 from ``POST /pinned`` as a
+        # Platform build without that route.
+        raise HTTPException(422, f"review settings revision {revision} not found")
+    if not is_l2_report_canary_scope(row.scope):
+        raise HTTPException(
+            422,
+            "canary review settings must use an "
+            f"{L2_REPORT_CANARY_SCOPE_PREFIX}* scope, not {row.scope!r}",
+        )
+    if row.settings.get("mode") == "inherit":
+        raise HTTPException(422, "canary review settings cannot inherit")
+    # Worker posture resolution already skips canary scopes, so this is not
+    # what isolates the experiment. It refuses the confusing configuration of
+    # a canary scope that is also a node or worker name.
+    if (
+        await session.get(ScreenerNode, row.scope) is not None
+        or await session.scalar(
+            select(ScreenerHeartbeat.instance_id)
+            .where(ScreenerHeartbeat.instance_id == row.scope)
+            .limit(1)
+        )
+        is not None
+    ):
+        raise HTTPException(409, "canary review settings scope names a screener")
+    posture = _canary_posture(row)
+    if posture is None:
+        raise HTTPException(422, "canary review settings revision is invalid")
+    return posture
+
+
+async def _claimable_review_settings_pin(
+    session: AsyncSession, row: ScreenerL2ReportCanary
+) -> EffectiveScreenerReviewSettings | None:
+    """Re-read a stamped pin; ``None`` when the revision no longer matches it."""
+    if row.review_settings_revision is None:
+        return None
+    revision = await session.get(
+        ScreenerReviewSettingsRevision, row.review_settings_revision
+    )
+    if (
+        revision is None
+        or revision.scope != row.review_settings_scope
+        or revision.checksum != row.review_settings_checksum
+    ):
+        return None
+    return _canary_posture(revision)
+
+
+async def _claimable_queue_filters(
+    session: AsyncSession,
+    *,
+    node: ScreenerNode,
+    payload: L2CanaryClaimRequest,
+    node_settings_current: bool,
+    source_only: bool,
+    now: datetime,
+) -> list[ColumnElement[bool]]:
+    """Filters selecting the queued rows on ``node`` this claimant may lease.
+
+    Any check that asks whether a canary is waiting for this claimant must use
+    these same filters, so it never counts a row the claimant cannot take: a
+    pinned row for a worker that does not apply pins, an unpinned row for a
+    worker whose node posture is stale, or a full-runtime or fixture row for a
+    worker not ready for it.
+    """
+    filters: list[ColumnElement[bool]] = [
+        ScreenerL2ReportCanary.target_node_id == node.node_id,
+        ScreenerL2ReportCanary.status == "queued",
+    ]
+    if source_only:
+        filters.append(ScreenerL2ReportCanary.run_mode == "source_only")
+    if not payload.accepts_review_settings_override:
+        # A rolling older worker would run a pinned row under its node posture.
+        filters.append(ScreenerL2ReportCanary.review_settings_revision.is_(None))
+    elif not node_settings_current:
+        # A stale node posture may run only a row that carries its own posture.
+        filters.append(ScreenerL2ReportCanary.review_settings_revision.is_not(None))
+    if not await _full_runtime_worker_ready(
+        session, node=node, now=now, instance_id=payload.instance_id
+    ):
+        # Leave full-runtime rows for an adopted worker rather than returning
+        # nothing: scheduling accepts any adopted worker on the node, so the
+        # oldest row may be one this caller can never take, and it must not
+        # block the source-only rows queued behind it.
+        filters.append(ScreenerL2ReportCanary.run_mode != "full_runtime")
+    if not await _fixture_worker_ready(
+        session, node=node, now=now, instance_id=payload.instance_id
+    ):
+        filters.append(
+            ScreenerL2ReportCanary.source_kind != "canonical_starter_fixture"
+        )
+    return filters
 
 
 def _view(row: ScreenerL2ReportCanary) -> L2CanaryView:
@@ -57,11 +263,22 @@ def _view(row: ScreenerL2ReportCanary) -> L2CanaryView:
         request_id=row.request_id,
         agent_id=row.agent_id,
         source_attempt_id=row.source_attempt_id,
+        source_kind=cast(
+            Literal["submission", "canonical_starter_fixture"], row.source_kind
+        ),
+        fixture_key=row.fixture_key,
         artifact_sha256=row.artifact_sha256,
         target_node_id=row.target_node_id,
         expected_agent_status=row.expected_agent_status,
         expected_score_count=row.expected_score_count,
         review_label=row.review_label,
+        run_mode=cast(Literal["source_only", "full_runtime"], row.run_mode),
+        source_attestation=row.source_attestation,
+        review_settings_revision=row.review_settings_revision,
+        review_settings_scope=row.review_settings_scope,
+        review_settings_checksum=row.review_settings_checksum,
+        settings_revision=row.settings_revision,
+        settings_checksum=row.settings_checksum,
         status=row.status,
         claimed_instance_id=row.claimed_instance_id,
         lease_expires_at=row.lease_expires_at,
@@ -79,19 +296,234 @@ def _valid_report(row: ScreenerL2ReportCanary, report: dict) -> bool:
     digest = hashlib.sha256(
         json.dumps(packet, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    if row.run_mode == "full_runtime":
+        codes = report.get("decision_evidence_codes", [])
+        if not isinstance(codes, list) or not all(
+            isinstance(code, str) for code in codes
+        ):
+            return False
+        challenge_codes = [
+            code
+            for code in codes
+            if code.startswith(("challenge-", "behavioral-oracle-"))
+        ]
+        if report.get("challenge_evidence_codes") != challenge_codes:
+            return False
+        if not challenge_codes:
+            expected_challenge_status = "not_run"
+        elif any(
+            code
+            not in {
+                "challenge-observed",
+                "challenge-model-call-missing",
+                "challenge-gateway-token-missing",
+                "challenge-shape-anomaly",
+                "behavioral-oracle-passed",
+                "behavioral-oracle-wrong-answer",
+                "behavioral-oracle-implausibly-fast",
+            }
+            for code in challenge_codes
+        ):
+            expected_challenge_status = "inconclusive"
+        else:
+            expected_challenge_status = "completed"
+        if report.get("challenge_status") != expected_challenge_status:
+            return False
+    # Rolling workers may finish an older shadow lease, while current workers
+    # preview the enforced source decision in either isolated run mode.
+    allowed_review_modes = {"shadow", "enforce_preview"}
+    report_agent_id = row.agent_id or row.canary_id
+    report_attempt_id = row.source_attempt_id or row.canary_id
     return (
         report.get("kind") == "l2_report_canary_v1"
         and report.get("authority") == "none"
-        and report.get("review_mode") == "shadow"
+        and report.get("review_mode") in allowed_review_modes
         and report.get("canary_id") == str(row.canary_id)
-        and report.get("agent_id") == str(row.agent_id)
-        and report.get("source_attempt_id") == str(row.source_attempt_id)
+        and report.get("agent_id") == str(report_agent_id)
+        and report.get("source_attempt_id") == str(report_attempt_id)
+        and report.get("source_kind", "submission") == row.source_kind
+        and (
+            row.source_kind == "submission"
+            or (
+                _fixture_attestation_valid(row)
+                and report.get("source_attestation") == row.source_attestation
+                and report.get("control_result") == _fixture_control_result(report)
+            )
+        )
         and report.get("artifact_sha256") == row.artifact_sha256
         and report.get("policy_version") == row.policy_version
         and report.get("settings_revision") == row.settings_revision
         and report.get("settings_checksum") == row.settings_checksum
+        and report.get("run_mode", "source_only") == row.run_mode
         and secrets.compare_digest(digest, row.runtime_evidence_sha256)
     )
+
+
+def _fixture_control_result(report: dict) -> str:
+    l1 = report.get("l1")
+    l2 = report.get("l2")
+    if isinstance(l2, dict) and report.get("decision_outcome") in {
+        "quarantine",
+        "deterministic_reject",
+    }:
+        return "hold"
+    if (
+        report.get("decision_outcome") == "pass"
+        and isinstance(l1, dict)
+        and l1.get("clearance_certified") is True
+        and isinstance(l2, dict)
+        and l2.get("clearance_certified") is True
+        and isinstance(report.get("built_image_digest"), str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", report["built_image_digest"])
+    ):
+        return "certificate"
+    return "inconclusive"
+
+
+async def _full_runtime_worker_ready(
+    session: AsyncSession,
+    *,
+    node: ScreenerNode,
+    now: datetime,
+    instance_id: str | None = None,
+    minimum_release: tuple[int, int, int] = _FULL_RUNTIME_MIN_RELEASE,
+) -> bool:
+    """Do not give a new-mode lease to a rolling old worker."""
+    rows = await session.scalars(
+        select(ScreenerHeartbeat).where(
+            ScreenerHeartbeat.screener_hotkey == node.screener_hotkey,
+            ScreenerHeartbeat.seen_at >= now - timedelta(minutes=5),
+        )
+    )
+    for row in rows:
+        if instance_id is None:
+            if not row.instance_id.startswith(f"{node.node_id}-worker-"):
+                continue
+        elif row.instance_id != instance_id:
+            continue
+        release = fleet_release_from_heartbeat_envelope(row.system_metrics)
+        match = (
+            re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", release.version)
+            if release is not None and release.version is not None
+            else None
+        )
+        if (
+            match is not None
+            and release is not None
+            and release.revision is not None
+            and tuple(map(int, match.groups())) >= minimum_release
+        ):
+            return True
+    return False
+
+
+async def _fixture_worker_ready(
+    session: AsyncSession,
+    *,
+    node: ScreenerNode,
+    now: datetime,
+    instance_id: str | None = None,
+) -> bool:
+    """Only a fresh signed v8 capability may claim the new fixture shape."""
+    rows = await session.scalars(
+        select(ScreenerHeartbeat).where(
+            ScreenerHeartbeat.screener_hotkey == node.screener_hotkey,
+            ScreenerHeartbeat.protocol_version >= 8,
+            ScreenerHeartbeat.seen_at >= now - _WORKER_HEARTBEAT_MAX_AGE,
+            ScreenerHeartbeat.state.in_(("polling", "screening")),
+        )
+    )
+    for row in rows:
+        if instance_id is None:
+            if not row.instance_id.startswith(f"{node.node_id}-worker-"):
+                continue
+        elif row.instance_id != instance_id:
+            continue
+        release = fleet_release_from_heartbeat_envelope(row.system_metrics)
+        if release is not None and release.source_fixture_v1:
+            return True
+    return False
+
+
+async def _fresh_worker_ids(
+    session: AsyncSession, *, node: ScreenerNode, now: datetime
+) -> set[str]:
+    """Node worker instances with a fresh polling or screening heartbeat."""
+    return set(
+        await session.scalars(
+            select(ScreenerHeartbeat.instance_id).where(
+                ScreenerHeartbeat.screener_hotkey == node.screener_hotkey,
+                ScreenerHeartbeat.instance_id.like(f"{node.node_id}-worker-%"),
+                ScreenerHeartbeat.seen_at >= now - _WORKER_HEARTBEAT_MAX_AGE,
+                ScreenerHeartbeat.state.in_(("polling", "screening")),
+            )
+        )
+    )
+
+
+async def _canary_yields_to_production(
+    session: AsyncSession,
+    *,
+    node: ScreenerNode,
+    limits: ScreenerNodeChannelSettings,
+    instance_id: str,
+    active: int,
+    review_settings_scopes: frozenset[str] | None,
+    now: datetime,
+) -> bool:
+    """Hold a leasable canary while this node's production admission is open.
+
+    The production claim budget counts only screening attempts, so a canary
+    that takes the worker production needs delays a fresh upload by up to one
+    canary lease. With admission open, a canary therefore waits while fresh
+    production work is claimable by this worker, and it may never occupy one
+    of the ``screening_concurrency`` fresh workers kept for production. The
+    caller holds the node row lock, so ``active`` cannot race another canary
+    claim, and has already selected the row it would lease, so a hold is
+    decided and logged only for a canary this worker could otherwise take.
+    """
+    healthy_workers = await _fresh_worker_ids(session, node=node, now=now)
+    reserve_cap = min(
+        limits.canary_concurrency,
+        _MAX_PARALLEL_SOURCE_ONLY,
+        max(0, len(healthy_workers) - limits.screening_concurrency),
+    )
+    if await has_claimable_screening_work(
+        session,
+        now=now,
+        review_settings_scopes=review_settings_scopes,
+        netuid=expected_netuid(),
+    ):
+        reason = "production-claimable"
+    elif instance_id not in healthy_workers or active >= reserve_cap:
+        # A worker without a fresh heartbeat is not counted in the
+        # reservation, so it cannot prove a production worker stays free.
+        reason = "production-reserved"
+    else:
+        return False
+    key = (node.node_id, reason)
+    logged_at = _production_hold_logged_at.get(key)
+    monotonic_now = time.monotonic()
+    if (
+        logged_at is None
+        or monotonic_now - logged_at >= _PRODUCTION_HOLD_LOG_INTERVAL_SECONDS
+    ):
+        _production_hold_logged_at[key] = monotonic_now
+        logger.info(
+            "report-only L2 canary held for production node_id=%s "
+            "instance_id=%s reason=%s screening_concurrency=%d "
+            "canary_concurrency=%d healthy_workers=%d active=%d "
+            "claimant_fresh=%s",
+            node.node_id,
+            instance_id,
+            reason,
+            limits.screening_concurrency,
+            limits.canary_concurrency,
+            len(healthy_workers),
+            active,
+            instance_id in healthy_workers,
+        )
+    return True
 
 
 async def _score_count(session: AsyncSession, agent_id: UUID) -> int:
@@ -103,23 +535,572 @@ async def _score_count(session: AsyncSession, agent_id: UUID) -> int:
     )
 
 
+_EXACT_SOURCE_CHANGED = "canary exact-source guard changed"
+_ATTESTATION_CHANGED = "canary source attestation changed"
+_NOT_BENCH_V13 = "source is not benchmark v13"
+_ATH_ACTION_MISSING = "ATH clear action missing"
+_RULING_CHANGED = "historical ruling changed"
+_OBJECT_DIFFERS = "current source object differs from ruling"
+_LEGACY_NULL_SHA_NOTE = (
+    "legacy attempt has no pinned artifact SHA; only a historical ath_clear or "
+    "screening_reject ruling can schedule it, and that ruling does not prove "
+    "what the old attempt executed"
+)
+_RULING_NEEDS_LEGACY_NOTE = (
+    "a historical ruling applies only to a legacy null-SHA attempt; schedule "
+    "this pinned attempt without one"
+)
+_OBJECT_PENDING_NOTE = (
+    "not judged: only scheduling re-hashes the stored object, and refuses with "
+    "this detail when it differs (or 503 when storage is unavailable)"
+)
+_BENCH_UNAVAILABLE_NOTE = "arrival benchmark version unavailable"
+
+
+@dataclass(frozen=True)
+class _CanarySource:
+    """What one submission canary pins; expected values may be omitted."""
+
+    agent_id: UUID
+    source_attempt_id: UUID
+    artifact_sha256: str | None
+    policy_version: int
+    expected_agent_status: str | None
+    expected_score_count: int | None
+    review_label: str
+    run_mode: str
+    source_attestation: dict | None
+
+
+@dataclass(frozen=True)
+class _SourceGuards:
+    agent: Agent | None
+    attempt: ScreeningAttempt | None
+    score_row_count: int | None
+    arrival_bench_version: int | None
+    checks: tuple[L2CanaryGuardCheck, ...]
+
+    @property
+    def refusal(self) -> L2CanaryGuardCheck | None:
+        """The guard an enforcing caller stops at: the first not known to pass."""
+        return next((check for check in self.checks if check.passed is not True), None)
+
+
+# Scheduling passes a verifier that re-hashes the stored object; the advisory
+# preflight passes none and reports that guard as not judged.
+_ObjectVerifier = Callable[[Agent], Awaitable[bool]]
+
+
+def _source_from_row(row: ScreenerL2ReportCanary) -> _CanarySource:
+    if row.agent_id is None or row.source_attempt_id is None:
+        raise HTTPException(status_code=409, detail="not a submission canary")
+    return _CanarySource(
+        agent_id=row.agent_id,
+        source_attempt_id=row.source_attempt_id,
+        artifact_sha256=row.artifact_sha256,
+        policy_version=row.policy_version,
+        expected_agent_status=row.expected_agent_status,
+        expected_score_count=row.expected_score_count,
+        review_label=row.review_label,
+        run_mode=row.run_mode,
+        source_attestation=row.source_attestation,
+    )
+
+
+def _guard(
+    guard: L2CanaryGuardName,
+    current: str | int | None,
+    expected: str | int | None,
+    conflict: str,
+    *,
+    note: str | None = None,
+) -> L2CanaryGuardCheck:
+    return L2CanaryGuardCheck(
+        guard=guard,
+        passed=None if expected is None else current == expected,
+        current=current,
+        expected=expected,
+        conflict_detail=f"{conflict}: {guard}",
+        note=note,
+    )
+
+
+def _ruling_id(attestation: dict) -> str | None:
+    value = attestation.get("ruling_id")
+    return value if isinstance(value, str) else None
+
+
+async def _evaluate_exact_source(
+    session: AsyncSession,
+    source: _CanarySource,
+    *,
+    scheduling: bool = False,
+    verify_object: _ObjectVerifier | None = None,
+    stop_at_refusal: bool = False,
+) -> _SourceGuards:
+    """The single exact-source predicate for schedule, claim, complete and preflight.
+
+    Guards are produced in the order the caller enforces them. ``scheduling``
+    adds the scheduler's historical-ruling admission (clear action, ruling,
+    stored object) ahead of the exact-source guards and the arrival benchmark
+    after them; claim and completion instead recheck the pinned attestation.
+    Enforcing callers stop at the first refusal, so later guards (and the
+    storage read) run only when every earlier one passed. The advisory
+    preflight collects every guard instead.
+    """
+    agent = await session.get(Agent, source.agent_id)
+    attempt = await session.get(ScreeningAttempt, source.source_attempt_id)
+    if agent is None or attempt is None:
+        return _SourceGuards(agent, attempt, None, None, ())
+    checks: list[L2CanaryGuardCheck] = []
+    score_row_count: int | None = None
+    bench: int | None = None
+
+    def done() -> _SourceGuards:
+        return _SourceGuards(agent, attempt, score_row_count, bench, tuple(checks))
+
+    def refused() -> bool:
+        return stop_at_refusal and checks[-1].passed is not True
+
+    attestation = source.source_attestation
+    well_formed = isinstance(attestation, dict)
+    if scheduling and attestation is not None:
+        assert isinstance(attestation, dict)
+        if attestation.get("kind") == "ath_clear":
+            action_id = attestation.get("action_id")
+            ruling_id = _ruling_id(attestation)
+            try:
+                ruling_uuid = UUID(ruling_id) if ruling_id is not None else None
+            except ValueError:
+                ruling_uuid = None
+            latest_action = (
+                await _latest_ath_action(session, ruling_uuid)
+                if ruling_uuid is not None
+                else None
+            )
+            current_clear = bool(
+                isinstance(action_id, str)
+                and latest_action is not None
+                and latest_action.action == "clear"
+                and str(latest_action.action_id) == action_id
+            )
+            checks.append(
+                L2CanaryGuardCheck(
+                    guard="ath_clear_action",
+                    passed=current_clear,
+                    current=str(latest_action.action_id) if latest_action else None,
+                    expected=action_id if isinstance(action_id, str) else None,
+                    conflict_detail=_ATH_ACTION_MISSING,
+                    note=None
+                    if current_clear
+                    else "the ruling's latest ATH action is not the pinned clear",
+                )
+            )
+            if refused():
+                return done()
+        checks.append(
+            L2CanaryGuardCheck(
+                guard="historical_ruling",
+                passed=await _historical_ruling_matches(session, source),
+                current=_ruling_id(attestation),
+                expected=None,
+                conflict_detail=_RULING_CHANGED,
+            )
+        )
+        if refused():
+            return done()
+        checks.append(
+            L2CanaryGuardCheck(
+                guard="source_object_verified",
+                passed=None if verify_object is None else await verify_object(agent),
+                current=None,
+                expected=source.artifact_sha256,
+                conflict_detail=_OBJECT_DIFFERS,
+                note=_OBJECT_PENDING_NOTE if verify_object is None else None,
+            )
+        )
+        if refused():
+            return done()
+
+    score_row_count = await _score_count(session, source.agent_id)
+    attempt_sha = attempt.artifact_sha256.lower() if attempt.artifact_sha256 else None
+    for check in (
+        _guard(
+            "attempt_owner",
+            str(attempt.agent_id),
+            str(source.agent_id),
+            _EXACT_SOURCE_CHANGED,
+        ),
+        _guard(
+            "agent_artifact_sha256",
+            agent.sha256.lower(),
+            source.artifact_sha256,
+            _EXACT_SOURCE_CHANGED,
+        ),
+        _guard(
+            "attempt_policy_version",
+            attempt.policy_version,
+            source.policy_version,
+            _EXACT_SOURCE_CHANGED,
+        ),
+        _guard(
+            "agent_status",
+            agent.status.value,
+            source.expected_agent_status,
+            _EXACT_SOURCE_CHANGED,
+        ),
+        _guard(
+            "score_row_count",
+            score_row_count,
+            source.expected_score_count,
+            _EXACT_SOURCE_CHANGED,
+        ),
+    ):
+        checks.append(check)
+        if refused():
+            return done()
+    if attestation is None:
+        check = _guard(
+            "attempt_artifact_sha256",
+            attempt_sha,
+            source.artifact_sha256,
+            _EXACT_SOURCE_CHANGED,
+            note=_LEGACY_NULL_SHA_NOTE if attempt_sha is None else None,
+        )
+        if attempt_sha is None:
+            # No expected value can ever match a legacy null pin.
+            check = check.model_copy(update={"passed": False})
+        checks.append(check)
+        if refused():
+            return done()
+    else:
+        pinned: list[L2CanaryGuardCheck] = [
+            L2CanaryGuardCheck(
+                guard="attempt_artifact_sha256",
+                passed=attempt_sha is None,
+                current=attempt_sha,
+                expected=None,
+                conflict_detail=f"{_ATTESTATION_CHANGED}: attempt_artifact_sha256",
+                note=None if attempt_sha is None else _RULING_NEEDS_LEGACY_NOTE,
+            ),
+            _guard(
+                "historical_ruling_run_mode",
+                source.run_mode,
+                "source_only",
+                _ATTESTATION_CHANGED,
+            ),
+        ]
+        for check in pinned:
+            checks.append(check)
+            if refused():
+                return done()
+        if not scheduling:
+            # Claim and completion recheck what scheduling pinned.
+            checks.append(
+                L2CanaryGuardCheck(
+                    guard="historical_ruling",
+                    passed=well_formed
+                    and await _historical_ruling_matches(session, source),
+                    current=_ruling_id(attestation) if well_formed else None,
+                    expected=None,
+                    conflict_detail=f"{_ATTESTATION_CHANGED}: historical_ruling",
+                )
+            )
+            if refused():
+                return done()
+            checks.append(
+                L2CanaryGuardCheck(
+                    guard="source_object_verified",
+                    passed=bool(
+                        well_formed
+                        and attestation.get("verified_at")
+                        and attestation.get("artifact_sha256") == source.artifact_sha256
+                    ),
+                    current=None,
+                    expected=None,
+                    conflict_detail=(f"{_ATTESTATION_CHANGED}: source_object_verified"),
+                )
+            )
+            if refused():
+                return done()
+    if scheduling:
+        observed = await arrival_bench_version(session, agent=agent)
+        bench = observed if isinstance(observed, int) else None
+        # An unavailable version is judged exactly as scheduling judges it:
+        # it is not 13, so scheduling refuses.
+        checks.append(
+            L2CanaryGuardCheck(
+                guard="arrival_bench_version",
+                passed=bench == 13,
+                current=bench,
+                expected=13,
+                conflict_detail=_NOT_BENCH_V13,
+                note=_BENCH_UNAVAILABLE_NOTE if bench is None else None,
+            )
+        )
+    return done()
+
+
+def _enforce(guards: _SourceGuards) -> tuple[Agent, ScreeningAttempt]:
+    if guards.agent is None or guards.attempt is None:
+        raise HTTPException(status_code=409, detail=f"{_EXACT_SOURCE_CHANGED}: source")
+    refusal = guards.refusal
+    if refusal is not None:
+        raise HTTPException(status_code=409, detail=refusal.conflict_detail)
+    return guards.agent, guards.attempt
+
+
 async def _exact_source(
     session: AsyncSession, row: ScreenerL2ReportCanary
 ) -> tuple[Agent, ScreeningAttempt]:
-    agent = await session.get(Agent, row.agent_id)
-    attempt = await session.get(ScreeningAttempt, row.source_attempt_id)
+    return _enforce(
+        await _evaluate_exact_source(
+            session, _source_from_row(row), stop_at_refusal=True
+        )
+    )
+
+
+def _fixture_attestation_valid(row: ScreenerL2ReportCanary) -> bool:
+    att = row.source_attestation
+    return bool(
+        row.source_kind == "canonical_starter_fixture"
+        and row.fixture_key == OBJECT_KEY
+        and row.artifact_sha256 == ARCHIVE_SHA256
+        and row.run_mode == "source_only"
+        and row.policy_version == 13
+        and row.bench_version == 13
+        and row.review_label == "candidate_clear"
+        and isinstance(att, dict)
+        and att.get("release") == RELEASE
+        and att.get("release_commit") == RELEASE_COMMIT
+        and att.get("source_tree") == SOURCE_TREE
+        and att.get("archive_sha256") == ARCHIVE_SHA256
+        and att.get("archive_size_bytes") == ARCHIVE_BYTES
+        and att.get("reviewed_archive_sha256") == ARCHIVE_SHA256
+        and att.get("reviewed_dockerfile_sha256") == DOCKERFILE_SHA256
+        and isinstance(att.get("registered_by"), str)
+        and isinstance(att.get("reviewed_by"), str)
+        and att["registered_by"] != att["reviewed_by"]
+        and isinstance(att.get("reviewer_built_image_digest"), str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", att["reviewer_built_image_digest"])
+        and isinstance(att.get("reviewer_evidence_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", att["reviewer_evidence_sha256"])
+    )
+
+
+async def _fixture_object_matches(storage: S3StorageClient) -> bool:
+    try:
+        verified = await storage.verify_object_sha256(
+            key=OBJECT_KEY, expected_size_bytes=ARCHIVE_BYTES
+        )
+    except StorageError:
+        return False
+    return verified.sha256 == ARCHIVE_SHA256 and verified.size_bytes == ARCHIVE_BYTES
+
+
+async def _historical_ruling_matches(
+    session: AsyncSession, row: _CanarySource | ScreenerL2ReportCanary
+) -> bool:
+    """A historical ruling labels this current-object replay, not past execution."""
+    attestation = row.source_attestation
+    if not isinstance(attestation, dict):
+        return False
+    try:
+        ruling_id = UUID(attestation["ruling_id"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if attestation.get("kind") == "ath_clear" and row.review_label == "candidate_clear":
+        ath_review = await session.get(AthReview, ruling_id)
+        action = await _latest_ath_action(session, ruling_id)
+        return bool(
+            ath_review is not None
+            and action is not None
+            and ath_review.agent_id == row.agent_id
+            and ath_review.original_policy_version == row.policy_version
+            and ath_review.status == "resolved"
+            and ath_review.resolution == "clear"
+            and ath_review.original_evidence.get("sha256") == row.artifact_sha256
+            and action.action == "clear"
+            and str(action.action_id) == attestation.get("action_id")
+            and ath_review.resolved_at == action.created_at
+            and ath_review.resolved_by == action.actor
+            and ath_review.resolution_reason == action.reason
+        )
     if (
-        agent is None
-        or attempt is None
-        or attempt.agent_id != row.agent_id
-        or (attempt.artifact_sha256 or "").lower() != row.artifact_sha256
-        or agent.sha256.lower() != row.artifact_sha256
-        or attempt.policy_version != row.policy_version
-        or agent.status.value != row.expected_agent_status
-        or await _score_count(session, row.agent_id) != row.expected_score_count
+        attestation.get("kind") == "screening_reject"
+        and row.review_label == "known_reject"
     ):
-        raise HTTPException(status_code=409, detail="canary exact-source guard changed")
-    return agent, attempt
+        event = await session.get(ScreeningReviewEvent, ruling_id)
+        return bool(
+            event is not None
+            and event.agent_id == row.agent_id
+            and event.attempt_id == row.source_attempt_id
+            and event.policy_version == row.policy_version
+            and event.event_kind == "manual"
+            and event.outcome == "reject"
+            and event.effective_decision == "reject"
+            and event.artifact_sha256 == row.artifact_sha256
+        )
+    return False
+
+
+async def _latest_ath_action(
+    session: AsyncSession, review_id: UUID
+) -> AthReviewAction | None:
+    return await session.scalar(
+        select(AthReviewAction)
+        .where(AthReviewAction.review_id == review_id)
+        .order_by(AthReviewAction.created_at.desc(), AthReviewAction.action_id.desc())
+        .limit(1)
+    )
+
+
+async def _current_object_matches(
+    storage: S3StorageClient, agent: Agent, artifact_sha256: str
+) -> tuple[bool, int]:
+    expected_size = agent.size_bytes
+    if expected_size is not None and not (0 < expected_size <= MAX_TARBALL_BYTES):
+        return False, 0
+    verified = await storage.verify_object_sha256(
+        key=_artifact_key(agent.agent_id),
+        expected_size_bytes=expected_size or MAX_TARBALL_BYTES,
+    )
+    return (
+        verified.sha256 == artifact_sha256
+        and 0 < verified.size_bytes <= MAX_TARBALL_BYTES
+        and (expected_size is None or verified.size_bytes == expected_size),
+        verified.size_bytes,
+    )
+
+
+async def _ruling_attestation(
+    session: AsyncSession,
+    *,
+    kind: str,
+    ruling_id: UUID,
+    artifact_sha256: str,
+) -> dict:
+    """The attestation scheduling would pin; ATH clears bind their latest clear."""
+    attestation: dict = {
+        "kind": kind,
+        "ruling_id": str(ruling_id),
+        "artifact_sha256": artifact_sha256,
+    }
+    if kind == "ath_clear":
+        action = await _latest_ath_action(session, ruling_id)
+        if action is not None and action.action == "clear":
+            attestation["action_id"] = str(action.action_id)
+    return attestation
+
+
+async def _active_canary_id(
+    session: AsyncSession, source_attempt_id: UUID
+) -> UUID | None:
+    return await session.scalar(
+        select(ScreenerL2ReportCanary.canary_id).where(
+            ScreenerL2ReportCanary.source_attempt_id == source_attempt_id,
+            ScreenerL2ReportCanary.status.in_(("queued", "leased")),
+        )
+    )
+
+
+@admin_router.get(
+    "/preflight/{agent_id}/{source_attempt_id}", response_model=L2CanaryPreflightView
+)
+async def get_l2_report_canary_preflight(
+    agent_id: UUID,
+    source_attempt_id: UUID,
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+    artifact_sha256: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
+    expected_agent_status: Annotated[
+        str | None, Query(min_length=1, max_length=64)
+    ] = None,
+    expected_score_count: Annotated[int | None, Query(ge=0)] = None,
+    historical_ruling_kind: Literal["ath_clear", "screening_reject"] | None = None,
+    historical_ruling_id: UUID | None = None,
+) -> L2CanaryPreflightView:
+    """Evaluate the scheduler's own guard predicate; advisory only.
+
+    Read-only and non-authorizing: no row locks, no queue write, and no storage
+    read. It grants nothing; scheduling reruns the same predicate under row
+    locks and, for a historical ruling, re-hashes the stored object. Omitted
+    expected values report the current value with ``passed=null``. Scheduling
+    would refuse at the first guard not known to pass, with its
+    ``conflict_detail``.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    if (historical_ruling_kind is None) != (historical_ruling_id is None):
+        raise HTTPException(
+            status_code=422,
+            detail="historical ruling kind and id must be supplied together",
+        )
+    attestation = None
+    if historical_ruling_kind is not None and historical_ruling_id is not None:
+        if artifact_sha256 is None:
+            raise HTTPException(
+                status_code=422,
+                detail="a historical ruling preflight requires artifact_sha256",
+            )
+        attestation = await _ruling_attestation(
+            session,
+            kind=historical_ruling_kind,
+            ruling_id=historical_ruling_id,
+            artifact_sha256=artifact_sha256,
+        )
+    guards = await _evaluate_exact_source(
+        session,
+        _CanarySource(
+            agent_id=agent_id,
+            source_attempt_id=source_attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            expected_agent_status=expected_agent_status,
+            expected_score_count=expected_score_count,
+            review_label=(
+                "known_reject"
+                if historical_ruling_kind == "screening_reject"
+                else "candidate_clear"
+            ),
+            run_mode="source_only",
+            source_attestation=attestation,
+        ),
+        scheduling=True,
+    )
+    agent, attempt = guards.agent, guards.attempt
+    if agent is None or attempt is None:
+        raise HTTPException(status_code=404, detail="canary source not found")
+    attempt_sha = attempt.artifact_sha256.lower() if attempt.artifact_sha256 else None
+    packet = await scored_runtime_evidence_for_lease(
+        session,
+        attempt_id=source_attempt_id,
+        artifact_sha256=artifact_sha256 or agent.sha256.lower(),
+        policy_version=13,
+        bench_version=13,
+        report_only_current_packet=True,
+    )
+    outcomes = [check.passed for check in guards.checks]
+    assert guards.score_row_count is not None
+    return L2CanaryPreflightView(
+        authority="none",
+        agent_id=agent_id,
+        source_attempt_id=source_attempt_id,
+        agent_artifact_sha256=agent.sha256.lower(),
+        source_attempt_artifact_sha256=attempt_sha,
+        agent_status=agent.status.value,
+        attempt_policy_version=attempt.policy_version,
+        arrival_bench_version=guards.arrival_bench_version,
+        score_row_count=guards.score_row_count,
+        attempt_agent_id=attempt.agent_id,
+        legacy_null_attempt_sha256=attempt_sha is None,
+        active_canary_id=await _active_canary_id(session, source_attempt_id),
+        report_only_packet_available=packet is not None,
+        guards=list(guards.checks),
+        guards_pass=(
+            False if False in outcomes else None if None in outcomes else True
+        ),
+    )
 
 
 @admin_router.post("", response_model=L2CanaryView)
@@ -127,8 +1108,49 @@ async def schedule_l2_report_canary(
     payload: L2CanaryScheduleRequest,
     _admin: AdminDep,
     session: SessionDep,
+    storage: Annotated[S3StorageClient, Depends(get_storage_client)],
+    x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> L2CanaryView:
-    """Queue one exact source once; this never reopens a screening attempt."""
+    """Queue one exact source once under the claiming node's posture.
+
+    This never reopens a screening attempt. The request model refuses a
+    ``review_settings_revision`` key with 422: pinned canaries use
+    ``POST /pinned``, so a Platform build without pin support rejects the
+    route instead of ignoring the field.
+    """
+    return await _schedule_l2_report_canary(
+        payload, None, session, storage, x_admin_actor
+    )
+
+
+@admin_router.post("/pinned", response_model=L2CanaryView)
+async def schedule_pinned_l2_report_canary(
+    payload: L2CanaryPinnedScheduleRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: Annotated[S3StorageClient, Depends(get_storage_client)],
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> L2CanaryView:
+    """Queue one exact source once under a pinned ``l2-report-canary*`` posture.
+
+    The separate route is the capability check. A Platform build that predates
+    pins has no such route and answers 405 or 404 without queueing anything,
+    where the plain route would ignore the unknown field and queue the canary
+    under the node's posture. This route therefore never answers 404 itself:
+    a missing revision is a 422.
+    """
+    return await _schedule_l2_report_canary(
+        payload, payload.review_settings_revision, session, storage, x_admin_actor
+    )
+
+
+async def _schedule_l2_report_canary(
+    payload: L2CanaryScheduleBase,
+    review_settings_revision: int | None,
+    session: AsyncSession,
+    storage: S3StorageClient,
+    x_admin_actor: str | None,
+) -> L2CanaryView:
     async with session.begin():
         existing = await session.scalar(
             select(ScreenerL2ReportCanary).where(
@@ -142,9 +1164,19 @@ async def schedule_l2_report_canary(
                 or existing.artifact_sha256 != payload.artifact_sha256
                 or existing.target_node_id != payload.target_node_id
                 or existing.review_label != payload.review_label
+                or existing.run_mode != payload.run_mode
                 or existing.policy_version != payload.policy_version
                 or existing.expected_agent_status != payload.expected_agent_status
                 or existing.expected_score_count != payload.expected_score_count
+                or existing.review_settings_revision != review_settings_revision
+                or (existing.source_attestation or {}).get("kind")
+                != payload.historical_ruling_kind
+                or (existing.source_attestation or {}).get("ruling_id")
+                != (
+                    str(payload.historical_ruling_id)
+                    if payload.historical_ruling_id is not None
+                    else None
+                )
             ):
                 raise HTTPException(
                     status_code=409, detail="canary already scheduled differently"
@@ -155,6 +1187,15 @@ async def schedule_l2_report_canary(
             raise HTTPException(
                 status_code=409, detail="target is not an active Hetzner screener node"
             )
+        if payload.run_mode == "full_runtime" and not await _full_runtime_worker_ready(
+            session, node=node, now=datetime.now(UTC)
+        ):
+            raise HTTPException(409, "full-runtime canary worker not adopted")
+        pin = (
+            await _schedulable_review_settings_pin(session, review_settings_revision)
+            if review_settings_revision is not None
+            else None
+        )
         # Serialize two distinct request ids for the same source attempt before
         # the partial unique index supplies its final database backstop.
         await session.scalar(
@@ -162,13 +1203,7 @@ async def schedule_l2_report_canary(
             .where(ScreeningAttempt.attempt_id == payload.source_attempt_id)
             .with_for_update()
         )
-        active = await session.scalar(
-            select(ScreenerL2ReportCanary.canary_id).where(
-                ScreenerL2ReportCanary.source_attempt_id == payload.source_attempt_id,
-                ScreenerL2ReportCanary.status.in_(("queued", "leased")),
-            )
-        )
-        if active is not None:
+        if await _active_canary_id(session, payload.source_attempt_id) is not None:
             raise HTTPException(
                 status_code=409, detail="source already has an active canary"
             )
@@ -184,13 +1219,245 @@ async def schedule_l2_report_canary(
             expected_agent_status=payload.expected_agent_status,
             expected_score_count=payload.expected_score_count,
             review_label=payload.review_label,
+            run_mode=payload.run_mode,
+            review_settings_revision=pin.revision if pin is not None else None,
+            review_settings_scope=pin.scope if pin is not None else None,
+            review_settings_checksum=pin.checksum if pin is not None else None,
             status="queued",
         )
-        agent, _ = await _exact_source(session, row)
-        if await arrival_bench_version(session, agent=agent) != 13:
-            raise HTTPException(status_code=409, detail="source is not benchmark v13")
+        if payload.historical_ruling_id is not None:
+            if not x_admin_actor or not x_admin_actor.strip():
+                raise HTTPException(status_code=400, detail="operator actor required")
+            assert payload.historical_ruling_kind is not None
+            row.source_attestation = {
+                **await _ruling_attestation(
+                    session,
+                    kind=payload.historical_ruling_kind,
+                    ruling_id=payload.historical_ruling_id,
+                    artifact_sha256=payload.artifact_sha256,
+                ),
+                "scope": "current-object-only; historical execution unverified",
+                "actor": x_admin_actor.strip(),
+            }
+        agent = await session.get(Agent, row.agent_id, with_for_update=True)
+        if agent is None:
+            raise HTTPException(status_code=409, detail="canary source not found")
+        attestation = row.source_attestation
+
+        async def verify_object(source_agent: Agent) -> bool:
+            assert attestation is not None
+            try:
+                matches, size_bytes = await _current_object_matches(
+                    storage, source_agent, row.artifact_sha256
+                )
+            except StorageError:
+                raise HTTPException(
+                    503, "source object verification unavailable"
+                ) from None
+            if matches:
+                attestation["verified_size_bytes"] = size_bytes
+                attestation["verified_at"] = datetime.now(UTC).isoformat()
+            return matches
+
+        # The advisory preflight runs this same predicate without the verifier.
+        _enforce(
+            await _evaluate_exact_source(
+                session,
+                _source_from_row(row),
+                scheduling=True,
+                verify_object=verify_object if attestation is not None else None,
+                stop_at_refusal=True,
+            )
+        )
         session.add(row)
         await session.flush()
+        return _view(row)
+
+
+@admin_router.get("/fixture/preflight")
+async def get_canonical_fixture_preflight(
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: Annotated[S3StorageClient, Depends(get_storage_client)],
+) -> dict:
+    """Expose the pinned public source and current object before any queue write."""
+    response.headers["Cache-Control"] = "no-store"
+    row = await session.scalar(
+        select(ScreenerL2ReportCanary).where(
+            ScreenerL2ReportCanary.fixture_key == OBJECT_KEY
+        )
+    )
+    node = (
+        await session.get(ScreenerNode, row.target_node_id) if row is not None else None
+    )
+    worker_ready = bool(
+        node is not None
+        and await _fixture_worker_ready(session, node=node, now=datetime.now(UTC))
+    )
+    object_matches = await _fixture_object_matches(storage)
+    return {
+        "release": RELEASE,
+        "release_commit": RELEASE_COMMIT,
+        "source_tree": SOURCE_TREE,
+        "archive_sha256": ARCHIVE_SHA256,
+        "archive_size_bytes": ARCHIVE_BYTES,
+        "fixture": _view(row).model_dump(mode="json") if row is not None else None,
+        "stored_object_matches": object_matches,
+        "fixture_capable_worker_ready": worker_ready,
+        "can_schedule": bool(
+            row is not None
+            and row.status == "ready"
+            and _fixture_attestation_valid(row)
+            and object_matches
+            and worker_ready
+        ),
+    }
+
+
+@admin_router.post("/fixture/register", response_model=L2CanaryView)
+async def register_canonical_fixture(
+    payload: CanonicalFixtureRegisterRequest,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: Annotated[S3StorageClient, Depends(get_storage_client)],
+) -> L2CanaryView:
+    """Stage exact public source without creating a miner or screening attempt."""
+    actor = await require_operator_proof(request)
+    async with session.begin():
+        existing = await session.scalar(
+            select(ScreenerL2ReportCanary).where(
+                ScreenerL2ReportCanary.fixture_key == OBJECT_KEY
+            )
+        )
+        if existing is not None:
+            if (
+                existing.request_id == payload.request_id
+                and existing.target_node_id == payload.target_node_id
+            ):
+                return _view(existing)
+            raise HTTPException(409, "canonical starter fixture already registered")
+        node = await session.get(ScreenerNode, payload.target_node_id)
+        if node is None or node.status != "active" or node.provider != "hetzner":
+            raise HTTPException(409, "target is not an active Hetzner screener node")
+        data = archive_bytes()
+        try:
+            await storage.put_object(
+                key=OBJECT_KEY, body=data, content_type="application/gzip"
+            )
+        except StorageError:
+            raise HTTPException(503, "fixture object upload unavailable") from None
+        if not await _fixture_object_matches(storage):
+            raise HTTPException(503, "fixture object verification failed")
+        row = ScreenerL2ReportCanary(
+            canary_id=uuid4(),
+            request_id=payload.request_id,
+            source_kind="canonical_starter_fixture",
+            fixture_key=OBJECT_KEY,
+            agent_id=None,
+            source_attempt_id=None,
+            artifact_sha256=ARCHIVE_SHA256,
+            policy_version=13,
+            bench_version=13,
+            target_node_id=payload.target_node_id,
+            expected_agent_status=None,
+            expected_score_count=None,
+            review_label="unreviewed",
+            run_mode="source_only",
+            status="awaiting_review",
+            source_attestation={
+                "release": RELEASE,
+                "release_commit": RELEASE_COMMIT,
+                "source_tree": SOURCE_TREE,
+                "archive_sha256": ARCHIVE_SHA256,
+                "archive_size_bytes": ARCHIVE_BYTES,
+                "registered_by": actor,
+            },
+        )
+        session.add(row)
+        await session.flush()
+        return _view(row)
+
+
+@admin_router.post("/fixture/{canary_id}/review", response_model=L2CanaryView)
+async def review_canonical_fixture(
+    canary_id: UUID,
+    payload: CanonicalFixtureReviewRequest,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: Annotated[S3StorageClient, Depends(get_storage_client)],
+) -> L2CanaryView:
+    """Require a second authenticated operator's served-path evidence."""
+    actor = await require_operator_proof(request)
+    async with session.begin():
+        row = await session.scalar(
+            select(ScreenerL2ReportCanary)
+            .where(ScreenerL2ReportCanary.canary_id == canary_id)
+            .with_for_update()
+        )
+        if row is None or row.source_kind != "canonical_starter_fixture":
+            raise HTTPException(404, "fixture not found")
+        if row.status != "awaiting_review" or not isinstance(
+            row.source_attestation, dict
+        ):
+            raise HTTPException(409, "fixture review state changed")
+        if actor == row.source_attestation.get("registered_by"):
+            raise HTTPException(409, "independent reviewer required")
+        if not await _fixture_object_matches(storage):
+            raise HTTPException(409, "fixture object changed")
+        row.source_attestation = {
+            **row.source_attestation,
+            "reviewed_by": actor,
+            "reviewer_evidence_sha256": payload.reviewer_evidence_sha256,
+            "reviewer_evidence_url": payload.reviewer_evidence_url,
+            "reviewed_archive_sha256": payload.reviewed_archive_sha256,
+            "reviewed_dockerfile_sha256": payload.reviewed_dockerfile_sha256,
+            "reviewer_built_image_digest": payload.built_image_digest,
+            "reviewed_at": datetime.now(UTC).isoformat(),
+            "scope": "candidate public source and served path; no verdict authority",
+        }
+        row.review_label = "candidate_clear"
+        row.status = "ready"
+        if not _fixture_attestation_valid(row):
+            raise HTTPException(409, "fixture evidence invalid")
+        return _view(row)
+
+
+@admin_router.post("/fixture/{canary_id}/schedule", response_model=L2CanaryView)
+async def schedule_canonical_fixture(
+    canary_id: UUID,
+    _payload: CanonicalFixtureScheduleRequest,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: Annotated[S3StorageClient, Depends(get_storage_client)],
+) -> L2CanaryView:
+    """Queue one source-only report; no submission or admission state changes."""
+    actor = await require_operator_proof(request)
+    async with session.begin():
+        row = await session.scalar(
+            select(ScreenerL2ReportCanary)
+            .where(ScreenerL2ReportCanary.canary_id == canary_id)
+            .with_for_update()
+        )
+        if row is None or row.source_kind != "canonical_starter_fixture":
+            raise HTTPException(404, "fixture not found")
+        if row.status != "ready" or not _fixture_attestation_valid(row):
+            raise HTTPException(409, "fixture not independently ready")
+        assert isinstance(row.source_attestation, dict)
+        if actor == row.source_attestation["reviewed_by"]:
+            raise HTTPException(409, "reviewer cannot schedule their own control")
+        if not await _fixture_object_matches(storage):
+            raise HTTPException(409, "fixture object changed")
+        node = await session.get(ScreenerNode, row.target_node_id)
+        if node is None or node.status != "active" or node.provider != "hetzner":
+            raise HTTPException(409, "target node unavailable")
+        if not await _fixture_worker_ready(session, node=node, now=datetime.now(UTC)):
+            raise HTTPException(409, "fixture-capable worker not adopted")
+        row.status = "queued"
+        row.source_attestation = {**row.source_attestation, "scheduled_by": actor}
         return _view(row)
 
 
@@ -232,10 +1499,15 @@ async def claim_l2_report_canary(
         effective = await _resolve_effective_review_settings(
             session, instance_id=payload.instance_id, enrolled_node_id=node_id
         )
-        if (
-            effective.revision != payload.settings_revision
-            or effective.checksum != payload.settings_checksum
-        ):
+        # An unpinned canary runs under the worker's node-effective posture, so
+        # it still requires that posture to be current. A pinned canary carries
+        # its own posture and stays claimable by a worker whose node revision
+        # moved, but only by a worker that declares it applies the pin.
+        node_settings_current = (
+            effective.revision == payload.settings_revision
+            and effective.checksum == payload.settings_checksum
+        )
+        if not node_settings_current and not payload.accepts_review_settings_override:
             raise HTTPException(
                 status_code=409, detail="canary review settings changed"
             )
@@ -254,37 +1526,143 @@ async def claim_l2_report_canary(
             stale.status = "expired"
             stale.error_code = "lease-expired"
             stale.completed_at = now
-        active = await session.scalar(
-            select(func.count())
-            .select_from(ScreenerL2ReportCanary)
-            .where(
-                ScreenerL2ReportCanary.target_node_id == node_id,
-                ScreenerL2ReportCanary.status == "leased",
+        active = list(
+            await session.scalars(
+                select(ScreenerL2ReportCanary)
+                .where(
+                    ScreenerL2ReportCanary.target_node_id == node_id,
+                    ScreenerL2ReportCanary.status == "leased",
+                )
+                .with_for_update()
             )
         )
-        if active:
+        claimable = await _claimable_queue_filters(
+            session,
+            node=node,
+            payload=payload,
+            node_settings_current=node_settings_current,
+            source_only=bool(active),
+            now=now,
+        )
+        # A stale pin-capable worker passes only for a pinned row it could
+        # lease; otherwise it gets the refusal that makes it refresh its posture.
+        # Raising also rolls back the lazy expiry above; the next claim on this
+        # node from a current worker redoes it.
+        if not node_settings_current and not await session.scalar(
+            select(exists().where(*claimable))
+        ):
+            raise HTTPException(
+                status_code=409, detail="canary review settings changed"
+            )
+        if any(row.claimed_instance_id == payload.instance_id for row in active):
             return None
+        # Keep private-challenge runs isolated.
+        if any(row.run_mode == "full_runtime" for row in active):
+            return None
+        _, limits = await resolve_screener_node_channel_settings(
+            session, node_id=node_id
+        )
+        admission_open = limits.screening_concurrency > 0
+        if not admission_open and active:
+            # Admission is closed, so canaries may use workers production
+            # cannot. Preserve the legacy first lease without requiring a
+            # heartbeat; additional source-only leases require fresh worker
+            # heartbeats and the node lock serializes their count.
+            healthy_workers = await _fresh_worker_ids(session, node=node, now=now)
+            if payload.instance_id not in healthy_workers or len(active) >= min(
+                _MAX_PARALLEL_SOURCE_ONLY, len(healthy_workers)
+            ):
+                return None
         row = await session.scalar(
             select(ScreenerL2ReportCanary)
-            .where(
-                ScreenerL2ReportCanary.target_node_id == node_id,
-                ScreenerL2ReportCanary.status == "queued",
-            )
+            .where(*claimable)
             .order_by(ScreenerL2ReportCanary.created_at)
             .with_for_update(skip_locked=True)
         )
         if row is None:
             return None
-        try:
-            agent, _ = await _exact_source(session, row)
-        except HTTPException:
-            row.status = "incomplete"
-            row.error_code = "exact-source-changed"
-            row.completed_at = now
+        # Production admission is open: decide the hold on the exact row this
+        # worker would lease, after every queue filter above, so a canary it
+        # cannot take never holds or logs, and before any drift guard spends a
+        # storage read on a row that will wait. Keep new queue filters on
+        # ``queued`` and new per-row lease checks below this point.
+        if admission_open and await _canary_yields_to_production(
+            session,
+            node=node,
+            limits=limits,
+            instance_id=payload.instance_id,
+            active=len(active),
+            # The pinned retries a production claim from this worker could
+            # bind, as ``resolve_claim_binding`` derives them.
+            review_settings_scopes=claim_canary_scopes(
+                (
+                    (
+                        effective.revision,
+                        payload.instance_id,
+                        effective.scope,
+                        effective.checksum,
+                    )
+                    if effective.revision >= 1
+                    else None
+                ),
+                enrolled_node_id=node_id,
+            ),
+            now=now,
+        ):
             return None
+        bound_revision = payload.settings_revision
+        bound_checksum = payload.settings_checksum
+        lease_settings = effective.settings
+        override: ScreenerReviewSettingsOverride | None = None
+        if row.review_settings_revision is not None:
+            pinned = await _claimable_review_settings_pin(session, row)
+            if pinned is None:
+                # Terminal, like source drift: a 409 would roll back and leave
+                # this row at the head of the node's queue on every claim.
+                row.status = "incomplete"
+                row.error_code = "review-settings-pin-drift"
+                row.completed_at = now
+                return None
+            bound_revision = pinned.revision
+            bound_checksum = pinned.checksum
+            lease_settings = pinned.settings
+            override = ScreenerReviewSettingsOverride(
+                revision=pinned.revision,
+                scope=pinned.scope,
+                checksum=pinned.checksum,
+            )
+        agent = None
+        if row.source_kind == "canonical_starter_fixture":
+            if not _fixture_attestation_valid(row) or not await _fixture_object_matches(
+                storage
+            ):
+                row.status = "incomplete"
+                row.error_code = "fixture-source-drift"
+                row.completed_at = now
+                return None
+        else:
+            try:
+                agent, _ = await _exact_source(session, row)
+            except HTTPException:
+                row.status = "incomplete"
+                row.error_code = "exact-source-changed"
+                row.completed_at = now
+                return None
+        if agent is not None and row.source_attestation is not None:
+            try:
+                matches, _ = await _current_object_matches(
+                    storage, agent, row.artifact_sha256
+                )
+            except StorageError:
+                return None
+            if not matches:
+                row.status = "incomplete"
+                row.error_code = "source-object-drift"
+                row.completed_at = now
+                return None
         evidence = await scored_runtime_evidence_for_lease(
             session,
-            attempt_id=row.source_attempt_id,
+            attempt_id=row.source_attempt_id or row.canary_id,
             artifact_sha256=row.artifact_sha256,
             policy_version=13,
             bench_version=13,
@@ -296,31 +1674,51 @@ async def claim_l2_report_canary(
         token = secrets.token_urlsafe(32)
         row.status = "leased"
         row.claimed_instance_id = payload.instance_id
-        row.settings_revision = payload.settings_revision
-        row.settings_checksum = payload.settings_checksum
+        row.settings_revision = bound_revision
+        row.settings_checksum = bound_checksum
         row.runtime_evidence_sha256 = hashlib.sha256(
             json.dumps(
                 evidence.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
             ).encode()
         ).hexdigest()
         row.lease_token_hash = hashlib.sha256(token.encode()).hexdigest()
-        row.lease_expires_at = now + _LEASE
+        row.lease_expires_at = now + _canary_lease(
+            source_review_timeout_seconds=lease_settings.source_review_timeout_seconds,
+            l2_timeout_seconds=lease_settings.timeout_seconds,
+            run_mode=row.run_mode,
+            source_kind=row.source_kind,
+        )
         # URL issuance is scoped to this canary, not to a running screening attempt.
+        if agent is None:
+            key = row.fixture_key
+            if key is None:
+                raise HTTPException(409, "fixture object key missing")
+        else:
+            key = _artifact_key(agent.agent_id)
         url = await storage.presigned_get_url(
-            key=_artifact_key(agent.agent_id), expires_in=900
+            key=key,
+            expires_in=900,
         )
         return L2CanaryClaimResponse(
             canary_id=row.canary_id,
-            agent_id=row.agent_id,
-            source_attempt_id=row.source_attempt_id,
+            agent_id=row.agent_id or row.canary_id,
+            source_attempt_id=row.source_attempt_id or row.canary_id,
             artifact_sha256=row.artifact_sha256,
             bench_version=row.bench_version,
             policy_version=row.policy_version,
-            miner_hotkey=agent.miner_hotkey,
+            run_mode=cast(Literal["source_only", "full_runtime"], row.run_mode),
+            source_kind=cast(
+                Literal["submission", "canonical_starter_fixture"], row.source_kind
+            ),
+            source_attestation=row.source_attestation if agent is None else None,
+            miner_hotkey=agent.miner_hotkey
+            if agent is not None
+            else "operator-source-fixture",
             lease_token=token,
             lease_expires_at=row.lease_expires_at,
             download_url=url,
             scored_runtime_evidence=evidence,
+            review_settings_override=override,
         )
 
 
@@ -331,6 +1729,7 @@ async def complete_l2_report_canary(
     request: Request,
     _screener: ScreenerDep,
     session: SessionDep,
+    storage: Annotated[S3StorageClient | None, Depends(get_storage_client)] = None,
 ) -> L2CanaryCompleteResponse:
     node_id = getattr(request.state, "screener_node_id", None)
     now = datetime.now(UTC)
@@ -361,7 +1760,15 @@ async def complete_l2_report_canary(
             or now > _utc(row.lease_expires_at)
         ):
             raise HTTPException(status_code=409, detail="canary lease expired")
-        await _exact_source(session, row)
+        if row.source_kind == "canonical_starter_fixture":
+            if (
+                storage is None
+                or not _fixture_attestation_valid(row)
+                or not await _fixture_object_matches(storage)
+            ):
+                raise HTTPException(409, "fixture source changed")
+        else:
+            await _exact_source(session, row)
         if not _valid_report(row, payload.report):
             raise HTTPException(
                 status_code=409, detail="canary report identity mismatch"

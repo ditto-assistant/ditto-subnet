@@ -1,4 +1,8 @@
 ---
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_coding_hosted
+
 - name: Bootstrap approved native Coding RSA key custody without starting a service
   hosts: role_coding_hosted
   become: true

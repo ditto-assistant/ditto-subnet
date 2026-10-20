@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 import httpx
+from pydantic import ValidationError
 
 from ditto_screener.binary_analysis import (
     analyze_binary,
@@ -49,7 +50,7 @@ from ditto_screener.source_signals import (
     find_decisive_malicious_source,
     find_source_review_leads,
     is_executable_source_path,
-    mask_comments,
+    mask_lead_comments,
     source_path_priority,
 )
 from ditto_screening_protocol import (
@@ -68,6 +69,14 @@ from ditto_screening_protocol.models import (
     source_review_invariants_for_policy,
     source_review_pass_clauses_for_policy,
 )
+from ditto_screening_protocol.reason_codes import (
+    SOURCE_REVIEW_MODEL_TIMEOUT,
+    SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED,
+)
+from ditto_screening_protocol.review_ledger import (
+    MULTI_LOCATION_CATEGORIES,
+    concern_threshold_reached,
+)
 
 # Every policy version whose L1 policy text this build carries. The platform
 # may require any one of them during a scheduled activation window.
@@ -79,7 +88,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v26-policy-v13"
+        return "source-review-v32-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -149,54 +158,68 @@ def _note_from_arguments(arguments: Mapping[str, object]) -> dict[str, object] |
     return note
 
 
-def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> None:
-    """Bounded append; a concern evicts the oldest non-concern when full."""
+def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> bool:
+    """Keep a distinct concern location when a full ledger repeats others."""
     if len(notes) < _MAX_REVIEW_NOTES:
         notes.append(note)
-        return
+        return True
     if note.get("kind") != "concern":
-        return
+        return False
     for index, existing in enumerate(notes):
         if existing.get("kind") != "concern":
             del notes[index]
             notes.append(note)
-            return
+            return True
+    fields = ("category", "path", "line")
+    sites = [tuple(existing.get(field) for field in fields) for existing in notes]
+    new_site = tuple(note.get(field) for field in fields)
+    if new_site in sites:
+        return False
+    seen: set[tuple[object, ...]] = set()
+    for index, site in enumerate(sites):
+        if site in seen:
+            del notes[index]
+            notes.append(note)
+            return True
+        seen.add(site)
+    return False
 
 
-def substantiated_concern_count(
-    notes: Sequence[Mapping[str, object]],
-) -> int:
-    """Count concerns that could actually survive as a finding.
-
-    A ``concern`` note is a lead the reviewer recorded mid-inspection, not a
-    verdict. The reviewer records them liberally by design -- the prompt asks
-    for one "the moment you see one" -- so counting them raw makes any
-    budget-cut review look guilty. Production, 2026-08-28: every one of 273
-    concern notes cited a path, so "did it cite" separates nothing; distinct
-    locations do. Reviews that RAN TO COMPLETION and then concluded low risk
-    carried at most 2 substantiated concerns (mean 0.8), while budget- or
-    fault-terminated reviews carried 6 to 19.
-
-    The multi-location rule is the finding contract itself: a
-    ``benchmark_emulation`` or ``scorer_contract_manipulation`` claim needs two
-    distinct source locations to be admissible as a finding, so a single-site
-    note in those categories could never have become one either.
-    """
-    locations: dict[str, set[tuple[str, object]]] = {}
-    for note in notes:
-        if note.get("kind") != "concern":
-            continue
-        path = note.get("path")
-        if not isinstance(path, str) or not path:
-            continue
-        category = str(note.get("category") or "none")
-        locations.setdefault(category, set()).add((path, note.get("line")))
-    total = 0
-    for category, sites in locations.items():
-        if category in _MULTI_LOCATION_CATEGORIES and len(sites) < 2:
-            continue
-        total += len(sites)
-    return total
+def _record_note_feedback(
+    notes: list[dict[str, object]], note: dict[str, object] | None
+) -> dict[str, object]:
+    """Report storage truthfully and steer repeated concerns toward new evidence."""
+    if note is None:
+        return {"recorded": False, "notes": len(notes)}
+    site_fields = ("category", "path", "line")
+    same_site_count = (
+        sum(
+            existing.get("kind") == "concern"
+            and all(existing.get(field) == note.get(field) for field in site_fields)
+            for existing in notes
+        )
+        if note.get("kind") == "concern"
+        and isinstance(note.get("path"), str)
+        and isinstance(note.get("line"), int)
+        else 0
+    )
+    recorded = _append_note(notes, note)
+    feedback: dict[str, object] = {"recorded": recorded, "notes": len(notes)}
+    if same_site_count:
+        feedback["same_site_concerns"] = same_site_count + int(recorded)
+        if same_site_count >= 3:
+            feedback["guidance"] = (
+                "This site already has multiple concern notes. Do not restate "
+                "the same mechanism. If a distinct causal mechanism remains, "
+                "record it explicitly; otherwise inspect a different served-path "
+                "location or submit_review using the existing ledger."
+            )
+        else:
+            feedback["guidance"] = (
+                "This location already has a concern note. If this adds no distinct "
+                "causal evidence, inspect a different served-path location."
+            )
+    return feedback
 
 
 def ledger_disposition(
@@ -214,8 +237,9 @@ def ledger_disposition(
     at 1. Raising the operator's threshold changed nothing. A threshold has to
     mean "fewer than this many does not hold", so that is what this does.
     """
-    concerns = substantiated_concern_count(notes)
-    if concerns >= max(1, concern_hold_count):
+    # The threshold rule is shared with Platform's public review conclusion
+    # (ditto_screening_protocol.review_ledger), so the two cannot disagree.
+    if concern_threshold_reached(notes, concern_hold_count=concern_hold_count):
         return "inconclusive"
     cleared = sum(1 for note in notes if note.get("kind") == "cleared")
     if cleared >= max(1, clear_min_notes):
@@ -251,11 +275,24 @@ _MIN_MAX_COMPLETION_TOKENS = 2_000
 # among compatible providers, so a third slow post only burns another slice of
 # the lease without adding a distinct recovery path.
 _MODEL_TRANSPORT_RETRY_DELAYS_SECONDS = (1.0,)
+# A Ditto Router blue/green deploy rejects valid endpoint keys with HTTP 401
+# for a few minutes (observed 3-7 minutes after each cutover). Waiting that
+# out keeps a half-finished review instead of discarding it; a key that is
+# really revoked still parks after about five minutes.
+ROUTER_AUTH_RETRY_DELAYS_SECONDS = (15.0, 30.0, 60.0, 90.0, 120.0)
 
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
 _OPAQUE_SIZE_LIMIT = 2 * 1024 * 1024
+# The starter kit compiles one committed model larger than the lead-scan limit
+# into its reference service. Only that exact path whose SHA-256 matches an
+# installed provenance manifest is accounted for instead of marking the lead
+# scan truncated, the same rule tools/l2_analyzer.py applies. Every other
+# oversized member, including an unrecognized binary, still truncates.
+_STARTER_MODEL_PATH = "fixtures/models/cross-encoder.onnx"
+_MAX_STARTER_MODEL_BYTES = 20 * 1024 * 1024
+_STARTER_MANIFEST_DIR = Path(__file__).parent / "data"
 _MAX_TOOL_OUTPUT_CHARS = 48_000
 _MAX_TOTAL_TOOL_CHARS = 8_000_000
 _MAX_READ_LINES = 400
@@ -283,13 +320,13 @@ _SOURCE_REVIEW_FAILURE_CODES: Mapping[str, str] = {
     "source archive contains a non-canonical path": "archive-invalid",
     "source archive contains a duplicate path": "archive-invalid",
     "provenance file could not be read": "archive-invalid",
+    "source archive changed during review": "archive-invalid",
     "static preflight mode must be off, shadow, or enforce": "detector-config-invalid",
     "max_completion_request_seconds must be finite and positive": (
         "request-timeout-config-invalid"
     ),
     # The reviewer exhausted a budget we set. Not infrastructure: the submission
     # was too large or too deep to review within the configured bounds.
-    "source reviewer exceeded lease budget": "lease-budget-exhausted",
     "source reviewer exceeded read budget": "read-budget-exhausted",
     "source reviewer exceeded step budget": "step-budget-exhausted",
     # The upstream model misbehaved (truncated completion, malformed tool call,
@@ -308,15 +345,20 @@ _SOURCE_REVIEW_FAILURE_CODES: Mapping[str, str] = {
     "analyze_binary path is invalid": "model-tool-call-invalid",
     "source reviewer requested an unsupported tool": "model-tool-call-invalid",
     "source reviewer cited an unknown archive member": "model-cited-unknown-member",
-    # The model returned a verdict that contradicts itself.
-    "source review has unexpected fields": "inconsistent-verdict",
-    "source review fields are invalid": "inconsistent-verdict",
-    "source review evidence is invalid": "inconsistent-verdict",
-    "source review evidence fields are invalid": "inconsistent-verdict",
-    "source review none category must be exclusive": "inconsistent-verdict",
-    "low-risk source review contains a prohibited category": "inconsistent-verdict",
-    "elevated source review cannot use none": "inconsistent-verdict",
-    "elevated source review is missing category evidence": "inconsistent-verdict",
+    # Fixed, source-free subcodes distinguish repairable reviewer contract
+    # failures without publishing its arguments or untrusted source text.
+    "source review has unexpected fields": "inconsistent-verdict-extra-fields",
+    "source review fields are invalid": "inconsistent-verdict-fields",
+    "source review evidence is invalid": "inconsistent-verdict-evidence",
+    "source review evidence fields are invalid": "inconsistent-verdict-evidence-fields",
+    "source review none category must be exclusive": "inconsistent-verdict-none-mixed",
+    "low-risk source review contains a prohibited category": (
+        "inconsistent-verdict-low-risk-category"
+    ),
+    "elevated source review cannot use none": "inconsistent-verdict-elevated-none",
+    "elevated source review is missing category evidence": (
+        "inconsistent-verdict-missing-evidence"
+    ),
     # Screener-side data we ship. This one really is our infrastructure.
     "at least one provenance manifest is required": "provenance-invalid",
     "provenance manifest is too large": "provenance-invalid",
@@ -367,9 +409,7 @@ def source_review_categories_for_policy(policy_version: int) -> frozenset[str]:
 _ADVISORY_CATEGORIES = frozenset(
     {"external_build_dependency", "user_isolation_correctness"}
 )
-_MULTI_LOCATION_CATEGORIES = frozenset(
-    {"benchmark_emulation", "scorer_contract_manipulation"}
-)
+_MULTI_LOCATION_CATEGORIES = MULTI_LOCATION_CATEGORIES
 _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
     {
         "rate_limit_exceeded",
@@ -380,12 +420,15 @@ _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
     }
 )
 
-# A single upstream completion must not consume the whole L1 budget.  The
+# A single upstream completion must not consume the whole L1 budget. The
 # caller keeps the renewable lease deadline as the overall review budget, while
-# this cap leaves time for one fresh retry and OpenRouter's provider failover.
-# A source-review turn produces a tool call or compact verdict, not a long-form
-# answer; 45 seconds is already generous for the 4k operator output budget.
-_MAX_COMPLETION_REQUEST_SECONDS = 45.0
+# this cap leaves time for one fresh retry and provider failover. High-reasoning
+# source turns can exceed 45 seconds even on a healthy provider; that cap
+# caused two timeouts and a failed review within a 600-second aggregate budget.
+_MAX_COMPLETION_REQUEST_SECONDS = 180.0
+# A model-turn timeout this close to the aggregate lease deadline is the lease
+# running out, not a provider fault that leaves the review time to continue.
+_LEASE_EXPIRY_SLACK_SECONDS = 1.0
 
 
 def _retryable_model_error_type(payload: object) -> str | None:
@@ -436,20 +479,84 @@ def _body_signature(payload: object) -> str:
         return "non-json"
     if not isinstance(payload, dict):
         return f"type={type(payload).__name__}"
-    keys = ",".join(sorted(str(key) for key in payload)[:10])
+    known_keys = {
+        "error",
+        "choices",
+        "output",
+        "id",
+        "object",
+        "model",
+        "usage",
+        "created",
+    }
+    keys = ",".join(
+        sorted(key for key in payload if isinstance(key, str) and key in known_keys)
+    )
+    unknown_count = sum(key not in known_keys for key in payload)
     error = payload.get("error")
     error_class = ""
     if isinstance(error, Mapping):
-        error_class = str(
-            error.get("code") or error.get("type") or error.get("error_type") or ""
-        )[:60]
+        code = error.get("code")
+        if isinstance(code, int) and 100 <= code <= 599:
+            error_class = str(code)
+        elif (
+            isinstance(code, str)
+            and len(code) == 3
+            and code.isascii()
+            and code.isdigit()
+        ):
+            error_class = code
     elif error:
-        error_class = str(error)[:60]
+        error_class = "non-object"
     choices = payload.get("choices")
-    return (
-        f"keys=[{keys}] error_class={error_class!r} "
+    signature = (
+        f"keys=[{keys}] other_keys={unknown_count} error_class={error_class!r} "
         f"choices={type(choices).__name__ if choices is not None else 'absent'}"
     )
+    provider_limit = _provider_limit_category(payload)
+    if provider_limit:
+        signature += f" provider_limit={provider_limit}"
+    return signature
+
+
+def _provider_limit_category(payload: object) -> str | None:
+    """Classify a provider refusal without copying upstream text into logs.
+
+    Provider error messages are untrusted: even an error-only envelope can echo
+    a request, source excerpt, account identifier, or credential. The log gets
+    only one of these fixed labels, never the provider's message or model name.
+    """
+    if not isinstance(payload, Mapping) or "choices" in payload or "output" in payload:
+        return None
+    error = payload.get("error")
+    if not isinstance(error, Mapping):
+        return None
+    message = error.get("message")
+    if not isinstance(message, str):
+        return None
+    lowered = message[:1000].casefold()
+    if "limit_rpm/" in lowered or "requests per minute" in lowered:
+        return "key_rpm"
+    if "insufficient credits" in lowered or "credit balance" in lowered:
+        return "credits"
+    if "upstream" in lowered and (
+        "capacity" in lowered or "rate limit" in lowered or "overloaded" in lowered
+    ):
+        return "upstream_capacity"
+    return None
+
+
+def _http_error_signature(response: httpx.Response) -> str:
+    """Describe a rejected HTTP status with the provider's bounded message."""
+    signature = f"http-status={response.status_code}"
+    try:
+        payload: object = response.json()
+    except ValueError:
+        return signature
+    provider_limit = _provider_limit_category(payload)
+    if provider_limit:
+        signature += f" provider_limit={provider_limit}"
+    return signature
 
 
 class SourceReviewBudgetExhausted(ValueError):
@@ -465,9 +572,13 @@ class SourceReviewBudgetExhausted(ValueError):
         read_files_used: int,
         max_read_bytes: int = _MAX_TOTAL_TOOL_CHARS,
         policy_version: int = SCREENING_POLICY_VERSION,
+        verdict_unsettled: bool = False,
+        stop_reason: str | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
+        self.verdict_unsettled = verdict_unsettled
+        self.stop_reason = stop_reason
         self.max_steps = max_steps
         self.steps_used = steps_used
         self.read_bytes_used = read_bytes_used
@@ -484,7 +595,33 @@ class SourceReviewBudgetExhausted(ValueError):
             steps_used=self.steps_used,
             max_read_bytes=self.max_read_bytes,
             read_bytes_used=self.read_bytes_used,
+            budget_stop_reason="step" if self.verdict_unsettled else self.stop_reason,
         )
+
+
+def l1_verdict_unsettled(observation: object) -> bool:
+    """Whether L1 stopped without one host-valid verdict it could settle on.
+
+    Two reviewer-owned stops qualify: spending every step without a valid
+    verdict (the inconsistency stays in ``error_code``), and running out of
+    L1's own time with a ledger that cannot admit or clear on its own. Either
+    way the reviewer, not infrastructure, ran out, and the deep review still
+    owes a decision on the recorded notes.
+    """
+    audit = getattr(observation, "review_audit", None)
+    code = getattr(observation, "error_code", None)
+    if not isinstance(audit, Mapping) or audit.get("stage") != "l1":
+        return False
+    if not isinstance(code, str):
+        return False
+    stop = audit.get("budget_stop_reason")
+    if stop == "step":
+        return code.startswith("source-review-inconsistent-verdict")
+    return (
+        stop == "time"
+        and code == "source-review-lease-budget-exhausted"
+        and getattr(observation, "failure_disposition", None) == "inconclusive"
+    )
 
 
 def policy_v10_static_assessment(
@@ -1196,6 +1333,14 @@ and the two-location evidence bar before citing anything:
   answers the canary shape, so a fixture keyed to the request user is cleared
   even at high density.
 
+The review_leads inventory reports item_selection and fingerprint_selection:
+truncated, omitted_count and omitted_by_kind describe candidates dropped after
+per-rule/file bounds. scan_truncated separately means the archive scan hit its
+file/byte budget. Selection favors high severity, then kind diversity.
+fingerprint_selection.saturation_leads points to repeated raw-scan kinds that
+can be padded with comments or strings. Inspect these as leads, never proof of
+evasion; use source search to follow omitted kinds when needed.
+
 The inventory also carries "emulation_fingerprints": bench-v12 anti-emulation
 leads over served/executable source, each naming a matched fingerprint kind, a
 severity, and location-only path:line roles. They automate the greppable bypass
@@ -1637,6 +1782,14 @@ and the two-location evidence bar before citing anything:
   answers the canary shape, so a fixture keyed to the request user is cleared
   even at high density.
 
+The review_leads inventory reports item_selection and fingerprint_selection:
+truncated, omitted_count and omitted_by_kind describe candidates dropped after
+per-rule/file bounds. scan_truncated separately means the archive scan hit its
+file/byte budget. Selection favors high severity, then kind diversity.
+fingerprint_selection.saturation_leads points to repeated raw-scan kinds that
+can be padded with comments or strings. Inspect these as leads, never proof of
+evasion; use source search to follow omitted kinds when needed.
+
 The inventory also carries "emulation_fingerprints": bench-v12 anti-emulation
 leads over served/executable source, each naming a matched fingerprint kind, a
 severity, and location-only path:line roles. They automate the greppable bypass
@@ -1851,13 +2004,21 @@ For build and security findings, trace the reachable lifecycle operation to an
 unauthorized read, disclosure, write, execution, persistence, privilege, or
 material availability effect; no model or scorer effect is required.
 
+For provider_bypass, do not infer the scored environment from Dockerfile ENV
+alone. The V13 scorer locks DITTOBENCH_PROVIDER=platform and supplies
+DITTOBENCH_INFERENCE_BASE_URL after caller environment. An external-provider
+default guarded only by the selector being absent is a conditional lead, not
+a proved scored-path bypass. Trace the effective served path for an override,
+ignored selector, or direct provider call that remains reachable under the
+locked environment. Preserve a concern when that alternate route is proved.
+
 Decide I1 through I8 independently. I8 EVALUATION INDEPENDENCE prohibits live
 case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
 markers, or `bench_version` from changing substantive retrieval, capability
 ordering, authority, execution, or output beyond the published compatibility
 contract. Complete source proof is enforceable. Behavioral
-degradation alone is a lead until a versioned post-commit, controlled,
-predeclared and replicated test attributes it to evaluation dependence. Use
+degradation alone is a lead, never a breach; screening runs no separate
+behavioral test that could attribute it later. Use
 evaluation_independent_runtime or no_evaluation_identity_branch only after
 tracing the served path; unreachable_nonruntime_code remains available when the
 effective build excludes the path.
@@ -1885,6 +2046,14 @@ applies, and the semantic or trajectory effect. Common formulas, finite domain
 vocabularies, typo handling, prescriptive wording, and fixture references alone
 are insufficient. Distributed compilation across routing, retrieval, prompts,
 calculators and finalizers remains one end-to-end mechanism.
+An instruction to restate a model-selected monetary amount in equivalent units
+because the current user requested minor units is not, by itself, proof of a
+benchmark-specific compiler. Check whether the prompt encodes an evaluation-
+derived interpretation, operand or output recipe beyond ordinary unit guidance;
+cite its activation and substantive effect. ANSWER-slot extraction that copies
+the model-authored value does not turn formatting advice into host authority.
+Keep post-finalization currency rescaling under I4 and proven benchmark-family
+prompt compilation under I5; do not infer either solely from the word cents.
 
 I7 also prohibits incorrect host removal of an applicable, authorized and
 available capability. Check quoted titles, entity names, compound requests,
@@ -1894,10 +2063,18 @@ genuine authoritative model planner may produce an exact pinned plan; an
 advisory planner must remain rejectable and every valid deviation executable.
 Neither architecture bypasses authorization or safety.
 
+On a scored v13 `/run`, the validator supplies `inference_base_url` as a
+case-scoped broker URL. A harness may build a per-request model client from it
+and send its inference bearer to that broker. This is the published attribution
+path, not credential exfiltration or provider bypass by itself. Trace the
+field's actual origin and outbound destination: a URL derived from user text,
+retrieved data, or an unrelated host remains a security lead. Do not require a
+source-side allowlist for the validator-supplied field.
+
 Opaque files are not violations by presence. Establish each loaded component's
 actual role and apply the published role-specific verification requirement.
-Private behavioral testing is mandatory only when that role requires it or
-source causality remains unresolved. Tests, diagnostics, and helpers require
+Screening runs no private behavioral test, so settle each role from traced
+source causality. Tests, diagnostics, and helpers require
 effective build/startup/runtime reachability; refuting one dormant lead does
 not clear the rest of the artifact.
 Before labeling an optional environment-gated branch reachable, inspect its
@@ -1957,6 +2134,8 @@ def _source_review_system_prompt(policy_version: int) -> str:
     prompt = _SYSTEM_PROMPT_HEAD + tail + batch_guidance
     if policy_version >= 13:
         prompt = prompt.replace(
+            "all seven invariants below", "all eight invariants below"
+        ).replace(
             "one decision for each I1 through I7.",
             "one decision for each I1 through I8.",
         )
@@ -2196,7 +2375,7 @@ def _rust_runtime_references(source: str) -> tuple[set[str], bool]:
             ("identifier", "include"),
             ("punctuation", "!"),
             ("punctuation", "("),
-        ] and not _rust_reference_is_test_only(tokens, index):
+        ]:
             argument = index + 3
             if argument < len(tokens) and tokens[argument][0] == "string":
                 references.add(tokens[argument][1])
@@ -2235,7 +2414,7 @@ def _rust_runtime_references(source: str) -> tuple[set[str], bool]:
             ("punctuation", "["),
             ("identifier", "path"),
             ("punctuation", "="),
-        ] and not _rust_reference_is_test_only(tokens, index):
+        ]:
             argument = index + 4
             if argument < len(tokens) and tokens[argument][0] == "string":
                 references.add(tokens[argument][1])
@@ -2243,34 +2422,6 @@ def _rust_runtime_references(source: str) -> tuple[set[str], bool]:
                 unresolved = True
         index += 1
     return references, unresolved
-
-
-def _rust_reference_is_test_only(
-    tokens: list[tuple[str, str]], reference_index: int
-) -> bool:
-    """Return whether a Rust source indirection is guarded only for tests."""
-    start = reference_index - 1
-    while start >= 0 and tokens[start] not in {
-        ("punctuation", ";"),
-        ("punctuation", "{"),
-        ("punctuation", "}"),
-    }:
-        start -= 1
-    start += 1
-
-    cfg_test = [
-        ("punctuation", "#"),
-        ("punctuation", "["),
-        ("identifier", "cfg"),
-        ("punctuation", "("),
-        ("identifier", "test"),
-        ("punctuation", ")"),
-        ("punctuation", "]"),
-    ]
-    return any(
-        tokens[cursor : cursor + len(cfg_test)] == cfg_test
-        for cursor in range(start, reference_index)
-    )
 
 
 def _is_standalone_shell_script(path: str) -> bool:
@@ -2390,13 +2541,20 @@ class TarSourceRepository:
     """A read-only, size-bounded view over regular files in a verified tarball."""
 
     def __init__(
-        self, archive_path: str, *, static_preflight_v2_mode: str = "off"
+        self,
+        archive_path: str,
+        *,
+        static_preflight_v2_mode: str = "off",
+        provenance_manifest_paths: tuple[str, ...] | None = None,
     ) -> None:
         if static_preflight_v2_mode not in {"off", "shadow", "enforce"}:
             raise ValueError("static preflight mode must be off, shadow, or enforce")
         self._archive_path = archive_path
+        self._archive_identity = self._current_archive_identity()
         self._static_preflight_v2_mode = static_preflight_v2_mode
+        self._provenance_manifest_paths = provenance_manifest_paths
         self._binary_analysis_cache: dict[str, dict[str, object]] = {}
+        self._member_digests: dict[str, str] | None = None
         members: list[_Member] = []
         seen: set[str] = set()
         with tarfile.open(archive_path, mode="r:gz") as archive:
@@ -2420,6 +2578,17 @@ class TarSourceRepository:
                 seen.add(normalized)
                 members.append(_Member(normalized, member.name, member.size))
         self._members = {member.name: member for member in members}
+        self._runtime_paths: frozenset[str] | None = None
+
+    def runtime_paths(self) -> frozenset[str]:
+        """Members the build or served code explicitly makes executable.
+
+        Computed once: the archive members are immutable for the lifetime of
+        the repository.
+        """
+        if self._runtime_paths is None:
+            self._runtime_paths = self._explicit_runtime_paths()
+        return self._runtime_paths
 
     def _explicit_runtime_paths(self) -> frozenset[str]:
         """Resolve Cargo-declared and Rust-included source outside normal roots.
@@ -2603,13 +2772,29 @@ class TarSourceRepository:
                 opaque = opaque[: max(0, len(opaque) // 2)]
                 binary_analysis = binary_analysis[: len(opaque)]
 
-    def review_leads(self) -> dict[str, object]:
-        """Precompute bounded location-only leads without exposing source text."""
+    def review_leads(
+        self, provenance_manifest_paths: tuple[str, ...] | None = None
+    ) -> dict[str, object]:
+        """Precompute bounded location-only leads without exposing source text.
+
+        Rule leads and emulation fingerprints point the reviewer at code the
+        miner wrote. A file whose exact path and sha256 ship in a runtime
+        starter manifest was not, so it stays out of those two scans; a staged
+        manifest grants nothing, and one changed byte breaks the match and
+        keeps every lead. Reachability, static-v2 advisories, and the other
+        whole-program analyses still read every file, because a miner-authored
+        chain can run through an unmodified starter file.
+        """
+        manifests = self._starter_manifests(provenance_manifest_paths)
+        trusted_digests = _trusted_starter_digests(manifests)
         readable: list[tuple[str, str]] = []
+        miner_readable: list[tuple[str, str]] = []
+        trusted_starter_skipped = 0
         bytes_scanned = 0
         files_scanned = 0
         members_considered = 0
         truncated = False
+        nontext: list[dict[str, object]] = []
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
             # Runtime sources get the bounded scan budget before docs, tests,
             # and other decoys, while the latter remain available to the broad
@@ -2621,7 +2806,11 @@ class TarSourceRepository:
             for name in ordered_names:
                 member_info = self._members[name]
                 if member_info.size > _OPAQUE_SIZE_LIMIT:
-                    truncated = True
+                    model = self._published_starter_model(archive, name, manifests)
+                    if model is None:
+                        truncated = True
+                    else:
+                        nontext.append(model)
                     continue
                 if members_considered >= _MAX_LEAD_SCAN_FILES:
                     truncated = True
@@ -2642,6 +2831,12 @@ class TarSourceRepository:
                     continue
                 readable.append((name, text))
                 files_scanned += 1
+                # Only a path some manifest pins can match, so hash just those.
+                pinned = trusted_digests.get(name)
+                if pinned and hashlib.sha256(raw).hexdigest() in pinned:
+                    trusted_starter_skipped += 1
+                else:
+                    miner_readable.append((name, text))
         static_advisories: list[dict[str, object]] = []
         if self._static_preflight_v2_mode != "off":
             reachability = analyze_reachability(dict(readable))
@@ -2656,14 +2851,22 @@ class TarSourceRepository:
                 }
                 for item in static_v2.advisory[:16]
             ]
+        item_selection: dict[str, object] = {}
+        fingerprint_selection: dict[str, object] = {}
+        items = find_source_review_leads(
+            miner_readable, selection_report=item_selection
+        )
+        fingerprints = find_benchmark_emulation_fingerprints(
+            miner_readable, selection_report=fingerprint_selection
+        )
         return {
-            "items": [*find_source_review_leads(readable), *static_advisories][
-                :_MAX_LEAD_SCAN_FILES
-            ],
-            "emulation_fingerprints": find_benchmark_emulation_fingerprints(readable),
+            "items": [*items, *static_advisories],
+            "item_selection": item_selection,
+            "emulation_fingerprints": fingerprints,
+            "fingerprint_selection": fingerprint_selection,
             "unmatchable_category_guards": guard_report(
                 find_unmatchable_category_guards(
-                    (path, mask_comments(text)) for path, text in readable
+                    (path, mask_lead_comments(text, path)) for path, text in readable
                 )
             ),
             "generator_mirroring": self._generator_mirroring_analysis(readable),
@@ -2671,9 +2874,56 @@ class TarSourceRepository:
                 self._review_adaptive_model_routing_analysis(readable)
             ),
             "files_scanned": files_scanned,
+            "trusted_starter_skipped": trusted_starter_skipped,
             "members_considered": members_considered,
             "bytes_scanned": bytes_scanned,
+            "nontext": nontext,
+            "scan_truncated": truncated,
             "truncated": truncated,
+        }
+
+    def _starter_manifests(self, override: tuple[str, ...] | None) -> tuple[str, ...]:
+        """A per-call manifest set, else the repository's, else the runtime set.
+
+        Only ``None`` falls through; an explicit empty tuple trusts nothing.
+        """
+        return _starter_manifest_paths(
+            override if override is not None else self._provenance_manifest_paths
+        )
+
+    def _published_starter_model(
+        self, archive: tarfile.TarFile, name: str, manifests: tuple[str, ...]
+    ) -> dict[str, object] | None:
+        """Account for an oversized member only as the exact starter model."""
+        member_info = self._members[name]
+        if name != _STARTER_MODEL_PATH or member_info.size > _MAX_STARTER_MODEL_BYTES:
+            return None
+        digests = _starter_model_digests(manifests)
+        if not digests:
+            return None
+        member = archive.getmember(member_info.archive_name)
+        # getmember resolves a name to its last entry, and extractfile follows
+        # links. The constructor admits one regular file per path, so anything
+        # else here is a later link or special entry it skipped. Never let that
+        # entry's bytes vouch for the admitted file; the analyzer's workspace
+        # walk likewise never follows links.
+        if not member.isfile():
+            return None
+        extracted = archive.extractfile(member)
+        if extracted is None:
+            return None
+        digest = hashlib.sha256()
+        hashed = 0
+        while chunk := extracted.read(1024 * 1024):
+            hashed += len(chunk)
+            digest.update(chunk)
+        if hashed != member_info.size or digest.hexdigest() not in digests:
+            return None
+        return {
+            "path": name,
+            "bytes": member_info.size,
+            "sha256": digest.hexdigest(),
+            "provenance": "starter_manifest_digest",
         }
 
     @staticmethod
@@ -2761,23 +3011,12 @@ class TarSourceRepository:
         if mode not in {"off", "shadow", "enforce"}:
             raise ValueError("static preflight mode must be off, shadow, or enforce")
         readable: list[tuple[str, str]] = []
-        manifests = provenance_manifest_paths or tuple(
-            str(path)
-            for path in sorted(
-                (Path(__file__).parent / "data").glob("starter-kit-provenance-*.json")
-            )
+        trusted_digests = _trusted_starter_digests(
+            self._starter_manifests(provenance_manifest_paths)
         )
-        trusted_digests: dict[str, set[str]] = {}
-        for manifest_path in manifests:
-            manifest = _load_provenance_manifest(Path(manifest_path))
-            files = manifest["files"]
-            assert isinstance(files, dict)
-            for path, digest in files.items():
-                assert isinstance(path, str) and isinstance(digest, str)
-                trusted_digests.setdefault(path, set()).add(digest)
         bytes_scanned = 0
         members_considered = 0
-        runtime_paths = self._explicit_runtime_paths()
+        runtime_paths = self.runtime_paths()
         all_readable: dict[str, str] = {}
         trusted_paths: set[str] = set()
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
@@ -2804,7 +3043,7 @@ class TarSourceRepository:
                     continue
                 raw = extracted.read(member_info.size + 1)
                 trusted = hashlib.sha256(raw).hexdigest() in trusted_digests.get(
-                    name, set()
+                    name, ()
                 )
                 if trusted:
                     trusted_paths.add(name)
@@ -2816,8 +3055,11 @@ class TarSourceRepository:
                 all_readable[name] = text
                 if not trusted and name in runtime_paths:
                     readable.append((name, text))
+        # Test-only Rust items stay in scope: no build flag can be proven off.
         legacy_matches = find_decisive_malicious_source(
-            readable, explicitly_executable_paths=runtime_paths
+            readable,
+            explicitly_executable_paths=runtime_paths,
+            include_test_only=True,
         )
         if not legacy_matches and mode == "off":
             return None
@@ -3124,6 +3366,13 @@ class TarSourceRepository:
                 for dimension, minimum in local_minimums.items()
             ):
                 continue
+            # A large ordinary agent file can contain question examples,
+            # retrieval vocabulary, model calls, and answer returns without
+            # implementing a deterministic answer path. Those file-wide words
+            # remain aggregate review leads, but cannot select the automatic
+            # served-generator hold by themselves.
+            if "direct_answer" not in local["deterministic_answer_path"]:
+                continue
             for dimension in sorted(required):
                 marker_lines = local[dimension]
                 if marker_lines:
@@ -3316,13 +3565,26 @@ class TarSourceRepository:
         if cached is not None:
             return cached
         member_info = self._members[normalized]
-        with tarfile.open(self._archive_path, mode="r:gz") as archive:
-            member = archive.getmember(member_info.archive_name)
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                return {"error": "file-unavailable"}
-            sample = sample_stream(extracted, size=member_info.size)
-        result = analyze_binary(sample, path=normalized)
+        try:
+            with tarfile.open(self._archive_path, mode="r:gz") as archive:
+                member = archive.getmember(member_info.archive_name)
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise OSError("file-unavailable")
+                sample = sample_stream(extracted, size=member_info.size)
+            result = analyze_binary(sample, path=normalized)
+        except Exception as error:  # noqa: BLE001
+            # One hostile blob must not abort review. Never log payload-derived
+            # exception text or a traceback, and cache failures just like facts.
+            logger.warning("Binary analysis failed: %s", type(error).__name__)
+            result = {
+                "path": normalized,
+                "bytes": member_info.size,
+                "format": "unknown",
+                "analysis_failed": True,
+                "analysis_truncated": True,
+                "error": "analysis-failed",
+            }
         self._binary_analysis_cache[normalized] = result
         return result
 
@@ -3349,6 +3611,7 @@ class TarSourceRepository:
         return _bounded_json({"hits": hits, "truncated": False})
 
     def _read_text(self, path: str) -> str | None:
+        self._assert_archive_unchanged()
         member_info = self._members[path]
         if member_info.size > 2 * 1024 * 1024:
             return None
@@ -3364,16 +3627,53 @@ class TarSourceRepository:
             return None
 
     def _member_sha256(self, path: str) -> str:
-        member_info = self._members[path]
-        digest = hashlib.sha256()
+        self._assert_archive_unchanged()
+        if self._member_digests is None:
+            self._member_digests = self._hash_members()
+        self._assert_archive_unchanged()
+        return self._member_digests[path]
+
+    def _current_archive_identity(self) -> tuple[int, int, int, int, int]:
+        stat = Path(self._archive_path).stat()
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
+
+    def _assert_archive_unchanged(self) -> None:
+        if self._current_archive_identity() != self._archive_identity:
+            raise ValueError("source archive changed during review")
+
+    def _hash_members(self) -> dict[str, str]:
+        """Hash every validated member in one sequential pass over the archive.
+
+        Provenance compares each supported manifest file by digest; reopening
+        the gzip stream per file re-decompressed the archive prefix every time.
+        """
+        digests: dict[str, str] = {}
         with tarfile.open(self._archive_path, mode="r:gz") as archive:
-            member = archive.getmember(member_info.archive_name)
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                raise ValueError("provenance file could not be read")
-            while chunk := extracted.read(1024 * 1024):
-                digest.update(chunk)
-        return digest.hexdigest()
+            for member in archive:
+                name = member.name.removeprefix("./")
+                member_info = self._members.get(name)
+                if (
+                    member_info is None
+                    or member_info.archive_name != member.name
+                    or not member.isfile()
+                ):
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise ValueError("provenance file could not be read")
+                digest = hashlib.sha256()
+                while chunk := extracted.read(1024 * 1024):
+                    digest.update(chunk)
+                digests[name] = digest.hexdigest()
+        if digests.keys() != self._members.keys():
+            raise ValueError("provenance file could not be read")
+        return digests
 
     def member_sha256(self, path: str) -> str:
         """Return the digest of one validated regular archive member."""
@@ -3404,6 +3704,7 @@ class OpenRouterSourceReviewAgent:
         transport_retry_delays: Sequence[float] = (
             _MODEL_TRANSPORT_RETRY_DELAYS_SECONDS
         ),
+        auth_retry_delays: Sequence[float] = ROUTER_AUTH_RETRY_DELAYS_SECONDS,
         inference_provider: str = "openrouter",
         max_completion_request_seconds: float | None = None,
     ) -> None:
@@ -3441,18 +3742,14 @@ class OpenRouterSourceReviewAgent:
         self._transport_retry_delays = tuple(
             max(0.0, float(delay)) for delay in transport_retry_delays
         )
+        self._auth_retry_delays = tuple(
+            max(0.0, float(delay)) for delay in auth_retry_delays
+        )
         self._static_preflight_v2_mode = static_preflight_v2_mode
         self._provenance_manifest_files = (
             (provenance_manifest_file,)
             if provenance_manifest_file is not None
-            else tuple(
-                str(path)
-                for path in sorted(
-                    (Path(__file__).parent / "data").glob(
-                        "starter-kit-provenance-*.json"
-                    )
-                )
-            )
+            else _starter_manifest_paths()
         )
         self._transport = transport
 
@@ -3471,6 +3768,7 @@ class OpenRouterSourceReviewAgent:
             repository = TarSourceRepository(
                 archive_path,
                 static_preflight_v2_mode=self._static_preflight_v2_mode,
+                provenance_manifest_paths=self._provenance_manifest_files,
             )
             result, clearance_certified = await self._run(
                 repository,
@@ -3479,6 +3777,12 @@ class OpenRouterSourceReviewAgent:
                 deadline=deadline,
                 notes=notes,
                 policy_version=policy_version,
+                validate_result=lambda value: _parse_review(
+                    value,
+                    artifact_sha256=artifact_sha256,
+                    repository=repository,
+                    policy_version=policy_version,
+                ),
             )
             observation = _parse_review(
                 result,
@@ -3523,8 +3827,12 @@ class OpenRouterSourceReviewAgent:
             # positive coverage admits it; a clean-but-thin ledger holds and
             # shows exactly how far inspection got. The budgets therefore
             # tune inspection depth, not fate.
+            # A reviewer that never produced a valid verdict holds rather than
+            # admitting on its ledger; policy v13 escalates it to L2/L3.
             disposition = (
-                ledger_disposition(
+                "inconclusive"
+                if budget is not None and budget.verdict_unsettled
+                else ledger_disposition(
                     notes,
                     concern_hold_count=self._concern_hold_count,
                     clear_min_notes=self._clear_min_notes,
@@ -3567,6 +3875,7 @@ class OpenRouterSourceReviewAgent:
         deadline: float | None = None,
         notes: list[dict[str, object]] | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        validate_result: Callable[[object], object] | None = None,
     ) -> tuple[object, bool]:
         if notes is None:
             notes = []
@@ -3589,28 +3898,49 @@ class OpenRouterSourceReviewAgent:
         tool_correction_used = False
         read_files: set[str] = set()
         runtime_source_read = False
+        schema_repair_turn = False
+        last_schema_error: ValueError | None = None
+
+        def lease_exhausted(step: int) -> SourceReviewBudgetExhausted:
+            return SourceReviewBudgetExhausted(
+                "source-review-lease-budget-exhausted",
+                max_steps=self._max_steps,
+                steps_used=min(step, self._max_steps),
+                read_bytes_used=delivered,
+                read_files_used=len(read_files),
+                max_read_bytes=self._max_read_bytes,
+                policy_version=policy_version,
+                stop_reason="time",
+            )
+
         if progress is not None:
             progress(0, self._max_steps)
         async with httpx.AsyncClient(
             transport=self._transport, timeout=self._timeout_seconds
         ) as client:
-            for _step in range(self._max_steps):
+            for _step in range(self._max_steps + 1):
+                if _step == self._max_steps and not schema_repair_turn:
+                    break
                 # The per-request timeout bounds one model turn; the lease
                 # deadline bounds the whole review across turns. Without the
                 # aggregate bound, max_steps slow turns could each run the full
                 # per-request timeout and outlive the screening lease.
                 request_timeout = self._timeout_seconds
+                lease_bounded_turn = False
                 if deadline is not None:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
-                        raise ValueError("source reviewer exceeded lease budget")
+                        raise lease_exhausted(_step)
+                    lease_bounded_turn = remaining <= min(
+                        self._timeout_seconds, self._max_completion_request_seconds
+                    )
                     request_timeout = min(request_timeout, remaining)
                 assessment_phase = (
                     _coverage_complete(notes)
                     or any(note.get("kind") == "concern" for note in notes)
                     or _step >= max(2, (self._max_steps * 3) // 4)
                 )
-                final_turn = _step + 1 == self._max_steps
+                final_turn = _step + 1 >= self._max_steps
                 if final_turn:
                     # Do not discard a complete review merely because the
                     # analyst kept exploring until its final allowed turn.
@@ -3628,19 +3958,32 @@ class OpenRouterSourceReviewAgent:
                             ),
                         }
                     )
-                message = await self._completion_message(
-                    client,
-                    api_key,
-                    _compacted_review_messages(messages, notes),
-                    timeout=request_timeout,
-                    reasoning_effort=_phase_reasoning_effort(
-                        self._reasoning_effort, assessment=assessment_phase
-                    ),
-                    tools=_source_review_tools_for_policy(
-                        policy_version, final_turn=final_turn
-                    ),
-                    tool_choice="required" if final_turn else "auto",
-                )
+                try:
+                    message = await self._completion_message(
+                        client,
+                        api_key,
+                        _compacted_review_messages(messages, notes),
+                        timeout=request_timeout,
+                        reasoning_effort=_phase_reasoning_effort(
+                            self._reasoning_effort, assessment=assessment_phase
+                        ),
+                        tools=_source_review_tools_for_policy(
+                            policy_version, final_turn=final_turn
+                        ),
+                        tool_choice="required" if final_turn else "auto",
+                    )
+                except (TimeoutError, httpx.TimeoutException) as error:
+                    # Only a turn whose effective timeout was shortened by
+                    # the lease can exhaust that budget. A provider request
+                    # cap can expire with less than a second left on the lease.
+                    if (
+                        lease_bounded_turn
+                        and deadline is not None
+                        and deadline - asyncio.get_running_loop().time()
+                        < _LEASE_EXPIRY_SLACK_SECONDS
+                    ):
+                        raise lease_exhausted(_step) from error
+                    raise
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
                 if not isinstance(tool_calls, list) or not tool_calls:
@@ -3695,26 +4038,39 @@ class OpenRouterSourceReviewAgent:
                             )
                         continue
                     if name == "submit_review":
+                        if validate_result is not None:
+                            try:
+                                validate_result(arguments)
+                            except ValueError as error:
+                                schema_repair_turn = True
+                                last_schema_error = error
+                                messages.append(
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": call_id,
+                                        "content": json.dumps(
+                                            _submit_review_schema_feedback(
+                                                error, arguments
+                                            )
+                                        ),
+                                    }
+                                )
+                                continue
                         if progress is not None:
-                            progress(_step + 1, self._max_steps)
+                            progress(min(_step + 1, self._max_steps), self._max_steps)
                         return arguments, (
                             inspection_calls >= 2 and runtime_source_read
                         )
                     if name == "record_note":
                         note = _note_from_arguments(arguments)
-                        if note is not None:
-                            _append_note(notes, note)
+                        feedback = _record_note_feedback(notes, note)
+                        if feedback["recorded"]:
                             noteless_calls = 0
                         messages.append(
                             {
                                 "role": "tool",
                                 "tool_call_id": call_id,
-                                "content": json.dumps(
-                                    {
-                                        "recorded": note is not None,
-                                        "notes": len(notes),
-                                    }
-                                ),
+                                "content": json.dumps(feedback),
                             }
                         )
                         continue
@@ -3758,7 +4114,27 @@ class OpenRouterSourceReviewAgent:
                         }
                     )
                 if progress is not None:
-                    progress(_step + 1, self._max_steps)
+                    progress(min(_step + 1, self._max_steps), self._max_steps)
+        if last_schema_error is not None:
+            # The reviewer kept submitting verdicts the host could not accept
+            # until its steps ran out. That is a reviewer budget outcome with
+            # an exact ledger, not an infrastructure fault: retrying the same
+            # model on the same source burns the attempt without new evidence.
+            logger.warning(
+                "source review verdict never validated: %s: %s",
+                type(last_schema_error).__name__,
+                last_schema_error,
+            )
+            raise SourceReviewBudgetExhausted(
+                _source_review_failure_code(last_schema_error),
+                max_steps=self._max_steps,
+                steps_used=self._max_steps,
+                read_bytes_used=delivered,
+                read_files_used=len(read_files),
+                max_read_bytes=self._max_read_bytes,
+                policy_version=policy_version,
+                verdict_unsettled=True,
+            ) from last_schema_error
         raise SourceReviewBudgetExhausted(
             "source-review-step-budget-exhausted",
             max_steps=self._max_steps,
@@ -3783,7 +4159,9 @@ class OpenRouterSourceReviewAgent:
         """Issue one model turn, healing only bounded transport-class faults."""
         started = asyncio.get_running_loop().time()
         attempts = len(self._transport_retry_delays) + 1
-        for attempt in range(attempts):
+        attempt = 0
+        auth_retries = 0
+        while True:
             remaining_timeout = timeout
             if timeout is not None:
                 remaining_timeout = timeout - (
@@ -3791,7 +4169,7 @@ class OpenRouterSourceReviewAgent:
                 )
                 if remaining_timeout <= 0:
                     raise TimeoutError(
-                        "source review model retry exceeded lease budget"
+                        "source review model retry exceeded request budget"
                     )
             payload: object | None = None
             try:
@@ -3809,8 +4187,23 @@ class OpenRouterSourceReviewAgent:
             except httpx.HTTPStatusError as error:
                 status = error.response.status_code
                 fault = str(status) if status == 429 or status >= 500 else None
-                signature = f"http-status={status}"
+                signature = _http_error_signature(error.response)
                 caught: BaseException = error
+                if status == 401 and auth_retries < len(self._auth_retry_delays):
+                    delay = self._auth_retry_delays[auth_retries]
+                    elapsed = asyncio.get_running_loop().time() - started
+                    if timeout is None or timeout - elapsed > delay:
+                        auth_retries += 1
+                        logger.warning(
+                            "source review model key rejected; waiting out a "
+                            "router deploy: signature=%s retry=%d/%d delay_s=%.1f",
+                            signature,
+                            auth_retries,
+                            len(self._auth_retry_delays),
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
             except (TimeoutError, httpx.TimeoutException) as error:
                 # ``asyncio.timeout`` raises the built-in TimeoutError, which
                 # is not an httpx.RequestError. Treat both deadline sources as
@@ -3853,8 +4246,7 @@ class OpenRouterSourceReviewAgent:
                 delay,
             )
             await asyncio.sleep(delay)
-
-        raise AssertionError("model retry loop exhausted without a result")
+            attempt += 1
 
     def _completion_request_headers(
         self, api_key: str, _effective_timeout: float
@@ -3921,16 +4313,84 @@ def _source_review_failure_code(error: BaseException) -> str:
     instead of losing the failure.
     """
     if isinstance(error, httpx.HTTPStatusError):
+        if error.response.status_code == 402:
+            return SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED
         return f"source-review-http-{error.response.status_code}"
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)):
+        # A model turn timed out while the lease still had time; lease expiry
+        # is raised as ``SourceReviewBudgetExhausted`` instead.
+        return SOURCE_REVIEW_MODEL_TIMEOUT
     message = str(error).strip()
     suffix = _SOURCE_REVIEW_FAILURE_CODES.get(message)
     if suffix is None and message.startswith("source review category "):
-        suffix = "inconsistent-verdict"
+        suffix = (
+            "inconsistent-verdict-category-locations"
+            if message.endswith(" requires two source locations")
+            else "inconsistent-verdict"
+        )
     if suffix is None and ("policy v10" in message or "invariant" in message):
-        suffix = "inconsistent-verdict"
+        suffix = "inconsistent-verdict-invariant"
     if suffix is None:
         return f"source-review-{type(error).__name__.lower()}"
     return f"source-review-{suffix}"
+
+
+def _submit_review_schema_feedback(
+    error: ValueError, arguments: dict[str, object]
+) -> dict[str, object]:
+    """Give the reviewer a bounded correction without echoing untrusted output."""
+    if isinstance(error, ValidationError):
+        issues = error.errors(
+            include_url=False, include_input=False, include_context=False
+        )
+        if issues:
+            issue = issues[0]
+            location = issue.get("loc", ())
+            if (
+                len(location) >= 2
+                and location[0] == "decisions"
+                and isinstance(location[1], int)
+            ):
+                index = location[1]
+                invariants = arguments.get("invariants")
+                item = (
+                    invariants[index]
+                    if isinstance(invariants, list) and index < len(invariants)
+                    else None
+                )
+                invariant = item.get("invariant") if isinstance(item, dict) else None
+                if (
+                    issue.get("msg")
+                    == "Value error, invariant pass clause is missing or incompatible"
+                ):
+                    return {
+                        "error": "submit-review-schema",
+                        "field": f"invariants[{index}].pass_clause",
+                        "invariant": (
+                            invariant
+                            if isinstance(invariant, str)
+                            and invariant
+                            in {item.value for item in SourceReviewInvariant}
+                            else None
+                        ),
+                        "detail": (
+                            "A PASS needs a published pass_clause for this same "
+                            "invariant and served path. Choose a compatible clause "
+                            "supported by your inspection, or mark this invariant "
+                            "INCONCLUSIVE. Preserve all other findings."
+                        ),
+                        "correctable": True,
+                    }
+    return {
+        "error": "submit-review-schema",
+        "code": _source_review_failure_code(error),
+        "detail": (
+            "The submitted review did not satisfy the structured contract. "
+            "Correct its fields and resubmit; do not change a substantive "
+            "finding merely to satisfy formatting."
+        ),
+        "correctable": True,
+    }
 
 
 def _assistant_message(payload: object) -> dict[str, object]:
@@ -4214,7 +4674,10 @@ def _parse_review(
         cited_line = item["line"]
         assert isinstance(cited_line, int)
         verdict = citation_admissibility(
-            cited_path, repository.member_text(cited_path), cited_line
+            cited_path,
+            repository.member_text(cited_path),
+            cited_line,
+            runtime_paths=repository.runtime_paths,
         )
         if verdict.admissible:
             admissible_evidence.append(item)
@@ -4325,6 +4788,22 @@ def _bounded_json(value: object) -> str:
     )
 
 
+def _starter_model_digests(manifests: tuple[str, ...]) -> set[str]:
+    """Starter-model SHA-256 values published by the given manifests."""
+    digests: set[str] = set()
+    try:
+        for manifest in manifests:
+            files = _load_provenance_manifest(Path(manifest))["files"]
+            if isinstance(files, dict) and isinstance(
+                files.get(_STARTER_MODEL_PATH), str
+            ):
+                digests.add(files[_STARTER_MODEL_PATH])
+    except (OSError, ValueError):
+        # An unreadable manifest set proves nothing; keep the member truncated.
+        return set()
+    return digests
+
+
 def _load_provenance_manifest(path: Path) -> dict[str, object]:
     raw = path.read_bytes()
     if len(raw) > 128_000:
@@ -4385,6 +4864,60 @@ def _load_provenance_manifest(path: Path) -> dict[str, object]:
         ):
             raise ValueError("provenance manifest Rust function entry is invalid")
     return value
+
+
+def _starter_manifest_paths(
+    override: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
+    """The runtime starter manifests, unless a caller pins its own set.
+
+    ``None`` means the runtime set, and only ``data/`` is globbed, so a
+    manifest staged outside it is never trusted. An explicit tuple is used as
+    given: an empty one trusts nothing.
+    """
+    if override is not None:
+        return override
+    return tuple(
+        str(path)
+        for path in sorted(_STARTER_MANIFEST_DIR.glob("starter-kit-provenance-*.json"))
+    )
+
+
+def _trusted_starter_digests(
+    override: tuple[str, ...] | None = None,
+) -> dict[str, frozenset[str]]:
+    """Map each starter path to every exact sha256 a runtime manifest pins.
+
+    Trust is exact path plus digest only; there is no near or fuzzy match. A
+    manifest set that cannot be read or parsed grants no trust at all, as the
+    starter-model accounting does, so every file is scanned as the miner's.
+    The L1 provenance block still fails such a set with ``provenance-invalid``.
+    """
+    trusted: dict[str, set[str]] = {}
+    for manifest_path in _starter_manifest_paths(override):
+        try:
+            manifest = _load_provenance_manifest(Path(manifest_path))
+        except (OSError, ValueError) as error:
+            logger.warning(
+                "starter provenance manifests are unreadable (%s); "
+                "granting no starter trust",
+                type(error).__name__,
+            )
+            return {}
+        files = manifest["files"]
+        assert isinstance(files, dict)
+        for path, digest in files.items():
+            assert isinstance(path, str) and isinstance(digest, str)
+            # Older append-only manifests pinned the development environment
+            # template. It is excluded from honest submission archives; never
+            # grant the new lead-skip authority to any environment file.
+            if any(
+                part == ".env" or part.startswith(".env.")
+                for part in PurePosixPath(path).parts
+            ):
+                continue
+            trusted.setdefault(path, set()).add(digest)
+    return {path: frozenset(digests) for path, digests in trusted.items()}
 
 
 _TOOLS: list[dict[str, object]] = [

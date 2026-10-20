@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -12,17 +15,189 @@ import pytest
 from ditto_screener import l2_report_canary
 from ditto_screener.l2_review import L2RunResult, L2Usage
 from ditto_screener.policy import (
+    PolicyEvidence,
+    ScreeningDecision,
     ScreeningOutcome,
     SourceReviewObservation,
     core_decision,
 )
-from ditto_screener.review_settings import bootstrap_review_settings
+from ditto_screener.review_settings import (
+    EffectiveReviewSettings,
+    bootstrap_review_settings,
+)
 from ditto_screening_protocol import ScoredRuntimeEvidenceLease
 
 
+def test_public_fixture_certificate_records_independent_built_image() -> None:
+    image = "sha256:" + "a" * 64
+    claim = SimpleNamespace(
+        canary_id=uuid4(),
+        agent_id=uuid4(),
+        source_attempt_id=uuid4(),
+        artifact_sha256="b" * 64,
+        policy_version=13,
+        run_mode="source_only",
+        source_kind="canonical_starter_fixture",
+        source_attestation={"built_image_digest": image},
+        scored_runtime_evidence=SimpleNamespace(model_dump=lambda **_: {}),
+    )
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="low",
+        finding_digest=None,
+        categories=(),
+        clearance_certified=True,
+    )
+    l2 = L2RunResult(
+        observation=observation,
+        analyzed_files=(),
+        causal_path=(),
+        tools=(),
+        usage=L2Usage(),
+        cache_hit=False,
+    )
+    inputs = {
+        "claim": claim,
+        "decision": SimpleNamespace(outcome="pass", evidence=()),
+        "l2_result": l2,
+        "l1_observation": observation,
+        "settings": SimpleNamespace(revision=1, checksum="c" * 64),
+    }
+    matched = l2_report_canary._report(**inputs, built_image_digest=image)
+    assert matched["authority"] == "none"
+    assert matched["control_result"] == "certificate"
+    assert matched["source_attestation"] == claim.source_attestation
+    changed = l2_report_canary._report(
+        **inputs, built_image_digest="sha256:" + "d" * 64
+    )
+    assert changed["control_result"] == "certificate"
+    assert changed["built_image_digest"] != image
+
+
 @pytest.mark.asyncio
-async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
+async def test_public_fixture_claim_uses_isolated_source_build_without_verdict(
     make_config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config()
+    settings = bootstrap_review_settings(config)
+    canary_id, agent_id, attempt_id = uuid4(), uuid4(), uuid4()
+    archive_sha = "b" * 64
+    image = "sha256:" + "a" * 64
+    revision = "a" * 40
+    keys = ("SAFE_KEY",)
+    packet = ScoredRuntimeEvidenceLease(
+        attempt_id=attempt_id,
+        artifact_sha256=archive_sha,
+        policy_version=13,
+        bench_version=13,
+        scorer_source_revision=revision,
+        release_descriptor_digest="sha256:" + "c" * 64,
+        scorer_image_digest="sha256:" + "d" * 64,
+        scorer_env_sha256=hashlib.sha256(
+            ("scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)).encode()
+        ).hexdigest(),
+        injected_keys=keys,
+        validator_count=3,
+        observed_at=int(datetime.now(UTC).timestamp()),
+    )
+    claim = {
+        "canary_id": str(canary_id),
+        "agent_id": str(agent_id),
+        "source_attempt_id": str(attempt_id),
+        "artifact_sha256": archive_sha,
+        "bench_version": 13,
+        "policy_version": 13,
+        "run_mode": "source_only",
+        "source_kind": "canonical_starter_fixture",
+        "source_attestation": {"archive_sha256": archive_sha},
+        "miner_hotkey": "operator-source-fixture",
+        "lease_token": "token",
+        "lease_expires_at": (datetime.now(UTC) + timedelta(minutes=100)).isoformat(),
+        "download_url": "https://example.test/fixture",
+        "scored_runtime_evidence": packet.model_dump(mode="json"),
+    }
+    completions = []
+
+    class Platform:
+        async def claim_l2_report_canary(self, **_kwargs):
+            return claim
+
+        async def complete_l2_report_canary(self, *_args, **kwargs):
+            completions.append(kwargs)
+
+        async def submit_result(self, *_args, **_kwargs):
+            raise AssertionError("fixture posted an authoritative verdict")
+
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="low",
+        finding_digest=None,
+        categories=(),
+        clearance_certified=True,
+    )
+
+    class Gate:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def screen(self, **kwargs):
+            assert kwargs["source_only_build"] is True
+            assert kwargs["execution_namespace"] == canary_id
+            assert kwargs["policy_only"] is False
+            assert kwargs.get("publish_image") is None
+            assert kwargs.get("publish_held_image") is None
+            assert kwargs.get("record_runtime_verification") is None
+            kwargs["record_built_image"](image)
+            return core_decision(
+                ScreeningOutcome.PASS,
+                code="source-clear",
+                summary="source-only clear",
+                detail="source-only clear",
+                policy_version=13,
+            )
+
+        def pop_shadow_review(self, _attempt_id):
+            return L2RunResult(
+                observation=observation,
+                analyzed_files=(),
+                causal_path=(),
+                tools=(),
+                usage=L2Usage(),
+                cache_hit=False,
+            )
+
+        def pop_preview_l1_review(self, _attempt_id):
+            return observation
+
+    monkeypatch.setattr(l2_report_canary, "BuildGate", Gate)
+    monkeypatch.setattr(
+        l2_report_canary, "load_policy_engine", lambda *_a, **_kw: object()
+    )
+    assert await l2_report_canary.consume(
+        config=config,
+        platform=Platform(),
+        primary_gate=SimpleNamespace(_client=object(), _journal=object()),
+        settings=settings,
+        instance_id="fixture-worker-1",
+    )
+    assert len(completions) == 1
+    assert completions[0]["status"] == "succeeded"
+    report = completions[0]["report"]
+    assert report["authority"] == "none"
+    assert report["source_kind"] == "canonical_starter_fixture"
+    assert report["source_attestation"] == claim["source_attestation"]
+    assert report["built_image_digest"] == image
+    assert report["control_result"] == "certificate"
+    assert report["challenge_status"] == "not_run"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("run_mode", "lease_minutes"),
+    [("source_only", 100), ("full_runtime", 150)],
+)
+async def test_report_only_l2_previews_full_runtime_enforcement_without_verdict(
+    make_config, monkeypatch: pytest.MonkeyPatch, run_mode: str, lease_minutes: int
 ) -> None:
     config = make_config()
     settings = bootstrap_review_settings(config)
@@ -52,15 +227,20 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
         "artifact_sha256": "b" * 64,
         "bench_version": 13,
         "policy_version": 13,
+        "run_mode": run_mode,
         "miner_hotkey": "miner",
         "lease_token": "token",
-        "lease_expires_at": (datetime.now(UTC) + timedelta(minutes=45)).isoformat(),
+        "lease_expires_at": (
+            datetime.now(UTC) + timedelta(minutes=lease_minutes)
+        ).isoformat(),
         "download_url": "https://example.test/source",
         "scored_runtime_evidence": packet.model_dump(mode="json"),
     }
     completions = []
     claimed = []
+    claimed_before = int(time.time())
     progress_stages = []
+    loaded_modes = []
 
     class Platform:
         async def claim_l2_report_canary(self, **kwargs):
@@ -74,22 +254,50 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
             raise AssertionError("report-only lane posted a screening verdict")
 
     class Gate:
-        def __init__(self, canary_config, *_args, **_kwargs):
-            assert canary_config.l2_review_mode == "shadow"
+        def __init__(self, canary_config, *_args, **kwargs):
+            assert canary_config.l2_review_mode == "enforce"
+            assert kwargs["capture_enforce_result"] is True
             assert canary_config.l2_always_escalate
             assert canary_config.require_signed_runtime_lease
-            assert canary_config.signed_runtime_lease_max_age_seconds == 45 * 60
+            # One receipt-anchored rule for both lanes: no canary-only widening.
+            assert (
+                canary_config.signed_runtime_lease_max_age_seconds
+                == config.signed_runtime_lease_max_age_seconds
+            )
             assert str(canary_id) in canary_config.l2_cache_dir
             assert canary_config.l2_cache_dir != config.l2_cache_dir
             assert canary_config.l2_audit_journal_file != config.l2_audit_journal_file
             assert canary_config.review_journal_file != config.review_journal_file
 
         async def screen(self, **kwargs):
-            assert kwargs["policy_only"] is True
+            assert kwargs["policy_only"] is (run_mode == "source_only")
+            assert kwargs["execution_namespace"] == (
+                canary_id if run_mode == "full_runtime" else None
+            )
             assert kwargs.get("publish_image") is None
             assert kwargs.get("record_runtime_verification") is None
             assert kwargs["scored_runtime_evidence"] == packet
+            assert (
+                claimed_before
+                <= kwargs["scored_runtime_evidence_received_at"]
+                <= int(time.time())
+            )
             kwargs["progress"]("source_review_0")
+            if run_mode == "full_runtime":
+                return ScreeningDecision(
+                    outcome=ScreeningOutcome.PASS,
+                    detail="isolated runtime passed",
+                    manifest_digest="a" * 64,
+                    evidence=(
+                        PolicyEvidence(
+                            "oracle", "behavioral-oracle-passed", "runtime observed"
+                        ),
+                        PolicyEvidence(
+                            "challenge", "challenge-observed", "challenge observed"
+                        ),
+                    ),
+                    policy_version=13,
+                )
             return core_decision(
                 ScreeningOutcome.INCONCLUSIVE,
                 code="source-review-inconclusive",
@@ -112,12 +320,38 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
                 tools=(),
                 usage=L2Usage(estimated_cost_usd=0.05),
                 cache_hit=False,
+                failure_subcode="no_tool_call_after_corrections",
+                scorer_attention={
+                    "counts": {"score_controls": 1},
+                    "locations": [
+                        {
+                            "kind": "score_controls",
+                            "path": "src/bin/miner.rs",
+                            "line": 388,
+                            "function": "evaluate",
+                        }
+                    ],
+                    "truncated": False,
+                },
+            )
+
+        def pop_preview_l1_review(self, _attempt_id):
+            return SourceReviewObservation(
+                ok=True,
+                risk_level="low",
+                finding_digest="c" * 64,
+                categories=("none",),
+                clearance_certified=True,
+                finding={"summary": "clean L1", "evidence": []},
             )
 
     monkeypatch.setattr(l2_report_canary, "BuildGate", Gate)
-    monkeypatch.setattr(
-        l2_report_canary, "load_policy_engine", lambda *_a, **_k: object()
-    )
+
+    def load_policy(*_args, **kwargs):
+        loaded_modes.append(kwargs["l2_mode"])
+        return object()
+
+    monkeypatch.setattr(l2_report_canary, "load_policy_engine", load_policy)
     consumed = await l2_report_canary.consume(
         config=config,
         platform=Platform(),
@@ -134,6 +368,368 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
     assert completions[0][1]["status"] == "succeeded"
     report = completions[0][1]["report"]
     assert report["authority"] == "none"
-    assert report["review_mode"] == "shadow"
+    assert report["review_mode"] == "enforce_preview"
+    assert loaded_modes == ["enforce"]
+    assert report["run_mode"] == run_mode
+    assert report["challenge_status"] == (
+        "completed" if run_mode == "full_runtime" else "not_run"
+    )
     assert report["source_attempt_id"] == str(attempt_id)
     assert report["l2"]["risk_level"] == "low"
+    assert report["l2"]["failure_subcode"] == "no_tool_call_after_corrections"
+    assert (
+        report["l2"]["scorer_attention"]["locations"][0]["path"] == "src/bin/miner.rs"
+    )
+    assert report["l1"]["clearance_certified"] is True
+    assert report["l1"]["finding"]["summary"] == "clean L1"
+
+
+def test_inconclusive_model_audit_is_report_only() -> None:
+    audit = {
+        "artifact_sha256": "b" * 64,
+        "disposition": "inconclusive",
+        "invariants": [{"invariant": "i7_model_tool_planning", "disposition": "pass"}],
+    }
+    claim = SimpleNamespace(
+        canary_id=uuid4(),
+        agent_id=uuid4(),
+        source_attempt_id=uuid4(),
+        artifact_sha256="b" * 64,
+        policy_version=13,
+        run_mode="source_only",
+        scored_runtime_evidence=SimpleNamespace(model_dump=lambda **_: {}),
+    )
+    settings = SimpleNamespace(revision=134, checksum="c" * 64)
+    shadow = L2RunResult(
+        observation=SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l2-model-inconclusive",
+            failure_disposition="inconclusive",
+            inconclusive_model_audit=audit,
+        ),
+        analyzed_files=(),
+        causal_path=(),
+        tools=(),
+        usage=L2Usage(),
+        cache_hit=False,
+    )
+    report = l2_report_canary._report(
+        claim=claim,
+        decision=SimpleNamespace(outcome="inconclusive", evidence=()),
+        l2_result=shadow,
+        settings=settings,
+    )
+    assert report["authority"] == "none"
+    assert report["l2"]["inconclusive_model_audit"] == audit
+
+
+def test_l1_failure_audit_is_visible_without_an_l2_result() -> None:
+    claim = SimpleNamespace(
+        canary_id=uuid4(),
+        agent_id=uuid4(),
+        source_attempt_id=uuid4(),
+        artifact_sha256="b" * 64,
+        policy_version=13,
+        run_mode="source_only",
+        scored_runtime_evidence=SimpleNamespace(model_dump=lambda **_: {}),
+    )
+    l1 = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-inconsistent-verdict",
+        failure_disposition="retryable_infra",
+        review_audit={"reason": "schema_validation"},
+        notes=({"kind": "observation", "summary": "inspected served entrypoint"},),
+    )
+    report = l2_report_canary._report(
+        claim=claim,
+        decision=SimpleNamespace(outcome="retryable_infra", evidence=()),
+        l2_result=None,
+        settings=SimpleNamespace(revision=137, checksum="c" * 64),
+        l1_observation=l1,
+    )
+    assert report["l1"]["error_code"] == "source-review-inconsistent-verdict"
+    assert report["l1"]["failure_disposition"] == "retryable_infra"
+    assert report["l1"]["review_audit"] == {"reason": "schema_validation"}
+    assert report["l1"]["notes"] == list(l1.notes)
+    assert report["l2"] is None
+    assert report["decision_outcome"] == "retryable_infra"
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("challenge-inconclusive", "inconclusive"),
+        ("challenge-compatibility-timeout", "inconclusive"),
+        ("behavioral-oracle-insufficient-round-trips", "inconclusive"),
+        ("challenge-observed", "completed"),
+        ("source-review-inconclusive", "not_run"),
+    ],
+)
+def test_full_runtime_report_distinguishes_challenge_state(
+    code: str, expected: str
+) -> None:
+    claim = SimpleNamespace(
+        canary_id=uuid4(),
+        agent_id=uuid4(),
+        source_attempt_id=uuid4(),
+        artifact_sha256="b" * 64,
+        policy_version=13,
+        run_mode="full_runtime",
+        scored_runtime_evidence=SimpleNamespace(model_dump=lambda **_: {}),
+    )
+    report = l2_report_canary._report(
+        claim=claim,
+        decision=core_decision(
+            ScreeningOutcome.INCONCLUSIVE,
+            code=code,
+            summary="held",
+            detail="held",
+            policy_version=13,
+        ),
+        l2_result=None,
+        settings=SimpleNamespace(revision=134, checksum="c" * 64),
+    )
+    assert report["challenge_status"] == expected
+    assert report["authority"] == "none"
+
+
+# ─── Operator-pinned canary posture (#2448) ──────────────────────────────────
+
+
+def _pinned_posture(
+    node: EffectiveReviewSettings,
+    *,
+    revision: int = 41,
+    scope: str = "l2-report-canary-ctl137",
+    timeout_seconds: int = 777,
+) -> EffectiveReviewSettings:
+    """A posture that differs from ``node`` in every field the canary reads."""
+    settings = node.settings.model_copy(
+        update={
+            "mode": "enforce",
+            "l3_enabled": not node.settings.l3_enabled,
+            "timeout_seconds": timeout_seconds,
+            "source_review_timeout_seconds": 3333,
+            "policy_manifest_profile": "l1_l2",
+            "policy_manifest_rotation_id": "canary-ctl-137",
+        }
+    )
+    checksum = hashlib.sha256(
+        json.dumps(
+            settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    return EffectiveReviewSettings(
+        revision=revision,
+        scope=scope,
+        settings=settings,
+        checksum=checksum,
+        max_age_seconds=60,
+    )
+
+
+def _pinned_claim(pin: EffectiveReviewSettings) -> dict[str, Any]:
+    canary_id, agent_id, attempt_id = uuid4(), uuid4(), uuid4()
+    revision = "a" * 40
+    keys = ("SAFE_KEY",)
+    packet = ScoredRuntimeEvidenceLease(
+        attempt_id=attempt_id,
+        artifact_sha256="b" * 64,
+        policy_version=13,
+        bench_version=13,
+        scorer_source_revision=revision,
+        release_descriptor_digest="sha256:" + "c" * 64,
+        scorer_image_digest="sha256:" + "d" * 64,
+        scorer_env_sha256=hashlib.sha256(
+            ("scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)).encode()
+        ).hexdigest(),
+        injected_keys=keys,
+        validator_count=3,
+        observed_at=int(datetime.now(UTC).timestamp()),
+    )
+    return {
+        "canary_id": str(canary_id),
+        "agent_id": str(agent_id),
+        "source_attempt_id": str(attempt_id),
+        "artifact_sha256": "b" * 64,
+        "bench_version": 13,
+        "policy_version": 13,
+        "run_mode": "source_only",
+        "miner_hotkey": "miner",
+        "lease_token": "token",
+        "lease_expires_at": (datetime.now(UTC) + timedelta(minutes=100)).isoformat(),
+        "download_url": "https://example.test/source",
+        "scored_runtime_evidence": packet.model_dump(mode="json"),
+        "review_settings_override": {
+            "revision": pin.revision,
+            "scope": pin.scope,
+            "checksum": pin.checksum,
+        },
+    }
+
+
+class _PinnedPlatform:
+    def __init__(self, claim: dict[str, Any], served: Any) -> None:
+        self.claim = claim
+        self.served = served
+        self.claims: list[dict[str, Any]] = []
+        self.revision_fetches: list[int] = []
+        self.completions: list[dict[str, Any]] = []
+
+    async def claim_l2_report_canary(self, **kwargs: Any) -> dict[str, Any]:
+        self.claims.append(kwargs)
+        return self.claim
+
+    async def get_review_settings_revision(self, revision: int) -> Any:
+        self.revision_fetches.append(revision)
+        if isinstance(self.served, Exception):
+            raise self.served
+        return self.served
+
+    async def complete_l2_report_canary(self, *_args: Any, **kwargs: Any) -> None:
+        self.completions.append(kwargs)
+
+    async def submit_result(self, *_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("report-only lane posted a screening verdict")
+
+
+class _NoPrimaryGateChanges:
+    """The worker's primary gate: a canary may borrow its client, nothing else."""
+
+    _client = object()
+
+    def apply_review_settings(self, _settings: Any) -> bool:
+        raise AssertionError("a pinned canary changed the primary gate posture")
+
+
+@pytest.mark.asyncio
+async def test_consume_applies_pinned_revision_to_canary_gate_only(
+    make_config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config()
+    node = bootstrap_review_settings(config)
+    pin = _pinned_posture(node)
+    claim = _pinned_claim(pin)
+    platform = _PinnedPlatform(claim, pin)
+    gate_configs = []
+    policy_kwargs = []
+
+    class Gate:
+        def __init__(self, canary_config, client, **_kwargs):
+            assert client is _NoPrimaryGateChanges._client
+            gate_configs.append(canary_config)
+
+        async def screen(self, **_kwargs):
+            return core_decision(
+                ScreeningOutcome.INCONCLUSIVE,
+                code="source-review-inconclusive",
+                summary="audit only",
+                detail="audit only",
+                policy_version=13,
+            )
+
+        def pop_shadow_review(self, _attempt_id):
+            return L2RunResult(
+                observation=SourceReviewObservation(
+                    ok=True, risk_level="low", finding_digest=None, categories=()
+                ),
+                analyzed_files=(),
+                causal_path=(),
+                tools=(),
+                usage=L2Usage(),
+                cache_hit=False,
+            )
+
+        def pop_preview_l1_review(self, _attempt_id):
+            return None
+
+    def load_policy(*_args, **kwargs):
+        policy_kwargs.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(l2_report_canary, "BuildGate", Gate)
+    monkeypatch.setattr(l2_report_canary, "load_policy_engine", load_policy)
+    assert await l2_report_canary.consume(
+        config=config,
+        platform=platform,  # type: ignore[arg-type]
+        primary_gate=_NoPrimaryGateChanges(),  # type: ignore[arg-type]
+        settings=node,
+        instance_id="subnet-screener-1-worker-1",
+    )
+    # The claim still reports the node posture and declares pin support.
+    assert platform.claims[0]["settings_revision"] == node.revision
+    assert platform.claims[0]["settings_checksum"] == node.checksum
+    assert platform.revision_fetches == [pin.revision]
+    # The canary gate runs the pinned posture, not the node's.
+    (canary_config,) = gate_configs
+    assert canary_config.l2_timeout_seconds == 777.0
+    assert canary_config.source_review_timeout_seconds == 3333.0
+    assert canary_config.l3_review_enabled is pin.settings.l3_enabled
+    assert canary_config.l3_review_enabled is not node.settings.l3_enabled
+    assert policy_kwargs == [
+        {
+            "l2_mode": "enforce",
+            "manifest_profile": "l1_l2",
+            "rotation_id": "canary-ctl-137",
+        }
+    ]
+    (completion,) = platform.completions
+    assert completion["status"] == "succeeded"
+    assert completion["report"]["settings_revision"] == pin.revision
+    assert completion["report"]["settings_checksum"] == pin.checksum
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("served", "error_code"),
+    [
+        ("other-scope", "review-settings-override-mismatch"),
+        ("other-revision", "review-settings-override-mismatch"),
+        ("other-checksum", "review-settings-override-mismatch"),
+        ("unavailable", "review-settings-override-unavailable"),
+    ],
+)
+async def test_consume_override_mismatch_completes_incomplete(
+    make_config, monkeypatch: pytest.MonkeyPatch, served: str, error_code: str
+) -> None:
+    config = make_config()
+    node = bootstrap_review_settings(config)
+    pin = _pinned_posture(node)
+    claim = _pinned_claim(pin)
+    response: Any = {
+        "other-scope": _pinned_posture(node, scope="l2-report-canary-other"),
+        "other-revision": _pinned_posture(node, revision=pin.revision + 1),
+        # Same revision and scope, different settings: the stamped checksum is
+        # the only field that tells the two postures apart.
+        "other-checksum": _pinned_posture(node, timeout_seconds=778),
+        "unavailable": RuntimeError("platform unavailable"),
+    }[served]
+    if served == "other-checksum":
+        assert (response.revision, response.scope) == (pin.revision, pin.scope)
+        assert response.checksum != pin.checksum
+    platform = _PinnedPlatform(claim, response)
+
+    def no_gate(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("a canary without its pinned posture must not run")
+
+    monkeypatch.setattr(l2_report_canary, "BuildGate", no_gate)
+    assert await l2_report_canary.consume(
+        config=config,
+        platform=platform,  # type: ignore[arg-type]
+        primary_gate=_NoPrimaryGateChanges(),  # type: ignore[arg-type]
+        settings=node,
+        instance_id="subnet-screener-1-worker-1",
+    )
+    (completion,) = platform.completions
+    assert completion["status"] == "incomplete"
+    assert completion["error_code"] == error_code
+    # Platform validates the report against the pin it stamped on the row.
+    assert completion["report"]["settings_revision"] == pin.revision
+    assert completion["report"]["settings_checksum"] == pin.checksum
+    assert completion["report"]["authority"] == "none"

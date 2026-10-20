@@ -226,25 +226,12 @@ class ScreenerConfig:
     Seeded from ``SCREENER_L2_ALWAYS_ESCALATE``; a bound reviewer revision can
     only turn it on for one posture (the integrity double-check), never off.
     """
-    # Only the isolated report-only canary widens this to its 45-minute lease.
     signed_runtime_lease_max_age_seconds: int = 300
+    """Oldest signed cohort observation accepted, measured at claim receipt."""
     adjudicator_max_completion_tokens: int | None = None
     """L4-only output cap; None inherits the existing L2 completion cap."""
-    remote_build_mode: str = "off"
-    """How the gate uses a prebuilt image archive.
-
-    Production workers use ``off`` so the leased screener performs the build
-    and smoke locally. ``prefer`` and ``require`` remain protocol-compatible
-    for explicit decomposed-lane tests, but must never be an implicit worker
-    default.
-    """
-    remote_build_timeout_seconds: float = 1500.0
-    """Maximum time to wait for a Targon Kaniko submission build.
-
-    This is intentionally independent of ``build_timeout_seconds``. The latter
-    caps the local Docker fallback, while the 70-minute screening lease budgets
-    both stages: 25 minutes for Targon followed by up to 45 minutes locally.
-    """
+    l2_max_completion_request_seconds: float | None = None
+    """Per-turn L2/L3 wall-clock cap; None derives it from the completion budget."""
 
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured."""
@@ -285,6 +272,11 @@ def _parse_int(name: str, default: str) -> int:
 def _parse_optional_int(name: str) -> int | None:
     raw = os.environ.get(name)
     return None if raw is None or not raw.strip() else _parse_int(name, raw)
+
+
+def _parse_optional_float(name: str) -> float | None:
+    raw = os.environ.get(name)
+    return None if raw is None or not raw.strip() else _parse_float(name, raw)
 
 
 def _parse_bool(name: str, default: bool) -> bool:
@@ -360,10 +352,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             or os.environ.get("DOCKER_HOST")
             or None
         ),
-        # Additive rollout: deployments set this true only after their dedicated
-        # rootless daemon is present. A later release can remove the compatibility
-        # default once every pet and fleet worker has converged.
-        require_rootless_docker=_parse_bool("SCREENER_REQUIRE_ROOTLESS_DOCKER", False),
+        # Managed screener deployments already use a dedicated rootless daemon.
+        # A standalone worker must fail closed if it accidentally targets the
+        # host's rootful Docker socket. Explicit opt-out is local-only.
+        require_rootless_docker=_parse_bool("SCREENER_REQUIRE_ROOTLESS_DOCKER", True),
         build_timeout_seconds=_parse_float("SCREENER_BUILD_TIMEOUT_SECONDS", "2700"),
         run_timeout_seconds=_parse_float("SCREENER_RUN_TIMEOUT_SECONDS", "120"),
         image_build_memory=os.environ.get(
@@ -411,7 +403,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         ),
         review_inference_provider=review_inference_provider,
         source_review_model=os.environ.get(
-            "SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-5.6-luna"
+            "SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-6-luna"
         ),
         source_review_base_url=os.environ.get("SCREENER_SOURCE_REVIEW_BASE_URL")
         or default_review_base_url(review_inference_provider),
@@ -445,19 +437,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             os.environ.get("SCREENER_STATIC_PREFLIGHT_AUDIT_FILE") or None
         ),
         l2_review_mode=os.environ.get("SCREENER_L2_REVIEW_MODE", "off"),
-        l2_review_model=os.environ.get(
-            "SCREENER_L2_REVIEW_MODEL", "openai/gpt-5.6-terra"
-        ),
+        l2_review_model=os.environ.get("SCREENER_L2_REVIEW_MODEL", "openai/gpt-6-sol"),
         l2_review_provider=os.environ.get(
             "SCREENER_L2_REVIEW_PROVIDER", review_inference_provider
         ),
-        l2_fallback_models=_parse_csv(
-            "SCREENER_L2_FALLBACK_MODELS", "z-ai/glm-5.2,openai/gpt-5.6-sol"
-        ),
+        l2_fallback_models=_parse_csv("SCREENER_L2_FALLBACK_MODELS", "z-ai/glm-5.2"),
         l3_review_enabled=_parse_bool("SCREENER_L3_REVIEW_ENABLED", True),
-        l3_review_model=os.environ.get(
-            "SCREENER_L3_REVIEW_MODEL", "openai/gpt-5.6-sol"
-        ),
+        l3_review_model=os.environ.get("SCREENER_L3_REVIEW_MODEL", "openai/gpt-6-sol"),
         l3_review_provider=os.environ.get(
             "SCREENER_L3_REVIEW_PROVIDER", review_inference_provider
         ),
@@ -472,14 +458,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_L2_AUDIT_JOURNAL_FILE",
             "/opt/ditto/screener/state/l2-audit.jsonl",
         ),
-        l2_timeout_seconds=_parse_float("SCREENER_L2_TIMEOUT_SECONDS", "900"),
-        l2_max_steps=_parse_int("SCREENER_L2_MAX_STEPS", "18"),
-        l2_max_input_tokens=_parse_int("SCREENER_L2_MAX_INPUT_TOKENS", "425000"),
-        l2_max_output_tokens=_parse_int("SCREENER_L2_MAX_OUTPUT_TOKENS", "20000"),
+        l2_timeout_seconds=_parse_float("SCREENER_L2_TIMEOUT_SECONDS", "1800"),
+        l2_max_steps=_parse_int("SCREENER_L2_MAX_STEPS", "256"),
+        l2_max_input_tokens=_parse_int("SCREENER_L2_MAX_INPUT_TOKENS", "5000000"),
+        l2_max_output_tokens=_parse_int("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000000"),
         l2_max_completion_tokens=_parse_int(
-            "SCREENER_L2_MAX_COMPLETION_TOKENS", "2400"
+            "SCREENER_L2_MAX_COMPLETION_TOKENS", "16000"
         ),
-        l2_max_cost_usd=_parse_float("SCREENER_L2_MAX_COST_USD", "2.00"),
+        l2_max_cost_usd=_parse_float("SCREENER_L2_MAX_COST_USD", "25.00"),
         l2_analyst_reasoning_effort=os.environ.get(
             "SCREENER_L2_ANALYST_REASONING_EFFORT", "model_default"
         ),
@@ -508,12 +494,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         require_signed_runtime_lease=_parse_bool(
             "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE", False
         ),
+        signed_runtime_lease_max_age_seconds=_parse_int(
+            "SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS", "300"
+        ),
         adjudicator_max_completion_tokens=_parse_optional_int(
             "SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS"
         ),
-        remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "off"),
-        remote_build_timeout_seconds=_parse_float(
-            "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1500"
+        l2_max_completion_request_seconds=_parse_optional_float(
+            "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS"
         ),
     )
     if not config.signing_source_present():
@@ -601,6 +589,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_REVIEW_MODE must be off, shadow, or enforce"
         )
+    if not 1 <= config.signed_runtime_lease_max_age_seconds <= 3_600:
+        raise ScreenerConfigError(
+            "SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS must be between 1 and 3600"
+        )
     if config.l2_review_model not in {
         "openai/gpt-5.6-terra",
         "openai/gpt-6-sol",
@@ -618,9 +610,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_REVIEW_PROVIDER must match SCREENER_REVIEW_INFERENCE_PROVIDER"
         )
-    if config.l2_fallback_models != ("z-ai/glm-5.2", "openai/gpt-5.6-sol"):
+    if config.l2_fallback_models not in {
+        ("z-ai/glm-5.2",),
+        ("z-ai/glm-5.2", "openai/gpt-5.6-sol"),
+    }:
         raise ScreenerConfigError(
-            "SCREENER_L2_FALLBACK_MODELS must be z-ai/glm-5.2,openai/gpt-5.6-sol"
+            "SCREENER_L2_FALLBACK_MODELS must be z-ai/glm-5.2, optionally "
+            "followed by openai/gpt-5.6-sol for legacy revisions"
         )
     if config.l3_review_model not in {"openai/gpt-5.6-sol", "openai/gpt-6-sol"}:
         raise ScreenerConfigError(
@@ -659,6 +655,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_MAX_COMPLETION_TOKENS must be within the output budget"
         )
+    if config.l2_max_completion_request_seconds is not None and not (
+        30 <= config.l2_max_completion_request_seconds <= 600
+    ):
+        raise ScreenerConfigError(
+            "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS must be between 30 and 600"
+        )
     if not 1 <= config.l2_max_input_tokens <= 5_000_000:
         raise ScreenerConfigError(
             "SCREENER_L2_MAX_INPUT_TOKENS must be between 1 and 5000000"
@@ -685,12 +687,8 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_REVIEW_SETTINGS_MAX_STALE_SECONDS must be between 60 and 86400"
         )
-    if config.remote_build_mode not in {"off", "prefer", "require"}:
+    if os.environ.get("SCREENER_REMOTE_BUILD_MODE", "off") != "off":
         raise ScreenerConfigError(
-            "SCREENER_REMOTE_BUILD_MODE must be off, prefer, or require"
-        )
-    if not 300 <= config.remote_build_timeout_seconds <= 2400:
-        raise ScreenerConfigError(
-            "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS must be between 300 and 2400"
+            "SCREENER_REMOTE_BUILD_MODE is retired; only local screening is supported"
         )
     return config

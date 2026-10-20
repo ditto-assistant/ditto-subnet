@@ -574,7 +574,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     }
     if (current.tenant === "agent") {
       const e = current.entry;
-      const stage = activityStage(e.status);
+      const stage = activityStage(e.status, e);
       return {
         title: publicDisplayName(e.name, e.name_handle),
         handle: e.name_handle,
@@ -702,7 +702,14 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
                 <MinerSummary
                   entry={entry()}
                   settled={settled()}
-                  total={props.entries().filter(isEligible).length}
+                  total={
+                    // Finalized and provisional rows rank on separate
+                    // counters, so the denominator is this entry's own tier.
+                    props
+                      .entries()
+                      .filter((x) => isEligible(x) && isFinalized(x) === isFinalized(entry()))
+                      .length
+                  }
                   currentBench={props.currentBench()}
                   emissionBench={props.emissionBench?.() ?? null}
                 />
@@ -768,9 +775,19 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
  * leads when held. */
 function minerStandingChip(e: RankedEntry): { text: string; class: string; title: string } {
   if (!isFinalized(e)) {
+    const scores = (e.score_count || 0) + " of " + (e.score_quorum || 3) + " scores";
+    // rankEntries gives ineligible rows no rank (a smoke run below the case
+    // floor, a shadow run): say so rather than print "Pnull".
+    if (e.rank == null) {
+      return {
+        text: "Unranked · " + scores,
+        class: "prev",
+        title:
+          "Provisional and not rank-eligible: shown for transparency, but this run will not rank.",
+      };
+    }
     return {
-      text:
-        "P" + e.rank + " · " + (e.score_count || 0) + " of " + (e.score_quorum || 3) + " scores",
+      text: "P" + e.rank + " · " + scores,
       class: "prev",
       title:
         "Provisional: accepted score feedback so far. The rank is final at " +
@@ -968,7 +985,7 @@ function MinerSubmissions(props: { submissions: PublicMinerSubmission[] }): JSX.
       <ul class="account-list miner-subs-list">
         <For each={visible()}>
           {(item) => {
-            const stage = () => activityStage(item.status);
+            const stage = () => activityStage(item.status, item);
             return (
               <li class="miner-sub">
                 <span class="miner-sub-main">
@@ -1116,7 +1133,7 @@ function MinerSummary(props: {
             k="Rank"
             v={
               isEligible(e())
-                ? "#" + e().rank + " of " + props.total
+                ? (isFinalized(e()) ? "#" : "P") + e().rank + " of " + props.total
                 : kind() === "zero"
                   ? "unranked (scored 0.000)"
                   : "unranked (provisional)"

@@ -41,6 +41,7 @@ from ditto.api_models.validator_capabilities import (
     ScorerLivenessProbe,
     ScorerProbeOutcome,
     ScorerProbeReason,
+    V14ScoredRuntimeEnvEvidence,
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_confirmation import (
@@ -298,6 +299,55 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
 # ``validator_infrastructure`` AND ``retryable is True`` before it even looks at
 # the code. So the agent codes are excluded three independent ways. The test
 # ``test_agent_attributable_inference_failures_stay_the_agents`` pins all three.
+_ADMISSION_CODES = frozenset(
+    {
+        "request_too_large",
+        "invalid_json",
+        "invalid_schema",
+        "stale_session",
+        "model_not_allowed",
+        "grant_not_servable",
+        "grant_rate_denied",
+        "platform_capacity",
+        "provider_failure",
+    }
+)
+_MINER_REQUEST_ADMISSION_CODES = frozenset(
+    {"request_too_large", "invalid_json", "invalid_schema", "model_not_allowed"}
+)
+_NON_AGENT_ADMISSION_CODES = _ADMISSION_CODES - _MINER_REQUEST_ADMISSION_CODES
+
+
+def _admission_suffix(payload: dict[str, object]) -> str | None:
+    """The dominant sanitized admission code, if the scorer counted one."""
+    failure = payload.get("failure")
+    if not isinstance(failure, dict):
+        return None
+    diagnostics = failure.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    taxonomy = diagnostics.get("admission_taxonomy")
+    if not isinstance(taxonomy, dict) or not taxonomy:
+        return None
+    counts: dict[str, int] = {}
+    for code, bucket in taxonomy.items():
+        if not isinstance(code, str) or code not in _ADMISSION_CODES:
+            continue
+        count = bucket.get("count") if isinstance(bucket, dict) else None
+        if not isinstance(count, int) or count <= 0:
+            continue
+        counts[code] = count
+    if not counts:
+        return None
+    # Generic 409 and 429 responses do not prove a miner fault: the Platform
+    # can also return them for route/grant state or capacity. Any such refusal
+    # prevents attributing this mixed run solely to the miner.
+    candidates = _NON_AGENT_ADMISSION_CODES & counts.keys()
+    if not candidates:
+        candidates = frozenset(counts)
+    return max(candidates, key=lambda code: (counts[code], code))
+
+
 _AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(
     {
         "inference_allowance_exhausted",
@@ -341,14 +391,37 @@ def _platform_route_proof_gap(payload: dict[str, object]) -> bool:
     because a systematically unprobeable submission must still run out of
     attempts instead of holding validator slots forever.
     """
+    return _bounded_retry_failure_code(payload) == _ROUTE_PROOF_UNAVAILABLE
+
+
+_SEED_DEADLINE_EXCEEDED = "seed_deadline_exceeded"
+
+# Scorer failures that are not the agent's to own but must still retry inside
+# the ORDINARY attempt budget. Never a subset of
+# ``_SANDBOX_INFRASTRUCTURE_CODES``: those mint a grant and raise the cap.
+#
+# ``seed_deadline_exceeded``: the harness did not acknowledge ``/seed`` within
+# the scorer's own deadline. A loaded validator host and a harness that embeds
+# too slowly are indistinguishable from inside one run, so the cause is named on
+# the ticket (it used to arrive as an anonymous ``scoring_error``) without
+# granting the unbounded re-lease a no-fault code would.
+_BOUNDED_RETRY_CODES = frozenset({_ROUTE_PROOF_UNAVAILABLE, _SEED_DEADLINE_EXCEEDED})
+
+assert not (_BOUNDED_RETRY_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
+
+
+def _bounded_retry_failure_code(payload: dict[str, object]) -> str | None:
+    """The scorer's bounded-retry infrastructure code, if it sent one."""
     failure = payload.get("failure")
     if not isinstance(failure, dict):
-        return False
-    return (
-        failure.get("kind") == "validator_infrastructure"
-        and failure.get("retryable") is True
-        and failure.get("code") == _ROUTE_PROOF_UNAVAILABLE
-    )
+        return None
+    if (
+        failure.get("kind") != "validator_infrastructure"
+        or failure.get("retryable") is not True
+    ):
+        return None
+    code = failure.get("code")
+    return code if isinstance(code, str) and code in _BOUNDED_RETRY_CODES else None
 
 
 def _agent_attributable_failure_code(payload: dict[str, object]) -> str | None:
@@ -525,15 +598,17 @@ class DittobenchClient:
         return self._transcripts.pop(run_id, None)
 
     def _control_headers(self) -> dict[str, str]:
-        """Authorize this validator on the scorer's inference control plane.
+        """Authorize this validator on the scorer's control plane.
 
-        The scorer admits ``/v1/inference/session*`` from a loopback peer or a
-        matching bearer. It joins sandbox-docker's network namespace while this
-        worker stays on the Compose bridge, so the call always arrives from a
-        private-bridge address and the bearer is the only thing that can
-        authorize it. Sent on the control plane alone — the shared
-        ``httpx.AsyncClient`` also talks to the platform, so this must never
-        become a client-wide default header.
+        The scorer requires this bearer on every control-plane route except
+        ``GET /health`` (logged in shadow mode, rejected under
+        ``DITTOBENCH_CONTROL_AUTH_MODE=enforce``), so every scorer call in
+        this client sends it. The scorer joins sandbox-docker's network
+        namespace while this worker stays on the Compose bridge, so the call
+        always arrives from a private-bridge address and the bearer is the
+        only thing that can authorize it. Sent on the control plane alone —
+        the shared ``httpx.AsyncClient`` also talks to the platform, so this
+        must never become a client-wide default header.
         """
         token = str(getattr(self._config, "dittobench_control_token", "") or "")
         return {"Authorization": f"Bearer {token}"} if token else {}
@@ -913,6 +988,7 @@ class DittobenchClient:
         try:
             response = await self._client.get(
                 f"{self._config.dittobench_api_url}/v1/capabilities",
+                headers=self._control_headers(),
                 timeout=getattr(
                     self._config, "dittobench_capabilities_timeout_seconds", 3.0
                 ),
@@ -1062,6 +1138,8 @@ class DittobenchClient:
         scored_runtime_env = None
         if 13 in observed_versions and payload.get("scored_runtime_env") is not None:
             try:
+                # The v13 type pins bench_version, so a v14 packet in this
+                # legacy slot is invalid and ignored like any other bad packet.
                 candidate = ScoredRuntimeEnvEvidence.model_validate(
                     payload["scored_runtime_env"]
                 )
@@ -1070,6 +1148,19 @@ class DittobenchClient:
             except ValueError:
                 # An invalid optional packet cannot upgrade the verified
                 # scorer identity or authorize a source review clearance.
+                pass
+        v14_scored_runtime_env = None
+        if (
+            14 in observed_versions
+            and payload.get("v14_scored_runtime_env") is not None
+        ):
+            try:
+                v14_candidate = V14ScoredRuntimeEnvEvidence.model_validate(
+                    payload["v14_scored_runtime_env"]
+                )
+                if v14_candidate.source_revision == source_revision:
+                    v14_scored_runtime_env = v14_candidate
+            except ValueError:
                 pass
         try:
             return ScorerBenchmarkCapability(
@@ -1089,6 +1180,7 @@ class DittobenchClient:
                 software_version=software_version,
                 source_revision=source_revision,
                 scored_runtime_env=scored_runtime_env,
+                v14_scored_runtime_env=v14_scored_runtime_env,
                 probe=self._record_scorer_probe(
                     "served",
                     observed_at=observed_at,
@@ -1414,7 +1506,9 @@ class DittobenchClient:
         endpoint = "/v2/score"
         url = f"{self._config.dittobench_api_url}{endpoint}"
         try:
-            resp = await self._client.post(url, json=body)
+            resp = await self._client.post(
+                url, json=body, headers=self._control_headers()
+            )
         except httpx.HTTPError as e:
             raise DittobenchError(f"submit failed: {e}") from e
         if resp.status_code in (429, 503):
@@ -1478,13 +1572,22 @@ class DittobenchClient:
         run_token = hashlib.sha256(run_id.encode()).hexdigest()[:16]
         try:
             while time.monotonic() - started <= budget:
-                resp = await self._client.get(url)
+                resp = await self._client.get(url, headers=self._control_headers())
+                # A poll that cannot be read says nothing about the run itself,
+                # which is still live in the sandbox. Cancel it like every other
+                # non-terminal exit so it cannot keep the sandbox after the
+                # ticket has been handed back.
                 if resp.status_code != 200:
+                    await self._cancel(run_id)
                     raise DittobenchError(
                         f"poll rejected ({resp.status_code}): {resp.text[:200]}"
                     )
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = None
                 if not isinstance(data, dict):
+                    await self._cancel(run_id)
                     raise DittobenchError("poll response was not a JSON object")
                 snapshot = safe_progress_snapshot(data)
                 if snapshot is not None:
@@ -1578,9 +1681,19 @@ class DittobenchClient:
                         if agent_failure_code == "model_inference_required":
                             message = f"run {run_id} made no authoritative model call"
                         elif agent_failure_code == "inference_request_rejected":
+                            admission = _admission_suffix(data)
+                            if admission is not None:
+                                agent_failure_code = (
+                                    f"inference_request_rejected:{admission}"
+                                )
                             message = (
                                 f"run {run_id} had an inference request rejected "
-                                "before reservation"
+                                f"before reservation ({admission or 'unclassified'})"
+                            )
+                            logger.info(
+                                "inference admission taxonomy run=%s code=%s",
+                                run_id,
+                                admission or "unclassified",
                             )
                         else:
                             message = f"run {run_id} exhausted its inference allowance"
@@ -1621,6 +1734,13 @@ class DittobenchClient:
                             f"run {run_id} could not prove its model route "
                             "disposition; the platform challenge was unfinished",
                             code=_ROUTE_PROOF_UNAVAILABLE,
+                            container_log_tail=log_tail,
+                        )
+                    if _bounded_retry_failure_code(data) == _SEED_DEADLINE_EXCEEDED:
+                        raise DittobenchError(
+                            f"run {run_id} harness did not acknowledge /seed "
+                            "within the scorer's seed deadline",
+                            code=_SEED_DEADLINE_EXCEEDED,
                             container_log_tail=log_tail,
                         )
                     # The unclassified branch, and the one agent 5fdadd33 landed
@@ -1668,6 +1788,7 @@ class DittobenchClient:
                     min(self._config.dittobench_poll_seconds, remaining)
                 )
         except httpx.HTTPError as e:
+            await self._cancel(run_id)
             raise DittobenchError(f"poll failed: {e}") from e
         except asyncio.CancelledError:
             await self._cancel(run_id)
@@ -1706,7 +1827,7 @@ class DittobenchClient:
             return None
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}/transcript"
         try:
-            resp = await self._client.get(url)
+            resp = await self._client.get(url, headers=self._control_headers())
         except httpx.HTTPError as e:
             logger.warning("run %s transcript fetch failed: %s", run_id, e)
             return None
@@ -1744,7 +1865,9 @@ class DittobenchClient:
         """
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}"
         try:
-            resp = await self._client.delete(url, timeout=_CANCEL_TIMEOUT_SECONDS)
+            resp = await self._client.delete(
+                url, headers=self._control_headers(), timeout=_CANCEL_TIMEOUT_SECONDS
+            )
             if resp.status_code not in (200, 202, 404, 405):
                 logger.warning(
                     "dittobench run %s cancellation rejected (%d): %s",

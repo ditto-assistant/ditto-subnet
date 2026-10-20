@@ -327,6 +327,11 @@ The hosted practice service is available. The playground's Submit tab drives it:
   This harness continues to use its own local model and embedding configuration;
   the playground sends no provider key.
 
+The optional Git crate target requires a pushed commit and
+`DITTOBENCH_CRATE_REF` set to its full lowercase SHA (`git rev-parse HEAD`). It
+never builds a moving branch or uncommitted local changes. The default local
+harness target needs no Git ref.
+
 The hosted service intentionally does not advertise its loopback tool endpoint
 to a remote `harness_url`. Its report can therefore show many
 `capped_tool_cases` even when the harness self-reports tool calls. That result
@@ -903,20 +908,22 @@ why it passes.
 | **LLM tool-router** — a first completion picks the tool subset, a second completion acts | catalog-present, cost factor | The deciding completion still offers a catalog (the router's output), so restraint and expected-tool credit are the model's; the extra completion sits inside the published cost budget (3 completion-equivalents on single-tool cases, 5 on chains). |
 | **JSON-mode / structured output** — the model returns `{"answer": …, "final_text": …}` | claim-span provenance, causal | Structured-output fields are completion spans; the graded value is contained in them, and the model derived it. Pass. |
 | **`final_answer` tool delivery** — the model emits a `final_answer{value}` call you turn into the response | claim-span provenance, causal | Tool-call arguments are completion spans. Pass — as long as you do not execute it through `tool_endpoint` as a non-memory action (it is not in the catalog, so it is not a swallowed catalog call either). |
-| **Formatter post-processor** — render `4110.67 dollars` as `$4,110.67`, `**Answer:** …` as plain text | claim-span provenance | The public normaliser (`scoregates.NormalizeSpan` + `ValueTokenHashes`) folds every honest rendering of the model's value to one claim token before containment, so a uniform, content-independent rendering passes. Rescaling (`/100`), unit changes and word→word maps produce a token the model never emitted and do not. |
+| **Formatter post-processor** — render `4110.67 dollars` as `$4,110.67`, `**Answer:** …` as plain text | claim-span provenance | The public normaliser (`scoregates.NormalizeSpan` + `SpanTokens`, rules in [PROTOCOL.md](PROTOCOL.md#the-gates-their-notes-and-their-posture)) folds every honest rendering of the model's value to one claim token before containment, so a uniform, content-independent rendering passes. Rescaling (`/100`), unit changes and word→word maps produce a token the model never emitted and do not. |
 | **Reply in the user's language** | grader reply-language policy | Answers are accepted in the question's language or English through the published lexicons; values stay canonical in every language. |
 | **Plain ReAct with tool results quoted into the next prompt** | causal | Delivered records and tool results are hash-exempt from the harness-authored span set, so quoting them is fine; only a value *you* computed that appears in no record or result trips `answer_in_prompt`. |
 | **Grounded abstention and clarifying questions authored by the model** | `AnswerAbsence`, `AnswerClarify` | Let the model write the decline citing what it searched, or the question naming the missing slot. A templated "I don't have that" or "what would you like?" scores 0. |
 
-The stock kit is the reference honest architecture: `src/v13.rs` holds each
-piece and `src/baseline.rs` wires them. Each verified honest pattern beside the
-rewrite it must not become:
+The stock kit illustrates an honest architecture: `src/v13.rs` holds the local
+gate helpers and `src/baseline.rs` wires them. Its default served path preserves
+the wire system prompt, leaving case interpretation to the model. Review the
+served behavior before treating an agent as safe. Each honest pattern beside a
+rewrite the public gates can charge:
 
 | Honest pattern (passes) | Rewrite it must not become (charged) |
 | --- | --- |
 | Serve the model's value as written; the `answer` slot is a verbatim copy of the model's own `Answer:` line (`v13::answer_slot_from_prose`, on only when `DITTOBENCH_ANSWER_SLOT` is set; `--gates` sets it) or absent | `/100` rescale, direction-word map, `%.2f` reformat, composed slot, replaced draft (`served_text_not_model_emitted`, `slot_not_in_prose`) |
 | A formatter, JSON mode, or a `final_answer` tool that carries the model's number | Any value the model did not emit |
-| Values-free system prompt (`v13::HARNESS_POLICY_PROMPT`); retrieved memory injected as `/seed`-derived context | The answer computed on the host and placed in the prompt ("reply exactly: X") (`answer_in_prompt`) |
+| Pass through the wire system prompt; retrieved memory is injected as `/seed`-derived context | The answer computed on the host and placed in the prompt ("reply exactly: X") (`answer_in_prompt`) |
 | Full catalog on every turn, or a semantic top-k preloader that keeps the published top-3 (`DITTOBENCH_PRELOAD_TOP_K`, `v13::preload_catalog`) | A request-keyed empty or one-tool catalog (`restraint_without_offer`, `expected_tool_not_offered`) |
 | Every model-emitted call is executed through `tool_endpoint` | A host that swallows the model's call to look restrained (`swallowed_model_call`) |
 | The model asks a clarifying question that names the missing detail and cites what memory search found; declines say what was found | An always-ask or always-decline phrase rule (`twin_concordant`) |
@@ -1006,8 +1013,9 @@ rehearses it; `local-rehearsal.py` follows (`LIVE_SCORING_BENCH_VERSION` 12,
   on end state through a follow-up read.
 - **Free-text tool arguments accept paraphrase** (#1847).
 - **Staged `/seed` waves are live and your 2xx is the ingest acknowledgement**
-  (#1844); point-in-time anchors arrive inside `user_input` as `as_of_twin`
-  pairs.
+  (#1844); same-turn corrections: point-in-time `as of <date>` anchors arrive
+  inside `user_input` as `as_of_twin` pairs, so keep superseded records with
+  their seed timestamps.
 - **Grounded abstention** (#1530): 25 unanswerable cases per run, each paired
   with an answerable twin; decline and cite what you searched.
 - **Memory mix rebalanced** (#1848, #1529): money falls from 50.9% to ≤ 12%

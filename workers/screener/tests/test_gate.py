@@ -10,13 +10,14 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tarfile
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -28,6 +29,7 @@ from ditto_screener.gate import (
     _MAX_SCREENED_IMAGE_BYTES,
     BuildGate,
     BuiltImageArtifact,
+    LeaseDeadline,
     _detail_tail,
     _docker_infrastructure_failure,
     _format_stage_timings,
@@ -41,10 +43,12 @@ from ditto_screener.gate import (
     dockerfile_at_root,
     image_binding_advisory,
 )
-from ditto_screener.platform import RemoteImageArchive
+from ditto_screener.l2_review import L2RunResult, L2Usage, LayeredSourceReviewAgent
 from ditto_screener.policy import (
     CORE_ONLY_MANIFEST,
     AgenticSourceReviewModule,
+    BehavioralOracleModule,
+    PolicyContext,
     PolicyEngine,
     PolicyEvidence,
     PolicyManifest,
@@ -52,10 +56,14 @@ from ditto_screener.policy import (
     ScreeningDecision,
     ScreeningOutcome,
     SourceReviewObservation,
+    core_decision,
     load_policy_engine,
 )
 from ditto_screener.runtime_verification import runtime_evidence_sha256
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
+    ScoredRuntimeEvidenceLease,
+)
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _ATTEMPT = UUID("7c5df3f9-3ea7-47ba-92d1-1bbcf4c5f300")
@@ -289,26 +297,92 @@ async def test_v13_shadow_semantics_require_tool_and_user_specific_memory(
     assert all(marker not in repr(decisions) for marker in memories.values())
 
 
-async def test_v13_incomplete_source_hold_retains_verified_image_without_passing(
-    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+_HELD_FINDING = {
+    "prompt_revision": "l3-sol-adversarial-critic-v3",
+    "risk_level": "high",
+    "confidence": 0.99,
+    "categories": ["cross_user_access"],
+    "evidence": [],
+}
+
+
+def _court_observation(adjudication: dict[str, object]) -> SourceReviewObservation:
+    return SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest="b" * 64,
+        categories=("cross_user_access",),
+        failure_disposition="inconclusive",
+        finding=_HELD_FINDING,
+        adjudication=adjudication,
+    )
+
+
+class _FixedReviewer:
+    def __init__(self, observation: SourceReviewObservation) -> None:
+        self._observation = observation
+
+    async def review(self, *_args: Any, **_kwargs: Any) -> SourceReviewObservation:
+        return self._observation
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "observation", "held"),
+    [
+        pytest.param(
+            13,
+            _court_observation({"decision": "reject", "reason": "proven breach"}),
+            True,
+            id="v13-court-reject",
+        ),
+        pytest.param(
+            13,
+            _court_observation(
+                {"decision": "escalate", "escalation_code": "adjudicator-failed"}
+            ),
+            True,
+            id="v13-court-refusal",
+        ),
+        pytest.param(
+            13,
+            _court_observation({"decision": "clear", "reason": "not reachable"}),
+            False,
+            id="v13-court-clear-awaiting-verification",
+        ),
+        pytest.param(
+            13,
+            SourceReviewObservation(
+                ok=True,
+                risk_level="low",
+                finding_digest="a" * 64,
+                categories=("none",),
+                clearance_certified=False,
+            ),
+            False,
+            id="v13-unadjudicated-hold",
+        ),
+        pytest.param(
+            12,
+            _court_observation({"decision": "reject", "reason": "proven breach"}),
+            False,
+            id="v12-court-reject",
+        ),
+    ],
+)
+async def test_v13_court_hold_retains_verified_image_without_passing(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    policy_version: int,
+    observation: SourceReviewObservation,
+    held: bool,
 ) -> None:
+    """Key the held upload on the evidence the real policy engine emits."""
     tarball = _valid_tar()
     gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
-    held = ScreeningDecision(
-        outcome=ScreeningOutcome.QUARANTINE,
-        detail="source review incomplete",
-        manifest_digest="ab" * 32,
-        evidence=(
-            PolicyEvidence(
-                "adjudication", "adjudicated-source-review-escalate", "held"
-            ),
-        ),
-        policy_version=13,
-    )
-    uploads: list[str] = []
-
-    async def evaluate(*_args: Any, **_kwargs: Any) -> ScreeningDecision:
-        return held
+    gate._policy = _review_engine()
+    gate._source_reviewer = _FixedReviewer(observation)  # type: ignore[assignment]
+    held_uploads: list[str] = []
+    passing_uploads: list[str] = []
 
     async def run_and_probe(*_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
         return gate_module._StageResult(True, ""), gate_module._AuditRuntime(
@@ -334,6 +408,134 @@ async def test_v13_incomplete_source_hold_retains_verified_image_without_passing
             image_ref=image_ref,
         )
 
+    async def publish(image: BuiltImageArtifact) -> None:
+        passing_uploads.append(image.sha256)
+
+    async def publish_held(image: BuiltImageArtifact) -> None:
+        held_uploads.append(image.sha256)
+
+    gate._run_and_probe = run_and_probe  # type: ignore[method-assign]
+    gate._export_image = export_image  # type: ignore[method-assign]
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=13,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            policy_version=policy_version,
+            publish_image=publish,
+            publish_held_image=publish_held,
+        )
+
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert result.adjudication == observation.adjudication
+    assert passing_uploads == []
+    assert held_uploads == ([hashlib.sha256(b"held image").hexdigest()] if held else [])
+    assert not (tmp_path / "held-image.tar").exists()
+
+
+def test_lease_deadline_offset_tracks_renewal() -> None:
+    parent = LeaseDeadline(100.0)
+    child = parent.offset(30)
+
+    parent.renew(200.0)
+
+    assert child.expires_at == 170
+    assert float(child) == 170
+    assert float(parent) == 200
+    assert child < 171
+    assert child > 169
+    assert 200 - parent == 0
+    assert child - 70 == 100
+    assert 1 + child == 171
+    assert isinstance(child, LeaseDeadline)
+
+
+def test_nested_offset_delegates_renew() -> None:
+    parent = LeaseDeadline(100.0)
+    grandchild = parent.offset(30).offset(10)
+
+    grandchild.renew(500.0)
+
+    assert parent.expires_at == 540
+    assert grandchild.expires_at == 500
+
+
+def test_capped_lease_deadline_follows_renewal_up_to_its_cap() -> None:
+    parent = LeaseDeadline(100.0)
+    capped = parent.cap(250.0)
+
+    parent.renew(200.0)
+    assert float(capped) == 200
+    parent.renew(300.0)
+    assert float(capped) == 250
+
+
+def test_capped_view_renewal_does_not_extend_shared_lease_past_cap() -> None:
+    parent = LeaseDeadline(100.0)
+    capped = parent.cap(250.0)
+
+    capped.renew(600.0)
+
+    assert parent.expires_at == 250.0
+    assert capped.expires_at == 250.0
+
+    offset_capped = parent.offset(30.0).cap(300.0)
+    offset_capped.renew(600.0)
+    assert parent.expires_at == 330.0
+    assert offset_capped.expires_at == 300.0
+
+
+async def test_held_image_deadline_follows_renewal(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    loop = asyncio.get_running_loop()
+    lease = LeaseDeadline(loop.time() + 600)
+    held = ScreeningDecision(
+        outcome=ScreeningOutcome.QUARANTINE,
+        detail="source review incomplete",
+        manifest_digest="ab" * 32,
+        evidence=(PolicyEvidence("adjudication", "source-review-adjudicated", "held"),),
+        adjudication={"decision": "reject"},
+        policy_version=13,
+    )
+    uploads: list[str] = []
+
+    async def evaluate(*_args: Any, **_kwargs: Any) -> ScreeningDecision:
+        # Leave the held-image export only a sliver past its 30s margin.
+        lease.expires_at = loop.time() + gate_module._LEASE_MIN_STAGE_SECONDS + 30.2
+        return held
+
+    async def run_and_probe(*_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
+        return gate_module._StageResult(True, ""), gate_module._AuditRuntime(
+            harness_base="http://harness:8080",
+            gateway_response_token="secret-a",
+            oracle_answer="secret-b",
+            gateway_state_file="/state/model-called",
+            tool_route="route",
+            tool_key=b"key",
+        )
+
+    async def export_image(
+        image_id: str, *, image_ref: str, deadline: float | None
+    ) -> BuiltImageArtifact:
+        await asyncio.sleep(0.3)
+        lease.renew(loop.time() + 600)
+        assert gate._lease_remaining(deadline) == pytest.approx(570, abs=1)
+        path = tmp_path / "held-image.tar"
+        path.write_bytes(b"held image")
+        return BuiltImageArtifact(
+            path=str(path),
+            sha256=hashlib.sha256(b"held image").hexdigest(),
+            size_bytes=10,
+            image_id=image_id,
+            image_ref=image_ref,
+        )
+
     async def publish_held(image: BuiltImageArtifact) -> None:
         uploads.append(image.sha256)
 
@@ -349,13 +551,13 @@ async def test_v13_incomplete_source_hold_retains_verified_image_without_passing
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url=_URL,
             policy_version=13,
+            deadline=lease,
             publish_image=lambda _image: asyncio.sleep(0),
             publish_held_image=publish_held,
         )
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
     assert uploads == [hashlib.sha256(b"held image").hexdigest()]
-    assert not (tmp_path / "held-image.tar").exists()
 
 
 @pytest.mark.parametrize("replay_probes", [False, True])
@@ -636,6 +838,8 @@ async def _screen(  # type: ignore[no-untyped-def]
     policy_only=False,
     policy_version=SCREENING_POLICY_VERSION,
     record_archive_verification=None,
+    execution_namespace=None,
+    deadline=None,
 ):
     return await gate.screen(
         agent_id=_AGENT,
@@ -649,6 +853,8 @@ async def _screen(  # type: ignore[no-untyped-def]
         policy_only=policy_only,
         policy_version=policy_version,
         record_archive_verification=record_archive_verification,
+        execution_namespace=execution_namespace,
+        deadline=deadline,
     )
 
 
@@ -682,6 +888,151 @@ async def test_timed_out_docker_process_may_exit_before_kill(
 
     assert code == 124
     assert output == "[timeout after 0.01s]"
+
+
+@pytest.mark.parametrize(
+    ("lease_seconds", "cap_seconds", "renew", "outcome", "reason_code"),
+    [
+        (0.15, 2.0, True, ScreeningOutcome.PASS, None),
+        (
+            0.10,
+            2.0,
+            False,
+            ScreeningOutcome.RETRYABLE_INFRA,
+            "docker-build-infrastructure",
+        ),
+        (
+            0.15,
+            0.10,
+            True,
+            ScreeningOutcome.DETERMINISTIC_REJECT,
+            "docker-build-timeout",
+        ),
+    ],
+)
+async def test_running_build_observes_lease_renewal_and_absolute_cap(
+    make_config: Callable[..., ScreenerConfig],
+    lease_seconds: float,
+    cap_seconds: float,
+    renew: bool,
+    outcome: ScreeningOutcome,
+    reason_code: str | None,
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(
+        make_config(docker_bin=sys.executable, build_timeout_seconds=cap_seconds),
+        _ok_run(),
+        tarball=tarball,
+    )
+    ok_run = _ok_run()
+    loop = asyncio.get_running_loop()
+    deadline = LeaseDeadline(loop.time() + 60)
+    original_expiry = deadline.expires_at
+    build_started = asyncio.Event()
+
+    async def run(args: list[str], **kwargs: Any) -> tuple[int, str]:
+        nonlocal original_expiry
+        if args[0] != "build":
+            return await ok_run(args, **kwargs)
+        assert kwargs["timeout"] == cap_seconds
+        assert kwargs["deadline"] is deadline
+        # Exhaust the short test lease only after ordinary preflight checks.
+        deadline.expires_at = loop.time() + lease_seconds
+        original_expiry = deadline.expires_at
+        build_started.set()
+        code, output = await BuildGate._run(
+            gate,
+            ["-c", "import time; time.sleep(0.3); print('built')"],
+            timeout=kwargs["timeout"],
+            deadline=kwargs["deadline"],
+        )
+        if code == 0:
+            _write_iidfile(args)
+        return code, output
+
+    async def renew_lease() -> None:
+        await build_started.wait()
+        await asyncio.sleep(0.03)
+        deadline.renew(loop.time() + 60)
+
+    gate._run = run  # type: ignore[method-assign]
+    renewal = asyncio.create_task(renew_lease()) if renew else None
+    try:
+        async with gate._client:
+            result = await asyncio.wait_for(
+                _screen(
+                    gate,
+                    hashlib.sha256(tarball).hexdigest(),
+                    build_only=True,
+                    deadline=deadline,
+                ),
+                timeout=3,
+            )
+    finally:
+        if renewal is not None:
+            renewal.cancel()
+            await asyncio.gather(renewal, return_exceptions=True)
+    assert result.outcome == outcome
+    if reason_code is not None:
+        assert result.evidence[-1].code == reason_code
+    else:
+        assert loop.time() > original_expiry
+    if outcome == ScreeningOutcome.RETRYABLE_INFRA:
+        assert "lease expired during build" in result.detail
+
+
+async def test_cancelled_docker_command_is_killed_and_reaped(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processes: list[asyncio.subprocess.Process] = []
+    started = asyncio.Event()
+    create_process = asyncio.create_subprocess_exec
+
+    async def capture_process(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await create_process(*args, **kwargs)
+        processes.append(process)
+        started.set()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_process)
+    async with httpx.AsyncClient() as client:
+        gate = BuildGate(
+            make_config(docker_bin=sys.executable),
+            client,
+            policy=PolicyEngine(CORE_ONLY_MANIFEST),
+            journal=ReviewJournal(None),
+        )
+        task = asyncio.create_task(
+            gate._run(
+                ["-c", "import time; time.sleep(10)"],
+                timeout=20,
+                deadline=LeaseDeadline(asyncio.get_running_loop().time() + 20),
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+    assert len(processes) == 1
+    assert processes[0].returncode is not None
+
+
+@pytest.mark.parametrize("marker", ["[lease expired after 1s]", "[timeout after 1s]"])
+async def test_docker_output_cannot_forge_a_timeout(
+    make_config: Callable[..., ScreenerConfig], marker: str
+) -> None:
+    async with httpx.AsyncClient() as client:
+        gate = BuildGate(
+            make_config(docker_bin=sys.executable),
+            client,
+            policy=PolicyEngine(CORE_ONLY_MANIFEST),
+            journal=ReviewJournal(None),
+        )
+        code, output = await gate._run(
+            ["-c", f"import sys; print({marker!r}); sys.exit(124)"], timeout=2
+        )
+    assert code == 124
+    assert output.startswith("Docker command output:")
 
 
 def test_root_and_log_helpers() -> None:
@@ -731,6 +1082,95 @@ def test_unportable_build_context_owner_is_infrastructure_failure() -> None:
     assert _docker_infrastructure_failure(
         'failed to Lchown "Dockerfile" for UID 197108, GID 197121: '
         "lchownat Dockerfile: invalid argument"
+    )
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "ERROR: failed to solve: rpc error: code = Unknown desc = no http "
+        "response from session for qmxu3s09iqv12evun9jcoq2we",
+        "ERROR: failed to solve: no active session for "
+        "qmxu3s09iqv12evun9jcoq2we: context deadline exceeded",
+        "ERROR: failed to receive status: rpc error: code = Unavailable "
+        "desc = error reading from server: EOF",
+    ],
+)
+def test_lost_buildkit_session_is_infrastructure_failure(detail: str) -> None:
+    assert _docker_infrastructure_failure(detail)
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101',
+        "ERROR: failed to solve: failed to compute cache key: failed to "
+        'calculate checksum of ref abc::xyz: "/Cargo.lock": not found',
+        "ERROR: failed to solve: dockerfile parse error on line 3: "
+        "unknown instruction: RUNN",
+    ],
+)
+def test_artifact_build_failure_is_not_infrastructure(detail: str) -> None:
+    assert not _docker_infrastructure_failure(detail)
+
+
+def _rustc_failure(source_line: str) -> str:
+    return (
+        "#12 [builder 5/6] RUN cargo build --release --locked\n"
+        "#12 43.02 error[E0308]: mismatched types\n"
+        "#12 43.02    --> src/relay.rs:88:24\n"
+        "#12 43.02     |\n"
+        f"#12 43.02 88  |         {source_line}\n"
+        "#12 43.02     |                       ^^^^ expected `RelayError`\n"
+        "#12 43.05 error: could not compile `dittobench-miner` due to 1 "
+        "previous error\n"
+        '#12 ERROR: process "/bin/sh -c cargo build --release --locked" did '
+        "not complete successfully: exit code: 101\n"
+        "------\n"
+        " > [builder 5/6] RUN cargo build --release --locked:\n"
+        f"43.02 88  |         {source_line}\n"
+        "------\n"
+        "Dockerfile:14\n"
+        "--------------------\n"
+        "  14 | >>> RUN cargo build --release --locked\n"
+        "--------------------\n"
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101'
+    )
+
+
+@pytest.mark.parametrize(
+    "source_line",
+    [
+        '503 => return Err("service unavailable"),',
+        '429 => bail!("too many requests"),',
+        'Err(e) => log::warn!("connection refused: {e}"),',
+    ],
+)
+def test_compiler_quoted_source_is_not_infrastructure(source_line: str) -> None:
+    assert not _docker_infrastructure_failure(_rustc_failure(source_line))
+
+
+def test_dockerfile_excerpt_is_not_infrastructure() -> None:
+    assert not _docker_infrastructure_failure(
+        "Dockerfile:9\n"
+        "--------------------\n"
+        '   9 | >>> RUN ./check.sh || (echo "killed" && exit 1)\n'
+        "--------------------\n"
+        'ERROR: failed to solve: process "/bin/sh -c ./check.sh" did not '
+        "complete successfully: exit code: 1"
+    )
+
+
+def test_dependency_fetch_failure_stays_infrastructure() -> None:
+    assert _docker_infrastructure_failure(
+        "#12 3.21 error: failed to get `serde` as a dependency of package "
+        "`dittobench-miner v0.1.0 (/app)`\n"
+        "#12 3.21 Caused by:\n"
+        "#12 3.21   [6] Could not resolve host: index.crates.io\n"
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101'
     )
 
 
@@ -804,126 +1244,6 @@ async def test_export_image_strips_attempt_scoped_remote_tag(
         assert manifest[0]["RepoTags"] is None
     finally:
         os.unlink(exported.path)
-
-
-async def test_targon_runtime_success_skips_docker_and_exports_archive(
-    make_config: Callable[..., ScreenerConfig], tmp_path: Path
-) -> None:
-    tarball = _valid_tar()
-    archive_bytes, config_id, _ = _oci_image_save_archive()
-    archive_path = tmp_path / "remote.tar"
-    archive_path.write_bytes(archive_bytes)
-    calls: list[list[str]] = []
-    published: list[BuiltImageArtifact] = []
-    consumed: list[UUID] = []
-
-    async def run(args: list[str], **_: Any) -> tuple[int, str]:
-        calls.append(args)
-        raise AssertionError(f"local Docker must not run: {args}")
-
-    async def remote_build() -> RemoteImageArchive:
-        return RemoteImageArchive(
-            build_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-            path=str(archive_path),
-            sha256=hashlib.sha256(archive_bytes).hexdigest(),
-            size_bytes=len(archive_bytes),
-            runtime_status="succeeded",
-            runtime_image_reference=(
-                "us-central1-docker.pkg.dev/ditto-app-dev/"
-                "ditto-screening-candidates/miner@sha256:" + "ab" * 32
-            ),
-        )
-
-    async def remote_build_consumed(build_id: UUID) -> None:
-        consumed.append(build_id)
-
-    async def publish(image: BuiltImageArtifact) -> None:
-        published.append(image)
-
-    gate = _gate_with(
-        make_config(require_rootless_docker=True, remote_build_mode="require"),
-        run,
-        tarball=tarball,
-    )
-    async with gate._client:
-        result = await gate.screen(
-            agent_id=_AGENT,
-            attempt_id=_ATTEMPT,
-            bench_version=12,
-            miner_hotkey=_MINER,
-            sha256=hashlib.sha256(tarball).hexdigest(),
-            download_url=_URL,
-            publish_image=publish,
-            remote_build=remote_build,
-            remote_build_consumed=remote_build_consumed,
-        )
-    assert result.outcome == ScreeningOutcome.PASS
-    assert calls == []
-    assert [image.image_id for image in published] == [config_id]
-    assert consumed == [UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
-
-
-async def test_remote_require_does_not_local_build_without_targon_health(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    tarball = _valid_tar()
-    calls: list[list[str]] = []
-
-    async def run(args: list[str], **_: Any) -> tuple[int, str]:
-        calls.append(args)
-        return 0, ""
-
-    async def remote_build() -> None:
-        return None
-
-    gate = _gate_with(
-        make_config(require_rootless_docker=True, remote_build_mode="require"),
-        run,
-        tarball=tarball,
-    )
-    async with gate._client:
-        result = await gate.screen(
-            agent_id=_AGENT,
-            attempt_id=_ATTEMPT,
-            bench_version=12,
-            miner_hotkey=_MINER,
-            sha256=hashlib.sha256(tarball).hexdigest(),
-            download_url=_URL,
-            remote_build=remote_build,
-        )
-    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
-    assert result.evidence[-1].code == "targon-runtime-unavailable"
-    assert calls == []
-
-
-async def test_remote_kaniko_failure_is_deterministic_docker_rejection(
-    make_config: Callable[..., ScreenerConfig],
-) -> None:
-    from ditto_screener.platform import RemoteSubmissionBuildRejected
-
-    tarball = _valid_tar()
-
-    async def remote_build() -> None:
-        raise RemoteSubmissionBuildRejected("FLEET_SUBMISSION_KANIKO_FAILED")
-
-    gate = _gate_with(
-        make_config(require_rootless_docker=True, remote_build_mode="require"),
-        _ok_run(),
-        tarball=tarball,
-    )
-    async with gate._client:
-        result = await gate.screen(
-            agent_id=_AGENT,
-            attempt_id=_ATTEMPT,
-            bench_version=12,
-            miner_hotkey=_MINER,
-            sha256=hashlib.sha256(tarball).hexdigest(),
-            download_url=_URL,
-            remote_build=remote_build,
-        )
-    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
-    assert result.evidence[-1].code == "docker-build"
-    assert result.detail == "build failed: DITTO_SUBMISSION_BUILD_FAILED=KANIKO"
 
 
 async def test_export_rejects_oversize_before_save(
@@ -1123,6 +1443,39 @@ async def test_default_v6_builds_and_health_checks_without_run(
     assert result.manifest_digest == CORE_ONLY_MANIFEST.digest
     assert any("http://harness:8080/health" in arg for call in calls for arg in call)
     assert not any("http://harness:8080/run" in arg for call in calls for arg in call)
+
+
+async def test_canary_execution_uses_separate_docker_names_and_cannot_publish(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    namespace = uuid4()
+    async with gate._client:
+        result = await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            execution_namespace=namespace,
+        )
+
+        async def publish(_image: BuiltImageArtifact) -> None:
+            raise AssertionError("isolated canary cannot publish")
+
+        with pytest.raises(ValueError, match="isolated execution"):
+            await gate.screen(
+                agent_id=_AGENT,
+                attempt_id=_ATTEMPT,
+                bench_version=13,
+                miner_hotkey=_MINER,
+                sha256=hashlib.sha256(tarball).hexdigest(),
+                download_url=_URL,
+                execution_namespace=namespace,
+                publish_image=publish,
+            )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(namespace.hex in arg for call in calls for arg in call)
 
 
 async def test_archive_receipt_follows_verified_contract_only(
@@ -1384,6 +1737,7 @@ class _SafeStaticLeadReviewer:
             risk_level="low",
             finding_digest="a" * 64,
             categories=("none",),
+            clearance_certified=True,
             finding={
                 "prompt_revision": "l3-sol-adversarial-critic-v3",
                 "risk_level": "low",
@@ -1423,6 +1777,62 @@ class _AdjudicatedStaticLeadReviewer(_SafeStaticLeadReviewer):
         )
 
 
+@pytest.mark.parametrize("policy_only", [False, True])
+async def test_deferred_preflight_reason_survives_post_build_pass(
+    make_config: Callable[..., ScreenerConfig], policy_only: bool
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
+            "scripts/local-only.sh": (
+                b'path="/var/run/docker.sock"\nconnect_control_socket "$path"\n'
+            ),
+        }
+    )
+
+    class ExhaustedReviewer(_SafeStaticLeadReviewer):
+        async def resolve_lead(
+            self, *_args: Any, **_kwargs: Any
+        ) -> SourceReviewObservation:
+            return SourceReviewObservation(
+                ok=False,
+                risk_level=None,
+                finding_digest=None,
+                categories=(),
+                error_code="source-review-step-budget-exhausted",
+                failure_disposition="pass_inconclusive",
+                review_audit={"stage": "l1", "steps_used": 20},
+            )
+
+    gate = _gate_with(make_config(), _ok_run([]), tarball=tarball)
+    gate._source_reviewer = ExhaustedReviewer()  # type: ignore[assignment]
+
+    async def post_build_pass(
+        context: PolicyContext, **_kwargs: Any
+    ) -> ScreeningDecision:
+        return core_decision(
+            ScreeningOutcome.PASS,
+            code="health-ok",
+            summary="image passed the health check",
+            detail="",
+            policy_version=context.policy_version,
+        )
+
+    gate._policy.evaluate = post_build_pass  # type: ignore[method-assign]
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), policy_only=policy_only
+        )
+    assert result.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert [item.code for item in result.evidence[:2]] == [
+        "source-review-step-budget-exhausted",
+        "health-ok",
+    ]
+    if not policy_only:
+        assert result.evidence[-1].code == "seed-ack-invalid"
+    assert result.reason_code == "source-review-step-budget-exhausted"
+
+
 async def test_l3_cleared_static_lead_can_continue_to_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1447,10 +1857,43 @@ async def test_l3_cleared_static_lead_can_continue_to_build(
     assert any(call[0] == "build" for call in calls)
 
 
-async def test_v13_l4_cleared_static_lead_holds_before_build(
+async def test_v13_uncertified_static_preflight_low_holds_before_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    """A source-only L4 clear cannot authorize v13 build or admission."""
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
+            "scripts/local-only.sh": (
+                b'path="/var/run/docker.sock"\nconnect_control_socket "$path"\n'
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+
+    class UncertifiedReviewer(_SafeStaticLeadReviewer):
+        async def resolve_lead(
+            self, *_args: Any, **_kwargs: Any
+        ) -> SourceReviewObservation:
+            cleared = await super().resolve_lead(*_args, **_kwargs)
+            return SourceReviewObservation(
+                **{**cleared.__dict__, "clearance_certified": False}
+            )
+
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    gate._source_reviewer = UncertifiedReviewer()  # type: ignore[assignment]
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), policy_version=13
+        )
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert result.evidence[0].code == "source-review-clearance-unproven"
+    assert not any(call[0] == "build" for call in calls)
+
+
+async def test_v13_l4_cleared_static_lead_continues_to_build(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A source L4 clear builds, then holds pending v13 verification."""
     tarball = _valid_tar(
         **{
             "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
@@ -1471,9 +1914,48 @@ async def test_v13_l4_cleared_static_lead_holds_before_build(
     assert result.outcome == ScreeningOutcome.QUARANTINE
     assert result.adjudication is not None
     assert result.adjudication["decision"] == "clear"
+    assert any(
+        item.code == "source-review-awaiting-v13-verification"
+        for item in result.evidence
+    )
+    assert result.reason_code == "source-review-awaiting-v13-verification"
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
-    assert not any(call[0] == "build" for call in calls)
+    assert any(call[0] == "build" for call in calls)
+
+
+async def test_static_preflight_reports_source_review_before_build(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """Platform renews ``building`` after these source-review stages."""
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
+            "scripts/local-only.sh": (
+                b'path="/var/run/docker.sock"\nconnect_control_socket "$path"\n'
+            ),
+        }
+    )
+
+    class ProgressReportingReviewer(_SafeStaticLeadReviewer):
+        async def resolve_lead(
+            self, *args: Any, **kwargs: Any
+        ) -> SourceReviewObservation:
+            kwargs["progress"](9, 10)
+            return await super().resolve_lead(*args, **kwargs)
+
+    stages: list[str] = []
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    gate._source_reviewer = ProgressReportingReviewer()  # type: ignore[assignment]
+    async with gate._client:
+        result = await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            progress=stages.append,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert stages.index("source_review_90") < stages.index("building")
 
 
 async def test_reports_only_coarse_pipeline_stages(
@@ -1526,6 +2008,7 @@ class _StubReviewer:
             risk_level="low",
             finding_digest=None,
             categories=("none",),
+            clearance_certified=True,
         )
 
 
@@ -1544,6 +2027,7 @@ class _TransportSettlingReviewer(_StubReviewer):
             risk_level="low",
             finding_digest="a" * 64,
             categories=("none",),
+            clearance_certified=True,
             notes=(
                 {
                     "kind": "observation",
@@ -1610,6 +2094,192 @@ async def test_source_review_starts_only_after_build_and_health(
     assert events[-1] == "review_finished"
 
 
+class _ReceiptRecordingReviewer(_SafeStaticLeadReviewer):
+    """Records the claim receipt time each review entry point receives."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.received_at: list[object] = []
+
+    async def resolve_lead(self, *args: Any, **kwargs: Any) -> SourceReviewObservation:
+        self.received_at.append(kwargs.get("scored_runtime_evidence_received_at"))
+        return await super().resolve_lead(*args, **kwargs)
+
+    async def review(self, *_args: Any, **kwargs: Any) -> SourceReviewObservation:
+        self.received_at.append(kwargs.get("scored_runtime_evidence_received_at"))
+        return SourceReviewObservation(
+            ok=True,
+            risk_level="low",
+            finding_digest=None,
+            categories=("none",),
+            clearance_certified=True,
+        )
+
+
+@pytest.mark.parametrize("static_lead", [True, False], ids=["preflight", "post-build"])
+async def test_every_review_entry_point_receives_the_claim_receipt_time(
+    make_config: Callable[..., ScreenerConfig], static_lead: bool
+) -> None:
+    tarball = (
+        _valid_tar(
+            **{
+                "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
+                "scripts/local-only.sh": (
+                    b'path="/var/run/docker.sock"\nconnect_control_socket "$path"\n'
+                ),
+            }
+        )
+        if static_lead
+        else _valid_tar()
+    )
+    reviewer = _ReceiptRecordingReviewer()
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    gate._policy = _review_engine()
+    gate._source_reviewer = reviewer  # type: ignore[assignment]
+
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=12,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            scored_runtime_evidence_received_at=1_800_000_000,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert reviewer.received_at == [1_800_000_000]
+    assert reviewer.resolve_calls == (1 if static_lead else 0)
+
+
+@pytest.mark.parametrize(
+    ("lease_attached", "bench_version"), [(True, 13), (False, 13), (False, 12)]
+)
+async def test_slow_build_does_not_age_out_a_receipt_fresh_v13_lease(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    lease_attached: bool,
+    bench_version: int,
+) -> None:
+    """Build time counts from the claim, not against the signed lease window.
+
+    A V13 arrival Platform could not attach a lease to is retryable fleet
+    infrastructure. Any other arrival without one keeps the inconclusive hold,
+    so a per-agent cause never loops through the infrastructure retry.
+    """
+    received_at = 1_800_000_000
+    clock = [float(received_at)]
+    monkeypatch.setattr(gate_module.time, "time", lambda: clock[0])
+    revision = "a" * 40
+    keys = ("DITTOBENCH_MODEL",)
+    tarball = _valid_tar()
+    sha256 = hashlib.sha256(tarball).hexdigest()
+    lease = ScoredRuntimeEvidenceLease(
+        attempt_id=_ATTEMPT,
+        artifact_sha256=sha256,
+        policy_version=13,
+        bench_version=13,
+        scorer_source_revision=revision,
+        release_descriptor_digest="sha256:" + "b" * 64,
+        scorer_image_digest="sha256:" + "c" * 64,
+        scorer_env_sha256=hashlib.sha256(
+            ("scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)).encode()
+        ).hexdigest(),
+        injected_keys=keys,
+        validator_count=3,
+        observed_at=received_at - 10,
+    )
+    reviewed: list[str] = []
+
+    class L1:
+        async def review(self, *_args: Any, **_kwargs: Any) -> SourceReviewObservation:
+            reviewed.append("l1")
+            return SourceReviewObservation(
+                ok=True,
+                risk_level="low",
+                finding_digest=None,
+                categories=("none",),
+                clearance_certified=True,
+            )
+
+    class L2:
+        _require_signed_runtime_lease = False
+        _l3_enabled = False
+        _signed_runtime_lease_max_age_seconds = 300
+        _model = "openai/gpt-6-sol"
+        _max_steps = 1
+        _max_input_tokens = 1
+        _max_output_tokens = 1
+        _max_cost_usd = 1.0
+        _timeout_seconds = 60.0
+
+        async def review(self, *_args: Any, **_kwargs: Any) -> L2RunResult:
+            reviewed.append("l2")
+            return L2RunResult(
+                SourceReviewObservation(
+                    ok=True,
+                    risk_level="low",
+                    finding_digest=None,
+                    categories=("none",),
+                    clearance_certified=True,
+                ),
+                (),
+                (),
+                (),
+                L2Usage(),
+                False,
+            )
+
+    ok_run = _ok_run()
+
+    async def slow_build(args: list[str], **kwargs: Any) -> tuple[int, str]:
+        if args[0] == "build":
+            clock[0] += 400
+        return await ok_run(args, **kwargs)
+
+    gate = _gate_with(make_config(), slow_build, tarball=tarball)
+    gate._policy = _review_engine()
+    gate._source_reviewer = LayeredSourceReviewAgent(
+        l1=L1(),  # type: ignore[arg-type]
+        l2=L2(),  # type: ignore[arg-type]
+        mode="enforce",
+    )
+
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=bench_version,
+            miner_hotkey=_MINER,
+            sha256=sha256,
+            download_url=_URL,
+            policy_version=13,
+            scored_runtime_evidence=lease if lease_attached else None,
+            scored_runtime_evidence_received_at=received_at,
+        )
+
+    assert clock[0] >= received_at + 400
+    held = [
+        item.code
+        for item in result.evidence
+        if item.code == "l2-runtime-evidence-unavailable"
+    ]
+    if lease_attached:
+        assert reviewed == ["l1", "l2"]
+        assert result.outcome != ScreeningOutcome.INCONCLUSIVE
+        assert held == []
+    elif bench_version == 13:
+        assert reviewed == []
+        assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+        assert held == ["l2-runtime-evidence-unavailable"]
+    else:
+        # Exactly the pre-existing inconclusive hold, which parks the agent.
+        assert reviewed == []
+        assert result.outcome == ScreeningOutcome.INCONCLUSIVE
+        assert "source-review-inconclusive" in {item.code for item in result.evidence}
+
+
 async def test_policy_only_rescreen_starts_source_review_without_runtime(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1633,20 +2303,54 @@ async def test_policy_only_rescreen_starts_source_review_without_runtime(
     assert not any(call[0] in {"build", "run", "exec"} for call in docker_calls)
 
 
+async def test_source_only_fixture_builds_and_reviews_without_serving(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    events: list[str] = []
+    docker_calls: list[list[str]] = []
+    built_images: list[str] = []
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(docker_calls), tarball=tarball)
+    gate._policy = _review_engine()
+    gate._source_reviewer = _StubReviewer(events)  # type: ignore[assignment]
+
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=13,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            policy_version=13,
+            execution_namespace=uuid4(),
+            source_only_build=True,
+            record_built_image=built_images.append,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert events == ["review_started", "review_finished"]
+    assert built_images == ["sha256:" + "34" * 32]
+    assert any(call[0] == "build" for call in docker_calls)
+    assert not any(
+        call[0] in {"create", "run", "start", "exec"} for call in docker_calls
+    )
+
+
 @pytest.mark.parametrize(
     ("policy_version", "expected", "settle_calls"),
     [
-        (12, ScreeningOutcome.PASS, 1),
-        (13, ScreeningOutcome.INCONCLUSIVE, 0),
+        (12, ScreeningOutcome.PASS, 0),
+        (13, ScreeningOutcome.PASS, 0),
     ],
 )
-async def test_oracle_transport_failure_is_fail_closed_for_v13(
+async def test_unrequested_oracle_transport_cannot_block_source_certificate(
     make_config: Callable[..., ScreenerConfig],
     policy_version: int,
     expected: ScreeningOutcome,
     settle_calls: int,
 ) -> None:
-    """A source-only settlement cannot clear v13 mandatory runtime verification."""
+    """The built-in source profile does not depend on a runtime oracle."""
     events: list[str] = []
     tarball = _valid_tar()
     gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
@@ -1670,16 +2374,48 @@ async def test_oracle_transport_failure_is_fail_closed_for_v13(
     assert result.outcome == expected
     assert result.policy_version == policy_version
     assert reviewer.settle_calls == settle_calls
-    if policy_version == 12:
-        assert result.adjudication is not None
-        assert result.adjudication["decision"] == "clear"
-        assert [evidence.code for evidence in result.evidence][-2:] == [
-            "challenge-transport-failure",
-            "source-review-adjudicated",
-        ]
-    else:
-        assert result.adjudication is None
-        assert result.evidence[-1].code == "challenge-transport-failure"
+    assert result.adjudication is None
+    assert not any(
+        evidence.code == "challenge-transport-failure" for evidence in result.evidence
+    )
+
+
+async def test_legacy_transport_settlement_preserves_the_court_reason(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    gate._policy = PolicyEngine(
+        PolicyManifest(
+            rotation_id="legacy-court-settlement",
+            module_specs=(
+                {"kind": "agentic_source_review"},
+                {"kind": "behavioral_oracle"},
+            ),
+        ),
+        (
+            AgenticSourceReviewModule(module_id="source-review"),
+            BehavioralOracleModule(module_id="oracle"),
+        ),
+    )
+    reviewer = _TransportSettlingReviewer([])
+    gate._source_reviewer = reviewer  # type: ignore[assignment]
+
+    async def no_response(_container: str, url: str, **_kwargs: Any) -> tuple[int, str]:
+        if url.endswith("/health"):
+            return 0, ""
+        return 24, "transport request failed"
+
+    gate._request_from_sidecar = no_response  # type: ignore[method-assign]
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), policy_version=12
+        )
+    assert result.outcome == ScreeningOutcome.PASS
+    assert reviewer.settle_calls == 1
+    assert result.adjudication is not None
+    assert result.reason_code == "source-review-adjudicated"
+    assert "challenge-transport-failure" in [item.code for item in result.evidence]
 
 
 async def test_source_review_is_not_started_when_the_build_fails(
@@ -1895,6 +2631,31 @@ async def test_unloaded_buildx_result_is_retryable_infrastructure(
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "docker-build-infrastructure"
     assert "No such image" in result.detail
+
+
+async def test_lost_buildkit_session_is_retryable_infrastructure(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+
+    async def session_lost(
+        args: list[str], *, stdin: Any = None, **_: Any
+    ) -> tuple[int, str]:
+        if args[0] == "build" and stdin is not None:
+            stdin.read()
+            return 1, (
+                "ERROR: failed to solve: rpc error: code = Unknown desc = no "
+                "http response from session for qmxu3s09iqv12evun9jcoq2we"
+            )
+        return 0, ""
+
+    gate = _gate_with(make_config(), session_lost, tarball=tarball)
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert result.evidence[-1].code == "docker-build-infrastructure"
+    assert "no http response from session" in result.detail
 
 
 async def test_build_uses_daemon_image_id_resolved_from_unique_tag(
@@ -2210,6 +2971,60 @@ def test_image_binding_escalation_preserves_review_and_policy_identity() -> None
     assert escalated.policy_version == 12
     assert escalated.adjudication == adjudication
     assert escalated.review_notes == notes
+    assert escalated.reason_code == "image-binding-heuristic"
+
+
+def test_image_binding_advisory_preserves_an_existing_quarantine_reason() -> None:
+    decision = core_decision(
+        ScreeningOutcome.QUARANTINE,
+        code="source-finding-held",
+        summary="source finding requires operator review",
+        detail="private policy quarantine pending operator review",
+    )
+    result = gate_module._with_image_binding_advisory(
+        decision, "prebuilt entrypoint requires provenance review"
+    )
+    assert result.reason_code == "source-finding-held"
+    assert result.evidence[-1].code == "image-binding-heuristic"
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ScreeningOutcome.PASS,
+        ScreeningOutcome.PASS_INCONCLUSIVE,
+        ScreeningOutcome.QUARANTINE,
+    ],
+)
+@pytest.mark.parametrize("record_count", [1, 16])
+def test_image_binding_advisory_preserves_the_deciding_reason_and_record(
+    outcome: ScreeningOutcome, record_count: int
+) -> None:
+    reason = "source-review-step-budget-exhausted"
+    deciding = PolicyEvidence("source-review", reason, "source review exhausted")
+    decision = ScreeningDecision(
+        outcome=outcome,
+        detail="",
+        manifest_digest="ab" * 32,
+        reason_code=reason,
+        review_audit={"stage": "l1", "reason_code": reason},
+        evidence=(
+            *(
+                PolicyEvidence("prior-audit", f"prior-{i}", "earlier observation")
+                for i in range(record_count - 1)
+            ),
+            deciding,
+        ),
+    )
+    result = gate_module._with_image_binding_advisory(decision, "image needs review")
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert result.reason_code == reason
+    assert result.review_audit == decision.review_audit
+    assert deciding in result.evidence
+    assert result.evidence[-1].code == "image-binding-heuristic"
+    assert len(result.evidence) == min(record_count + 1, 16)
+    assert decision.outcome == outcome
+    assert decision.evidence[-1] == deciding
 
 
 async def test_build_only_skips_image_binding_advisory_and_passes(
@@ -2500,8 +3315,10 @@ async def test_transient_build_failures_are_retryable_infrastructure(
     assert result.detail.startswith("screener error:")
 
 
+@pytest.mark.parametrize("exit_code", [-15, 137, 143])
 async def test_signal_interrupted_build_is_retryable_infrastructure(
     make_config: Callable[..., ScreenerConfig],
+    exit_code: int,
 ) -> None:
     tarball = _valid_tar()
 
@@ -2511,14 +3328,15 @@ async def test_signal_interrupted_build_is_retryable_infrastructure(
         if args[0] == "build":
             if stdin is not None:
                 stdin.read()
-            return -15, ""
+            return exit_code, "step 3/9"
         return 0, ""
 
     gate = _gate_with(make_config(), interrupted, tarball=tarball)
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
-    assert "SIGTERM" in result.detail
+    expected_signal = "SIGTERM" if exit_code < 0 else f"({exit_code})"
+    assert expected_signal in result.detail
 
 
 async def test_failure_diagnostics_are_bounded(
@@ -3122,6 +3940,7 @@ def test_seed_evidence_never_exceeds_the_decision_bound() -> None:
         outcome=ScreeningOutcome.PASS,
         detail="",
         manifest_digest=CORE_ONLY_MANIFEST.digest,
+        reason_code="health-ok",
         evidence=tuple(
             PolicyEvidence("stable-core", f"filler-{index}", "x") for index in range(16)
         ),
@@ -3138,6 +3957,7 @@ def test_seed_evidence_never_exceeds_the_decision_bound() -> None:
     assert len(result.evidence) == 16
     codes = [item.code for item in result.evidence]
     assert codes[-2:] == ["seed-memory-cap", "seed-envelope-usage"]
+    assert result.reason_code == "health-ok"
 
 
 def test_screening_locks_the_same_persistence_paths_as_scoring() -> None:
@@ -3171,3 +3991,30 @@ async def test_the_locked_persistence_paths_reach_the_smoke_container(
     )
     assert "DITTOBENCH_MEMORY_PATH=/tmp/dittobench-memory.json" in run_call
     assert "DITTOBENCH_DB=/tmp/dittobench.db" in run_call
+
+
+def test_gate_threads_l2_turn_timeout_to_the_reviewer(make_config) -> None:  # type: ignore[no-untyped-def]
+    derived = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    # conftest keeps the 2.4k profile, so the derived cap stays at its floor.
+    assert derived._source_reviewer._l2._max_completion_request_seconds == 45.0
+    derived = _gate_with(
+        make_config(l2_max_completion_tokens=16_000, l2_max_output_tokens=1_000_000),
+        _ok_run(),
+        tarball=_valid_tar(),
+    )
+    assert derived._source_reviewer._l2._max_completion_request_seconds == (
+        pytest.approx(16_000 / 60)
+    )
+    explicit = _gate_with(
+        make_config(l2_max_completion_request_seconds=300.0),
+        _ok_run(),
+        tarball=_valid_tar(),
+    )
+    assert explicit._source_reviewer._l2._max_completion_request_seconds == 300.0
+
+
+def test_gate_retries_a_relayed_provider_body_fault_once(make_config) -> None:  # type: ignore[no-untyped-def]
+    # 2026-10-02/03: four L3 adjudications lost every completed turn to one
+    # relayed provider fault and parked as l3-adjudicator-model-provider-fault.
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    assert gate._source_reviewer._l2._retry_provider_body_fault_once is True

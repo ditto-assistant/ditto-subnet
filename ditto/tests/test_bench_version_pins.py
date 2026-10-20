@@ -280,7 +280,7 @@ def test_backroom_confirmation_schema_enumerates_the_confirmable_epochs() -> Non
 
 def test_generated_backroom_client_carries_every_confirmable_epoch() -> None:
     unions = re.findall(
-        r"bench_version: ((?:\d+ \| )+\d+);", BACKROOM_GENERATED.read_text()
+        r"bench_version: (9 \| (?:\d+ \| )*\d+);", BACKROOM_GENERATED.read_text()
     )
     assert unions, "generated client has no bench_version unions; regenerate it"
     expected = set(_golden()["confirmation_bench_versions"])

@@ -1,8 +1,12 @@
 """Automatic, bounded retry and a fleet circuit breaker for infrastructure builds.
 
 A screener that reports ``docker-build-infrastructure`` (Docker daemon, BuildKit,
-or the build host failed; the miner's archive was never judged) parks the agent
-as ``screening_failed``. Unlike the provider codes in
+or the build host failed; the miner's archive was never judged), a retryable
+``l2-runtime-evidence-unavailable`` (no signed scorer-cohort lease was available
+at claim), ``worker-claim-not-started`` (the worker settled a durable claim
+before fetching the artifact), or ``source-review-adjudicator-key-unavailable``
+(the node's source-review court key was unusable) parks the agent as
+``screening_failed``. Unlike the provider codes in
 ``PROVIDER_BACKOFF_REASON_CODES`` it is retried without an operator, so this
 module owns three things and nothing else:
 
@@ -70,17 +74,50 @@ from ditto.db.models import (
     SubmissionImageBuild,
 )
 from ditto.db.queries.screening_retry import latest_screening_attempt_id
+from ditto_screening_protocol import reason_codes
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-# Retried automatically. Deliberately separate from PROVIDER_BACKOFF_REASON_CODES,
-# whose members are held on reclaim AND counted toward the inconclusive park cap.
-# Adding a code here means updating the partial index
-# ``screening_attempts_infra_failed_idx`` (models.py, its migration, and
+# Retried automatically, the one exception to #1201's operator-authorized retry.
+# The codes are the ``FLEET_INFRA`` class of the shared screening registry
+# (``ditto_screening_protocol.reason_codes``), which the worker imports too, so
+# the producer and this allowlist cannot drift apart. Exact codes only, each one
+# fleet-owned and provably independent of the submitted artifact: every producer
+# of the code must be reachable only from fleet, transport, or lock state. A
+# reviewer or model failure, a budget or lease outcome, or a catch-all code a
+# submission can reach (``worker-lease-orphaned``,
+# ``worker-platform-request-failed``, ``l2-cache-lock-timeout``,
+# ``source-review-model-timeout``, see #2449) stays on the operator retry, or a
+# hostile archive could loop the fleet. Deliberately separate from
+# PROVIDER_BACKOFF_REASON_CODES, whose members are held on reclaim AND counted
+# toward the inconclusive park cap. Adding a code here means updating the partial
+# index ``screening_attempts_infra_failed_idx`` (models.py, its migration, and
 # ``_infra_failure_filters``) in the same change, or the breaker scan silently
-# goes back to a sequential scan under the claim lock.
-INFRA_AUTO_RETRY_REASON_CODES: tuple[str, ...] = ("docker-build-infrastructure",)
+# goes back to a sequential scan under the claim lock. Reclassifying a code in
+# the registry is that same policy change.
+#
+# ``l2-runtime-evidence-unavailable`` reaches here only as a retryable failure,
+# which the worker emits only when Platform attached no signed scorer-cohort lease
+# to a V13 arrival under policy 13: the pinned cohort was unavailable (#2444).
+# Every other cause (a present lease failing identity or freshness, or an arrival
+# that can never carry a lease) is an INCONCLUSIVE verdict with an ``expired``
+# attempt, never matched here, so no per-agent cause can loop this retry.
+# ``worker-claim-not-started`` qualifies because the worker emits it only between
+# ``claim_next`` and ``_screen_one`` (stop during a multi-item claim, a policy
+# change during the claim, an out-of-range item policy, an unparseable claim
+# response), before the artifact is fetched, built, or reviewed (#2446).
+# ``source-review-adjudicator-key-unavailable`` qualifies because the worker
+# emits it only when the source-review court's API key file on the node is unset,
+# unreadable, too short, or readable by group/other. The key is read before the
+# archive is opened, so the artifact decides only whether the court is consulted,
+# never whether it fails. A court that cannot open or read the archive (which the
+# archive itself can cause) and a screen whose source reviewer never started
+# report ``source-review-unavailable`` instead, which stays on the operator
+# retry (#2449).
+INFRA_AUTO_RETRY_REASON_CODES: tuple[str, ...] = (
+    reason_codes.INFRA_AUTO_RETRY_REASON_CODES
+)
 
 INFRA_RETRY_BASE_BACKOFF = timedelta(minutes=10)
 INFRA_RETRY_MAX_BACKOFF = timedelta(minutes=60)
@@ -118,6 +155,7 @@ BREAKER_HISTORY_LOOKBACK = timedelta(hours=48)
 # one), or a deterministic ``docker-build`` rejection (the build ran and judged
 # the archive). A quarantine alone is not proof: the static preflight can quarantine
 # before any build starts.
+# A build timeout proves nothing about infrastructure health and is not recovery.
 _RECOVERY_REJECT_REASON = "docker-build"
 
 # Beyond this the doubling is already clamped; it only keeps the shift small.
@@ -439,12 +477,18 @@ async def plan_infra_retries(
     """Decide, for every agent parked on an infrastructure failure, when it retries.
 
     A candidate is a ``screening_failed`` agent whose *latest* attempt failed with
-    one of ``INFRA_AUTO_RETRY_REASON_CODES`` and carries no operator retry
-    override (an override is the manual path and is never held here). Pass
-    ``agent_ids`` to restrict the decisions; breaker state is always derived from
-    the whole fleet's history. With no candidate there is nothing to hold, so the
-    fleet scan is skipped (the hot claim path) unless ``fleet_breakers`` asks for
-    every breaker, e.g. for an operator view. ``fleet_scan=False`` skips the
+    one of the exact fleet-owned ``INFRA_AUTO_RETRY_REASON_CODES`` and carries no
+    operator retry override (an override is the manual path and is never held
+    here). Every other failure, reviewer and model failures included, is retried
+    only by an operator. The plan issues nothing: a retry starts only when an
+    admitted claim takes it, bounded by that claim's open screener slots, so a
+    node at ``screening_concurrency`` 0 or a held legacy GCP route retries
+    nothing.
+
+    Pass ``agent_ids`` to restrict the decisions; breaker state is always derived
+    from the whole fleet's history. With no candidate there is nothing to hold, so
+    the fleet scan is skipped (the hot claim path) unless ``fleet_breakers`` asks
+    for every breaker, e.g. for an operator view. ``fleet_scan=False`` skips the
     fleet-wide history query altogether (per-agent backoff and streak only, no
     breaker), for callers such as the unauthenticated public endpoint.
 

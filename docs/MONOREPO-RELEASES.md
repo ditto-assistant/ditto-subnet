@@ -31,6 +31,20 @@ DittoBench API, coding datagen, coding starter kit, and validator stack so the
 Python, Go, and Rust consumers cannot release against different canonical
 bytes. The package remains shadow-only and contains no private corpus material.
 
+Screener controller delivery does not depend on the legacy submission-builder
+image job. Fleet descriptors retain the protocol 1 builder-image field so
+existing hosts can accept them: a valid job digest wins, otherwise the producer
+uses `release/screener-fleet-builder.digest` and emits a warning. Builder failure
+or skip does not block descriptor promotion; cancellation still stops it. The
+builder job continues to report its own failures. If neither reference is
+valid, descriptor publication stops. Before publishing a fallback descriptor,
+the protected `prod` job authenticates through the existing build WIF identity
+and checks that the exact selected digest still exists in Artifact Registry.
+A missing image, lookup failure, or mismatched digest stops publication; a
+valid builder-job image skips this extra verification. Update the fallback only
+from an immutable builder reference in a published fleet descriptor or Artifact
+Registry.
+
 The `Release` workflow first rejects a merge that a newer queued `main` push
 already superseded. For the current merge, affected root surfaces and every
 selected component verify the exact source in parallel before one aggregate
@@ -52,16 +66,14 @@ consume the resulting immutable release commit:
 - datagen publishes an immutable component digest, stages it on a zero-traffic
   Cloud Run revision, verifies an authenticated v8 generation, and only then
   promotes it to 100% traffic;
-- screener image publication queues a dedicated Targon Kaniko rental first,
-  and parks on failure; the existing GitHub/GCP build runner is used only when
-  an operator selects that provider before a manual Backroom retry;
+- screener image publication builds the exact release on a trusted GitHub
+  runner and registers its immutable digest with Platform;
 - an assembled, signed validator-stack descriptor advances the non-activating
   `candidate-compat-2` channel while remaining smoke tests continue, allowing
   opted-in validators to authenticate and pre-pull its exact component images;
   only the later `compat-2` promotion authorizes a transactional update;
-- the capacity controller and its trusted-builder sibling deploy together from
-  the exact release commit over IAP whenever either orchestrator or screener
-  source changes;
+- the capacity controller deploys from the exact release commit over IAP
+  whenever orchestrator or screener source changes;
 - release publication advances one keyless-signed screener-fleet descriptor;
   both Hetzner and live GCE overflow workers authenticate and pull that stable
   channel themselves. A zero-sized GCE fleet is a successful no-op and creates
@@ -182,8 +194,23 @@ break-glass path for an exact non-release commit; using it delegates the
 exception to the protected environment reviewer and is never automatic.
 The capacity-controller workflow's direct manual dispatch is a separate
 break-glass operator override: it intentionally bypasses
-`SCREENER_CAPACITY_CONTROLLER_ENABLED`, while still requiring the protected
-`prod` environment and an exact 40-character revision.
+`SCREENER_CAPACITY_CONTROLLER_ENABLED` and the automatic tag opt-in, while
+still requiring repository Actions access, the `prod` environment's branch
+policy, and an exact 40-character revision. The current `prod` environment
+has no required reviewer; manual dispatch is an explicit operator action,
+not a separate approval gate.
+
+Automatic capacity-controller deployment also requires the repository variable
+`SCREENER_CAPACITY_CONTROLLER_AUTO_DEPLOY_TAG` to equal the exact semantic
+release tag emitted by that run. An absent, empty, or different tag skips the
+controller deploy even when `SCREENER_CAPACITY_CONTROLLER_ENABLED=true`. The
+called workflow rechecks the tag byte-for-byte before authenticating because
+GitHub expression equality is case-insensitive.
+The screener owner must review the release and deliberately opt in to one tag;
+clear the variable after that release to prevent a later matching rerun. A
+manual controller dispatch remains the explicit path to deploy an exact
+main-ancestry commit without enabling automatic deployment for later runs;
+it does not require that commit to have a published release tag.
 
 ## Protected environment configuration
 
@@ -204,10 +231,7 @@ values. Infra outputs the service-account emails and exact WIF provider. No
 static GCP key is used.
 
 The release job reads `screener-controller-api-token-prod` through its dedicated
-WIF identity into a mode-0600 runner file. The Targon key is never a GitHub
-secret: only the Platform API identity (and the leftover capacity VM, while it
-exists) may read `TARGON_API_KEY` from Secret Manager, and the build rental
-receives a 30-minute registry-only token.
+WIF identity into a mode-0600 runner file to register the trusted image digest.
 
 Backroom application secrets are not Terraform values. Bootstrap them once
 with `apps/backroom/scripts/bootstrap-worker-secrets.sh`; the script consumes
@@ -220,16 +244,17 @@ Only the scoped Cloudflare deployment token belongs in the GitHub environment.
 1. Merge and apply the infra stack, but leave the capacity-controller flag off.
 2. Configure the protected GitHub environments and populate the controller
    bearer secret version out of band.
-3. Publish the pinned maintained Kaniko executor.
-4. Deploy Platform from a reviewed release so the trusted-build queue migration
+3. Deploy Platform from a reviewed release so the trusted-build queue migration
    and controller API exist.
-5. Enable and converge the capacity controller and separate image-builder unit.
-   Later semantic releases deploy both units automatically; Ansible remains the
-   first-boot/configuration path.
-6. Queue one screener build. Verify a Targon immutable digest; if it fails,
-   verify the parked attempt in Backroom before selecting GCP and manually
-   retrying it.
-7. Exercise GCE worker scale `0 -> 1 -> 0` before retiring the pet screener.
+4. Enable and converge the capacity controller. For a later semantic release,
+   opt in to its exact tag before automatic controller deployment, or use the
+   protected manual dispatch for an already published release. Ansible remains
+   the first-boot/configuration path.
+5. Publish one screener image and verify the immutable digest registered in Platform.
+6. Exercise GCE worker scale-out `0 -> 1` and verify the desired target returns
+   to zero before retiring the pet screener. Physical scale-in remains deferred
+   until claims can be fenced throughout deletion; drain excess capacity under
+   operator control.
 
 Merging application source performs semantic release and automatic runtime
 deployment. Infrastructure remains separate: Terraform apply, first-boot

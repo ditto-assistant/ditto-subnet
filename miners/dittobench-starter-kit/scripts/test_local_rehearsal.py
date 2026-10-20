@@ -103,7 +103,7 @@ class LocalRehearsalTest(unittest.TestCase):
             LOCAL.parse_args([]).bench_version, LOCAL.LIVE_SCORING_BENCH_VERSION
         )
         self.assertEqual(
-            LOCAL.parse_args(["--bench-version", "13"]).bench_version,
+            LOCAL.parse_args(["--bench-version", str(LOCAL.MAX_BENCH_VERSION)]).bench_version,
             LOCAL.MAX_BENCH_VERSION,
         )
         with self.assertRaises(SystemExit):

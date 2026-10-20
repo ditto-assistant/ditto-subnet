@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from sqlalchemy import and_, desc, or_, select
+from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import aliased
 
 from ditto.api_models.agent_status import AgentStatus
@@ -164,7 +165,22 @@ async def record_attestation(
         hi_signature=hi_signature,
     )
     session.add(row)
-    await session.flush()
+    try:
+        await session.flush()
+    except SAIntegrityError as exc:
+        # The SELECTs above are not a lock: a concurrent submission of the same
+        # nonce or pair can pass them too and lose at the unique constraint.
+        # Answer it like the sequential replay (409), not a generic 500.
+        message = str(exc.orig) if getattr(exc, "orig", None) is not None else str(exc)
+        if "owner_attestations_nonce_key" in message:
+            raise AttestationReplayedError(
+                "this attestation nonce has already been submitted"
+            ) from exc
+        if "owner_attestations_active_pair_idx" in message:
+            raise AttestationReplayedError(
+                "an active attestation already links these two hotkeys"
+            ) from exc
+        raise
     return row
 
 

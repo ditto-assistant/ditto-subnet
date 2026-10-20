@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from contextlib import nullcontext
-from typing import TYPE_CHECKING, Any
+from contextlib import asynccontextmanager, nullcontext
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote, urlsplit
 
 from ditto.chain.errors import (
@@ -15,8 +15,11 @@ from ditto.chain.errors import (
     ChainEmissionReceiptUnavailable,
     ChainError,
     ChainTimeoutError,
+    ChainTreasuryActivationReadError,
+    ChainTreasuryReadTimeoutError,
     ExtrinsicNotFoundError,
 )
+from ditto.chain.header_rpc import header_substrate
 from ditto.chain.models import (
     BlockInfo,
     ChainConfig,
@@ -30,11 +33,19 @@ from ditto.chain.models import (
     ExtrinsicInfo,
     NeuronInfo,
 )
+from ditto.chain.treasury_read_trace import TreasuryReadTrace
+from ditto.chain.treasury_runtime_cache import TreasuryRuntimeCache
+from ditto_screening_protocol.treasury import TreasuryEmissionPolicy, TreasuryLedgerPin
+from ditto_screening_protocol.treasury_identity import read_finalized_collector_pin
 
 if TYPE_CHECKING:
     from types import TracebackType
 
     from pylon_client.artanis import AsyncPylonClient
+
+    from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
+    from ditto.chain.runtime_interface_report import RuntimeInterfaceReport
+    from ditto.chain.treasury_receipts import TreasuryChainProof
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +93,62 @@ _PENDING_EPOCH_AT_STORAGE = "PendingEpochAt"
 _SUBNET_EPOCH_INDEX_STORAGE = "SubnetEpochIndex"
 
 
+def _treasury_substrate(
+    url: str, *, runtime_cache: TreasuryRuntimeCache | None = None
+) -> Any:
+    """Bind SDK startup metadata and treasury reads to one finalized snapshot.
+
+    The SDK otherwise starts metadata initialization at the best head before
+    our finalized reads arrive, which can initialize the same runtime twice.
+    This snapshot belongs only to this connection. Storage, identity, and
+    permissions are still queried anew, at their explicitly supplied hashes.
+    """
+    from async_substrate_interface import AsyncSubstrateInterface
+
+    class FinalizedTreasurySubstrate(AsyncSubstrateInterface):
+        def __init__(self) -> None:
+            super().__init__(url=url)
+            self._treasury_finalized_head: str | None = None
+
+        async def get_chain_head(self) -> str:
+            return await self.get_chain_finalised_head()
+
+        async def get_chain_finalised_head(self) -> str:
+            if self._treasury_finalized_head is None:
+                self._treasury_finalized_head = await super().get_chain_finalised_head()
+            return self._treasury_finalized_head
+
+        async def get_runtime_for_version(
+            self, runtime_version: int, block_hash: str | None = None
+        ) -> Any:
+            if runtime_cache is None:
+                return await super().get_runtime_for_version(
+                    runtime_version, block_hash
+                )
+            # init_runtime has freshly resolved the applicable specVersion at
+            # this connection's finalized snapshot, using the SDK's parent-state
+            # upgrade boundary. Genesis is also read on this new connection.
+            genesis = await self.get_block_hash(0)
+            if not isinstance(genesis, str) or not genesis:
+                raise ChainConnectionError("treasury runtime genesis unavailable")
+            load = super().get_runtime_for_version
+            runtime = await runtime_cache.get(
+                url,
+                genesis,
+                runtime_version,
+                lambda: load(runtime_version, block_hash),
+            )
+            # The SDK's block mappings and last_used remain connection-local.
+            self.runtime_cache.add_item(
+                runtime=runtime,
+                block_hash=block_hash,
+                runtime_version=runtime_version,
+            )
+            return runtime
+
+    return FinalizedTreasurySubstrate()
+
+
 class ChainClient:
     """Async context manager wrapping Pylon for chain access.
 
@@ -122,6 +189,12 @@ class ChainClient:
         self._recent_neurons_cache: dict[int, tuple[float, tuple[NeuronInfo, ...]]] = {}
         self._recent_neurons_flights: dict[int, asyncio.Task[list[NeuronInfo]]] = {}
         self._clock = time.monotonic
+
+    def _new_treasury_substrate(self) -> Any:
+        cache = getattr(self, "_treasury_runtime_cache", None)
+        if cache is None:
+            cache = self._treasury_runtime_cache = TreasuryRuntimeCache()
+        return _treasury_substrate(self._substrate_url(), runtime_cache=cache)
 
     async def __aenter__(self) -> ChainClient:
         """Open the underlying Pylon client connection."""
@@ -320,10 +393,8 @@ class ChainClient:
         number while historical events and storage are read by hash. Callers
         must bind the pair before combining those two data sources.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
-
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with header_substrate(self._substrate_url()) as substrate:
                 block_hash = await substrate.get_block_hash(block_number)
         except TimeoutError as e:
             raise ChainTimeoutError(f"get_block_hash({block_number}) timed out") from e
@@ -337,13 +408,257 @@ class ChainClient:
             )
         return str(block_hash).lower()
 
+    @asynccontextmanager
+    async def _treasury_reader(self, *, setters: bool = False):
+        trace = TreasuryReadTrace(setters=setters)
+        try:
+            async with (
+                asyncio.timeout(8),
+                self._new_treasury_substrate() as substrate,
+            ):
+                trace.client = substrate
+                yield trace
+                trace.step = "connection_close"
+        except TimeoutError as error:
+            raise ChainTreasuryReadTimeoutError(trace.step) from error
+
+    async def get_treasury_collector_pin(
+        self, policy: TreasuryEmissionPolicy, *, first_block: int, pinned_block: int
+    ) -> TreasuryLedgerPin:
+        """Read finalized shadow evidence only; never access a wallet or signer."""
+        try:
+            async with self._treasury_reader() as substrate:
+                return await read_finalized_collector_pin(
+                    substrate,
+                    policy,
+                    first_block=first_block,
+                    pinned_block=pinned_block,
+                )
+        except ValueError:
+            raise
+        except ChainTreasuryReadTimeoutError:
+            raise
+        except TimeoutError as error:
+            raise ChainTimeoutError(
+                "finalized treasury identity read timed out"
+            ) from error
+        except Exception as error:
+            raise ChainConnectionError(
+                "finalized treasury identity unavailable"
+            ) from error
+
+    async def get_treasury_weight_setters(
+        self, policy: TreasuryEmissionPolicy, *, block_hash: str
+    ) -> tuple[str, ...]:
+        from ditto_screening_protocol.treasury_identity import (
+            read_finalized_weight_setters,
+        )
+
+        async with self._treasury_reader(setters=True) as substrate:
+            return await read_finalized_weight_setters(
+                substrate, policy, block_hash=block_hash
+            )
+
+    async def get_treasury_dispatch_observation(self, policy: TreasuryEmissionPolicy):
+        from ditto_screening_protocol.treasury_identity import (
+            read_treasury_dispatch_observation,
+        )
+
+        async with self._treasury_reader() as substrate:
+            return await read_treasury_dispatch_observation(substrate, policy)
+
+    async def get_treasury_managed_weight_setters(
+        self,
+        policy: TreasuryEmissionPolicy,
+        *,
+        block_hash: str,
+        managed_hotkeys: tuple[str, ...],
+    ):
+        from ditto_screening_protocol.treasury_identity import (
+            read_finalized_managed_weight_setters,
+        )
+
+        async with self._treasury_reader(setters=True) as substrate:
+            return await read_finalized_managed_weight_setters(
+                substrate,
+                policy,
+                block_hash=block_hash,
+                managed_hotkeys=managed_hotkeys,
+            )
+
+    async def get_treasury_activation_observation(self, policy: TreasuryEmissionPolicy):
+        observed, keys, _ = await self._treasury_activation_observation(policy)
+        return observed, keys
+
+    async def get_treasury_managed_activation_observation(
+        self, policy: TreasuryEmissionPolicy, *, managed_hotkeys: tuple[str, ...]
+    ):
+        from ditto_screening_protocol.treasury_identity import (
+            TreasuryManagedSetterObservation,
+        )
+
+        observed, keys, count = await self._treasury_activation_observation(
+            policy, managed_hotkeys=managed_hotkeys
+        )
+        return observed, TreasuryManagedSetterObservation(
+            block_hash=observed.finalized_block_hash,
+            hotkeys=keys,
+            permitted_count=count,
+        )
+
+    async def _treasury_activation_observation(
+        self,
+        policy: TreasuryEmissionPolicy,
+        *,
+        managed_hotkeys: tuple[str, ...] | None = None,
+    ):
+        """One request-local connection and exact hash; two unchanged read windows."""
+        from ditto_screening_protocol.treasury_identity import (
+            read_finalized_managed_weight_setters,
+            read_finalized_weight_setters,
+            read_treasury_dispatch_observation,
+        )
+
+        trace = TreasuryReadTrace()
+        stage: Literal["identity", "setter_roster"] = "identity"
+        try:
+            async with (
+                asyncio.timeout(8) as deadline,
+                self._new_treasury_substrate() as substrate,
+            ):
+                trace.client = substrate
+                observed = await read_treasury_dispatch_observation(trace, policy)
+                # Validate the same policy binding before any authorization read.
+                TreasuryLedgerPin(
+                    policy=policy,
+                    policy_digest=policy.digest,
+                    identity=observed.identity,
+                )
+                now = asyncio.get_running_loop().time()
+                expires = deadline.when()
+                # A synchronous decode may have crossed the first deadline
+                # before its cancellation callback could run. Never renew an
+                # already elapsed identity window into authorization reads.
+                if expires is not None and now >= expires:
+                    raise TimeoutError()
+                stage = "setter_roster"
+                trace.setters = True
+                # The old path opened a second SDK connection with its own
+                # eight-second deadline. Keep that window, but reuse only this
+                # request's exact-hash metadata/transport, never permissions.
+                deadline.reschedule(now + 8)
+                if managed_hotkeys is None:
+                    keys = await read_finalized_weight_setters(
+                        trace, policy, block_hash=observed.finalized_block_hash
+                    )
+                    count = len(keys)
+                else:
+                    proof = await read_finalized_managed_weight_setters(
+                        trace,
+                        policy,
+                        block_hash=observed.finalized_block_hash,
+                        managed_hotkeys=managed_hotkeys,
+                    )
+                    keys, count = proof.hotkeys, proof.permitted_count
+                trace.step = "connection_close"
+                return observed, keys, count
+        except TimeoutError as error:
+            raise ChainTreasuryActivationReadError(
+                stage, ChainTreasuryReadTimeoutError(trace.step)
+            ) from error
+        except Exception as error:
+            raise ChainTreasuryActivationReadError(stage, error) from error
+
+    async def get_treasury_receipt_proof(
+        self,
+        selector: TreasuryReceiptSelector,
+        policy: TreasuryEmissionPolicy,
+        *,
+        sender: str,
+        recipient: str,
+        asset: str,
+        recipient_hotkey: str | None,
+        pinned_block: int,
+        pinned_block_hash: str,
+        pinned_uid: int,
+    ) -> TreasuryChainProof:
+        """Canonical finalized receipt, with existing archive fallback and no signer."""
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        from ditto.chain.errors import (
+            ChainTreasuryReceiptUnavailable,
+            TreasuryReceiptReadProgress,
+        )
+        from ditto.chain.treasury_receipts import read_treasury_chain_proof
+
+        attempts = 0
+        progress = TreasuryReceiptReadProgress()
+        timed_out = False
+        for url in self._historical_substrate_urls():
+            attempts += 1
+            progress = TreasuryReceiptReadProgress()
+            try:
+                async with (
+                    asyncio.timeout(self._config.archive_rpc_timeout_seconds),
+                    AsyncSubstrateInterface(url=url) as substrate,
+                ):
+                    proof = await read_treasury_chain_proof(
+                        substrate,
+                        selector,
+                        policy,
+                        sender=sender,
+                        recipient=recipient,
+                        asset=asset,
+                        recipient_hotkey=recipient_hotkey,
+                        pinned_block=pinned_block,
+                        pinned_block_hash=pinned_block_hash,
+                        pinned_uid=pinned_uid,
+                        progress=progress,
+                    )
+                    progress.phase = "connection_close"
+                return proof
+            except ValueError:
+                # Complete data contradicting the claim is not provider failure.
+                raise
+            except Exception as error:
+                timed_out = timed_out or isinstance(error, TimeoutError)
+                # Provider addresses/credentials and raw exceptions stay private.
+                continue
+        raise ChainTreasuryReceiptUnavailable(
+            progress.phase, attempts, timed_out=timed_out
+        )
+
+    async def get_runtime_interface_report(
+        self, block: int | None = None
+    ) -> RuntimeInterfaceReport:
+        """Compare one runtime's consumed interfaces with audits; reads only."""
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        from ditto.chain.runtime_interface_report import (
+            read_runtime_interface_report,
+        )
+
+        failures: list[str] = []
+        for url in self._historical_substrate_urls():
+            try:
+                async with (
+                    asyncio.timeout(self._config.archive_rpc_timeout_seconds),
+                    AsyncSubstrateInterface(url=url) as substrate,
+                ):
+                    return await read_runtime_interface_report(substrate, block=block)
+            except ValueError:
+                raise
+            except Exception as error:
+                failures.append(self._safe_rpc_error(error)[:200])
+        raise ChainConnectionError(
+            "runtime interface report unavailable: " + "; ".join(failures)
+        )
+
     async def get_finalized_block(self) -> BlockInfo:
         """Return the current finalized chain block from Substrate."""
 
-        from async_substrate_interface import AsyncSubstrateInterface
-
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with header_substrate(self._substrate_url()) as substrate:
                 block_hash = await substrate.get_chain_finalised_head()
                 block_number = await substrate.get_block_number(block_hash)
         except TimeoutError as e:
@@ -363,10 +678,8 @@ class ChainClient:
             raise ExtrinsicNotFoundError(
                 f"finalized block number {block_number} is invalid"
             )
-        from async_substrate_interface import AsyncSubstrateInterface
-
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with header_substrate(self._substrate_url()) as substrate:
                 finalized_hash = await substrate.get_chain_finalised_head()
                 finalized_number = await substrate.get_block_number(finalized_hash)
                 if finalized_number is None or block_number > int(finalized_number):
@@ -883,23 +1196,23 @@ class ChainClient:
             ) from e
 
     async def read_epoch_schedule(self, netuid: int) -> EpochSchedule:
-        """Read the subnet's stateful epoch position at the current head.
+        """Read the subnet's stateful epoch position at one finalized head.
 
         Five storage reads at one block hash -- ``LastEpochBlock``,
         ``PendingEpochAt``, ``SubnetEpochIndex``, ``Tempo`` and
         ``BlocksSinceLastStep`` -- plus the block's own timestamp. This is the
-        identity the epoch-pinned ledger keys on, so unlike :meth:`_read_epoch`
+        identity the epoch-pinned ledger keys on. SDK startup metadata and all
+        six storage queries share one request-local finalized hash; another
+        invocation obtains a new finalized head. Unlike :meth:`_read_epoch`
         it fails loud: a pin taken against a half-read schedule would be worse
         than no pin. It deliberately does not read the timelocked commit map
         (``read_weight_diagnostics`` does; that is a diagnostic, not a clock).
         """
-        from async_substrate_interface import AsyncSubstrateInterface
-
         from ditto.chain.weight_diagnostics import predict_next_epoch_block
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
-                block_hash = await substrate.get_chain_head()
+            async with self._new_treasury_substrate() as substrate:
+                block_hash = await substrate.get_chain_finalised_head()
                 header = await substrate.get_block_header(block_hash=block_hash)
                 block = _block_number_from_header(header)
 

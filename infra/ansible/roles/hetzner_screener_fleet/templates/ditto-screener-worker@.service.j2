@@ -1,6 +1,6 @@
 [Unit]
 Description=Ditto screener worker %i on {{ screener_fleet_node_id }}
-After=network-online.target ditto-screener-enroll.service ditto-screener-fleet-agent.service
+After=network-online.target ditto-screener-enroll.service
 Wants=network-online.target
 Requires=ditto-screener-enroll.service
 

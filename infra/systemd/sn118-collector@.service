@@ -1,0 +1,31 @@
+[Unit]
+Description=SN118 isolated %i collector signer (operator staged, default off)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/sn118-collector/%i/activation.env
+
+[Service]
+Type=oneshot
+User=sn118-collector-%i
+Group=sn118-collector-%i
+UMask=0077
+EnvironmentFile=/etc/sn118-collector/%i/activation.env
+ExecStart=/opt/sn118-collector/.venv/bin/python /opt/sn118-collector/scripts/treasury_collector.py --role %i --policy /etc/sn118-collector/%i/policy.json --policy-sha256 ${POLICY_SHA256} --journal /var/lib/sn118-collector-%i/journal.db
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+LimitCORE=0
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/sn118-collector-%i
+TimeoutStartSec=180
+
+# Separate HOSTS and secret IAM principals for registration/transfer. Neither
+# service identity can access the other delegate or the offline primary key.
+# This template creates no users, hosts, grants, secrets or timer enablement.

@@ -48,7 +48,7 @@ from ditto.api_models.private_dataset import (
     PrivateDatasetRequest as PrivateDatasetRequest,
 )
 from ditto.api_models.stack_health import ValidatorStackHealth
-from ditto.api_models.system_health import SystemMetrics
+from ditto.api_models.system_health import HostSpecs, SystemMetrics
 from ditto.api_models.upload import (
     _SIGNATURE_HEX_PATTERN,
     _SS58_PATTERN,
@@ -111,6 +111,7 @@ from ditto_screening_protocol.confirmation import (
 from ditto_screening_protocol.confirmation import (
     V9ConfirmationEvidenceRoot,
 )
+from ditto_screening_protocol.treasury_enforcement import TreasuryPin
 
 _CODE_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
@@ -616,6 +617,17 @@ class ValidatorHeartbeatRequest(BaseModel):
             ),
         ),
     ] = None
+    host_specs: Annotated[
+        HostSpecs | None,
+        Field(
+            default=None,
+            description=(
+                "Fixed host hardware (CPUs, RAM, disk, architecture) sampled once "
+                "per boot, under heartbeat protocol v32. Null when the probe failed "
+                "or on older validators."
+            ),
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -629,8 +641,16 @@ class ValidatorHeartbeatRequest(BaseModel):
 
     @model_validator(mode="after")
     def weights_fold_requires_v27(self) -> ValidatorHeartbeatRequest:
+        if (
+            self.capabilities is not None
+            and self.capabilities.treasury_weights is not None
+            and self.protocol_version < 30
+        ):
+            raise ValueError("treasury weight guard requires heartbeat protocol v30")
         if self.weights_fold is not None and self.protocol_version < 27:
             raise ValueError("weights fold requires heartbeat protocol v27")
+        if self.host_specs is not None and self.protocol_version < 32:
+            raise ValueError("host specs require heartbeat protocol v32")
         return self
 
     @model_validator(mode="after")
@@ -1865,6 +1885,20 @@ class LedgerResponse(BaseModel):
     so the exposed pool and the computed weights agree by construction.
     """
 
+    treasury_pin: Annotated[
+        TreasuryPin | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Immutable epoch-bound treasury policy and collector observations. "
+                "V1 is shadow-only and cannot alter weights or authorize spending. "
+                "V2 requires offline approval and current finalized/fleet proof "
+                "before service-first weight dispatch; it never authorizes spending. "
+                "Absent preserves the legacy ledger wire."
+            ),
+        ),
+    ] = None
     entries: Annotated[
         list[LedgerEntry],
         Field(
@@ -1925,6 +1959,31 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
+    statistical_band_mode: Annotated[
+        Literal["capped"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-29 consensus marker. When capped, paired tie and "
+                "unpaired dethrone statistics are limited to twice the KOTH "
+                "margin before decay. Absent preserves the legacy fold."
+            ),
+        ),
+    ] = None
+    rank_shares: Annotated[
+        list[float] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-31 operator payout curve: the champion's share, then "
+                "each tail slot's, summing to 1. Served only once every "
+                "recently-live weight setter reports v31. Absent keeps the "
+                "frozen 65/14/10/7/4 curve."
+            ),
+        ),
+    ] = None
     count: Annotated[int, Field(ge=0, description="Number of entries returned.")]
     generated_at: Annotated[
         datetime | None,
@@ -1965,6 +2024,29 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = 0.0
+    reward_eligibility_mode: Annotated[
+        Literal["enforce"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Present only while the operator's terminal-review emission gate "
+                "is enforcing (ditto-subnet #2041). When present, every entry "
+                "below has a terminal review decision for its exact artifact "
+                "digest at this benchmark version under the posture revision the "
+                "platform resolved: artifacts with an unresolved, inconclusive, "
+                "infrastructure-failed or escalated review have already been "
+                "withheld from this pool, and a clear recorded inside the current "
+                "emission window takes effect at the next one. Absent -- the "
+                "default, and what an older platform's omission means -- says the "
+                "gate is off or in shadow, in which case this ledger is exactly "
+                "what it was before the gate existed. The pool is filtered "
+                "platform-side either way, so a validator that ignores this field "
+                "folds correctly; it is served so the fold's telemetry can state "
+                "which posture produced the pool."
+            ),
+        ),
+    ] = None
     continual_retest_cohort_size: Annotated[
         int,
         Field(
@@ -2081,7 +2163,32 @@ class LedgerResponse(BaseModel):
             exclude_if=lambda value: value is None,
             description=(
                 "The incumbent the fold defends when crown_mode is incumbent; "
-                "always one of entries. Absent whenever crown_mode is absent."
+                "one of entries, or provisional_incumbent when that is served. "
+                "Absent whenever crown_mode is absent."
+            ),
+        ),
+    ] = None
+    provisional_incumbent: Annotated[
+        LedgerEntry | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol 28. The crown incumbent when the operator's "
+                "terminal-review emission gate withholds its exact artifact: it "
+                "is deliberately NOT in entries, because it may not be paid, and "
+                "is served only on an epoch pin whose crown_mode is incumbent, "
+                "with crown_incumbent_agent_id equal to its agent_id. It must "
+                "carry the same verifiable quorum score_proofs (and v9 "
+                "confirmation, when enforced) as any entry; a validator rejects "
+                "the whole ledger when it does not verify. The fold "
+                "adds it to the pool as the incumbent, derives champion, tail, "
+                "tie pooling and the score-ceiling cohort exactly as for any "
+                "entry, then burns every share it allocated to this entry "
+                "instead of renormalizing it onto other miners: a held champion "
+                "keeps the crown and its slot goes unpaid rather than "
+                "reassigned. Absent on every other ledger, which then folds "
+                "exactly as protocol 27."
             ),
         ),
     ] = None

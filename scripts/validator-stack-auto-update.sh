@@ -1046,7 +1046,11 @@ refresh_updater_checkout() {
 
 mode="${1:-run}"
 case "$mode" in adopt|migrate|rollback) [ "$#" -le 2 ] || die "usage: $0 $mode [descriptor-digest]";; prepare|bootstrap) [ "$#" -eq 2 ] || die "usage: $0 $mode <descriptor-digest>";; run|prefetch|refresh|recover|status|budget) [ "$#" -eq 1 ] || die "usage: $0 $mode";; *) die "usage: $0 [run|prefetch|refresh|status|recover|prepare <descriptor-digest>|bootstrap <descriptor-digest>|adopt <descriptor-digest>|migrate <descriptor-digest>|rollback]";; esac
-if [ "$mode" = budget ]; then printf 'TIMEOUT_START_SECONDS=10800\nTIMEOUT_STOP_SECONDS=600\n'; exit 0; fi
+# The run service must also cover startup recovery before a fresh full drain:
+# committed recovery can wait once then fully roll back (five ready windows).
+# Add stop, candidate deploy/health and another rollback (seven windows), or systemd
+# SIGTERMs a healthy update mid-transaction and records it as a failure.
+if [ "$mode" = budget ]; then printf 'TIMEOUT_START_SECONDS=21600\nTIMEOUT_STOP_SECONDS=600\n'; exit 0; fi
 if [ "$mode" = status ]; then show_status; exit 0; fi
 command -v flock >/dev/null 2>&1 || die "flock is not installed"
 case "$STATE_DIR" in /*) ;; *) die "stack update state directory must be absolute";; esac

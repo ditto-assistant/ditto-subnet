@@ -26,6 +26,21 @@ applied to an existing version. It ships as a new one.
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
 | 13 (pre-activation) | `2027-05-01` | Deterministic typed worlds and compositional enterprise records; model-authored private wording deferred to V14. A published 250-case memory mix with money capped at ≤12% target / 15% hard, typed claim grading in the requested unit, and relay-evidenced tool gates (catalog-present, provenance, causal, twin/pair, cost) that ship in shadow/observe. Same seed and generator revision reproduce the dataset. Activation follows exact-candidate qualification and canary evidence. |
 
+## Answer-pool collision audit
+
+`grade.Hit` can accept ordinary prose as an answer for some persona values.
+Across 100 full-profile seeds, the incidental-prose fixture records 167
+collisions at V7, 83 at V8, and 90 at V9. The matcher and published V8–V13
+answer pools remain unchanged: changing a pool would change the generated
+persona plan for the same `(seed, bench_version)`. Three full-profile seeds per
+version from V8 through V13 are pinned to their pre-audit plan hashes.
+
+Qualified eye colors and star signs, plus middle names filtered against the
+incidental-prose fixture, are staged for bench version 14 or later. Version 14
+is not supported by the generator or scorer yet. This candidate pool policy
+must be included in a complete new-version contract and qualification before
+any scored run can use it; it does not correct historical scores.
+
 ## V10 generator-as-spec contract
 
 V10 starts from a seed-scoped semantic specification rather than a reusable
@@ -871,7 +886,7 @@ byte-identical. The full wire statement of every rule is in
 | --- | --- | --- | --- | --- | --- |
 | Catalog-present (restraint requires an offer; expected tool must be offered) with the semantic-preloading safe harbor (top-k = 3 of the published TF-IDF embedding, or non-empty on declarative/chit-chat/decline) | `restraint_without_offer`, `expected_tool_not_offered`, `semantic_preloading_safe_harbor` | shadow | `DITTOBENCH_V13_CATALOG_GATE_POSTURE` | `TestCatalogGateRestraintRequiresAnOfferUnlessSafeHarbor`, `TestCatalogGateExpectedToolMustBeOfferedUnlessSafeHarbor`, `TestCatalogSemanticTopKIsDeterministicAndRanksTheCuedTool` | #1826 |
 | Swallowed model call (restraint scored on model-emitted calls) | `swallowed_model_call` | shadow | same switch | `TestCatalogGateSwallowedModelCallScoresRestraintOnModelChoice` | #1826 |
-| Claim-span provenance (claim tokens of the credited span ⊆ union of the case's completion tokens after `scoregates.NormalizeSpan` / `ValueTokenHashes`) | `served_text_not_model_emitted`, `no_model_completion`; grader-side `slot_not_in_prose` | shadow | `DITTOBENCH_V13_CLAIM_PROVENANCE_POSTURE` (shared with the causal gate) | `TestTextProvenanceVerdicts`, `TestNormalizeSpanVectors`, `TestApplyV13ClaimProvenanceHonestPatternsPass` | #1849 |
+| Claim-span provenance (claim tokens of the credited span ⊆ union of the case's completion tokens after `scoregates.NormalizeSpan` / `SpanTokens`) | `served_text_not_model_emitted`, `no_model_completion`; grader-side `slot_not_in_prose` | shadow | `DITTOBENCH_V13_CLAIM_PROVENANCE_POSTURE` (shared with the causal gate) | `TestTextProvenanceVerdicts`, `TestNormalizeSpanVectors`, `TestApplyV13ClaimProvenanceHonestPatternsPass` | #1849 |
 | Causal model dependence (claim tokens ⊆ harness-first prompt tokens minus `/seed` records, served tool results, the case's `user_input` and the validator system prompt) | `answer_in_prompt` | shadow | same switch | `TestCausalDependenceVerdicts`, `TestV13ProvenanceBankGIHNegativeIsGraderBlind` | #1833 |
 | Twin / pair post-pass (`decision_twin`, `as_of_twin` concordance; base + counterfactual pair) | `twin_concordant`, `counterfactual_insensitive` | observe | `DITTOBENCH_V13_TWIN_POSTURE`, rule `DITTOBENCH_V13_TWIN_RULE` (`concordant_zero` default, `pair_product` auto-fallback when the honest concordant-error rate exceeds 5%) | `TestTwinPostPassBaselinesZeroAndOracleFull`, `TestTwinPostPassCounterfactualZeroesOnlyThePair`, `TestTwinPostPassLeavesEarlierVersionsUntouched` | #1835 |
 | Per-case inference cost factor `clamp(1 − α·max(0, tokens_out − budget_c), 0.6, 1)` over successful completions, choices and output tokens; budgets 3 completion-equivalents (memory, single tool) / 5 (chains) at 512 tokens each | `per_case[].inference_cost` | shadow (reported, never applied) | enforce decision after #1521 | `TestCostFactorRule`, `TestCostBudgetsArePublishedPerClass`, `TestBuildInferenceCostIsVersionGatedAndShadow` | #1850 |
@@ -1078,6 +1093,32 @@ Run sizes, the deterministic grader boundary (no LLM judge), the inference
 boundary and locked model, LongMemEval floors (`bench_version >= 9`, a floor,
 never an enumerated whitelist), and the v9 signed-evidence / score-gate /
 curve-v3 efficiency stack all carry forward unchanged.
+
+## Bench v14 (action-scoped declarative over-call scoring)
+
+Issue #2508 introduces a new identity for the scoring correction proposed in
+#2405. V13 is a frozen scored contract: its whole-case exclusion for
+`conversational-declarative` is retained, even for unrelated observed actions.
+V14 counts those cases in the memory over-call denominator and exempts only
+`save_memory`, `update_memory`, and `delete_memory` on that category. Memory
+reads and no-call baselines remain unpenalized. Unrelated and mixed actions
+count once per case. Legacy lifecycle-write cases stay excluded at all versions.
+
+The generated surface, question-family identifiers, envelope, grader policy,
+v13 gate postures, LongMem instrument, and public harness wire version (9) carry
+forward. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
+version. It introduces no deferred private surface research or screening-policy
+activation. `CurrentBenchVersion` stays at its existing value (8).
+
+For seed `123456789`, full profile, public surface salt 0,
+`TestV14KnownVector` pins:
+`8a08dfe713fd6df2d67ece92148118a3fbd64b5d0f6a90f78dccb9853e329d50`.
+Every v2–v13 generation and grading vector remains unchanged. The scorer also
+pins 1,536 historical composite replay vectors against source
+`861814b58a38c0582e9fc73848566d1b6fe8c325`.
+
+See [the separately gated rollout plan](../../../docs/benchmark-v14-rollout.md).
+Supporting v14 does not change Platform's active version or qualify a fleet.
 
 ## Auditing an old score
 

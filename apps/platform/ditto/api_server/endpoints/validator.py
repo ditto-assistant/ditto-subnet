@@ -28,9 +28,10 @@ Lifecycle + scope decisions (documented so they're easy to revisit):
   **canonical payload** binding the agent id and the reported
   ``run_id`` / ``composite`` / ``seed`` (see :func:`_score_signing_message`), so
   a captured signature can neither be replayed against a different agent nor
-  cover an altered composite. The remaining GET endpoints are read-only and
-  authenticate via the ``X-Validator-Hotkey`` header + on-chain permit check;
-  they cannot allocate a quorum slot or submit a score.
+  cover an altered composite. The artifact GET is read-only but likewise
+  requires a fresh, one-time signed nonce (the ``X-Validator-Artifact-*``
+  headers) on top of the permit check and an unexpired issued ticket; it cannot
+  allocate a quorum slot or submit a score.
 """
 
 from __future__ import annotations
@@ -95,12 +96,15 @@ from ditto.api_models.receipt_diagnostics import (
     SubmitReceiptDiagnostics,
     diagnostic_signing_message,
 )
+from ditto.api_models.scoring_lease_settings import DEFAULT_SCORING_TICKET_TTL
 from ditto.api_models.stack_health import (
     ValidatorStackHealth,
     validator_stack_health_signing_token,
 )
 from ditto.api_models.system_health import (
+    HostSpecs,
     SystemMetrics,
+    host_specs_signing_token,
     system_metrics_signing_token,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -155,7 +159,7 @@ from ditto.api_server.crn import (
     bounded_continual_seed_set,
     fold_seed_bound,
 )
-from ditto.api_server.datapipeline import DatasetGenerator
+from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
 from ditto.api_server.deferred_source_review import (
     DEFERRED_MECHANICAL_REASON,
     DEFERRED_REVIEW_KIND,
@@ -196,12 +200,17 @@ from ditto.api_server.koth import (
     top5_round_is_due,
 )
 from ditto.api_server.model_use import evaluate_model_use, model_use_policy
-from ditto.api_server.onchain_seed import derive_validator_seed
+from ditto.api_server.onchain_seed import derive_seed, derive_validator_seed
 from ditto.api_server.outlier_escalation import (
     OUTLIER_ALGORITHM_VERSION,
+    OUTLIER_AXIS_EVIDENCE_KIND,
     OUTLIER_REVIEW_KIND,
+    AxisObservation,
     OutlierEscalationSettings,
+    OutlierEscalationSettingsLoad,
     evaluate_score_outlier,
+    load_outlier_escalation_settings,
+    public_audit_evidence,
 )
 from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
 from ditto.api_server.queue_policy_settings import (
@@ -215,8 +224,12 @@ from ditto.api_server.scoring_gate import (
     evaluate_duplicate_signals,
     evaluate_rejected_resubmission,
 )
+from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.api_server.storage import S3StorageClient
-from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+from ditto.api_server.v13_scorer_cohort import (
+    pinned_validator_allowed,
+    pinned_validator_may_submit,
+)
 from ditto.api_server.validator_slot_settings import (
     DEFAULT_SETTINGS as SLOT_SETTINGS_DEFAULT,
 )
@@ -355,9 +368,11 @@ from ditto.db.queries.tickets import (
     list_validator_live_leases,
     mark_ticket_scored,
 )
+from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enabled
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+    nonce_expires_at,
 )
 from ditto.db.queries.weight_receipts import (
     WeightReceiptConflict,
@@ -476,46 +491,17 @@ def _outlier_escalation_settings_from_env() -> OutlierEscalationSettings:
     """Build the escalation policy from the environment, falling back to shipped
     defaults for any variable that is unset or unparseable (fail-safe: a bad
     value degrades to the conservative default rather than crashing scoring)."""
-    defaults = OutlierEscalationSettings()
-
-    mode = (
-        os.environ.get("DITTO_OUTLIER_ESCALATION_MODE", defaults.mode).strip().lower()
-    )
-    if mode not in {"off", "observe", "enforce"}:
-        mode = defaults.mode
-
-    def _int(name: str, fallback: int) -> int:
-        try:
-            return int(os.environ[name])
-        except (KeyError, ValueError):
-            return fallback
-
-    def _float(name: str, fallback: float) -> float:
-        try:
-            return float(os.environ[name])
-        except (KeyError, ValueError):
-            return fallback
-
-    return OutlierEscalationSettings(
-        mode=mode,
-        min_bench_version=_int(
-            "DITTO_OUTLIER_ESCALATION_MIN_BENCH_VERSION", defaults.min_bench_version
-        ),
-        min_cohort_size=_int(
-            "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE", defaults.min_cohort_size
-        ),
-        modified_z_threshold=_float(
-            "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD",
-            defaults.modified_z_threshold,
-        ),
-        min_composite_floor=_float(
-            "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR",
-            defaults.min_composite_floor,
-        ),
-    )
+    return load_outlier_escalation_settings(os.environ).settings
 
 
-OUTLIER_ESCALATION_SETTINGS = _outlier_escalation_settings_from_env()
+# Loaded once per process at import, like the transform-audit toggle. The load
+# record keeps each field's source (env / default / default_invalid_env) so the
+# admin posture read can show a silently-rejected variable; scoring only ever
+# consumes ``OUTLIER_ESCALATION_SETTINGS``.
+OUTLIER_ESCALATION_SETTINGS_LOAD: OutlierEscalationSettingsLoad = (
+    load_outlier_escalation_settings(os.environ)
+)
+OUTLIER_ESCALATION_SETTINGS = OUTLIER_ESCALATION_SETTINGS_LOAD.settings
 
 
 def _binomial_tail(k: int, n: int, p: float = 0.5) -> float:
@@ -1147,6 +1133,7 @@ async def _evaluate_and_record_outlier_escalation(
     cohort: Sequence[float],
     settings: OutlierEscalationSettings,
     now: datetime,
+    axes: Mapping[str, AxisObservation] | None = None,
 ) -> None:
     """Escalate an out-of-band composite to ATH review (issue #476).
 
@@ -1164,6 +1151,22 @@ async def _evaluate_and_record_outlier_escalation(
     opens the hold. Bench-version scoped so v8-v11 are untouched, and gated on
     ``SCORED`` so a copy / transform-audit hold that already fired this
     transition wins outright (this path never re-holds an already-held agent).
+
+    ``axes`` adds per-axis robust-z evidence to every recorded entry. A
+    per-axis outlier that does not hold under the policy (per-axis
+    enforcement off, or the composite below the floor) is appended as
+    ``OUTLIER_AXIS_EVIDENCE_KIND`` evidence only -- never a hold, never a
+    would-be hold -- in both ``observe`` and ``enforce`` mode.
+
+    The audit chain is public, so its entries carry only the neutral per-axis
+    projection (:func:`public_audit_evidence`: axis name + outlier flag). The
+    full per-axis statistics (value, cohort median/MAD, modified z) are kept
+    only on the private ``ath_reviews`` snapshot, which exists only when an
+    ``enforce`` hold opens. An ``observe`` would-be hold and every
+    ``OUTLIER_AXIS_EVIDENCE_KIND`` entry persist ``{axis, outlier}`` and
+    nothing more, so observe mode records which axes were out of band, not
+    their per-axis z distribution. To see the statistics before enforcing,
+    replay the ledger with the dry-run endpoint (``per_axis_enforce=true``).
     """
     if settings.mode == "off":
         return
@@ -1175,9 +1178,32 @@ async def _evaluate_and_record_outlier_escalation(
         return
 
     decision = evaluate_score_outlier(
-        composite=composite, cohort=cohort, settings=settings
+        composite=composite, cohort=cohort, settings=settings, axes=axes
     )
     if not decision.held:
+        if decision.axis_outliers:
+            # A single axis far out of band while the policy holds nothing:
+            # observe-only evidence on its own audit kind, so the would-be-hold
+            # and hold counts stay exactly the composite policy's.
+            await append_audit_entry(
+                session,
+                agent_id=agent.agent_id,
+                validator_hotkey=None,
+                event=EVENT_AUDIT,
+                payload={
+                    "audit_kind": OUTLIER_AXIS_EVIDENCE_KIND,
+                    "enforced": False,
+                    "qualified": False,
+                    "bench_version": bench_version,
+                    "evidence": public_audit_evidence(decision.evidence),
+                },
+                recorded_at=now,
+            )
+            logger.info(
+                "agent %s: per-axis out-of-band score recorded as evidence: %s",
+                agent.agent_id,
+                ",".join(decision.axis_outliers),
+            )
         # In-band, below the floor, or an insufficient cohort. Rank normally and
         # leave no hold; the "why not" lives in the decision evidence, which is
         # only persisted when a would-be hold fires (below), matching the other
@@ -1199,7 +1225,7 @@ async def _evaluate_and_record_outlier_escalation(
                 "enforced": False,
                 "qualified": True,
                 "bench_version": bench_version,
-                "evidence": decision.evidence,
+                "evidence": public_audit_evidence(decision.evidence),
             },
             recorded_at=now,
         )
@@ -1250,7 +1276,7 @@ async def _evaluate_and_record_outlier_escalation(
             "enforced": True,
             "qualified": True,
             "bench_version": bench_version,
-            "evidence": decision.evidence,
+            "evidence": public_audit_evidence(decision.evidence),
         },
         recorded_at=now,
     )
@@ -1709,6 +1735,7 @@ async def _issue_source_backfill_ticket(
         SIMILARITY_CONCURRENT_SUBMISSION_LIMIT_DEFAULT
     ),
     resume_only: bool = False,
+    ticket_ttl: timedelta = DEFAULT_SCORING_TICKET_TTL,
 ) -> ValidatorTicket | None:
     """Use otherwise-idle capacity after the desired era has nothing to give.
 
@@ -1793,7 +1820,7 @@ async def _issue_source_backfill_ticket(
             session,
             validator_hotkey=validator_hotkey,
             now=now,
-            ttl=_TICKET_TTL,
+            ttl=ticket_ttl,
             bench_version=rollout.from_version,
             artifact_mode=artifact_mode,
             validator_running_benchmark=validator_running_benchmark,
@@ -1897,7 +1924,7 @@ async def _issue_source_backfill_ticket(
         session,
         validator_hotkey=validator_hotkey,
         now=now,
-        ttl=_TICKET_TTL,
+        ttl=ticket_ttl,
         bench_version=rollout.from_version,
         artifact_mode=artifact_mode,
         validator_running_benchmark=validator_running_benchmark,
@@ -1926,6 +1953,7 @@ async def _issue_prev_gen_carryover_ticket(
     similarity_concurrent_submission_limit: int = (
         SIMILARITY_CONCURRENT_SUBMISSION_LIMIT_DEFAULT
     ),
+    ticket_ttl: timedelta = DEFAULT_SCORING_TICKET_TTL,
 ) -> ValidatorTicket | None:
     """Lease an adopted previous-generation submission in the new era.
 
@@ -1975,7 +2003,7 @@ async def _issue_prev_gen_carryover_ticket(
         session,
         validator_hotkey=validator_hotkey,
         now=now,
-        ttl=_TICKET_TTL,
+        ttl=ticket_ttl,
         bench_version=rollout.desired_version,
         artifact_mode="screened_only",
         validator_running_benchmark=validator_running_benchmark,
@@ -2013,21 +2041,16 @@ def _prev_gen_carryover_precedes_desired_era(
 # How long a pre-signed artifact URL stays valid.
 _ARTIFACT_URL_TTL = timedelta(minutes=5)
 
-# How long a validator has to redeem a ticket with a score before it lapses and
-# the slot re-opens for another validator.
-# Keep the lease longer than the validator's 165-minute benchmark cap.
-# The remaining fifteen minutes cover artifact/setup time and the validator's
-# explicit two-minute signed-report margin.
-# Production v11 canonical completions (21d): 8-wide p99 55 min / max 60 min;
-# including serial windows p99 101 min / max 114 min. Zero of 1014 scored
-# tickets exceeded 120 min. 180 is over-budgeted for that tail without the
-# 430-minute silent occupancy of a wedged scorer. The validator still has a
-# 15-minute unchanged-progress watchdog.
-_TICKET_TTL = timedelta(minutes=180)
+# How long a validator has to redeem a scoring ticket before it lapses is no
+# longer a constant here (#1156). Every issuance path resolves the operator's
+# Backroom revision with ``resolve_scoring_ticket_ttl`` and stamps it onto NEW
+# tickets only; ``DEFAULT_SCORING_TICKET_TTL`` (180 minutes, with its sizing
+# rationale in ``ditto.api_models.scoring_lease_settings``) governs until an
+# operator writes one and on any failure to read it.
 
-# Signed job claims outside this window are stale. A consumed nonce remains in
-# the database for the same window, making replay rejection consistent across
-# every API replica without introducing another secret.
+# Signed job claims outside this window are stale. A consumed nonce is kept
+# until that window closes, including when the stamp is in the future, so a
+# replica cannot forget the nonce while the signature is still acceptable.
 _JOB_REQUEST_MAX_AGE = timedelta(minutes=2)
 # A leased seed of ``None`` is meaningful (a legacy bundle lease), so "this
 # validator holds no lease" needs a sentinel distinct from it.
@@ -2046,7 +2069,9 @@ _qualification_refresh_due = 0.0
 # Reject captured heartbeats outside a short clock-skew/retry window. Workers
 # report every two minutes, so five minutes tolerates normal transient outages.
 _HEARTBEAT_MAX_SKEW_SECONDS = 300
-_HEARTBEAT_MAX_BYTES = 16 * 1024
+HEARTBEAT_MAX_BYTES = 16 * 1024
+RECEIPT_DIAGNOSTICS_MAX_BYTES = 8192
+WEIGHT_RECEIPT_MAX_BYTES = 3 * 1024 * 1024
 
 
 # Object-store key the upload pipeline writes the tarball under.
@@ -2506,10 +2531,13 @@ def _heartbeat_signing_message(
     confirmation_progress: list[ConfirmationProgress] | None = None,
     updater_status: ValidatorUpdaterStatus | None = None,
     weights_fold: WeightsFold | None = None,
+    host_specs: HostSpecs | None = None,
 ) -> bytes:
     """Canonical heartbeat payload, mirrored by ``ditto-subnet``."""
     if weights_fold is not None and protocol_version < 27:
         raise ValueError("weights fold requires heartbeat protocol v27")
+    if host_specs is not None and protocol_version < 32:
+        raise ValueError("host specs require heartbeat protocol v32")
     if stack_health is not None and protocol_version < 9:
         raise ValueError("per-component stack health requires heartbeat protocol v9")
     if benchmark_capacity is not None and protocol_version < 10:
@@ -2533,6 +2561,24 @@ def _heartbeat_signing_message(
             active = str(active_agent_id) if active_agent_id is not None else ""
             # Mirrors the validator: the fold report changes the signed bytes
             # only when present, so a fold-less v27 heartbeat stays on v23.
+            # v32 hardware announcement. Like the fold, it changes the signed
+            # bytes only when present, so a probe failure stays on v23/v27.
+            if host_specs is not None:
+                return (
+                    "ditto-validator-heartbeat:v32:"
+                    f"{validator_hotkey}:{software_version}:{protocol_version}:"
+                    f"{code_digest}:{state}:{active}:"
+                    f"{system_metrics_signing_token(system_metrics)}:"
+                    f"{benchmark_progress_signing_token(benchmark_progress)}:"
+                    f"{validator_identity_signing_token(capabilities, stack)}:"
+                    f"{validator_stack_health_signing_token(stack_health)}:"
+                    f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+                    f"{confirmation_progress_signing_token(confirmation_progress)}:"
+                    f"{validator_updater_status_signing_token(updater_status)}:"
+                    f"{weights_fold_signing_token(weights_fold)}:"
+                    f"{host_specs_signing_token(host_specs)}:"
+                    f"{timestamp}"
+                ).encode()
             if weights_fold is not None:
                 return (
                     "ditto-validator-heartbeat:v27:"
@@ -3017,7 +3063,7 @@ async def submit_receipt_diagnostics(
     session: SessionDep,
 ) -> dict[str, bool]:
     """Store latest signed observation; never consumed by emission verification."""
-    if len(await request.body()) > 8192:
+    if len(await request.body()) > RECEIPT_DIAGNOSTICS_MAX_BYTES:
         raise HTTPException(status_code=413, detail="diagnostic payload too large")
     report = request_body.report
     now = datetime.now(UTC)
@@ -3070,7 +3116,7 @@ async def submit_weight_receipt(
     session: SessionDep,
 ) -> SubmitWeightReceiptResponse:
     """Durably acknowledge a signed commit claim without granting source release."""
-    if len(await request.body()) > 3 * 1024 * 1024:
+    if len(await request.body()) > WEIGHT_RECEIPT_MAX_BYTES:
         raise HTTPException(status_code=413, detail="weight receipt payload too large")
     receipt = request_body.receipt
     if receipt.validator_hotkey != validator_hotkey:
@@ -3094,7 +3140,15 @@ async def submit_weight_receipt(
                 session, submission=request_body, now=now
             )
     except WeightReceiptConflict as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
+        logger.warning(
+            "weight receipt conflict code=%s validator=%s request=%s attempt=%s %s",
+            error.code,
+            validator_hotkey,
+            receipt.request_id,
+            receipt.attempt.attempt_id,
+            error.claimed_provenance,
+        )
+        raise HTTPException(status_code=409, detail=f"{error.code}: {error}") from error
     return SubmitWeightReceiptResponse(
         request_id=receipt.request_id,
         attempt_id=receipt.attempt.attempt_id,
@@ -3123,8 +3177,8 @@ async def heartbeat(
     except ValueError as error:
         raise HTTPException(status_code=400, detail="invalid Content-Length") from error
     if (
-        claimed_bytes > _HEARTBEAT_MAX_BYTES
-        or len(await request.body()) > _HEARTBEAT_MAX_BYTES
+        claimed_bytes > HEARTBEAT_MAX_BYTES
+        or len(await request.body()) > HEARTBEAT_MAX_BYTES
     ):
         raise HTTPException(status_code=413, detail="heartbeat payload too large")
     if request_body.validator_hotkey != validator_hotkey:
@@ -3213,6 +3267,7 @@ async def heartbeat(
         confirmation_progress=request_body.confirmation_progress,
         updater_status=request_body.updater_status,
         weights_fold=request_body.weights_fold,
+        host_specs=request_body.host_specs,
     )
     if not _verify_signature(validator_hotkey, payload, request_body.signature):
         raise ValidatorAuthError("heartbeat signature verification failed")
@@ -3303,6 +3358,11 @@ async def heartbeat(
                 if request_body.weights_fold is not None
                 else None
             ),
+            host_specs=(
+                request_body.host_specs.model_dump(mode="json")
+                if request_body.host_specs is not None
+                else None
+            ),
             benchmark_capacity=(
                 work.benchmark_capacity.model_dump(mode="json")
                 if work.benchmark_capacity is not None
@@ -3340,6 +3400,65 @@ async def heartbeat(
     if seen_at.tzinfo is None:
         seen_at = seen_at.replace(tzinfo=UTC)
     return ValidatorHeartbeatResponse(accepted=accepted, seen_at=seen_at, leases=leases)
+
+
+async def _bind_unverified_v13_dataset(
+    session: AsyncSession,
+    *,
+    chain: ChainClient,
+    request: Request,
+    generator: DatasetGenerator,
+    agent: Agent,
+    dataset: BenchmarkDataset,
+) -> bool:
+    """Re-pin a block-less V13 dataset to the latest chain block.
+
+    Only a pin no lease has ever derived a seed from is rebound, so no issued
+    or scored ticket can disagree with the new one. The agent's compatibility
+    columns follow when they mirror the same block-less pin. Returns ``False``
+    (leaving the pin untouched) when the chain or generator is unavailable.
+    """
+    leased = await session.scalar(
+        select(ValidatorTicket.agent_id)
+        .where(
+            ValidatorTicket.agent_id == agent.agent_id,
+            ValidatorTicket.bench_version == dataset.bench_version,
+            ValidatorTicket.seed.is_not(None),
+        )
+        .limit(1)
+    )
+    if leased is not None:
+        return False
+    try:
+        block = await chain.get_latest_block()
+        seed = derive_seed(block.hash, agent.agent_id)
+        sha256 = await lease_dataset_sha(
+            request, generator, seed=seed, bench_version=dataset.bench_version
+        )
+    except (ChainError, DataPipelineError) as error:
+        logger.warning(
+            "V%d dataset for agent %s is not chain-bound and could not be rebound: %s",
+            dataset.bench_version,
+            agent.agent_id,
+            error,
+        )
+        return False
+    if agent.dataset_seed == dataset.seed and agent.dataset_seed_block_hash is None:
+        agent.dataset_seed = seed
+        agent.dataset_sha256 = sha256
+        agent.dataset_seed_block = block.number
+        agent.dataset_seed_block_hash = block.hash
+    logger.info(
+        "rebound block-less V%d dataset for agent %s to block %d",
+        dataset.bench_version,
+        agent.agent_id,
+        block.number,
+    )
+    dataset.seed = seed
+    dataset.sha256 = sha256
+    dataset.seed_block = block.number
+    dataset.seed_block_hash = block.hash
+    return True
 
 
 @router.post(
@@ -3425,6 +3544,10 @@ async def request_job(
     inference_settings = await request.app.state.inference_concurrency_settings.resolve(
         getattr(request.app.state, "session_maker", None)
     )
+    # Operator-revisioned lease clock (#1156), resolved on its own session like
+    # the boards above. It is stamped only onto a ticket minted in this poll; a
+    # resumed live ticket keeps the deadline it was issued with.
+    ticket_ttl = await resolve_scoring_ticket_ttl(request.app.state)
 
     job: JobResponse | None = None
     async with session.begin():
@@ -3461,7 +3584,11 @@ async def request_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -3759,6 +3886,7 @@ async def request_job(
                     required_basis=V9_CONTRACT_RETEST_BASIS,
                     allow_parallel_ordinary=True,
                     allow_parallel_contract_retests=True,
+                    ttl=ticket_ttl,
                 )
                 if target_benchmark_ready
                 else None
@@ -3774,7 +3902,7 @@ async def request_job(
                     session,
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
-                    ttl=_TICKET_TTL,
+                    ttl=ticket_ttl,
                     artifact_mode=artifact_mode,
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
@@ -3816,6 +3944,7 @@ async def request_job(
                     similarity_concurrent_submission_limit=(
                         queue_policy.similarity_budget.concurrent_submission_limit
                     ),
+                    ticket_ttl=ticket_ttl,
                 )
                 if relaxed_carryover_due
                 else None
@@ -3826,7 +3955,7 @@ async def request_job(
                         session,
                         validator_hotkey=payload.validator_hotkey,
                         now=now,
-                        ttl=_TICKET_TTL,
+                        ttl=ticket_ttl,
                         bench_version=rollout.desired_version,
                         artifact_mode="screened_only",
                         validator_running_benchmark=slot_running_benchmark,
@@ -3853,7 +3982,7 @@ async def request_job(
                     session,
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
-                    ttl=_TICKET_TTL,
+                    ttl=ticket_ttl,
                     bench_version=rollout.desired_version,
                     artifact_mode="screened_only",
                     validator_running_benchmark=slot_running_benchmark,
@@ -3893,6 +4022,7 @@ async def request_job(
                     similarity_concurrent_submission_limit=(
                         queue_policy.similarity_budget.concurrent_submission_limit
                     ),
+                    ticket_ttl=ticket_ttl,
                 )
         else:
             ticket = None
@@ -3955,6 +4085,7 @@ async def request_job(
                     similarity_concurrent_submission_limit=(
                         queue_policy.similarity_budget.concurrent_submission_limit
                     ),
+                    ticket_ttl=ticket_ttl,
                 )
             if ticket is None and rollout is None:
                 stale_ticket = await session.scalar(
@@ -4010,7 +4141,7 @@ async def request_job(
                         session,
                         validator_hotkey=payload.validator_hotkey,
                         now=now,
-                        ttl=_TICKET_TTL,
+                        ttl=ticket_ttl,
                         bench_version=canonical_version,
                         artifact_mode=artifact_mode,
                         validator_running_benchmark=slot_running_benchmark,
@@ -4042,6 +4173,7 @@ async def request_job(
                     ),
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
+                    ttl=ticket_ttl,
                 )
             if ticket is None and source_backfill_rollout is not None:
                 # Once the inherited top ten is fully established on the new
@@ -4077,6 +4209,7 @@ async def request_job(
                     similarity_concurrent_submission_limit=(
                         queue_policy.similarity_budget.concurrent_submission_limit
                     ),
+                    ticket_ttl=ticket_ttl,
                 )
             if ticket is None and rollout is not None:
                 # Every issuing lane an open rollout offers has been walked and
@@ -4109,20 +4242,46 @@ async def request_job(
                 if dataset is not None
                 else agent.dataset_seed_block_hash
             )
+            if (
+                ticket.bench_version >= 13
+                and ticket.seed is None
+                and seed_block_hash is None
+                and dataset is not None
+                and generator.run_size is not None
+            ):
+                # A chain blip at screening pins a local CSPRNG seed with no
+                # block. V13 cannot lease that pin, and as the queue head it
+                # 503s (rolling back) every poll on the fleet. Bind it to a
+                # block read now, which is still causally after the commit.
+                bound = await _bind_unverified_v13_dataset(
+                    session,
+                    chain=chain,
+                    request=request,
+                    generator=generator,
+                    agent=agent,
+                    dataset=dataset,
+                )
+                if bound:
+                    seed_block = dataset.seed_block
+                    seed_block_hash = dataset.seed_block_hash
             # Give each of the three quorum validators an independent dataset.
             # The post-commit block hash keeps the seed unpredictable; binding
             # the validator hotkey makes it distinct and publicly reproducible.
             # Persist the pin on the ticket so retries cannot rotate datasets.
-            if ticket.bench_version == 13 and ticket.seed is None:
+            if ticket.bench_version >= 13 and ticket.seed is None:
                 if heartbeat is None or not heartbeat_supports_version(
-                    heartbeat, now=now, version=13
+                    heartbeat, now=now, version=ticket.bench_version
                 ):
                     raise HTTPException(
-                        503, "deterministic V13 scorer capability is unavailable"
+                        503,
+                        f"deterministic V{ticket.bench_version} scorer capability "
+                        "is unavailable",
                     )
                 if seed_block_hash is None or generator.run_size is None:
                     raise HTTPException(
-                        503, "deterministic V13 seed binding is unavailable"
+                        503,
+                        f"deterministic V{ticket.bench_version} seed binding "
+                        "is unavailable",
                     )
             if seed_block_hash is not None and generator.run_size is not None:
                 expected_seed = derive_validator_seed(
@@ -5202,6 +5361,7 @@ async def _canonical_tail_is_draining(
     requesting_validator: str,
     canonical_version: int,
     now: datetime,
+    ticket_ttl: timedelta = DEFAULT_SCORING_TICKET_TTL,
 ) -> bool:
     """Whether current-version quorum work is finishing or just finished.
 
@@ -5215,7 +5375,7 @@ async def _canonical_tail_is_draining(
     before the idle validators' next poll, recreating the idle gap this guard
     exists to fill.
     """
-    recently_settled_after = now - _TICKET_TTL
+    recently_settled_after = now - ticket_ttl
     active_agent_id = await session.scalar(
         select(ValidatorTicket.agent_id)
         .where(
@@ -5317,6 +5477,9 @@ async def request_top5_confirmation_job(
         getattr(request.app.state, "session_maker", None)
     )
     slot_settings = await _validator_slot_settings(request)
+    # Operator-revisioned lease clock (#1156): stamped only onto a lease minted
+    # here, and the tail-drain window is one current canonical lease long.
+    ticket_ttl = await resolve_scoring_ticket_ttl(request.app.state)
     # Bench v13+: read the finalized hash of any reign anchor whose height the
     # head has reached BEFORE the write transaction opens. The Substrate read
     # is a fresh websocket and three RPCs; holding a Platform row lock across
@@ -5339,7 +5502,11 @@ async def request_top5_confirmation_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -5625,6 +5792,7 @@ async def request_top5_confirmation_job(
                 requesting_validator=payload.validator_hotkey,
                 canonical_version=canonical_version,
                 now=now,
+                ticket_ttl=ticket_ttl,
             )
         )
         # Serialize the coverage read with ticket issuance. Catch-up is allowed
@@ -5779,12 +5947,16 @@ async def request_top5_confirmation_job(
             bench_version=canonical_version,
         )
         if canonical_version >= 3:
-            if canonical_version == 13 and (
+            if canonical_version >= 13 and (
                 heartbeat is None
-                or not heartbeat_supports_version(heartbeat, now=now, version=13)
+                or not heartbeat_supports_version(
+                    heartbeat, now=now, version=canonical_version
+                )
             ):
                 raise HTTPException(
-                    503, "deterministic V13 scorer capability is unavailable"
+                    503,
+                    f"deterministic V{canonical_version} scorer capability "
+                    "is unavailable",
                 )
             if generator.run_size is None:
                 raise HTTPException(
@@ -5854,7 +6026,7 @@ async def request_top5_confirmation_job(
             agent_id=selected_member_id,
             validator_hotkey=payload.validator_hotkey,
             now=now,
-            ttl=_TICKET_TTL,
+            ttl=ticket_ttl,
             bench_version=canonical_version,
             seed=(selected_wave_seed if confirmation_datasets else None),
             dataset_sha256=(
@@ -6229,7 +6401,11 @@ async def fail_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -6560,7 +6736,11 @@ async def agent_artifact(
                 nonce=x_validator_artifact_nonce,
                 validator_hotkey=x_validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=x_validator_artifact_requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -6761,7 +6941,7 @@ async def submit_score(
         if (
             report_version == 13
             and (prior_ticket is None or prior_ticket.status != TicketStatus.SCORED)
-            and not await pinned_validator_allowed(
+            and not await pinned_validator_may_submit(
                 session, hotkey=payload.validator_hotkey, now=datetime.now(UTC)
             )
         ):
@@ -7148,10 +7328,12 @@ async def submit_score(
             )
             await _publish_finalized_run(
                 storage,
+                session=session,
                 agent=agent,
                 scores=replacement_scores,
                 median=replacement_median,
                 dataset=replacement_dataset,
+                mirror_transcripts=await transcript_mirror_enabled(session),
             )
         # Persist the crate's structural (AST) fingerprint from the report, so it
         # is available for the gate here and for future cross-miner comparison.
@@ -7495,6 +7677,8 @@ async def submit_score(
                 # it on. The cohort is the eligible ledger read above, which is
                 # one row per owner and excludes this still-evaluating
                 # candidate, held agents, and banned agents.
+                # Per-axis evidence: each axis is the median of this agent's
+                # quorum on that axis, against the same eligible ledger's axis.
                 await _evaluate_and_record_outlier_escalation(
                     session,
                     agent=agent,
@@ -7503,6 +7687,18 @@ async def submit_score(
                     cohort=[row.composite for row in eligible],
                     settings=OUTLIER_ESCALATION_SETTINGS,
                     now=audit_now,
+                    axes={
+                        "tool_mean": AxisObservation(
+                            value=statistics.median(s.tool_mean for s in agent_scores),
+                            cohort=[row.tool_mean for row in eligible],
+                        ),
+                        "memory_mean": AxisObservation(
+                            value=statistics.median(
+                                s.memory_mean for s in agent_scores
+                            ),
+                            cohort=[row.memory_mean for row in eligible],
+                        ),
+                    },
                 )
                 deferred_settings = queue_policy.deferred_source_review
                 await _evaluate_and_record_deferred_review(
@@ -7569,10 +7765,12 @@ async def submit_score(
                 # key, so a retried request republishes identical content.
                 await _publish_finalized_run(
                     storage,
+                    session=session,
                     agent=agent,
                     scores=agent_scores,
                     median=median_composite,
                     dataset=finalized_dataset,
+                    mirror_transcripts=await transcript_mirror_enabled(session),
                 )
         elif existing_score is None and agent.status in {
             AgentStatus.SCORED,
@@ -7633,10 +7831,12 @@ async def submit_score(
                 )
                 await _publish_finalized_run(
                     storage,
+                    session=session,
                     agent=agent,
                     scores=migrated_scores,
                     median=migrated_median,
                     dataset=migrated_dataset,
+                    mirror_transcripts=await transcript_mirror_enabled(session),
                 )
         # Consume the ticket (one ticket, one score); the slot stays occupied.
         await mark_ticket_scored(
@@ -7795,10 +7995,12 @@ async def submit_score(
 async def _publish_finalized_run(
     storage: S3StorageClient,
     *,
+    session: AsyncSession,
     agent: Agent,
     scores: Sequence[Score],
     median: float,
     dataset: BenchmarkDataset | None = None,
+    mirror_transcripts: bool = False,
 ) -> None:
     """Mirror a finalized run to version-addressed and current public keys.
 
@@ -7815,11 +8017,11 @@ async def _publish_finalized_run(
     if storage.public_bucket is None:
         return
     bench_version = scores[0].bench_version if scores else None
-    if bench_version == 13:
-        # V13 private work can share a CRN artifact beyond this agent's
-        # finalization. Full-detail mirrors require work-set closure first.
-        # Public aggregate/signed digest projections remain available.
-        return
+    for score in scores:
+        if await _score_uses_private_dataset(session, score):
+            # Full-detail records and transcripts both wait for private
+            # work-set closure, even after this agent reaches quorum.
+            return
     record = {
         "agent_id": str(agent.agent_id),
         "miner_hotkey": agent.miner_hotkey,
@@ -7900,6 +8102,98 @@ async def _publish_finalized_run(
                 agent.agent_id,
                 key,
             )
+    # A held agent (ATH review, quarantine, ban) publishes no transcript even
+    # at quorum; only a scored or live agent's behavioral data is mirrored.
+    if mirror_transcripts and agent.status in _TRANSCRIPT_MIRROR_STATUSES:
+        await _mirror_quorum_transcripts(storage, session, scores)
+
+
+_TRANSCRIPT_MIRROR_STATUSES = frozenset({AgentStatus.SCORED, AgentStatus.LIVE})
+
+
+async def _mirror_quorum_transcripts(
+    storage: S3StorageClient, session: AsyncSession, scores: Sequence[Score]
+) -> None:
+    """Copy transcripts already stored when a score reaches quorum."""
+    if storage.public_bucket is None:
+        return
+    for score in scores:
+        if await _score_uses_private_dataset(session, score):
+            continue
+        digest = _score_transcript_sha256(score)
+        if digest is None:
+            continue
+        key = transcript_object_key(digest)
+        try:
+            if await storage.object_exists(key=key, bucket=storage.public_bucket):
+                continue
+            if not await storage.object_exists(key=key):
+                continue
+            body = await storage.get_object(key=key, max_bytes=TRANSCRIPT_MAX_BYTES)
+            await storage.put_object(
+                key=key,
+                body=body,
+                content_type="application/json",
+                bucket=storage.public_bucket,
+            )
+        except Exception:  # noqa: BLE001 - additive mirror, never fail finalization
+            logger.exception("public transcript mirror failed for %s", digest)
+
+
+async def _mirror_late_transcript(
+    storage: S3StorageClient,
+    session: AsyncSession,
+    score: Score,
+    digest: str,
+    body: bytes,
+) -> None:
+    """Mirror a verified late upload only after its own version reaches quorum."""
+    if storage.public_bucket is None or not await transcript_mirror_enabled(session):
+        return
+    if await _score_uses_private_dataset(session, score):
+        return
+    agent = await session.get(Agent, score.agent_id)
+    if agent is None or agent.status not in _TRANSCRIPT_MIRROR_STATUSES:
+        return
+    score_count = await session.scalar(
+        select(func.count())
+        .select_from(Score)
+        .where(
+            Score.agent_id == score.agent_id,
+            Score.bench_version == score.bench_version,
+        )
+    )
+    if (score_count or 0) < SCORING_QUORUM:
+        return
+    key = transcript_object_key(digest)
+    try:
+        if not await storage.object_exists(key=key, bucket=storage.public_bucket):
+            await storage.put_object(
+                key=key,
+                body=body,
+                content_type="application/json",
+                bucket=storage.public_bucket,
+            )
+    except Exception:  # noqa: BLE001 - primary transcript is already stored
+        logger.exception("public transcript mirror failed for %s", digest)
+
+
+async def _score_uses_private_dataset(session: AsyncSession, score: Score) -> bool:
+    """Preserve the submit-transcript privacy rule for every public mirror."""
+    if score.bench_version >= 13:
+        return True
+    dataset_sha = (
+        score.details.get("dataset_sha256") if isinstance(score.details, dict) else None
+    )
+    return bool(
+        dataset_sha
+        and await session.scalar(
+            select(PrivateBenchmarkDataset.dataset_id)
+            .where(PrivateBenchmarkDataset.dataset_sha256 == dataset_sha)
+            .limit(1)
+        )
+        is not None
+    )
 
 
 # Transcript artifacts are content-addressed in the public bucket so a record
@@ -7908,7 +8202,7 @@ _TRANSCRIPT_KEY_TEMPLATE = "transcripts/{sha256}.json"
 
 # A transcript carries every graded final_text for a full run; cap well above
 # any legitimate size while bounding a hostile body.
-_TRANSCRIPT_MAX_BYTES = 32 << 20
+TRANSCRIPT_MAX_BYTES = 32 << 20
 
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
@@ -7946,16 +8240,18 @@ async def submit_transcript(
     graded per-case inputs whose digest the validator declared under
     ``details["transcript_sha256"]`` and bound into its score signature. The
     platform accepts the bytes only when their SHA-256 equals that declared
-    digest, then stores them content-addressed in authoritative storage and
-    mirrors them publicly when configured. Because the binding is *content*
-    equality against an already-signed digest, a
+    digest, then stores them content-addressed in authoritative storage.
+    The anonymous public mirror is a separate audited setting and, when
+    enabled, runs at quorum or on a later upload after quorum. Because the
+    binding is *content* equality against an already-signed digest, a
     caller spoofing another validator's hotkey can only ever upload the exact
     bytes that validator attested — so the header + permit check is sufficient
-    auth here. Idempotent: re-uploading an existing digest is a no-op.
+    auth here. A retry does not rewrite the primary object and can complete a
+    missing public mirror once quorum and the operator setting allow it.
     """
     response.headers["Cache-Control"] = "no-store"
     body = await request.body()
-    if len(body) > _TRANSCRIPT_MAX_BYTES:
+    if len(body) > TRANSCRIPT_MAX_BYTES:
         raise HTTPException(status_code=413, detail="transcript exceeds size cap")
     if not body:
         raise HTTPException(status_code=400, detail="empty transcript body")
@@ -8007,39 +8303,7 @@ async def submit_transcript(
             digest,
             len(body),
         )
-    # Preserve the optional anonymous mirror for offline auditors. A mirror
-    # outage must not discard the authoritative transcript after score
-    # acceptance.
-    dataset_sha = (
-        score.details.get("dataset_sha256") if isinstance(score.details, dict) else None
-    )
-    private_dataset = (
-        await session.scalar(
-            select(PrivateBenchmarkDataset.dataset_id)
-            .where(PrivateBenchmarkDataset.dataset_sha256 == dataset_sha)
-            .limit(1)
-        )
-        if dataset_sha
-        else None
-    )
-    # Private transcripts can expose answers while another CRN member still
-    # needs the dataset. Retain privately; a later explicit closure/reveal
-    # operation must establish that no future work can reuse this artifact.
-    if (
-        storage.public_bucket is not None
-        and private_dataset is None
-        and score.bench_version != 13
-    ):
-        try:
-            if not await storage.object_exists(key=key, bucket=storage.public_bucket):
-                await storage.put_object(
-                    key=key,
-                    body=body,
-                    content_type="application/json",
-                    bucket=storage.public_bucket,
-                )
-        except Exception:  # noqa: BLE001 - additive mirror, primary already stored
-            logger.exception("public transcript mirror failed for %s", digest)
+    await _mirror_late_transcript(storage, session, score, digest, body)
     return SubmitTranscriptResponse(
         agent_id=agent_id, run_id=run_id, transcript_sha256=digest, stored=True
     )

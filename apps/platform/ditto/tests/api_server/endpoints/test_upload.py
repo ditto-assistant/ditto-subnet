@@ -5,12 +5,13 @@ from __future__ import annotations
 import hashlib
 import io
 import tarfile
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from unittest.mock import ANY, AsyncMock, MagicMock
+from uuid import UUID, uuid4
 
 import bittensor
 import httpx
@@ -81,6 +82,10 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
         "ditto.api_server.endpoints.upload.get_upload_admission_for_coldkey",
         AsyncMock(return_value=None),
     )
@@ -112,6 +117,26 @@ def _make_keypair() -> bittensor.Keypair:
     return bittensor.Keypair.create_from_uri("//Alice")
 
 
+def _signed_upload_auth(
+    keypair: bittensor.Keypair,
+    *,
+    hotkey: str,
+    sha256: str,
+    signature_timestamp: int | None = None,
+    signature_nonce: UUID | None = None,
+) -> dict[str, object]:
+    timestamp = (
+        signature_timestamp if signature_timestamp is not None else int(time.time())
+    )
+    nonce = signature_nonce or uuid4()
+    payload = (f"ditto-upload-v2:{hotkey}:{sha256}:{timestamp}:{nonce}").encode("ascii")
+    return {
+        "signature": keypair.sign(payload).hex(),
+        "signature_timestamp": timestamp,
+        "signature_nonce": str(nonce),
+    }
+
+
 def _signed_request_body(
     *,
     keypair: bittensor.Keypair | None = None,
@@ -121,12 +146,11 @@ def _signed_request_body(
 ) -> dict[str, object]:
     kp = keypair or _make_keypair()
     hotkey = override_hotkey or kp.ss58_address
-    payload = f"{hotkey}:{sha256}".encode()
     return {
         "hotkey": hotkey,
         "sha256": sha256,
         "file_size_bytes": file_size_bytes,
-        "signature": kp.sign(payload).hex(),
+        **_signed_upload_auth(kp, hotkey=hotkey, sha256=sha256),
     }
 
 
@@ -296,7 +320,7 @@ class TestUploadCheck:
         token = uuid4()
         duplicate_lookup = AsyncMock(return_value=None)
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_same_hotkey_agent_by_sha",
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
             duplicate_lookup,
         )
         monkeypatch.setattr(
@@ -428,7 +452,7 @@ class TestUploadCheck:
             AsyncMock(return_value=None),
         )
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_same_hotkey_agent_by_sha",
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
             AsyncMock(return_value=None),
         )
         verifier = _override_payment_verifier(app)
@@ -476,7 +500,7 @@ class TestUploadCheck:
         override_get_chain_client(app)
         duplicate_id = uuid4()
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_same_hotkey_agent_by_sha",
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
             AsyncMock(
                 return_value=SimpleNamespace(
                     agent_id=duplicate_id,
@@ -498,8 +522,61 @@ class TestUploadCheck:
         assert ERROR_CODE_IDENTICAL_SUBMISSION in blocked_body["error_codes"]
         assert blocked_body["payment_required"] is False
         assert blocked_body["identical_agent_id"] == str(duplicate_id)
+        assert blocked_body["messages"] == [
+            "The previous submission cannot be resubmitted. "
+            "Please try again after updating."
+        ]
         assert allowed.json()["ok"] is True
         assert allowed.json()["payment_required"] is True
+
+    async def test_duplicate_from_another_owner_hotkey_precedes_cooldown(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        previous_id = uuid4()
+        lookup = AsyncMock(
+            return_value=SimpleNamespace(
+                agent_id=previous_id,
+                status=AgentStatus.SCORED,
+                miner_hotkey=_make_keypair().ss58_address,
+            )
+        )
+        cooldown = AsyncMock(return_value=datetime.now(UTC) + timedelta(hours=1))
+        reserve = AsyncMock()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha", lookup
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_submission_retry_at", cooldown
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.reserve_upload_admission", reserve
+        )
+        new_hotkey = bittensor.Keypair.create_from_uri("//Bob")
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(keypair=new_hotkey),
+                "reserve_submission_slot": True,
+            },
+        )
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["error_codes"] == [ERROR_CODE_IDENTICAL_SUBMISSION]
+        assert result["identical_agent_id"] == str(previous_id)
+        assert result["payment_required"] is False
+        assert result["admission_token"] is None
+        assert result["retry_at"] is None
+        lookup.assert_awaited_once_with(
+            ANY, miner_coldkey="5Coldkey", sha256=_GOOD_SHA256
+        )
+        cooldown.assert_not_awaited()
+        reserve.assert_not_awaited()
 
     async def test_banned_hotkey_returns_1103(
         self,
@@ -528,7 +605,9 @@ class TestUploadCheck:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         override_get_chain_client(app)
-        retry_at = datetime(2026, 7, 24, 12, 30, tzinfo=UTC)
+        retry_at = datetime.now(UTC).replace(microsecond=0) + timedelta(
+            hours=2, minutes=30
+        )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_submission_retry_at",
             AsyncMock(return_value=retry_at),
@@ -542,7 +621,39 @@ class TestUploadCheck:
         assert result["ok"] is False
         assert result["payment_required"] is False
         assert ERROR_CODE_SUBMISSION_COOLDOWN in result["error_codes"]
-        assert result["retry_at"] == "2026-07-24T12:30:00Z"
+        assert result["retry_at"] == retry_at.isoformat().replace("+00:00", "Z")
+        assert result["messages"] == [
+            f"owner coldkey may submit again at {retry_at.isoformat()}. "
+            "Please try again in 2 hours and 30 minutes."
+        ]
+
+    async def test_reservation_race_includes_the_cooldown_countdown(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        retry_at = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=2)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.reserve_upload_admission",
+            AsyncMock(side_effect=SubmissionCooldownError(retry_at)),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={**_signed_request_body(), "reserve_submission_slot": True},
+        )
+
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["error_codes"] == [ERROR_CODE_SUBMISSION_COOLDOWN]
+        assert result["payment_required"] is False
+        assert result["admission_token"] is None
+        assert retry_at.isoformat() in result["messages"][0]
+        assert result["messages"][0].endswith(
+            "Please try again in 2 hours and 0 minutes."
+        )
 
     async def test_bad_signature_returns_1100(
         self, app: FastAPI, client: httpx.AsyncClient
@@ -555,6 +666,48 @@ class TestUploadCheck:
         result = response.json()
         assert result["ok"] is False
         assert ERROR_CODE_BAD_SIGNATURE in result["error_codes"]
+
+    @pytest.mark.parametrize("offset_seconds", [-301, 301])
+    async def test_signed_request_outside_clock_window_is_rejected(
+        self, app: FastAPI, client: httpx.AsyncClient, offset_seconds: int
+    ) -> None:
+        override_get_chain_client(app)
+        keypair = _make_keypair()
+        body = _signed_request_body(keypair=keypair)
+        body.update(
+            _signed_upload_auth(
+                keypair,
+                hotkey=keypair.ss58_address,
+                sha256=_GOOD_SHA256,
+                signature_timestamp=int(time.time()) + offset_seconds,
+            )
+        )
+        response = await client.post("/api/v1/upload/check", json=body)
+        assert response.status_code == 200
+        assert ERROR_CODE_BAD_SIGNATURE in response.json()["error_codes"]
+
+    async def test_nonce_cannot_be_changed_after_signing(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        override_get_chain_client(app)
+        body = _signed_request_body()
+        body["signature_nonce"] = str(uuid4())
+        response = await client.post("/api/v1/upload/check", json=body)
+        assert response.status_code == 200
+        assert ERROR_CODE_BAD_SIGNATURE in response.json()["error_codes"]
+
+    async def test_legacy_static_signature_is_not_accepted(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        override_get_chain_client(app)
+        keypair = _make_keypair()
+        body = _signed_request_body(keypair=keypair)
+        body["signature"] = keypair.sign(
+            f"{keypair.ss58_address}:{_GOOD_SHA256}".encode()
+        ).hex()
+        response = await client.post("/api/v1/upload/check", json=body)
+        assert response.status_code == 200
+        assert ERROR_CODE_BAD_SIGNATURE in response.json()["error_codes"]
 
     async def test_unregistered_hotkey_returns_1101(
         self, app: FastAPI, client: httpx.AsyncClient
@@ -709,20 +862,25 @@ class TestOpenApiInclusion:
         assert "/api/v1/upload/agent" in paths
 
 
-_GOOD_TAR_BYTES = b"\x1f\x8b" + b"x" * 1024  # gzip magic + padding
+def _tar_bytes(files: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+_DOCKERFILE = b"FROM scratch\n"
+_GOOD_TAR_BYTES = _tar_bytes({"Dockerfile": _DOCKERFILE})
 _GOOD_TAR_SHA = hashlib.sha256(_GOOD_TAR_BYTES).hexdigest()
 
 
 def _real_source_tar() -> bytes:
-    """A genuine tar.gz with a Rust source file, so the fingerprint/embedding-input
-    extractors yield real content (the junk ``_GOOD_TAR_BYTES`` decodes to None)."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        data = b"fn handle(x: i64) -> i64 {\n    let acc = x + 1;\n    acc * 2\n}\n"
-        info = tarfile.TarInfo("src/lib.rs")
-        info.size = len(data)
-        tar.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
+    """A genuine tar.gz with a root Dockerfile and a Rust source file."""
+    source = b"fn handle(x: i64) -> i64 {\n    let acc = x + 1;\n    acc * 2\n}\n"
+    return _tar_bytes({"Dockerfile": _DOCKERFILE, "src/lib.rs": source})
 
 
 _GOOD_BLOCK_HASH = "0x" + "ab" * 32
@@ -815,13 +973,11 @@ def _upload_agent_form(
 ) -> tuple[dict[str, Any], dict[str, tuple[str, bytes, str]]]:
     kp = keypair or bittensor.Keypair.create_from_uri("//Alice")
     hotkey = override_hotkey or kp.ss58_address
-    payload = f"{hotkey}:{sha256}".encode()
-    signature_hex = kp.sign(payload).hex()
     data: dict[str, Any] = {
         "hotkey": hotkey,
         "sha256": sha256,
         "name": name,
-        "signature": signature_hex,
+        **_signed_upload_auth(kp, hotkey=hotkey, sha256=sha256),
         "payment_block_hash": payment_block_hash,
         "payment_block_number": payment_block_number,
         "payment_extrinsic_index": payment_extrinsic_index,
@@ -1053,6 +1209,24 @@ class TestUploadAgentHappyPath:
         assert put_kwargs["content_type"] == "application/gzip"
         assert put_kwargs["body"] == _GOOD_TAR_BYTES
 
+    async def test_rejects_a_non_archive_before_payment_or_storage(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        deps = _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        junk = b"\x1f\x8b" + b"x" * 64
+        data, _ = _upload_agent_form(
+            keypair=kp, sha256=hashlib.sha256(junk).hexdigest()
+        )
+        files = {"agent_tar": ("harness.tar.gz", junk, "application/gzip")}
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 400
+        assert "gzip-compressed tar" in response.json()["message"]
+        deps["verifier"].verify_payment.assert_not_awaited()
+        deps["storage"].put_object.assert_not_awaited()
+
     async def test_stores_code_embedding_when_enabled(
         self, app: FastAPI, client: httpx.AsyncClient
     ):
@@ -1121,6 +1295,9 @@ class TestUploadAgentValidationFailures:
         assert response.status_code == 429
         assert int(response.headers["Retry-After"]) in range(1798, 1801)
         assert retry_at.isoformat() in response.json()["message"]
+        assert response.json()["message"].endswith(
+            "Please try again in 0 hours and 30 minutes."
+        )
 
     async def test_bad_signature_returns_400(
         self, app: FastAPI, client: httpx.AsyncClient
@@ -1133,6 +1310,24 @@ class TestUploadAgentValidationFailures:
 
         assert response.status_code == 400
         assert "signature" in response.json()["message"]
+
+    async def test_signed_but_expired_upload_is_rejected_before_payment_work(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        deps = _wire_full_stack(app)
+        keypair = _make_keypair()
+        data, files = _upload_agent_form(keypair=keypair)
+        data.update(
+            _signed_upload_auth(
+                keypair,
+                hotkey=keypair.ss58_address,
+                sha256=_GOOD_TAR_SHA,
+                signature_timestamp=int(time.time()) - 301,
+            )
+        )
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+        assert response.status_code == 400
+        deps["verifier"].verify_payment.assert_not_awaited()
 
     async def test_banned_hotkey_returns_403(
         self,
@@ -1202,12 +1397,11 @@ class TestUploadAgentValidationFailures:
         # Claim a different sha than the actual bytes will hash to.
         bogus_sha = "ff" * 32
         kp = bittensor.Keypair.create_from_uri("//Alice")
-        payload = f"{kp.ss58_address}:{bogus_sha}".encode()
         data = {
             "hotkey": kp.ss58_address,
             "sha256": bogus_sha,
             "name": "alpha-agent",
-            "signature": kp.sign(payload).hex(),
+            **_signed_upload_auth(kp, hotkey=kp.ss58_address, sha256=bogus_sha),
             "payment_block_hash": _GOOD_BLOCK_HASH,
             "payment_block_number": 13579,
             "payment_extrinsic_index": 7,
@@ -1226,12 +1420,11 @@ class TestUploadAgentValidationFailures:
         oversized = b"\x1f\x8b" + b"x" * (MAX_TARBALL_SIZE_BYTES - 1)
         big_sha = hashlib.sha256(oversized).hexdigest()
         kp = bittensor.Keypair.create_from_uri("//Alice")
-        payload = f"{kp.ss58_address}:{big_sha}".encode()
         data = {
             "hotkey": kp.ss58_address,
             "sha256": big_sha,
             "name": "alpha-agent",
-            "signature": kp.sign(payload).hex(),
+            **_signed_upload_auth(kp, hotkey=kp.ss58_address, sha256=big_sha),
             "payment_block_hash": _GOOD_BLOCK_HASH,
             "payment_block_number": 13579,
             "payment_extrinsic_index": 7,
@@ -1428,24 +1621,29 @@ class TestUploadAgentBoundaries:
     reject legitimate uploads or accept malformed ones."""
 
     async def test_size_exactly_at_cap_accepted(
-        self, app: FastAPI, client: httpx.AsyncClient
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """``_read_tar_capped_with_sha`` uses ``size > max_bytes``; this
         test pins the boundary so a refactor to ``>=`` is caught."""
         _wire_full_stack(app)
-        # gzip magic + filler up to exactly the cap.
-        at_cap = b"\x1f\x8b" + b"x" * (MAX_TARBALL_SIZE_BYTES - 2)
+        at_cap = _GOOD_TAR_BYTES
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.MAX_TARBALL_SIZE_BYTES",
+            len(at_cap),
+        )
         at_cap_sha = hashlib.sha256(at_cap).hexdigest()
         kp = bittensor.Keypair.create_from_uri("//Alice")
         _override_payment_verifier(
             app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
         )
-        payload = f"{kp.ss58_address}:{at_cap_sha}".encode()
         data = {
             "hotkey": kp.ss58_address,
             "sha256": at_cap_sha,
             "name": "alpha-agent",
-            "signature": kp.sign(payload).hex(),
+            **_signed_upload_auth(kp, hotkey=kp.ss58_address, sha256=at_cap_sha),
             "payment_block_hash": _GOOD_BLOCK_HASH,
             "payment_block_number": 13579,
             "payment_extrinsic_index": 7,
@@ -1463,12 +1661,11 @@ class TestUploadAgentBoundaries:
         over = b"\x1f\x8b" + b"x" * (MAX_TARBALL_SIZE_BYTES - 2) + b"!"
         over_sha = hashlib.sha256(over).hexdigest()
         kp = bittensor.Keypair.create_from_uri("//Alice")
-        payload = f"{kp.ss58_address}:{over_sha}".encode()
         data = {
             "hotkey": kp.ss58_address,
             "sha256": over_sha,
             "name": "alpha-agent",
-            "signature": kp.sign(payload).hex(),
+            **_signed_upload_auth(kp, hotkey=kp.ss58_address, sha256=over_sha),
             "payment_block_hash": _GOOD_BLOCK_HASH,
             "payment_block_number": 13579,
             "payment_extrinsic_index": 7,

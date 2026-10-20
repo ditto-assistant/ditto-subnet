@@ -134,6 +134,48 @@ class TestAgentByHotkey:
 
 
 class TestAgentStatus:
+    async def test_banned_hotkey_surfaces_banned_status(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``ditto status`` reads this endpoint; a hotkey-level ban overrides
+        the agent's own status exactly as ``agent-by-hotkey`` does."""
+        from types import SimpleNamespace
+
+        from ditto.db.models import AgentStatus
+
+        _override_session_with_dummy(app)
+        agent = SimpleNamespace(
+            agent_id=uuid4(),
+            miner_hotkey=_HOTKEY,
+            status=AgentStatus.SCORED,
+            screening_reason=None,
+            screening_reason_code=None,
+        )
+        checked: list[str] = []
+
+        async def _agent(*_args: object, **_kwargs: object) -> object:
+            return agent
+
+        async def _banned(*_args: object, hotkey: str, **_kwargs: object) -> bool:
+            checked.append(hotkey)
+            return True
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.retrieval.get_agent_by_id", _agent
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.retrieval.is_hotkey_banned", _banned
+        )
+
+        response = await client.get(f"/api/v1/retrieval/agent/{agent.agent_id}/status")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == AgentStatus.BANNED.value
+        assert checked == [_HOTKEY]
+
     async def test_returns_miner_visible_screening_reason(
         self,
         app: FastAPI,
@@ -147,6 +189,7 @@ class TestAgentStatus:
         _override_session_with_dummy(app)
         agent = SimpleNamespace(
             agent_id=uuid4(),
+            miner_hotkey=_HOTKEY,
             status=AgentStatus.REJECTED,
             screening_reason="Remove the bundled credential and resubmit",
             screening_reason_code="source-safety",
@@ -155,9 +198,15 @@ class TestAgentStatus:
         async def _agent(*_args: object, **_kwargs: object) -> object:
             return agent
 
+        async def _not_banned(*_args: object, **_kwargs: object) -> bool:
+            return False
+
         monkeypatch.setattr(
             "ditto.api_server.endpoints.retrieval.get_agent_by_id",
             _agent,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.retrieval.is_hotkey_banned", _not_banned
         )
 
         response = await client.get(f"/api/v1/retrieval/agent/{agent.agent_id}/status")

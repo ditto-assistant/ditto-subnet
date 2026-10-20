@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
@@ -17,6 +17,7 @@ from ditto.db.models import (
     BenchmarkRolloutMember,
     ConfirmationScore,
     EvaluationPayment,
+    Score,
 )
 from ditto.db.queries.confirmation_scores import confirmation_composites_by_seed
 from ditto.db.queries.score_ranking import official_composites
@@ -28,6 +29,7 @@ from ditto.db.queries.scores import (
     list_scores_for_agent,
     quorum_composites,
     quorum_ledger_proof_rows,
+    quorum_score_rows,
     ranked_quorum_agent_ids,
     upsert_score,
 )
@@ -181,6 +183,83 @@ class TestQuorumLedgerProofRows:
 
     async def test_empty_agent_set_skips_query(self, session: AsyncSession) -> None:
         assert await quorum_ledger_proof_rows(session, [], bench_versions={}) == {}
+
+    @pytest.mark.parametrize("details", [None, {}, ["bad"], "bad", False, 17])
+    async def test_non_object_or_absent_details_preserve_null_evidence(
+        self, session: AsyncSession, details: object
+    ) -> None:
+        agent = await _seed_agent(session)
+        await _upsert(session, agent.agent_id)
+        async with session.begin():
+            await session.execute(
+                update(Score)
+                .where(Score.agent_id == agent.agent_id)
+                .values(details=details)
+            )
+        rows = await quorum_ledger_proof_rows(
+            session,
+            [agent.agent_id],
+            bench_versions={agent.agent_id: _BENCH_VERSION},
+        )
+        assert rows[agent.agent_id][0].details == dict.fromkeys(
+            ("ticket_deadline", "transcript_sha256", "base_evidence_sha256", "v9_base")
+        )
+
+    async def test_exact_versions_and_all_ordered_signed_proofs_survive(
+        self, session: AsyncSession
+    ) -> None:
+        first = await _seed_agent(session)
+        second = await _seed_agent(session)
+        for hotkey, composite in [("z", 0.8), ("a", 0.8), ("m", 0.2)]:
+            await _upsert(
+                session,
+                first.agent_id,
+                validator_hotkey=hotkey,
+                composite=composite,
+                run_id=f"signed-{hotkey}",
+                signature=f"signature-{hotkey}",
+                seed=7,
+                details={"v9_base": {"run_id": hotkey}, "per_case": "x" * 200_000},
+            )
+        await _upsert(
+            session, first.agent_id, validator_hotkey="wrong", bench_version=8
+        )
+        await _upsert(session, second.agent_id, bench_version=8)
+        rows = await quorum_ledger_proof_rows(
+            session,
+            [first.agent_id, second.agent_id, first.agent_id],
+            bench_versions={first.agent_id: 7, second.agent_id: 8},
+        )
+        assert set(rows) == {first.agent_id, second.agent_id}
+        proofs = rows[first.agent_id]
+        assert [p.validator_hotkey for p in proofs] == ["m", "a", "z"]
+        assert [p.composite for p in proofs] == [0.2, 0.8, 0.8]
+        assert [p.signature for p in proofs] == [
+            "signature-m",
+            "signature-a",
+            "signature-z",
+        ]
+        assert all(p.seed == 7 and p.bench_version == 7 for p in proofs)
+        assert all(p.details is not None for p in proofs)
+        assert all(
+            p.details is not None
+            and p.details["v9_base"] == {"run_id": p.validator_hotkey}
+            for p in proofs
+        )
+        assert all(
+            p.details is not None and "per_case" not in p.details for p in proofs
+        )
+        assert rows[second.agent_id][0].bench_version == 8
+
+    async def test_missing_requested_versions_returns_no_proofs(
+        self, session: AsyncSession
+    ) -> None:
+        agent = await _seed_agent(session)
+        await _upsert(session, agent.agent_id)
+        assert (
+            await quorum_ledger_proof_rows(session, [agent.agent_id], bench_versions={})
+            == {}
+        )
 
 
 async def _seed_scored(
@@ -2101,3 +2180,57 @@ class TestQuorumComposites:
 
     async def test_unknown_agent_absent(self, session: AsyncSession) -> None:
         assert await quorum_composites(session, [uuid4()]) == {}
+
+
+class TestQuorumScoreRows:
+    async def test_details_keys_projects_only_requested_keys(
+        self, session: AsyncSession
+    ) -> None:
+        """The narrow projection ships exactly the requested keys and no more.
+
+        The efficiency materializer reads three keys out of the per-case audit
+        blob; the full document must not leave Postgres.
+        """
+        agent = await _seed_agent(session)
+        await _upsert(
+            session,
+            agent.agent_id,
+            validator_hotkey="5V1",
+            run_id="r1",
+            details={"token_usage": {"total_tokens": 5}, "v9_base": {"run_id": "r1"}},
+        )
+        rows = await quorum_score_rows(
+            session,
+            [agent.agent_id],
+            bench_versions={agent.agent_id: _BENCH_VERSION},
+            details_keys=("token_usage", "v9_base"),
+        )
+        details = rows[agent.agent_id][0].details
+        assert details is not None
+        assert set(details) == {"token_usage", "v9_base"}
+        assert details["token_usage"] == {"total_tokens": 5}
+
+    async def test_details_keys_preserves_null_details(
+        self, session: AsyncSession
+    ) -> None:
+        """A SQL-NULL details column stays None under the narrow projection.
+
+        The CASE guard keeps the declared dict | None contract: without it,
+        jsonb_build_object would materialize each NULL extraction into an
+        object of JSON nulls.
+        """
+        agent = await _seed_agent(session)
+        await _upsert(
+            session,
+            agent.agent_id,
+            validator_hotkey="5V2",
+            run_id="r2",
+            details=None,
+        )
+        rows = await quorum_score_rows(
+            session,
+            [agent.agent_id],
+            bench_versions={agent.agent_id: _BENCH_VERSION},
+            details_keys=("token_usage", "v9_base"),
+        )
+        assert rows[agent.agent_id][0].details is None

@@ -25,6 +25,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -93,7 +94,7 @@ type Sandbox interface {
 // validator hands us the platform's short-lived download URL).
 type Source struct {
 	GitURL     string // e.g. https://github.com/<miner>/<harness>
-	GitRef     string // branch, tag, or commit (default: default branch)
+	GitRef     string // required full lowercase commit SHA; never a mutable branch or tag
 	GitSubdir  string // optional repository-relative Docker context
 	TarballURL string // presigned https URL of a gzipped tar of the harness
 	// TarballSHA256, when non-empty, is verified (hex) against the fetched bytes.
@@ -209,6 +210,10 @@ type LocalDocker struct {
 	// AllowPrivate relaxes the SSRF guard on TarballURL fetches (local dev only,
 	// e.g. a minio/localhost presigned URL). Mirrors the submit-handler flag.
 	AllowPrivate bool
+	// AllowSourceBuild is reserved for explicitly constructed local development
+	// sandboxes. NewLocalDocker leaves it disabled, and the production scorer
+	// never enables it: validator jobs must run a screener-built image.
+	AllowSourceBuild bool
 	// PidsLimit caps the container process/thread count (docker --pids-limit) —
 	// a fork-bomb bound. Always applied; defaults to 512.
 	PidsLimit int
@@ -389,14 +394,20 @@ func (d *LocalDocker) V8IsolationReady(ctx context.Context) error {
 	return nil
 }
 
-// Build materializes the submission in a temp dir, then either loads the
-// screener-built image or, for local/legacy practice only, builds the source
-// with BuildKit. V7/V8 validator tickets require the exact screener-built image.
+// Build materializes the submission in a temp dir, then loads the screener-built
+// image. Explicit local development sandboxes may opt into building source with
+// BuildKit. Validator tickets always require the exact screener-built image.
 // A private source repository may use host-side askpass authentication, but no
 // credential enters the build context, image, Dockerfile, or command line.
 func (d *LocalDocker) Build(ctx context.Context, src Source) (string, string, *protocol.CodeFingerprint, error) {
 	if src.GitURL == "" && src.TarballURL == "" {
 		return "", "", nil, fmt.Errorf("sandbox: one of git_url or tarball_url is required")
+	}
+	if src.GitURL != "" && !ValidGitCommitSHA(src.GitRef) {
+		return "", "", nil, errors.New("git_ref must be a full 40-character lowercase commit SHA")
+	}
+	if src.ScreenedImageURL == "" && !d.AllowSourceBuild {
+		return "", "", nil, errors.New("sandbox: screened image is required; source builds are disabled")
 	}
 	ctx, cancel := context.WithTimeout(ctx, d.BuildTimeout)
 	defer cancel()
@@ -424,15 +435,8 @@ func (d *LocalDocker) Build(ctx context.Context, src Source) (string, string, *p
 			return "", "", nil, err
 		}
 		defer cleanupAuth()
-		cloneArgs := []string{"clone", "--depth", "1"}
-		if src.GitRef != "" {
-			cloneArgs = append(cloneArgs, "--branch", src.GitRef)
-		}
-		cloneArgs = append(cloneArgs, src.GitURL, workdir)
-		cmd := exec.CommandContext(ctx, "git", cloneArgs...)
-		cmd.Env = cloneEnv
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return "", "", nil, fmt.Errorf("git clone failed: %s: %w", strings.TrimSpace(string(out)), err)
+		if err := materializeGitSource(ctx, src, workdir, cloneEnv); err != nil {
+			return "", "", nil, err
 		}
 		contextDir, err = resolveGitContext(workdir, src.GitSubdir)
 		if err != nil {
@@ -475,6 +479,54 @@ func (d *LocalDocker) Build(ctx context.Context, src Source) (string, string, *p
 		return "", tail(buf.String(), 4000), nil, fmt.Errorf("docker build failed: %w", err)
 	}
 	return image, tail(buf.String(), 2000), fingerprint, nil
+}
+
+// ValidGitCommitSHA accepts only an immutable, canonical Git SHA-1 object ID.
+// A branch, tag, abbreviation, or all-zero placeholder cannot pin a build.
+func ValidGitCommitSHA(ref string) bool {
+	if len(ref) != 40 || ref != strings.ToLower(ref) || ref == strings.Repeat("0", 40) {
+		return false
+	}
+	_, err := hex.DecodeString(ref)
+	return err == nil
+}
+
+func materializeGitSource(ctx context.Context, src Source, workdir string, env []string) error {
+	if !ValidGitCommitSHA(src.GitRef) {
+		return errors.New("git_ref must be a full 40-character lowercase commit SHA")
+	}
+	git := func(args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Env = env
+		return cmd.CombinedOutput()
+	}
+	if out, err := git("init", "-q", workdir); err != nil {
+		return fmt.Errorf("git init failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := git("-C", workdir, "remote", "add", "origin", src.GitURL); err != nil {
+		return fmt.Errorf("git remote setup failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if _, err := git("-C", workdir, "fetch", "--no-tags", "--depth", "1", "origin", src.GitRef); err != nil {
+		// Git may echo a credential-bearing URL in failure output.
+		return fmt.Errorf("git fetch of pinned commit failed: %w", err)
+	}
+	if out, err := git("-C", workdir, "checkout", "--detach", "FETCH_HEAD"); err != nil {
+		return fmt.Errorf("git checkout of pinned commit failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return verifyGitHead(ctx, workdir, env, src.GitRef)
+}
+
+func verifyGitHead(ctx context.Context, workdir string, env []string, expected string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", workdir, "rev-parse", "--verify", "HEAD")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git HEAD verification failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if got := strings.TrimSpace(string(out)); got != expected {
+		return fmt.Errorf("git HEAD %q does not match pinned git_ref %q", got, expected)
+	}
+	return nil
 }
 
 // cloneEnvironment returns an ephemeral askpass environment for host-side git

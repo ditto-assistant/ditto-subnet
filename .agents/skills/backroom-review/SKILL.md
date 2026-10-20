@@ -48,8 +48,11 @@ SHA-256, and `agent_status`. Screenshots, rank, and truncated keys are leads.
 - Leaderboard / ATH / scored or live high-rank / precedent search → board.
 - Miner appeal: follow current status. A scored agent is a board case even
   if it was once quarantined.
-- Skip `banned` rows. Park `evaluating` / `waiting_validator` for the next
-  fire — `open_ath_review` 409s until the agent is `scored` or `live`.
+- Skip `banned` rows. An `evaluating` / `waiting_validator` row can still
+  be rejected through the batched rulings court (below): a proven violation
+  need not wait for quorum, and the reject ends its live validator tickets.
+  A hold (`open_ath_review`, or a batch `open`) still 409s until the agent
+  is `scored` or `live`.
 - An ATH reject is per UUID. Same SHA or same hotkey is a different agent row
   (see [references/precedents/identity-uuid-not-sha.md](references/precedents/identity-uuid-not-sha.md)).
   The rare `banned_hotkeys` upload gate is separate and blocks future uploads;
@@ -70,7 +73,9 @@ Use `list_screening_source_files`, `read_screening_source_file`, and
 Read the Dockerfile, manifests, entrypoint, and every reachable answer- or
 tool-construction path. Use `get_copy_review_source_diff` and
 `read_copy_review_source_diff_file` for suspected copying or same-owner
-resubmits. Use `get_screening_baseline_diff` for starter-kit comparisons.
+resubmits. Use `get_lineage_source_diff` (add `path` for one file) to diff a
+resubmission against its rejected ancestor. Use
+`get_screening_baseline_diff` for starter-kit comparisons.
 Search terms and class labels live in
 [references/techniques.md](references/techniques.md).
 
@@ -135,6 +140,36 @@ the observed-tool path. Runtime/concurrency diagnosis is
 8. Re-read every quarantine context and refresh the queue. A timeout is
    ambiguous; verify whether the write landed before retrying.
 
+### Terminal ghosts
+
+An active row with `terminal_ghost: true` sits behind an exact agent that is
+already `banned` or `rejected` (read `agent_status`). It is reconciliation
+work, not a review: `terminal_ghost_count`, `actionable_count`, and
+`oldest_actionable_created_at` keep it out of the actionable queue and age,
+and `get_source_review_queue_slo` reports it as
+`terminal_quarantine_ghost_count`. Do not re-judge the artifact, and never
+release or rescreen it to undo a terminal ruling.
+
+1. Confirm the terminal ruling on that exact UUID (`get_ath_review` for a ban).
+2. Preview `reject` with the exact agent UUID and artifact SHA-256 and a reason
+   naming that ruling. Require `disposition: ready`, `terminal_reconciliation:
+   true`, `resulting_agent_status` equal to the current terminal status, and a
+   `terminal_ruling` whose `ath_review_id` / `ath_action_id` match the current
+   reject in `get_ath_review`. A preview with no `terminal_ruling` is "not
+   reconcilable" (no current ATH reject for that exact agent and artifact, for
+   example a `rejected` screening agent): leave it and escalate.
+3. Execute with the preview token. The token is fenced to that ruling: if the
+   ruling or terminal state moved, the batch (or the item, if it moved under
+   lock) is refused; preview again. The quarantine closes with its own
+   resolution row and review event naming the ATH review and reject action;
+   the agent's status, miner-visible reason, and public record stay unchanged.
+
+A reject on a row already closed behind a terminal ruling (by the ruling itself
+or another operator) returns `already_applied`, never a conflict. The unfenced
+single-row resolver refuses these rows. A terminal ATH reject now closes the
+matching active quarantine in the same transaction, so new ghosts should not
+appear; treat one as a pre-fix row or a bug to report.
+
 ## ATH board
 
 Search **both** reporters, then apply the same holding to the same pattern
@@ -182,16 +217,22 @@ published policy or transfer a finding to another artifact.
    row mixed because I4 or I7 passed while I3 or I5 still fails.
 5. Re-fetch `get_screening_submission` immediately before writing.
 6. `open_ath_review` with the exact SHA-256 and score count, then
-   `resolve_ath_review` `clear` or `reject`.
+   `resolve_ath_review` `clear` or `reject`. To record a clean review of an
+   unheld scored or live row, use a batched `clear` ruling instead: it
+   attests without holding, so the row never leaves the board.
 7. Write a specific miner-visible reason: pattern, file:line, which limb or
    engine test failed or passed, and the cited precedent.
 8. Re-read the agent. A timeout is ambiguous; verify before retrying.
+   A `reject` also closes the agent's active screening quarantine in the same
+   transaction; `reconciled_quarantine_ids` on the response and on the
+   `get_ath_review` reject action names each one.
 
 ### Batched rulings (5-20 decisions from one board review)
 
 Use the rulings court instead of walking `open_ath_review` /
-`resolve_ath_review` one row at a time. It is the same two writers behind the
-quarantine court's shape, with the crown re-read on both legs.
+`resolve_ath_review` one row at a time. It is the same writers behind the
+quarantine court's shape (plus the hold-free `attest` writer for a clear on
+an unheld row), with the crown re-read on both legs.
 
 1. Write the rulings document (Platform wire shape, snake_case):
 
@@ -204,8 +245,13 @@ quarantine court's shape, with the crown re-read on both legs.
    ```
 
    `action` is `open` (hold for investigation), `clear`, or `reject`. A
-   `reject` on a scored/live agent opens and resolves in one item; on a held
-   agent it resolves only. Each agent appears once; every reject cites at
+   `reject` on a scored, live, or still-evaluating agent opens and resolves
+   in one item (set `expected_score_count` to the current partial count, which
+   may be 0); on a held agent it resolves only. A `clear` on a held agent
+   resolves the hold (`["clear"]`); on an unheld scored or live agent with no
+   ATH review it attests (`["attest"]`): the terminal clear is recorded, the
+   agent keeps its status and board position, and `would_change_crown` is
+   false. Each agent appears once; every reject cites at
    least one `path:line`. The replay of the 2026-09-13 top-5 rejects lives at
    `apps/platform/ditto/tests/fixtures/ath_rulings_replay_2026-09-13.json`.
 2. `create_ath_rulings_upload` (backroom:write), then
@@ -258,7 +304,7 @@ running, and exits cleanly when a `stop` file is touched in that directory.
 A loop fire may resolve rows (release/reject/clear) with the same bar as an
 interactive fire, but it never rescreens, and miner-requested holds,
 family-dedupe holds, and stranded holds (409 "agent is no longer held") are
-always left for a human.
+always left for a human, as are terminal-ghost quarantine rows.
 
 The loop prompt is a scheduled-run entry point, not the screener's Python
 prompt. Interactive reviews enter through this skill and the same court

@@ -10,6 +10,10 @@
 #     infra/ansible/playbooks/gcp-coding-hosted-postgres-environment.yml \
 #     --limit ditto-coding-hosted-v2 -e '{"coding_hosted_postgres_environment_enabled": true, …}'
 #   unset DITTO_CODING_PG_PASSWORD
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_coding_hosted
+
 - name: Materialize native Coding PostgreSQL environment copies without starting a service
   hosts: role_coding_hosted
   become: true

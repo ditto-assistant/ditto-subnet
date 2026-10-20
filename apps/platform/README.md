@@ -92,9 +92,14 @@ it remains platform-operated, and validators do not run it.
 | `GET /api/v1/screener/agent/{id}/artifact` | Presigned download URL for the crate tarball |
 | `POST /api/v1/screener/agent/{id}/result` | Signed pass/fail verdict that promotes the agent |
 
-### Planned (scoring + ops)
+### Scoring + ops
 
-Weight/score aggregation (`/scoring/*`) and `/admin/*`. See
+`GET /api/v1/scoring/scores` serves the validator best-score ledger that every
+validator folds into weights itself (the weight fold is validator-side, not
+here), and `GET /api/v1/scoring/router-ledger` serves the shadow router ledger.
+Both require a fresh signature from a chain-registered, validator-permitted
+hotkey. Operator controls live under `/api/v1/admin/*`, authenticated by the
+admin bearer and driven from Backroom. See
 [`docs/VALIDATOR.md`](https://github.com/ditto-assistant/ditto-subnet/blob/main/docs/VALIDATOR.md)
 in `ditto-subnet` for validator scoring design and operations.
 

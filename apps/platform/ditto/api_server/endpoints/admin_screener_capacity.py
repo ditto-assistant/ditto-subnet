@@ -64,6 +64,7 @@ from ditto.db.models import (
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
     ScreenerHeartbeat,
+    ScreenerL2ReportCanary,
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
     ScreenerProviderSettingsRevision,
@@ -328,6 +329,29 @@ async def _node_channel_control(
         )
         or 0
     )
+    canary_active = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ScreenerL2ReportCanary)
+            .where(
+                ScreenerL2ReportCanary.target_node_id == node_id,
+                ScreenerL2ReportCanary.status == "leased",
+                ScreenerL2ReportCanary.lease_expires_at > datetime.now(UTC),
+            )
+        )
+        or 0
+    )
+    canary_queued = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ScreenerL2ReportCanary)
+            .where(
+                ScreenerL2ReportCanary.target_node_id == node_id,
+                ScreenerL2ReportCanary.status == "queued",
+            )
+        )
+        or 0
+    )
     node = await session.get(ScreenerNode, node_id)
     screening_active = 0
     if node is not None:
@@ -358,6 +382,8 @@ async def _node_channel_control(
             build_active=build_active,
             runtime_active=runtime_active,
             source_review_active=source_review_active,
+            canary_active=canary_active,
+            canary_queued=canary_queued,
         ),
     )
 
@@ -368,7 +394,7 @@ def _default_provider_revision(environment: str) -> ProviderSettingsRevisionMode
         revision=0,
         parent_revision=0,
         settings=DEFAULT_SCREENER_PROVIDER_SETTINGS,
-        reason="Built-in single-shot Targon settings",
+        reason="Built-in GCE safety route until a provider revision is configured",
         actor="platform",
         created_at=None,
     )
@@ -407,6 +433,8 @@ async def create_screener_bootstrap_grant(
     session: SessionDep,
 ) -> ScreenerBootstrapGrantResponse:
     """Mint one audited, node-bound grant against the live controller fence."""
+    if payload.provider == "targon":
+        raise HTTPException(status_code=422, detail="Targon screening is retired")
     expected_confirmation = screener_bootstrap_grant_confirmation(payload)
     if payload.confirmation != expected_confirmation:
         raise HTTPException(
@@ -512,6 +540,15 @@ async def set_screener_provider_settings(
     _admin: AdminDep,
     session: SessionDep,
 ) -> ProviderSettingsRevisionModel:
+    if any(
+        "targon" in providers
+        for providers in (
+            payload.settings.build_provider_priority,
+            payload.settings.runtime_provider_priority,
+            payload.settings.source_review_provider_priority,
+        )
+    ):
+        raise HTTPException(status_code=422, detail="Targon screening is retired")
     expected_confirmation = provider_settings_confirmation(payload.settings)
     if payload.confirmation != expected_confirmation:
         raise HTTPException(
@@ -1018,6 +1055,9 @@ async def screener_capacity(
         events=events,
         event_retention_days=(
             request.app.state.config.screener_auth.capacity_event_retention_days or None
+        ),
+        legacy_bearer_accepted=(
+            request.app.state.config.screener_auth.legacy_bearer_accepted
         ),
         builds=[_build_view(row) for row in build_rows],
         provider_jobs=sorted(

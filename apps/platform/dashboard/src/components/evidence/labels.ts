@@ -36,6 +36,10 @@ export function validatorFailureLabel(
 ): string {
   if (code === "inference_allowance_exhausted") return "Inference allowance exhausted";
   if (code === "inference_request_rejected") return "Inference request rejected";
+  if (code === "request_too_large") return "Inference request too large";
+  if (code === "invalid_json") return "Inference request was not JSON";
+  if (code === "invalid_schema") return "Inference request schema rejected";
+  if (code === "stale_session") return "Inference request was stale";
   if (code === "model_inference_required") return "Model inference required";
   const relayLabel = code ? INFRA_RELAY_CAUSE_LABELS[code] : undefined;
   if (relayLabel) return relayLabel;

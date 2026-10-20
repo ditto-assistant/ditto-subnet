@@ -19,6 +19,7 @@ import {
   tokenPenaltyChipLabel,
 } from "../../lib/scoring";
 import { TipTarget } from "../ui/Tooltip";
+import type { RewardEligibility } from "../../types/leaderboard";
 import type { BoardEntry } from "./leaderboard-data";
 import { rankMoveState } from "./board-state";
 
@@ -87,6 +88,62 @@ export function ContinualScoreChip(props: { entry: BoardEntry }): JSX.Element {
           </TipTarget>
         );
       })()}
+    </Show>
+  );
+}
+
+/**
+ * Reward eligibility (#2041), which is deliberately NOT the rank column and
+ * NOT the KOTH role column.
+ *
+ * A submission whose exact artifact still has an open, inconclusive,
+ * infrastructure-failed or escalated source review keeps its score and its
+ * rank -- the board is not allowed to hide either while a review is pending --
+ * and stops earning. This chip is the only thing on the row that says so, and
+ * it renders the platform's own sentence rather than a locally worded one, so
+ * the board and the submission page cannot disagree about why.
+ *
+ * Nothing renders while the row is earning, or while the operator gate is off:
+ * a chip on every row would say nothing, and would read as an accusation on the
+ * rows it did appear on.
+ */
+export function RewardEligibilityChip(props: { entry: BoardEntry }): JSX.Element {
+  const eligibility = (): RewardEligibility | null => props.entry.reward_eligibility ?? null;
+  const withheld = (): boolean => eligibility()?.posture_satisfied === false;
+  const enforcing = (): boolean => eligibility()?.enforcement === "enforce";
+  const label = (): string => {
+    const record = eligibility();
+    if (record === null) return "";
+    if (record.state === "awaiting_next_window") return "Cleared \u00b7 earns next window";
+    if (record.state === "review_infrastructure_failed") return "Not earning \u00b7 Ditto fault";
+    if (record.state === "review_rejected") return "Not earning \u00b7 rejected";
+    // Everything else is some flavour of "the review is still open", and the
+    // tooltip carries the exact one. The chip stays neutral: an open review is
+    // not a finding.
+    return enforcing() ? "Not earning \u00b7 review open" : "Would not earn \u00b7 review open";
+  };
+  const tip = (): string => {
+    const record = eligibility();
+    if (record === null) return "";
+    return (
+      record.reason +
+      (enforcing()
+        ? ""
+        : " The operator gate is in rehearsal, so this submission is still being paid.")
+    );
+  };
+  return (
+    <Show when={withheld()}>
+      <TipTarget
+        class={
+          "rollout-chip tip reward-eligibility-chip " +
+          (eligibility()?.state === "review_rejected" ? "warn" : "settled")
+        }
+        tabindex={0}
+        text={tip()}
+      >
+        {label()}
+      </TipTarget>
     </Show>
   );
 }

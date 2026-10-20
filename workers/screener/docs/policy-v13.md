@@ -4,6 +4,23 @@ Status: published with partial screener support; activation pending. This policy
 takes effect only through the versioned activation control after every
 prerequisite at the end of this document is satisfied.
 
+## Source-review admission amendment
+
+The built-in admission profile uses exact-artifact source review and the
+mechanical build, image, and health gates. A private behavioral challenge is
+not a universal admission requirement. A completed, certified low-risk source
+review can clear without one; a supported source violation remains held for
+evidence-bound rejection review. Missing source evidence is never a clear.
+Until Platform verifies source-only clear receipts, a v13 court clear is
+transported and held as `QUARANTINE` with
+`source-review-awaiting-v13-verification`.
+
+Operators may still request a bounded private behavioral audit for a specific
+unresolved runtime question. Such an audit has its own explicit manifest and
+does not silently become a prerequisite for every submission. The activation
+record must include the revised built-in manifest digest and release revision;
+historical decisions retain their original policy digest.
+
 Policy v13 is a strict two-outcome policy. Every completed review ends in
 `CLEAR` or `REJECT`. When verification cannot be completed the result is
 `REJECT` with `violation_proven: false` and an explicit failure domain; such a
@@ -473,8 +490,8 @@ published retry and remediation procedure.
 
 ### W16: evaluation independence
 
-- Artifact commitment precedes private challenge generation and private
-  challenge randomness.
+- When a private challenge is requested, artifact commitment precedes its
+  generation and randomness.
 - Active private seeds, expected outputs, and case identities remain hidden.
 - Active per-case results cannot influence a weight-eligible artifact.
 - Served behavior does not change according to evaluation identity, and served
@@ -724,6 +741,15 @@ This is a certification failure, not proof of misconduct.
 - The missing verification and failure domain are recorded.
 - Platform failure is not represented as artifact misconduct.
 - Suspicion is not converted into an unpublished requirement.
+- Screening runs no separate private behavioral test. When two complete source
+  reviews of the exact artifact both end without a source-proven decision
+  (`insufficient_static_evidence`), source verification is incomplete and the
+  outcome is V2, reported as `verification-incomplete-unreviewable`. Reviews
+  stopped by a budget, time limit, provider or infrastructure failure do not
+  count toward the two; those follow the re-review treatment for their
+  failure domain.
+- The miner may resubmit. A V2 reject is not a ban and is not a precedent
+  about the artifact's behavior.
 
 ### V3: provider verification not completed
 
@@ -906,10 +932,11 @@ may produce `CLEAR`, and none of them may submit a passing verdict:
   decisive finding;
 - `source-review-invalid-risk` — the reviewer returned an unusable risk level;
 - `source-review-inconsistent-verdict` — the reviewer contradicted itself;
-- `adjudicated-source-review-escalate` — adjudication ended without a
-  finalized, verified finding;
-- `behavioral-oracle-inconclusive` and `challenge-inconclusive` — a required
-  behavioral check produced no usable observation; and
+- `source-review-adjudication-refused` — adjudication ended without a
+  finalized, verified finding (Platform stores it as the reason code
+  `adjudicated-source-review-escalate`);
+- `behavioral-oracle-inconclusive` and `challenge-inconclusive` — an explicitly
+  required targeted behavioral audit produced no usable observation; and
 - `source-review-unavailable` — review infrastructure was unreachable.
 
 Each resolves through the retry and deadline procedure and then terminates as:
@@ -925,8 +952,15 @@ An adjudicator that fails without a finding records only that adjudication did
 not complete. It is neither clearance evidence nor rejection evidence, and it
 may never be reported as cheating.
 
-A behavioral-oracle pass obtained after a mandatory check went undecided does
-not substitute for that check.
+A held court reject or refusal (worker evidence `source-review-adjudicated`,
+with `source-review-adjudication-refused` for a refusal) retains the built
+image as supplemental evidence bound to the screening attempt, never to the
+agent, so artifact-bound verification can proceed without a rebuild.
+`adjudicated-source-review-*` is Platform's stored reason code, not worker
+evidence.
+
+A targeted behavioral-oracle pass does not substitute for an undecided source
+or build check.
 
 All `REJECT` outcomes remove current rank and emission eligibility while
 preserving scores, artifacts, evidence, and history. The decision records

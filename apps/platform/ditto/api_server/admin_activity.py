@@ -23,8 +23,10 @@ from ditto.api_models.copy_court_settings import CopyCourtSettings
 from ditto.api_models.efficiency_settings import EfficiencyBonusSettings
 from ditto.api_models.inference_concurrency_settings import InferenceConcurrencySettings
 from ditto.api_models.queue_policy_settings import QueuePolicySettings
+from ditto.api_models.scoring_lease_settings import ScoringLeaseSettings
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.treasury_settings import TreasurySettings, public_wallet_address
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.db.models import AdminActivity, AdminActivityOutcome
 
@@ -116,6 +118,25 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
         ),
     ),
     "burn-settings": (BurnSettings, frozenset(("burn_share",))),
+    "scoring-lease-settings": (
+        ScoringLeaseSettings,
+        frozenset(("scoring_ticket_ttl_minutes",)),
+    ),
+    "treasury-settings": (
+        TreasurySettings,
+        frozenset(
+            (
+                "mode",
+                "allocation_version",
+                "treasury_hotkey",
+                "treasury_coldkey",
+                "sweep_interval_hours",
+                "service_buckets",
+                "gm_bps",
+                "maintenance_bps",
+            )
+        ),
+    ),
     "efficiency-bonus-settings": (
         EfficiencyBonusSettings,
         frozenset(
@@ -150,6 +171,7 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "retest_eligibility_z",
                 "rollout_standdown",
                 "tie_weighting_mode",
+                "statistical_band_mode",
                 "wave_membership",
             )
         ),
@@ -293,6 +315,15 @@ def public_details(action: str, body: object) -> dict:
                     result["settings"][field] = {
                         name: value for name, value in nested.items() if name in fields
                     }
+            if key == "treasury-settings":
+                # Billing account identifiers never enter the public audit feed.
+                for field in ("treasury_hotkey", "treasury_coldkey"):
+                    if field in result["settings"]:
+                        result["settings"][field] = public_wallet_address(
+                            result["settings"][field]
+                        )
+                for bucket in result["settings"].get("service_buckets", []):
+                    bucket.pop("service_account_ref", None)
         except (ValidationError, ValueError, TypeError):
             pass
     return result

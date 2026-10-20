@@ -42,3 +42,10 @@ the session cookie at the edge when immediate read revocation is required.
 
 Do not add `FIREBASE_API_KEY`, `DITTO_API_BASE_URL`, or the private
 `/api/v5/admin/backroom-access` endpoint to this deployment.
+
+Receipt observers use the exclusive `backroom:treasury:observe` grant described
+in `docs/mcp.md`. It has no ordinary read/write or artifact scopes and can only
+read an exact historical treasury revision or submit a verified receipt. Its
+write-level staff entitlement is checked at consent, issuance, refresh and
+every request against request-local bindings. Ordinary agent grants retain
+their existing consent, narrowing, expiration and revocation behavior.

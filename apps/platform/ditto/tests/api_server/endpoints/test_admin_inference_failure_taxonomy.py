@@ -29,10 +29,16 @@ from ditto.db.models import (
     InferenceRequest,
     ValidatorTicket,
 )
+from ditto.db.queries.inference_concurrency_settings import (
+    insert_inference_concurrency_settings_revision,
+)
 from ditto.db.queries.inference_failure_taxonomy import (
     FAILURE_GROUP_LIMIT,
+    RATE_LIMIT_BURST_THRESHOLD,
+    RATE_LIMIT_BURST_TICKET_LIMIT,
     load_inference_failure_taxonomy_rows,
 )
+from ditto.db.queries.inference_observability import load_inference_runtime_rows
 
 pytestmark = pytest.mark.asyncio
 
@@ -53,7 +59,9 @@ def _install(app: FastAPI, session_maker: async_sessionmaker[AsyncSession]) -> N
     app.dependency_overrides[get_session] = _session
 
 
-async def _grant(session: AsyncSession, now: datetime) -> InferenceGrant:
+async def _grant(
+    session: AsyncSession, now: datetime, *, validator_hotkey: str = "validator-a"
+) -> InferenceGrant:
     agent = Agent(
         agent_id=uuid4(),
         miner_hotkey=f"miner-{uuid4().hex[:8]}",
@@ -64,7 +72,7 @@ async def _grant(session: AsyncSession, now: datetime) -> InferenceGrant:
     )
     ticket = ValidatorTicket(
         agent_id=agent.agent_id,
-        validator_hotkey="validator-a",
+        validator_hotkey=validator_hotkey,
         slot_id="slot-0",
         status=TicketStatus.ISSUED,
         issued_at=now - timedelta(hours=2),
@@ -124,6 +132,7 @@ def _rows(
     terminal_error_code: str | None = None,
     openrouter_attempts: int = 1,
     fallback_phase: int = 0,
+    held_for: timedelta = timedelta(0),
 ) -> list[InferenceRequest]:
     return [
         InferenceRequest(
@@ -146,7 +155,7 @@ def _rows(
             timed_out=False,
             latency_ms=None if status == "started" else 900,
             started_at=started_at,
-            completed_at=None if status == "started" else started_at,
+            completed_at=None if status == "started" else started_at + held_for,
         )
         for _ in range(count)
     ]
@@ -167,6 +176,11 @@ def _groups(body: dict[str, Any], window: int, kind: str) -> list[dict[str, Any]
         for row in body["groups"]
         if row["window_seconds"] == window and row["request_kind"] == kind
     ]
+
+
+def _burst(body: dict[str, Any], kind: str) -> dict[str, Any]:
+    (burst,) = [row for row in body["rate_limit_bursts"] if row["request_kind"] == kind]
+    return burst
 
 
 def _one(groups: Iterable[dict[str, Any]], **match: Any) -> dict[str, Any]:
@@ -256,6 +270,7 @@ async def test_a_burst_names_its_model_route_and_code_without_inventing_a_route(
         "group_limit",
         "lanes",
         "groups",
+        "rate_limit_bursts",
     }
     assert body["window_seconds"] == [60, 300, 900, 3600]
 
@@ -450,3 +465,176 @@ async def test_group_list_is_capped_and_says_how_much_it_dropped(
     assert len(minute) == 1
     assert minute[0]["groups_total"] == 1 + extra
     assert minute[0]["terminal_error_code"] == "upstream_http_429"
+
+
+async def test_a_429_burst_under_local_headroom_is_active_and_names_its_tickets(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The incident's signature: upstream 429s while local admission sat idle."""
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    recent = now - timedelta(seconds=20)
+    async with session_maker() as session, session.begin():
+        heavy = await _grant(session, now)
+        light = await _grant(session, now, validator_hotkey="validator-b")
+        session.add_all(
+            _rows(
+                heavy,
+                count=RATE_LIMIT_BURST_THRESHOLD - 10,
+                started_at=recent,
+                status="failed",
+                upstream_provider="Groq",
+                terminal_error_code="upstream_http_429",
+            )
+            + _rows(
+                light,
+                count=10,
+                started_at=recent,
+                status="failed",
+                terminal_error_code="upstream_http_429",
+            )
+            # Older than five minutes: in the 15-minute lane, not the burst.
+            + _rows(
+                light,
+                count=9,
+                started_at=now - timedelta(seconds=400),
+                status="failed",
+                terminal_error_code="upstream_http_429",
+            )
+            + _rows(light, count=5, started_at=recent, status="completed")
+        )
+    response = await client.get(_PATH, headers=_HEADERS)
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    burst = _burst(body, "chat")
+    assert burst["window_seconds"] == 300
+    assert burst["rate_limited_failures"] == RATE_LIMIT_BURST_THRESHOLD
+    assert burst["threshold"] == RATE_LIMIT_BURST_THRESHOLD
+    assert burst["global_concurrency_limit"] == 96
+    assert burst["peak_global_concurrency"] < burst["global_concurrency_limit"]
+    assert burst["active"] is True
+    assert (burst["tickets_total"], burst["tickets_truncated"]) == (2, False)
+    assert [
+        (
+            ticket["agent_id"],
+            ticket["bench_version"],
+            ticket["validator_hotkey"],
+            ticket["slot_id"],
+            ticket["rate_limited_failures"],
+        )
+        for ticket in burst["tickets"]
+    ] == [
+        (str(heavy.agent_id), _BENCH_VERSION, "validator-a", "slot-0", 90),
+        (str(light.agent_id), _BENCH_VERSION, "validator-b", "slot-0", 10),
+    ]
+    assert datetime.fromisoformat(burst["tickets"][0]["ticket_deadline"]) == (
+        heavy.ticket_deadline
+    )
+
+    quiet = _burst(body, "embedding")
+    assert (quiet["rate_limited_failures"], quiet["active"]) == (0, False)
+    assert quiet["tickets"] == []
+
+
+async def test_a_429_burst_at_the_local_concurrency_limit_is_not_flagged(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """At the configured limit the 429s may be Ditto's own load, not the pool."""
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        await insert_inference_concurrency_settings_revision(
+            session,
+            parent_revision=0,
+            scope="*",
+            settings={
+                "chat_per_ticket_concurrency": 8,
+                "chat_per_validator_concurrency": 16,
+                "chat_global_concurrency": 16,
+            },
+            checksum="d" * 64,
+            reason="shrink the chat lane for the burst suppression test",
+            actor="tester",
+        )
+        grant = await _grant(session, now)
+        # Every call overlaps every other, so the lane peaked at the full count.
+        session.add_all(
+            _rows(
+                grant,
+                count=RATE_LIMIT_BURST_THRESHOLD,
+                started_at=now - timedelta(seconds=60),
+                status="failed",
+                terminal_error_code="upstream_http_429",
+                held_for=timedelta(seconds=10),
+            )
+        )
+    body = (await client.get(_PATH, headers=_HEADERS)).json()
+
+    burst = _burst(body, "chat")
+    assert burst["rate_limited_failures"] == RATE_LIMIT_BURST_THRESHOLD
+    assert burst["global_concurrency_limit"] == 16
+    assert burst["peak_global_concurrency"] == RATE_LIMIT_BURST_THRESHOLD
+    assert burst["active"] is False
+    assert [ticket["agent_id"] for ticket in burst["tickets"]] == [str(grant.agent_id)]
+
+    # The burst peak is the runtime-metrics five-minute peak, not a new metric.
+    async with session_maker() as session:
+        _, windows, _ = await load_inference_runtime_rows(
+            session, stale_after_seconds=3600
+        )
+    (runtime,) = [
+        row
+        for row in windows
+        if row["window_seconds"] == 300 and row["request_kind"] == "chat"
+    ]
+    assert runtime["peak_global_concurrency"] == burst["peak_global_concurrency"]
+
+
+async def test_affected_tickets_are_capped_worst_first_below_the_threshold(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Scattered 429s under the floor stay inactive but still name tickets."""
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    recent = now - timedelta(seconds=20)
+    extra = RATE_LIMIT_BURST_TICKET_LIMIT + 1
+    async with session_maker() as session, session.begin():
+        worst = await _grant(session, now)
+        rows = _rows(
+            worst,
+            count=3,
+            started_at=recent,
+            status="failed",
+            terminal_error_code="upstream_http_429",
+        )
+        for index in range(extra):
+            rows.extend(
+                _rows(
+                    await _grant(
+                        session, now, validator_hotkey=f"validator-{index:03d}"
+                    ),
+                    count=1,
+                    started_at=recent,
+                    status="failed",
+                    terminal_error_code="upstream_http_429",
+                )
+            )
+        session.add_all(rows)
+    body = (await client.get(_PATH, headers=_HEADERS)).json()
+
+    burst = _burst(body, "chat")
+    assert burst["rate_limited_failures"] == 3 + extra
+    assert burst["rate_limited_failures"] < RATE_LIMIT_BURST_THRESHOLD
+    assert burst["active"] is False
+    assert burst["tickets_total"] == 1 + extra
+    assert burst["tickets_truncated"] is True
+    assert len(burst["tickets"]) == RATE_LIMIT_BURST_TICKET_LIMIT
+    assert burst["tickets"][0]["agent_id"] == str(worst.agent_id)
+    assert burst["tickets"][0]["rate_limited_failures"] == 3

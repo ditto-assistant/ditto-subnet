@@ -124,6 +124,16 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
+    page: "gamma",
+    label: "Gamma · Beta",
+    desc: () => "Service funding & wallet trail",
+    icon: () => (
+      <svg class="ic" viewBox="0 0 24 24">
+        <path d="M6 21V3h12M10 7h8" />
+      </svg>
+    ),
+  },
+  {
     page: "benchmark",
     label: "Benchmark",
     // The nav description names the live version once known (monolith

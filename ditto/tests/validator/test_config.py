@@ -154,9 +154,22 @@ class TestLongMemCapacity:
 
         assert parse_validator_config_from_env().longmem_capacity == expected
 
+    @pytest.mark.parametrize("benchmark_capacity", range(1, 9))
+    def test_compose_empty_value_derives_for_every_host_size(
+        self, monkeypatch: pytest.MonkeyPatch, benchmark_capacity: int
+    ) -> None:
+        # docker-compose.yml renders an unset VALIDATOR_LONGMEM_CAPACITY as "".
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_BENCHMARK_CAPACITY", str(benchmark_capacity))
+        monkeypatch.setenv("VALIDATOR_LONGMEM_CAPACITY", "")
+
+        config = parse_validator_config_from_env()
+
+        assert config.longmem_capacity == (benchmark_capacity + 1) // 2
+
     @pytest.mark.parametrize(
         ("benchmark_capacity", "longmem_capacity"),
-        [(1, 2), (2, 2), (8, 5), (8, -1)],
+        [(1, 2), (2, 2), (4, 4), (8, 5), (8, -1)],
     )
     def test_rejects_unsafe_independent_capacity(
         self,

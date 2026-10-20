@@ -38,6 +38,8 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     AttestationRejectedError,
     HotkeyAgentNotFoundError,
+    LoginRejectedError,
+    LoginRequiredError,
     PaymentAmountMismatchError,
     PaymentRecoveryExpiredError,
     PreCheckRejectedError,
@@ -117,6 +119,8 @@ class TestUploadCheck:
             sha256="ab" * 32,
             file_size_bytes=1024,
             signature="cd" * 64,
+            signature_timestamp=1_798_000_000,
+            signature_nonce=UUID("123e4567-e89b-42d3-a456-426614174000"),
         )
 
     def test_happy_path_returns_response_with_ok_false_payload(self) -> None:
@@ -178,6 +182,8 @@ class TestUploadAgent:
             "sha256": "ab" * 32,
             "name": "smoke-agent",
             "signature": "cd" * 64,
+            "signature_timestamp": 1_798_000_000,
+            "signature_nonce": UUID("123e4567-e89b-42d3-a456-426614174000"),
             "payment": PaymentReceipt(
                 block_hash="0x" + "ef" * 32,
                 block_number=42,
@@ -218,6 +224,8 @@ class TestUploadAgent:
             "sha256",
             "name",
             "signature",
+            "signature_timestamp",
+            "signature_nonce",
             "payment_block_hash",
             "payment_block_number",
             "payment_extrinsic_index",
@@ -512,3 +520,33 @@ class TestTransportErrors:
             client.get_agent_status(agent_id=UUID(int=0))
 
         assert isinstance(e.value.__cause__, httpx.ConnectError)
+
+
+class TestRevokeMinerSession:
+    def test_invalid_or_expired_session_is_login_required(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                401, json={"detail": "miner session is invalid or expired"}
+            )
+
+        with make_client(handler) as client, pytest.raises(LoginRequiredError):
+            client.revoke_miner_session("ditto_ms_" + "ab" * 32)
+
+    def test_other_failures_stay_login_rejected(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, json={"detail": "unavailable"})
+
+        with make_client(handler) as client, pytest.raises(LoginRejectedError):
+            client.revoke_miner_session("ditto_ms_" + "ab" * 32)
+
+    def test_success_revokes_without_error(self) -> None:
+        paths: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            paths.append(request.url.path)
+            return httpx.Response(204)
+
+        with make_client(handler) as client:
+            client.revoke_miner_session("ditto_ms_" + "ab" * 32)
+
+        assert paths == ["/api/v1/miner-auth/session/revoke"]

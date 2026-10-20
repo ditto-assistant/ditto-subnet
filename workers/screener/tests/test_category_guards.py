@@ -11,7 +11,7 @@ from ditto_screener.source_signals import mask_comments
 
 
 def _scan(source: str, path: str = "src/memcase.rs"):
-    return find_unmatchable_category_guards([(path, mask_comments(source))])
+    return find_unmatchable_category_guards([(path, mask_comments(source, path))])
 
 
 def test_the_transposed_literal_is_reported_with_its_nearest_slug() -> None:

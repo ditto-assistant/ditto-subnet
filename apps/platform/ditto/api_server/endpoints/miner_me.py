@@ -24,6 +24,7 @@ from ditto.api_models.miner_avatar import MinerAvatarResponse
 from ditto.api_models.miner_logs import MinerHarnessLogsResponse
 from ditto.api_models.miner_screening_feedback import MinerScreeningFeedbackResponse
 from ditto.api_models.miner_session import (
+    MinerArtifactDownload,
     MinerCommand,
     MinerMeResponse,
     MinerMeReviewsResponse,
@@ -33,7 +34,8 @@ from ditto.api_models.miner_session import (
     PublicMinerReview,
     PublicMinerSubmission,
 )
-from ditto.api_server.dependencies import get_session
+from ditto.api_server.deferred_source_review import public_review_reason
+from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.miner_auth import (
     require_scope,
     resolve_miner_session,
@@ -44,6 +46,7 @@ from ditto.api_server.endpoints.miner_screening_feedback import (
     load_owned_screening_feedback,
 )
 from ditto.api_server.hippius import HippiusClient
+from ditto.api_server.miner_artifact import prepare_owned_artifact_download
 from ditto.api_server.miner_avatar import (
     MAX_AVATAR_BYTES,
     MinerAvatarRejected,
@@ -59,6 +62,7 @@ from ditto.api_server.miner_session import (
     parse_scopes,
 )
 from ditto.api_server.name_claim import expected_netuid
+from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.storage.errors import ObjectUploadFailedError
 from ditto.db.models import AthReview
 from ditto.db.queries.miner_avatars import (
@@ -83,6 +87,7 @@ def no_store(response: Response) -> None:
 
 router = APIRouter(prefix="/me", tags=["miner-me"], dependencies=[Depends(no_store)])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
 
 
 def _session_view(row, *, now: datetime) -> MinerSessionView:
@@ -385,12 +390,27 @@ async def my_submissions(
         PublicMinerSubmission(
             agent_id=agent.agent_id,
             name=agent.name,
+            version=agent.version,
             status=str(agent.status),
             created_at=agent.created_at,
             avatar_url=avatar_url,
         )
         for agent in agents
     ]
+
+
+@router.get("/agents/{agent_id}/artifact", response_model=MinerArtifactDownload)
+async def my_artifact(
+    agent_id: UUID,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    storage: StorageDep,
+) -> MinerArtifactDownload:
+    response.headers["Cache-Control"] = "private, no-store"
+    return await prepare_owned_artifact_download(
+        request, session, storage, agent_id=agent_id
+    )
 
 
 @router.get(
@@ -460,7 +480,7 @@ async def my_reviews(request: Request, session: SessionDep) -> MinerMeReviewsRes
                     name=agent.name,
                     status=item.status,
                     opened_at=item.opened_at,
-                    detail=item.original_reason,
+                    detail=public_review_reason(item.original_reason),
                 )
             )
         else:

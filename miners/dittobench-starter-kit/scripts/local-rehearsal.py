@@ -36,9 +36,11 @@ LONGMEM_DIR = API_DIR / "integrations" / "longmemeval"
 # until the owner activates it after the v13 qualification report.
 LIVE_SCORING_BENCH_VERSION = 12
 MIN_BENCH_VERSION = 8
+# Bench 14 is an explicit preactivation rehearsal target; the live default
+# above is unchanged. The harness wire stays 9.
 # Inclusive ceiling; tracks the shared MAX_SUPPORTED_BENCH_VERSION that
 # ditto/tests/test_bench_version_pins.py diffs across every layer.
-MAX_BENCH_VERSION = 13
+MAX_BENCH_VERSION = 14
 # Environment variables the harness honours only during a local rehearsal.
 COMPLETION_LOG_ENV = "DITTOBENCH_COMPLETION_LOG"
 # The kit's `answer` slot is off by default (the wire stays at bench 9, so a

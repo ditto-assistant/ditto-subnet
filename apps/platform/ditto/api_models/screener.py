@@ -239,6 +239,7 @@ class ScreenerHeartbeatResponse(BaseModel):
     accepted: bool
     seen_at: datetime
     lease_deadline: datetime | None = None
+    source_fixture_v1_heartbeat_supported: bool = False
 
 
 class ShadowReviewUsage(BaseModel):
@@ -255,8 +256,8 @@ class ShadowReviewUsage(BaseModel):
 # One shadow observation records every provider stage the L2/L3 trajectory
 # used: each analyst turn, the critic, and every adjudicator, including model
 # failover retries. A bounded escalation therefore reports far more than a
-# handful of stages -- observed production runs span 9 to 25. The screener
-# caps this at 50 (_MAX_SHADOW_PROVIDER_STAGES in ditto_screener), and this
+# handful of stages. The screener truncates to the most recent 50 stages
+# (MAX_SHADOW_PROVIDER_STAGES in ditto_screener), and this
 # bound must not be tighter, or the platform silently rejects the telemetry it
 # asked the screener to collect.
 MAX_SHADOW_PROVIDER_STAGES = 50

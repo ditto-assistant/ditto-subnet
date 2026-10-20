@@ -189,6 +189,126 @@ func TestServerUnknownCase(t *testing.T) {
 	}
 }
 
+func TestEffectReceiptV1BindsAndDeduplicatesOperation(t *testing.T) {
+	c := webCase("effect-receipt-1")
+	s := NewServerWithEffectReceiptsV1()
+	s.Register(c.ID, BuildFixture(7, c))
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	post := func(req protocol.ToolExecRequest) (int, protocol.ToolExecResponse) {
+		body, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.Post(ts.URL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out protocol.ToolExecResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, out
+	}
+	first := protocol.ToolExecRequest{
+		CaseID: c.ID, UserID: "alice", Name: "set_theme",
+		Args: json.RawMessage(`{"theme":"dark"}`), OperationID: "operation-first-0001",
+		EffectProtocol: protocol.ToolEffectProtocolV1,
+	}
+	if status, out := post(first); status != http.StatusOK || out.EffectState != "applied" ||
+		out.Replayed || out.OperationID != first.OperationID || out.Result == "" {
+		t.Fatalf("first effect status=%d receipt=%+v", status, out)
+	}
+	if status, out := post(first); status != http.StatusOK || out.EffectState != "applied" ||
+		!out.Replayed || out.OperationID != first.OperationID {
+		t.Fatalf("replayed receipt status=%d receipt=%+v", status, out)
+	}
+	sameArgs := first
+	sameArgs.Args = json.RawMessage(`{ "theme" : "dark" }`)
+	if status, out := post(sameArgs); status != http.StatusOK || !out.Replayed {
+		t.Fatalf("canonical replay status=%d receipt=%+v", status, out)
+	}
+	if got := len(s.Observed(c.ID)); got != 1 {
+		t.Fatalf("cached receipt applied effect %d times, want one", got)
+	}
+	mismatch := first
+	mismatch.Args = json.RawMessage(`{"theme":"light"}`)
+	if status, out := post(mismatch); status != http.StatusConflict || out.EffectState != "not_applied" {
+		t.Fatalf("mismatched operation status=%d receipt=%+v", status, out)
+	}
+	if got := len(s.Observed(c.ID)); got != 1 {
+		t.Fatalf("mismatched operation changed effects: %d", got)
+	}
+	// A separately model-emitted, authorized repetition gets a new operation ID.
+	second := first
+	second.OperationID = "operation-second-0002"
+	if status, out := post(second); status != http.StatusOK || out.EffectState != "applied" || out.Replayed {
+		t.Fatalf("separate effect status=%d receipt=%+v", status, out)
+	}
+	other := first
+	other.OperationID = "operation-other-0003"
+	other.Name = "list_workflows"
+	other.Args = json.RawMessage(`{}`)
+	if status, out := post(other); status != http.StatusOK || out.EffectState != "applied" {
+		t.Fatalf("later distinct tool status=%d receipt=%+v", status, out)
+	}
+	if got := len(s.Observed(c.ID)); got != 3 {
+		t.Fatalf("distinct model-backed effects=%d, want three", got)
+	}
+	if got := s.EffectAccounting(c.ID); got != (EffectAccounting{Attempts: 6, ReceiptReplays: 2, AppliedEffects: 3}) {
+		t.Fatalf("effect accounting=%+v", got)
+	}
+}
+
+func TestEffectReceiptV1RecoversOnlyAfterNotAppliedAndLegacyFailsClosed(t *testing.T) {
+	c := protocol.ToolCase{ID: "effect-recovery-1", Category: "web_recovery_result_usage",
+		ExpectedTools: []protocol.ToolSpec{{Name: "search_web"}}}
+	s := NewServerWithEffectReceiptsV1()
+	s.Register(c.ID, BuildFixture(99, c))
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+	req := protocol.ToolExecRequest{CaseID: c.ID, Name: "search_web",
+		Args: json.RawMessage(`{"queries":["x"]}`), OperationID: "operation-retry-0001",
+		EffectProtocol: protocol.ToolEffectProtocolV1}
+	post := func(url string) (int, protocol.ToolExecResponse) {
+		body, _ := json.Marshal(req)
+		resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out protocol.ToolExecResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, out
+	}
+	if status, out := post(ts.URL); status != http.StatusOK || out.EffectState != "not_applied" || out.Error == "" {
+		t.Fatalf("pre-effect failure status=%d receipt=%+v", status, out)
+	}
+	if status, out := post(ts.URL); status != http.StatusOK || out.EffectState != "applied" || out.Result == "" {
+		t.Fatalf("same-ID retry status=%d receipt=%+v", status, out)
+	}
+	if got := s.EffectAccounting(c.ID); got != (EffectAccounting{Attempts: 2, SameHopRetries: 1, AppliedEffects: 1}) {
+		t.Fatalf("not-applied recovery accounting=%+v", got)
+	}
+	if got := len(s.Observed(c.ID)); got != 2 {
+		t.Fatalf("attempts=%d, want first failed and second applied", got)
+	}
+	legacy := NewServer()
+	legacy.Register(c.ID, BuildFixture(99, c))
+	legacyURL := httptest.NewServer(legacy)
+	defer legacyURL.Close()
+	if status, out := post(legacyURL.URL); status != http.StatusConflict || out.Result != "" {
+		t.Fatalf("legacy endpoint falsely accepted receipt status=%d receipt=%+v", status, out)
+	}
+	if got := len(legacy.Observed(c.ID)); got != 0 {
+		t.Fatalf("legacy endpoint applied opt-in call: %d", got)
+	}
+}
+
 // TestJobChainDependency verifies the dependent-arg gate: get_agent_job_status
 // yields the needle ONLY when queried with the job id execute_agent_job served.
 func TestJobChainDependency(t *testing.T) {

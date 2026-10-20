@@ -22,6 +22,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+from collections.abc import Collection
 from functools import lru_cache
 from importlib.resources import files as resource_files
 from typing import Any
@@ -93,24 +94,44 @@ def is_stock_kit_text(text: str) -> bool:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest() in normalized
 
 
+def wrapping_root(paths: Collection[str]) -> str | None:
+    """The one wrapping directory whose removal lines ``paths`` up with the kit.
+
+    ``None`` unless every path shares one leading component and stripping it
+    strictly increases overlap with the baseline, so an archive that genuinely
+    has its own top-level layout is left alone. Callers pass EVERY readable
+    path, including ones a bounded read skipped, so loaded and skipped files are
+    aligned by the same decision.
+    """
+    unique = set(paths)
+    if not unique:
+        return None
+    head = starter_kit_head_text()
+    roots = {path.split("/", 1)[0] for path in unique if "/" in path}
+    if len(roots) != 1 or any("/" not in path for path in unique):
+        return None
+    stripped = {path.split("/", _MAX_ROOT_STRIP)[1] for path in unique}
+    if len(stripped) != len(unique):
+        return None
+    if len(stripped & set(head)) <= len(unique & set(head)):
+        return None
+    return next(iter(roots))
+
+
+def strip_wrapping_root(path: str, root: str | None) -> str:
+    """``path`` with ``root`` (from :func:`wrapping_root`) removed, if set."""
+    if root is None:
+        return path
+    return path.removeprefix(f"{root}/")
+
+
 def align_candidate_paths(candidate: dict[str, str]) -> dict[str, str]:
     """Strip a single wrapping directory when that is what makes paths line up.
 
-    Returns the input unchanged unless every candidate path shares one leading
-    component and stripping it strictly increases overlap with the baseline, so
-    an archive that genuinely has its own top-level layout is left alone.
+    Returns the input unchanged unless :func:`wrapping_root` finds a root to
+    strip.
     """
-    if not candidate:
+    root = wrapping_root(candidate)
+    if root is None:
         return candidate
-    head = starter_kit_head_text()
-    roots = {path.split("/", 1)[0] for path in candidate if "/" in path}
-    if len(roots) != 1 or any("/" not in path for path in candidate):
-        return candidate
-    stripped = {
-        path.split("/", _MAX_ROOT_STRIP)[1]: text for path, text in candidate.items()
-    }
-    if len(stripped) != len(candidate):
-        return candidate
-    if len(set(stripped) & set(head)) <= len(set(candidate) & set(head)):
-        return candidate
-    return stripped
+    return {strip_wrapping_root(path, root): text for path, text in candidate.items()}

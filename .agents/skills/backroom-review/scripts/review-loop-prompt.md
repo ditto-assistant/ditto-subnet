@@ -16,6 +16,9 @@ by the saved scheduled-task prompt per the backroom-review skill.
   platform-side unsticking, not a retry.
 - Skip `banned` rows. Park `evaluating` / `waiting_validator` rows for a
   later fire.
+- Skip quarantine rows with `terminal_ghost: true` (the agent is already
+  banned or rejected). They are not reviews; list them in the report for a
+  human to reconcile per the skill's "Terminal ghosts" section.
 - Leave rows with missing source, mixed evidence, or infrastructure failure
   unchanged and list them in the report with what would resolve them.
 - A quarantine release needs decisive lines read in source; a reject needs
@@ -51,6 +54,9 @@ by the saved scheduled-task prompt per the backroom-review skill.
 5. Resolve per item with `resolve_screening_quarantine` /
    `resolve_ath_review`: the reason names the policy category, the minimal
    file:line set actually read, and the cited precedent. No challenge values.
+   A v13 court clear held with `source-review-awaiting-v13-verification`
+   releases through `release_verified_v13_court_clear`, which re-verifies its
+   signed receipt; a 409 leaves it for the ordinary review above.
 6. Re-read each resolved row to verify the write landed. Refresh the leaderboard
    after ATH rulings and report predecessor re-entry without widening the batch.
    A timeout is

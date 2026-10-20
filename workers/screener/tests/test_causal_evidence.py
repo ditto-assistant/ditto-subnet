@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
@@ -22,7 +23,11 @@ from ditto_screener.l2_review import (
     _enforce_causal_authority,
     _parse_l2_review,
 )
-from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.policy import (
+    CONFIRMED_VIOLATION_CODE,
+    SourceReviewObservation,
+    _source_review_reason_for,
+)
 from ditto_screener.source_review import TarSourceRepository
 from ditto_screening_protocol import (
     SourceReviewAuthorityTransition,
@@ -31,6 +36,10 @@ from ditto_screening_protocol import (
     SourceReviewEvidenceItem,
     SourceReviewEvidenceRole,
     SourceReviewFinding,
+    SourceReviewInvariant,
+    SourceReviewInvariantAssessment,
+    SourceReviewInvariantDecision,
+    SourceReviewInvariantDisposition,
     SourceReviewScorerVisibleEffect,
 )
 
@@ -75,7 +84,7 @@ def _with_policy_v10_invariants(value: dict[str, object]) -> dict[str, object]:
         "tool_execution_bypassed": "i6_tool_execution_fidelity",
         "tool_trajectory_fabricated": "i6_tool_execution_fidelity",
         "selective_model_disablement": "i1_model_invocation",
-        "scorer_field_rewritten": "i3_model_dissent",
+        "scorer_field_rewritten": "i4_derived_value_authority",
         "derived_value_authoritative": "i4_derived_value_authority",
         "family_compiler_authoritative": "i5_production_engine",
         "tool_selection_predetermined": "i7_model_tool_planning",
@@ -87,7 +96,11 @@ def _with_policy_v10_invariants(value: dict[str, object]) -> dict[str, object]:
         else set()
     )
     category_breach = (
-        "i3_model_dissent"
+        (
+            "i4_derived_value_authority"
+            if transition == "scorer_field_rewritten"
+            else "i3_model_dissent"
+        )
         if "scorer_contract_manipulation" in categories
         else "i6_tool_execution_fidelity"
         if "fabricated_tool_trajectory" in categories
@@ -232,9 +245,18 @@ def _review_value(digest: str) -> dict[str, object]:
             ],
             "generator_components": [],
             "causal_evidence": {
-                "schema_version": 2,
+                "schema_version": 3,
                 "authority_transition": "model_skipped",
                 "scorer_visible_effect": "answer",
+                "i5_proof": {
+                    "evaluation_assumption": (
+                        "A fixed evaluation answer replaces the request answer."
+                    ),
+                    "ordinary_product_exclusion": (
+                        "The served code skips the deciding model, not just guidance."
+                    ),
+                    "assumption_evidence_index": 0,
+                },
                 "role_bindings": [
                     {
                         "path": "src/main.rs",
@@ -354,6 +376,72 @@ def test_scorer_category_accepts_scorer_field_rewrite() -> None:
 
     assert verification.role_complete is True
     assert verification.reason_code == "causal-evidence-verified"
+
+
+def test_v13_i5_requires_signed_assumption_and_product_exclusion(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha, digest = _tar(
+        tmp_path, "request = read_request()\nanswer = 'fixed'\n"
+    )
+    value = _review_value(digest)
+    observation, _, _, _ = _parse_l2_review(
+        value,
+        artifact_sha256=artifact_sha,
+        repository=TarSourceRepository(str(archive)),
+    )
+    assert _enforce_causal_authority(observation).ok is True
+    finding = SourceReviewFinding.model_validate(observation.finding)
+    assert finding.causal_evidence is not None
+    assert finding.causal_evidence.i5_proof is not None
+    assert b'"i5_proof"' in finding.canonical_bytes()
+
+    legacy = _review_value(digest)
+    legacy_causal = legacy["causal_evidence"]
+    assert isinstance(legacy_causal, dict)
+    legacy_causal["schema_version"] = 2
+    legacy_causal.pop("i5_proof")
+    old_observation, _, _, _ = _parse_l2_review(
+        legacy,
+        artifact_sha256=artifact_sha,
+        repository=TarSourceRepository(str(archive)),
+    )
+    enforced = _enforce_causal_authority(old_observation)
+    assert enforced.failure_disposition == "inconclusive"
+    assert enforced.error_code == "l2-i5-proof-incomplete"
+
+    historical = SourceReviewFinding.model_validate(old_observation.finding)
+    historical = historical.model_copy(
+        update={"prompt_revision": "l2-terra-source-review-v47-policy-v13"}
+    )
+    assert verify_causal_finding(historical).role_complete is True
+    assert b'"i5_proof"' not in historical.canonical_bytes()
+    for revision in (48, 49, 100):
+        current = historical.model_copy(
+            update={"prompt_revision": f"l2-terra-source-review-v{revision}-policy-v13"}
+        )
+        verified = verify_causal_finding(current)
+        assert verified.role_complete is False
+        assert verified.reason_code == "i5-proof-incomplete"
+
+
+def test_v13_i5_assumption_index_must_bind_source_evidence(tmp_path: Path) -> None:
+    archive, artifact_sha, digest = _tar(
+        tmp_path, "request = read_request()\nanswer = 'fixed'\n"
+    )
+    value = _review_value(digest)
+    causal = value["causal_evidence"]
+    assert isinstance(causal, dict)
+    proof = causal["i5_proof"]
+    assert isinstance(proof, dict)
+    proof["assumption_evidence_index"] = 9
+
+    with pytest.raises(ValueError, match="I5 assumption is not bound"):
+        _parse_l2_review(
+            value,
+            artifact_sha256=artifact_sha,
+            repository=TarSourceRepository(str(archive)),
+        )
 
 
 def test_transition_effect_mismatch_is_inconclusive() -> None:
@@ -712,9 +800,24 @@ def _corpus_review_value(case: dict[str, object], digest: str) -> dict[str, obje
             {"path": "src/main.rs", "line": 2, "role": "effect"},
         ],
         causal_evidence={
-            "schema_version": 2,
+            "schema_version": 3 if category == "benchmark_emulation" else 2,
             "authority_transition": case["authority_transition"],
             "scorer_visible_effect": case["scorer_visible_effect"],
+            **(
+                {
+                    "i5_proof": {
+                        "evaluation_assumption": (
+                            "A fixed evaluation answer replaces the request answer."
+                        ),
+                        "ordinary_product_exclusion": (
+                            "The served code skips the deciding model entirely."
+                        ),
+                        "assumption_evidence_index": 0,
+                    }
+                }
+                if category == "benchmark_emulation"
+                else {}
+            ),
             "role_bindings": [
                 {
                     "path": "src/main.rs",
@@ -765,3 +868,85 @@ def test_sanitized_corpus_runs_through_production_parser_and_authority_boundary(
     assert verification.reason_code == "causal-evidence-verified"
     assert verification.authority_transition == case["authority_transition"]
     assert verification.scorer_visible_effect == case["scorer_visible_effect"]
+
+
+def _confirmed_breach_finding() -> SourceReviewFinding:
+    finding = _finding(category="provider_bypass", transition=None)
+    return finding.model_copy(
+        update={
+            "invariant_assessment": SourceReviewInvariantAssessment(
+                decisions=[
+                    SourceReviewInvariantDecision(
+                        invariant=invariant,
+                        disposition=(
+                            SourceReviewInvariantDisposition.BREACH
+                            if invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+                            else SourceReviewInvariantDisposition.INCONCLUSIVE
+                        ),
+                        summary="Bounded decision.",
+                        evidence_indices=(
+                            [0]
+                            if invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+                            else []
+                        ),
+                    )
+                    for invariant in SourceReviewInvariant
+                ]
+            )
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("clearance_path", "certified"),
+    [
+        ("l3_adjudicated_violation_cause", True),
+        ("l3_adjudicated_violation_cause_tiebreak", True),
+        # L2 alone never had an L3 adjudicator that could refute it.
+        ("l2_violation", False),
+        (None, False),
+    ],
+)
+def test_only_an_l3_confirmed_violation_is_certified(
+    clearance_path: str | None, certified: bool
+) -> None:
+    finding = _confirmed_breach_finding()
+    assert verify_causal_finding(finding).role_complete
+
+    observation = _enforce_causal_authority(
+        _observation(finding), clearance_path=clearance_path
+    )
+
+    assert observation.ok
+    assert observation.violation_certified is certified
+
+
+def test_a_certified_v13_breach_names_the_confirmed_violation_code() -> None:
+    finding = _confirmed_breach_finding()
+    certified = _enforce_causal_authority(
+        _observation(finding), clearance_path="l3_adjudicated_violation_cause"
+    )
+
+    assert _source_review_reason_for(certified, policy_version=13) == (
+        CONFIRMED_VIOLATION_CODE,
+        "independent L2 and L3 source review confirmed an invariant breach",
+    )
+    # Before policy v13 a court reject, not this certificate, owns rejection.
+    assert _source_review_reason_for(certified, policy_version=12)[0] != (
+        CONFIRMED_VIOLATION_CODE
+    )
+    # Without an invariant breach there is nothing to reject on.
+    no_breach = replace(
+        certified,
+        finding=_finding(category="provider_bypass", transition=None).model_dump(
+            mode="json"
+        ),
+    )
+    assert _source_review_reason_for(no_breach, policy_version=13)[0] != (
+        CONFIRMED_VIOLATION_CODE
+    )
+    # An uncertified (L2-only) finding stays a held lead.
+    uncertified = replace(certified, violation_certified=False)
+    assert _source_review_reason_for(uncertified, policy_version=13)[0] != (
+        CONFIRMED_VIOLATION_CODE
+    )

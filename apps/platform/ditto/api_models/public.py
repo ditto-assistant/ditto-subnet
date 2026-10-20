@@ -20,7 +20,7 @@ from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.confirmation_progress import ConfirmationProgressStage
 from ditto.api_models.gate_evidence import PublicGateEvidence
 from ditto.api_models.name_claim import PublicNameHandle
-from ditto.api_models.retry_state import RetryState
+from ditto.api_models.retry_state import RetryDisposition, RetryState
 from ditto.api_models.screener import ScreenerProgressStage, ScreenerRuntimeState
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.ticket_status import TicketPurpose
@@ -332,15 +332,21 @@ class PublicV9BaseEvidence(BaseModel):
     score_gates: PublicV9ScoreGateEvidence
 
 
+# DittoBench's bench v7+ token contract: usage is metered and recorded, but the
+# record is always neutral and carries no budget (``budget_percentile`` is 0).
+QUALITY_ONLY_TOKEN_FORMULA = "v7-quality-only-v1"
+
+
 class PublicTokenEfficiency(BaseModel):
-    """Auditable v5 relay-token waste penalty."""
+    """Auditable relay-token decision: the v5 waste penalty, or the neutral
+    bench v7+ quality-only record that meters usage without scoring it."""
 
     formula_version: str
     baseline_id: str | None = None
     baseline_prompt_tokens: Annotated[int | None, Field(default=None, ge=0)]
     baseline_completion_tokens: Annotated[int | None, Field(default=None, ge=0)]
     baseline_total_tokens: Annotated[int | None, Field(default=None, ge=0)]
-    budget_percentile: Annotated[float, Field(gt=0.0, le=1.0)]
+    budget_percentile: Annotated[float, Field(ge=0.0, le=1.0)]
     observed_prompt_tokens: Annotated[int, Field(ge=0)]
     observed_completion_tokens: Annotated[int, Field(ge=0)]
     observed_total_tokens: Annotated[int, Field(ge=0)]
@@ -352,6 +358,31 @@ class PublicTokenEfficiency(BaseModel):
     adjusted_composite: Annotated[float, Field(ge=0.0, le=1.0)]
     penalty_applied: bool
     decision_reason: str
+
+    @model_validator(mode="after")
+    def budget_matches_formula(self) -> PublicTokenEfficiency:
+        if self.formula_version == QUALITY_ONLY_TOKEN_FORMULA:
+            if self.multiplier != 1.0 or self.penalty_applied:
+                raise ValueError("Quality-only token record must be neutral")
+        elif self.budget_percentile == 0.0:
+            raise ValueError("Budgeted token record needs a budget percentile")
+        return self
+
+
+class PublicAuditPairCounts(BaseModel):
+    """One run's reproduce-under-transform audit outcome counts (public).
+
+    Sufficient statistics: a reader sums them across runs and validators. The
+    discordant direction (``base_only`` vs ``transform_only``) is what the
+    transform-audit gate factor charges.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    both_correct: Annotated[int, Field(ge=0)]
+    base_only: Annotated[int, Field(ge=0)]
+    transform_only: Annotated[int, Field(ge=0)]
+    both_wrong: Annotated[int, Field(ge=0)]
 
 
 class PublicBenchmarkQualityFactor(BaseModel):
@@ -390,8 +421,8 @@ class PublicCompositeBreakdown(BaseModel):
             ge=0.9,
             le=1.0,
             description=(
-                "Benchmark-v5 token multiplier; null when token efficiency does "
-                "not apply or was unavailable."
+                "Signed token multiplier (a neutral 1.0 under the bench v7+ "
+                "quality-only contract); null when it was unavailable."
             ),
         ),
     ] = None
@@ -626,6 +657,98 @@ class PublicCodingShadowScore(BaseModel):
         return self
 
 
+class PublicRewardEligibility(BaseModel):
+    """Whether one exact artifact is earning, and in plain words why not.
+
+    Deliberately a separate object rather than another flag on the row, because
+    #2041 and #2053 ask for score rank, provisional champion status and reward
+    eligibility to be three readable things instead of one collapsed verdict. A
+    withheld artifact keeps its ``composite``, its ``rank`` and its whole review
+    history; this object is the only thing that says it is not being paid.
+
+    It carries no source, no reviewer output and no cohort statistics -- only the
+    state, the fixed miner-facing sentence for that state, and the posture
+    identity needed to reproduce the verdict.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    state: Annotated[
+        str,
+        Field(
+            description=(
+                "``eligible`` or one of the withheld classes: "
+                "``unresolved_review``, ``review_inconclusive``, "
+                "``review_escalated``, ``review_infrastructure_failed``, "
+                "``review_missing``, ``review_rejected``, "
+                "``awaiting_next_window``."
+            )
+        ),
+    ]
+    reason: Annotated[
+        str,
+        Field(
+            description=(
+                "Fixed miner-facing explanation for ``state``. The same sentence "
+                "the submission page, the board and Backroom publish, so they can "
+                "never disagree about why a score is not yet earning."
+            )
+        ),
+    ]
+    reward_eligible: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether this artifact is earning emissions under the CURRENT "
+                "posture. True while the gate is off or in shadow even when "
+                "``posture_satisfied`` is false -- those postures publish the "
+                "finding without acting on it."
+            )
+        ),
+    ]
+    posture_satisfied: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether the required review posture is met, independent of "
+                "enforcement. False with ``reward_eligible`` true is exactly a "
+                "row that enforcement would withhold."
+            )
+        ),
+    ]
+    enforcement: Annotated[
+        str,
+        Field(description="Operator posture in force: ``off``/``shadow``/``enforce``."),
+    ]
+    policy_revision: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Eligibility posture revision this verdict was reached under. "
+                "``0`` means no revision is stored and the documented default "
+                "(enforcement off) is in force."
+            ),
+        ),
+    ]
+    window_start: Annotated[
+        datetime,
+        Field(description="Opening instant of the emission window evaluated (UTC)."),
+    ]
+    activates_at: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "When a cleared artifact starts earning. Set only for "
+                "``awaiting_next_window``: a clear takes effect at the next "
+                "window boundary and is never applied backwards, so no reward is "
+                "granted for the period spent under review."
+            ),
+        ),
+    ] = None
+
+
 class PublicLeaderboardEntry(BaseModel):
     """One miner's best score, aggregate-only, for public display.
 
@@ -800,12 +923,27 @@ class PublicLeaderboardEntry(BaseModel):
             default=None,
             description=(
                 "Whether this entry is finalized on the current benchmark, "
-                "full-benchmark eligible, and currently registered, so validators "
-                "may include it in the active weight fold. Null when registration "
-                "could not be read."
+                "full-benchmark eligible, currently registered, AND holds a "
+                "terminal review for its exact artifact while the operator's "
+                "eligibility gate is enforcing, so validators may include it in "
+                "the active weight fold. Null when registration could not be "
+                "read. Read ``reward_eligibility`` for which of those it is."
             ),
         ),
     ]
+    reward_eligibility: Annotated[
+        PublicRewardEligibility | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Terminal-review reward eligibility for this exact artifact, "
+                "separate from ``rank`` and from champion status. Absent on a "
+                "historical board and on a platform with the gate switched off "
+                "and nothing to report."
+            ),
+        ),
+    ] = None
     composite: Annotated[
         float,
         Field(
@@ -1420,6 +1558,21 @@ class PublicEmissionRecipient(BaseModel):
             ),
         ),
     ]
+    paid: Annotated[
+        bool,
+        Field(
+            default=True,
+            exclude_if=lambda value: value,
+            description=(
+                "Present, and false, only for a provisional incumbent (protocol "
+                "28): its artifact is withheld by the terminal-review emission "
+                "gate, so it holds this slot -- the crown, a tail slot, or a "
+                "pooled share -- without being paid, and validators burn "
+                "``share_of_miner_pool`` rather than reassigning it. Absent "
+                "means paid."
+            ),
+        ),
+    ] = True
     shared_seed_confirmations: Annotated[
         int,
         Field(
@@ -1585,6 +1738,45 @@ class PublicKothEmissions(BaseModel):
     tail_size: Annotated[int, Field(ge=0)]
     champion_agent_id: UUID
     champion_miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    champion_reward_eligible: Annotated[
+        bool,
+        Field(
+            default=True,
+            description=(
+                "Whether the crowned agent is also earning emissions. Holding the "
+                "crown and being paid are separate facts (#2041): a champion whose "
+                "exact artifact has an open, inconclusive, infrastructure-failed or "
+                "escalated review keeps the crown and the top rank and earns "
+                "nothing while the operator's eligibility gate is enforcing. True "
+                "whenever the gate is off or in shadow."
+            ),
+        ),
+    ] = True
+    provisional_champion: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "The crown is held provisionally: this projection's champion is "
+                "not currently reward-eligible, so the 65% slot is unpaid rather "
+                "than reassigned. The inverse of ``champion_reward_eligible``, "
+                "published under its own name because it is the word the board "
+                "renders."
+            ),
+        ),
+    ] = False
+    reward_eligibility_mode: Annotated[
+        str | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "``enforce`` while the terminal-review emission gate is withholding "
+                "from this projection; absent when it is off or in shadow, in which "
+                "case this projection is exactly the pre-gate one."
+            ),
+        ),
+    ] = None
     raw_leader_agent_id: UUID
     raw_leader_miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     raw_leader_decision: PublicDethroneDecision | None = None
@@ -1768,6 +1960,17 @@ class PublicLedgerActor(BaseModel):
 class PublicLedgerEpochRecipient(PublicLedgerActor):
     role: Literal["champion", "joint_champion", "tail"]
     share_of_miner_pool: Annotated[float, Field(gt=0.0, le=1.0)]
+    paid: Annotated[
+        bool,
+        Field(
+            default=True,
+            exclude_if=lambda value: value,
+            description=(
+                "Present, and false, only for the pin's provisional incumbent: "
+                "its share burned instead of being paid (protocol 28)."
+            ),
+        ),
+    ] = True
 
 
 class PublicLedgerEpoch(BaseModel):
@@ -2629,6 +2832,70 @@ class PublicValidatorScore(BaseModel):
             ),
         ),
     ]
+    audit_pairs: Annotated[
+        PublicAuditPairCounts | None,
+        Field(
+            default=None,
+            description=(
+                "This run's transform-audit outcome counts. The direction of the "
+                "discordant pairs (``base_only`` vs ``transform_only``) is what "
+                "the transform-audit gate charges, so these counts are what make "
+                "its multiplier reconstructable. Null for a run that carried no "
+                "audit pairs or predates the counts."
+            ),
+        ),
+    ]
+    tool_efficiency: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Observed tool-efficiency factor the scorer folded into this "
+                "run's composite gate. Null when the scorer did not record it."
+            ),
+        ),
+    ]
+    metamorphic_consistency: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Fraction of invariance twin groups answered consistently, the "
+                "input to the metamorphic-consistency gate factor. Null when no "
+                "twin group ran."
+            ),
+        ),
+    ]
+    memory_over_call: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Memory over-call multiplier exactly as the scorer applied it to "
+                "this run's composite gate. Null for a run scored before the "
+                "scorer recorded it, or under a contract without a gate."
+            ),
+        ),
+    ]
+    conversational_sanity: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Weakest-link pass rate across the conversational-sanity slices, "
+                "the input to the conversational-sanity gate factor. Null when no "
+                "conversational case ran."
+            ),
+        ),
+    ]
     case_results: Annotated[
         list[PublicCaseResult] | None,
         Field(
@@ -2903,6 +3170,40 @@ class PublicConfirmationProgress(BaseModel):
     subjects: list[PublicConfirmationSubject] = Field(default_factory=list)
 
 
+PublicDeferredReviewTrigger = Literal["top_five", "anomaly"]
+"""Why an active hold entered deferred source review (coarse, public-safe)."""
+
+PublicReviewConclusion = Literal[
+    "pending", "not_completed", "no_finding", "budget_exhausted", "adverse_signal"
+]
+"""What the automated source review concluded for a held submission."""
+
+_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION = (
+    "Why an active deferred source review hold was opened: ``top_five`` when "
+    "the canonical score placed the submission in the top five, ``anomaly`` "
+    "when a robust score anomaly check fired. Empty when the submission is not "
+    "held for deferred source review. Ranks, thresholds, and evidence are not "
+    "exposed."
+)
+_REVIEW_CONCLUSION_DESCRIPTION = (
+    "What the automated source review concluded for a held (``under_review``) "
+    "submission. ``pending``: the automated deep review has not reported yet, "
+    "or it was interrupted and awaits a retry. ``not_completed``: no automated "
+    "review completed with a recorded conclusion (there is no recorded review "
+    "audit, or the review stopped before its model stage, for example because "
+    "a runtime lease was unavailable or review was disabled), and no finding "
+    "was recorded; an operator decision is pending. ``no_finding``: a recorded "
+    "audit shows a model review ran and ended without a decision or finding. "
+    "``budget_exhausted``: a recorded audit shows a model review ran and "
+    "exhausted its read, step, tool, or model budget without a finding, and "
+    "its recorded concerns did not reach the hold threshold. "
+    "``adverse_signal``: it reported a concern that an operator must "
+    "adjudicate, including a budget-terminated review held because of its "
+    "recorded concerns. Null when the hold has no automated review conclusion "
+    "(for example a copy review) or the submission is not held."
+)
+
+
 class PublicActivityEntry(BaseModel):
     """One submission's safe, public lifecycle state."""
 
@@ -3037,6 +3338,12 @@ class PublicActivityEntry(BaseModel):
             ),
         ),
     ] = None
+    deferred_review_triggers: list[PublicDeferredReviewTrigger] = Field(
+        default_factory=list, description=_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION
+    )
+    review_conclusion: PublicReviewConclusion | None = Field(
+        default=None, description=_REVIEW_CONCLUSION_DESCRIPTION
+    )
     review_opened_at: Annotated[
         datetime | None,
         Field(
@@ -3177,6 +3484,50 @@ class PublicActivityEntry(BaseModel):
             description=(
                 "Earliest time an expired ticket becomes eligible to retry (UTC); "
                 "set while cooling_down."
+            ),
+        ),
+    ] = None
+    retry_disposition: Annotated[
+        RetryDisposition | None,
+        Field(
+            default=None,
+            description=(
+                "How to read a parked submission. 'operator_hold' means the "
+                "platform will not attribute this row to the submission and an "
+                "operator has to act before it can advance; it is not by itself "
+                "a claim that the fleet failed. 'terminal_artifact_failure' "
+                "means every remaining slot died on one named agent-attributable "
+                "code, so no further lease of this artifact can finish scoring. "
+                "Null while the submission is still advancing. Fail-closed: a "
+                "mixed, unnamed, stale or unnameable cause reads as "
+                "'operator_hold'. Read 'hold_failure_code' before describing a "
+                "hold as anyone's fault."
+            ),
+        ),
+    ] = None
+    terminal_failure_code: Annotated[
+        PublicValidationFailureCode | None,
+        Field(
+            default=None,
+            description=(
+                "The agreed machine cause behind a 'terminal_artifact_failure', "
+                "drawn from the same allowlist as a validation attempt's "
+                "failure_code. Null for every other disposition. Raw validator "
+                "diagnostics are never published here."
+            ),
+        ),
+    ] = None
+    hold_failure_code: Annotated[
+        PublicValidationFailureCode | None,
+        Field(
+            default=None,
+            description=(
+                "The agreed machine cause behind an 'operator_hold', when every "
+                "remaining slot reports the same one, drawn from the same "
+                "allowlist as a validation attempt's failure_code. Null is the "
+                "ordinary case and means the cause is mixed, unnamed or stale: "
+                "the row is unattributed rather than proven to be a fleet "
+                "failure, and must not be described as one."
             ),
         ),
     ] = None
@@ -3349,18 +3700,29 @@ class PublicScreeningAttempt(BaseModel):
     review_notes: list[PublicScreeningReviewNote] = Field(default_factory=list)
 
 
+PublicAdmissionLane = Literal["build", "runtime_smoke", "source_review"]
+
+
 class PublicAdmissionRetry(BaseModel):
     """Live admission state for a submission still in build & admission.
 
-    Failed cost-bearing attempts never retry automatically, except a Docker build
-    infrastructure failure. ``parked`` names a source-review/provider failure
-    (including OpenRouter throttling), while ``stuck`` names another Ditto-owned
-    infrastructure failure. Both require a guarded Backroom retry.
+    Failed cost-bearing attempts never retry automatically, except a Ditto-owned
+    failure that never judged the artifact: a Docker build infrastructure
+    failure, a claim the worker released before starting it, missing scorer
+    runtime evidence, or a screening node whose source-review court could not
+    start. ``parked`` names a source-review/provider failure (including OpenRouter
+    throttling), while ``stuck`` names another Ditto-owned infrastructure
+    failure. Both require a guarded Backroom retry.
     ``retry_queued`` means a retry is waiting for a screener slot: either that
-    exact retry was authorized, or (with ``next_retry_at`` set) a Docker build
-    infrastructure failure is retried automatically with backoff, no earlier than
+    exact retry was authorized, or (with ``next_retry_at`` set) one of those
+    automatic infrastructure failures is retried with backoff, no earlier than
     that time. After too many consecutive failures, or a long park, it reports
     ``stuck`` and needs a guarded retry like any other.
+
+    ``lane`` names the admission lane (image build, runtime smoke, or source
+    review) the latest attempt is in or stopped in, and is null whenever
+    Platform holds no evidence for it (no attempt yet, a worker-local lane, or
+    a failure that names no lane).
     """
 
     state: Literal["queued", "running", "parked", "stuck", "retry_queued"]
@@ -3370,6 +3732,7 @@ class PublicAdmissionRetry(BaseModel):
     # infrastructure retry reports the earliest time it may start.
     next_retry_at: datetime | None = None
     last_failure_infrastructure: bool = False
+    lane: PublicAdmissionLane | None = None
 
 
 class PublicOrdinaryReview(BaseModel):
@@ -3407,6 +3770,35 @@ class PublicOrdinaryReview(BaseModel):
                 "Time since the CURRENT screening attempt started, separate "
                 "from age_seconds above. Null when there is no attempt yet "
                 "(capacity_wait)."
+            ),
+        ),
+    ]
+    typical_p50_seconds: Annotated[float | None, Field(default=None, ge=0)]
+    typical_p95_seconds: Annotated[float | None, Field(default=None, ge=0)]
+
+
+class PublicAthReview(BaseModel):
+    """Source-safe ATH-hold clock (ditto-subnet#2042, slice 2).
+
+    Tells a miner whether their held submission is waiting for a deep-review
+    screener, being worked, parked after an infrastructure failure, or waiting
+    for an operator, and for how long. It carries no hold evidence, no
+    queue class, no reason codes, and no other miner's data.
+    ``typical_p50_seconds`` and ``typical_p95_seconds`` cover every pending
+    ATH hold across the subnet. They are not a promise about this
+    submission.
+    """
+
+    reason: Literal[
+        "active_work", "capacity_wait", "infrastructure_backoff", "escalation"
+    ]
+    age_seconds: Annotated[
+        float,
+        Field(
+            ge=0,
+            description=(
+                "Time since this hold last became pending. A deep-review retry "
+                "does not reset it. Only a reopen after a resolution does."
             ),
         ),
     ]
@@ -3470,6 +3862,17 @@ PublicValidationFailureCode = Literal[
     "provider_recovery_exhausted",
     "grant_decline_evidence_mismatch",
     "budget_evidence_absent",
+    "request_too_large",
+    "invalid_json",
+    "invalid_schema",
+    "stale_session",
+    "model_not_allowed",
+    "grant_not_servable",
+    "grant_rate_denied",
+    "platform_capacity",
+    "provider_failure",
+    "provider_outage_parked",
+    "seed_deadline_exceeded",
 ]
 
 _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
@@ -3479,14 +3882,41 @@ _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
         "model_inference_required",
     }
 )
+_ADMISSION_PUBLIC_CODES: frozenset[str] = frozenset(
+    {
+        "request_too_large",
+        "invalid_json",
+        "invalid_schema",
+        "stale_session",
+        "model_not_allowed",
+        "grant_not_servable",
+        "grant_rate_denied",
+        "platform_capacity",
+        "provider_failure",
+    }
+)
 _PUBLIC_INFRA_RELAY_CAUSES: frozenset[str] = frozenset(
     {
         "inference_lane_saturated",
         "provider_recovery_exhausted",
         "grant_decline_evidence_mismatch",
         "budget_evidence_absent",
+        # Written by the lease parker, not the relay, when an open provider
+        # circuit expires every non-probe scoring lease. It names the fleet's
+        # own outage and carries nothing about the submission, so a miner
+        # reading it learns why a run stopped without learning anything the
+        # platform keeps private.
+        "provider_outage_parked",
     }
 )
+
+
+# Named for the operator and the miner, but deliberately attributed to no one:
+# a harness that missed the scorer's /seed deadline is equally explained by an
+# overloaded validator host and by a slow harness (ditto-subnet#2921). The code
+# says only which stage stopped the run, which reveals nothing about the
+# submission, so the dashboard keeps its neutral "unattributed" hold copy.
+_PUBLIC_UNATTRIBUTED_CODES: frozenset[str] = frozenset({"seed_deadline_exceeded"})
 
 
 def public_validation_failure_code(
@@ -3505,9 +3935,11 @@ def public_validation_failure_code(
         return cast(PublicValidationFailureCode, failure_detail)
     if failure_detail in _PUBLIC_INFRA_RELAY_CAUSES:
         return cast(PublicValidationFailureCode, failure_detail)
+    if failure_detail in _PUBLIC_UNATTRIBUTED_CODES:
+        return cast(PublicValidationFailureCode, failure_detail)
     if ":" in failure_detail:
         _code, cause = failure_detail.split(":", 1)
-        if cause in _PUBLIC_INFRA_RELAY_CAUSES:
+        if cause in _PUBLIC_INFRA_RELAY_CAUSES or cause in _ADMISSION_PUBLIC_CODES:
             return cast(PublicValidationFailureCode, cause)
     return None
 
@@ -3577,16 +4009,9 @@ class PublicInferenceRun(BaseModel):
 
 
 class PublicConfirmationScore(BaseModel):
-    """One append-only shared-seed score from a continual top-five retest."""
+    """One append-only continual retest score, without its reusable seed."""
 
     composite: Annotated[float, Field(ge=0.0, le=1.0)]
-    seed: Annotated[
-        str,
-        Field(
-            pattern=r"^\d+$",
-            description="Exact decimal shared seed, encoded without JS rounding.",
-        ),
-    ]
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     bench_version: Annotated[int, Field(ge=1)]
     accepted_at: datetime
@@ -3787,10 +4212,80 @@ class PublicAgentSummary(BaseModel):
     review_event_at: datetime | None = None
     review_original_reason: str | None = None
     review_opened_at: datetime | None = None
+    deferred_review_triggers: list[PublicDeferredReviewTrigger] = Field(
+        default_factory=list, description=_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION
+    )
+    review_conclusion: PublicReviewConclusion | None = Field(
+        default=None, description=_REVIEW_CONCLUSION_DESCRIPTION
+    )
     preserved_composite: Annotated[
         float | None, Field(default=None, ge=0.0, le=1.0)
     ] = None
     active_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)
+
+
+class PublicValidatorRetry(BaseModel):
+    """Why a below-quorum submission is or is not advancing through scoring.
+
+    The validator-side counterpart to :class:`PublicAdmissionRetry`. Admission
+    already tells a miner when a screening failure was Ditto's; without this a
+    submission loses that distinction the moment it reaches the validator queue,
+    where the platform's confidence in the classification is higher rather than
+    lower.
+    """
+
+    state: Annotated[
+        RetryState,
+        Field(
+            description=(
+                "running, retry_available, cooling_down, exhausted, or queued. "
+                "Read ``disposition`` before showing an exhausted row to a "
+                "miner: the state alone does not say whose failure it was."
+            )
+        ),
+    ]
+    disposition: Annotated[
+        RetryDisposition | None,
+        Field(
+            default=None,
+            description=(
+                "'operator_hold' when the platform will not attribute this row "
+                "to the submission and an operator has to act, "
+                "'terminal_artifact_failure' when no further lease of this "
+                "artifact can finish scoring. Null while it is advancing. "
+                "Fail-closed: a mixed, unnamed, stale or unnameable cause reads "
+                "as 'operator_hold', which on its own asserts no fault."
+            ),
+        ),
+    ] = None
+    terminal_failure_code: Annotated[
+        PublicValidationFailureCode | None,
+        Field(
+            default=None,
+            description=(
+                "Allowlisted machine cause behind a terminal disposition, from "
+                "the same set as a validation attempt's ``failure_code``."
+            ),
+        ),
+    ] = None
+    hold_failure_code: Annotated[
+        PublicValidationFailureCode | None,
+        Field(
+            default=None,
+            description=(
+                "Allowlisted machine cause behind an operator hold, when every "
+                "remaining slot agrees on one. Null means the hold is "
+                "unattributed, not that the fleet is at fault."
+            ),
+        ),
+    ] = None
+    retry_after: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description="Earliest UTC time an expired ticket may be re-leased.",
+        ),
+    ] = None
 
 
 class PublicSubmissionPipeline(BaseModel):
@@ -3807,6 +4302,13 @@ class PublicSubmissionPipeline(BaseModel):
             "build & admission; null once admission is terminal."
         ),
     )
+    validator_retry: PublicValidatorRetry | None = Field(
+        default=None,
+        description=(
+            "Live validator-retry state while the submission is below quorum; "
+            "null once it finalizes, and before any validator work exists."
+        ),
+    )
     ordinary_review: PublicOrdinaryReview | None = Field(
         default=None,
         description=(
@@ -3815,11 +4317,28 @@ class PublicSubmissionPipeline(BaseModel):
             "pipeline (whichever way)."
         ),
     )
+    ath_review: PublicAthReview | None = Field(
+        default=None,
+        description=(
+            "ATH-hold clock and reason while the submission is held for "
+            "review after scoring; null when it is not held."
+        ),
+    )
     submission_family: PublicSubmissionFamily | None = Field(
         default=None,
         description=(
             "Current-benchmark submission family when this agent shares a "
             "leaderboard ownership slot with another finalized generation."
+        ),
+    )
+    reward_eligibility: PublicRewardEligibility | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Terminal-review reward eligibility for this exact artifact: whether "
+            "it is earning emissions, and if not, the plain-language reason. "
+            "Separate from ``status`` and from the score fields, because a score "
+            "stays published and ranked while its review is open (#2041)."
         ),
     )
     active_bench_version: Annotated[
@@ -3933,6 +4452,17 @@ class PublicSubmissionPipeline(BaseModel):
     ] = None
     provisional_scores: list[PublicProvisionalScore] = Field(default_factory=list)
     confirmation_scores: list[PublicConfirmationScore] = Field(default_factory=list)
+    confirmation_sample_composites: list[Annotated[float, Field(ge=0.0, le=1.0)]] = (
+        Field(
+            default_factory=list,
+            description=(
+                "Per-seed retest medians for this agent and active benchmark, "
+                "sorted by composite without exposing reusable seed identifiers. "
+                "These are display-only; cohort fold eligibility is authoritative "
+                "only in the leaderboard."
+            ),
+        )
+    )
     final_composite: Annotated[
         float | None,
         Field(
@@ -4121,6 +4651,16 @@ class PublicAuditResponse(BaseModel):
     head_hash: Annotated[
         str | None,
         Field(default=None, description="entry_hash of the last entry in this page."),
+    ]
+    moderation_signer_public_keys: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description=(
+                "Ed25519 role public keys (hex) trusted to sign moderation "
+                "events on this chain. The current key is first."
+            ),
+        ),
     ]
     entries: Annotated[
         list[PublicAuditEntry],
@@ -4357,6 +4897,16 @@ class PublicValidatorSlotPolicy(BaseModel):
     ]
 
 
+class PublicHostSpecs(BaseModel):
+    """Hardware a screener or validator announced about itself, not what it is doing."""
+
+    cpu_count: Annotated[int, Field(ge=1, le=1024)]
+    cpu_physical_cores: Annotated[int, Field(ge=1, le=1024)] | None = None
+    memory_total_mib: Annotated[int, Field(ge=1, le=1 << 24)]
+    disk_total_gib: Annotated[int, Field(ge=1, le=1 << 20)]
+    architecture: str
+
+
 class PublicValidatorHeartbeat(BaseModel):
     """Latest signed software report from one permitted validator."""
 
@@ -4489,6 +5039,16 @@ class PublicValidatorHeartbeat(BaseModel):
         ),
     ]
     system_metrics: PublicSystemMetrics | None = None
+    host_specs: Annotated[
+        PublicHostSpecs | None,
+        Field(
+            description=(
+                "Fixed host hardware the validator last announced (heartbeat "
+                "protocol v32+). A later failed probe keeps the last announcement; "
+                "null when a v32 validator never announced or on older validators."
+            ),
+        ),
+    ] = None
     capabilities: ValidatorCapabilities | None = None
     stack: ValidatorStackIdentity | None = None
     stack_health: ValidatorStackHealth | None = None
@@ -4557,6 +5117,12 @@ class PublicRolloutQueueEntry(BaseModel):
     quorum: Annotated[int, Field(ge=1)]
     retry_state: RetryState | None = None
     retry_after: datetime | None = None
+    retry_disposition: RetryDisposition | None = None
+    """Same reading as the operations feed; see ``PublicActivityEntry``."""
+    terminal_failure_code: PublicValidationFailureCode | None = None
+    """Allowlisted cause behind a terminal disposition, else null."""
+    hold_failure_code: PublicValidationFailureCode | None = None
+    """Allowlisted cause behind an operator hold, else null; see the feed."""
     active_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)
 
 
@@ -4637,16 +5203,6 @@ class PublicScreenerProgress(BaseModel):
 
     stage: ScreenerProgressStage
     started_at: datetime
-
-
-class PublicHostSpecs(BaseModel):
-    """Hardware a screener announced about itself, not what it is doing."""
-
-    cpu_count: Annotated[int, Field(ge=1, le=1024)]
-    cpu_physical_cores: Annotated[int, Field(ge=1, le=1024)] | None = None
-    memory_total_mib: Annotated[int, Field(ge=1, le=1 << 24)]
-    disk_total_gib: Annotated[int, Field(ge=1, le=1 << 20)]
-    architecture: str
 
 
 class PublicScreenerHeartbeat(BaseModel):

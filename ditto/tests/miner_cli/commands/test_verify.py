@@ -98,20 +98,19 @@ class TestVerifyBoundaries:
         # No partial check table on the input-validation error path.
         assert "CHECK" not in captured.out
 
-    def test_empty_valid_tar_passes(
+    def test_empty_valid_tar_fails_the_archive_contract(
         self, empty_tar: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Edge: a structurally valid .tar.gz with zero entries. The
-        container parses; real checks pass. Verify only validates the
-        wrapper (gzip + tar structure + size + sha256); content
-        validation lands when the deferred checks ship."""
+        container parses, but the screener would reject it for a missing
+        root Dockerfile after the fee is paid, so verify fails it first."""
         exit_code = run(make_args(empty_tar))
 
         captured = capsys.readouterr()
-        assert exit_code == 0
-        assert "result: PASS" in captured.out
-        # 0 entries is the legitimate case here, surfaced in the detail.
+        assert exit_code != 0
+        assert "result: PASS" not in captured.out
         tar_opens_lines = [
             line for line in captured.out.splitlines() if "tar_opens" in line
         ]
         assert any("0 entries" in line for line in tar_opens_lines)
+        assert "SCR-CONTRACT-001" in captured.out

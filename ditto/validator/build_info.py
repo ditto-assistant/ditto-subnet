@@ -110,7 +110,37 @@ from ditto import __version__
 # v27+, because a v26 validator ignores the additive fields and would keep the
 # earliest-lineage walk -- a different champion, and so a different weight
 # vector, on exactly the epochs the marker exists to stabilize.
-HEARTBEAT_PROTOCOL_VERSION = 27
+#
+# v28 consumes ``LedgerResponse.provisional_incumbent``: under ``crown_mode:
+# incumbent``, an epoch pin whose incumbent's artifact is withheld by the
+# terminal-review emission gate serves that entry separately from the payable
+# ``entries``. The fold adds it to the pool as the crown incumbent, computes
+# champion, tail, tie pooling and the score-ceiling cohort exactly as before,
+# then burns every share it allocated to that entry instead of renormalizing
+# it onto other miners -- the held champion keeps the crown and its slot goes
+# unpaid rather than reassigned. The heartbeat request and signing bytes are
+# unchanged; this is a capability-negotiation bump. Platform must not filter a
+# held incumbent out of the pool until every recently-live weight setter
+# reports v28+, because a v27 validator ignores the additive field and would
+# crown and pay the runner-up instead.
+# v29 consumes ``LedgerResponse.statistical_band_mode=capped``. The marker
+# caps paired tie/cohort comparisons and unpaired dethrone/contested bands at
+# twice the KOTH margin. A v28 validator ignores the additive marker and folds
+# the historical bands, so Platform must withhold it until every recently-live
+# weight setter reports v29+. Heartbeat signing bytes are unchanged.
+# v30 adds signed exact-policy treasury pin/queued-dispatch capability. Only
+# a crypto-approved validator whose actual transport implements both guards
+# advertises it. V1 shadow ledgers retain the historical weight fold.
+# v31 consumes ``LedgerResponse.rank_shares``, the operator-set payout curve for
+# the champion and tail (frozen default 65/14/10/7/4). A v30 validator ignores the
+# additive field and folds the frozen curve, so Platform must withhold it until
+# every recently-live weight setter reports v31+. Heartbeat signing bytes are
+# unchanged.
+# v32 announces ``host_specs``: logical/physical CPUs, total RAM, total root
+# disk, and architecture, probed once per boot (the screener v6 block). Like the
+# weights fold, it changes the signed bytes only when present, so a failed probe
+# signs the v23/v27 domain. Platform must accept v32 before validators adopt it.
+HEARTBEAT_PROTOCOL_VERSION = 32
 
 
 @dataclass(frozen=True)

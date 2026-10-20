@@ -59,6 +59,18 @@ class ConversationObservation(WireModel):
     retry_assessment_id: UUID | None = None
 
 
+class ConversationAdmissionDiagnostics(WireModel):
+    scope: Literal["process"] = "process"
+    in_flight: bool = False
+    attempts: Annotated[int, Field(ge=0)] = 0
+    busy_skips: Annotated[int, Field(ge=0)] = 0
+    last_outcome: Literal["not_attempted", "claimed", "idle", "failed", "cancelled"] = (
+        "not_attempted"
+    )
+    last_elapsed_ms: Annotated[int, Field(ge=0)] | None = None
+    last_completed_at: datetime | None = None
+
+
 class ConversationObservations(WireModel):
     mode: Literal["off", "shadow"]
     instrument: str
@@ -74,6 +86,7 @@ class ConversationObservations(WireModel):
     settings_reason: str | None = None
     settings_updated_at: datetime | None = None
     next_budget_slot_at: datetime | None = None
+    admission_diagnostics: ConversationAdmissionDiagnostics | None = None
 
 
 class ConversationSettingsRequest(WireModel):

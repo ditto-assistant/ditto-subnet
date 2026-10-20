@@ -39,6 +39,17 @@ MAX_UNACKNOWLEDGED = 4096
 MAX_CIPHERTEXT_BYTES = 1024 * 1024
 _dispatch_lock = asyncio.Lock()
 _receipt_task: ContextVar[int | None] = ContextVar("ditto_receipt_task", default=None)
+_treasury_body: ContextVar[dict[str, Any] | None] = ContextVar(
+    "ditto_treasury_body", default=None
+)
+_treasury_validator: ContextVar[str] = ContextVar(
+    "ditto_treasury_validator", default=""
+)
+
+
+def treasury_task_body() -> tuple[dict[str, Any] | None, str]:
+    return _treasury_body.get(), _treasury_validator.get()
+
 
 receipts = Table(
     "ditto_weight_receipts",
@@ -70,11 +81,18 @@ def validate_request(data: dict[str, Any]) -> dict[str, Any]:
     """Canonicalize known fields only; reject malformed proof inputs."""
     if (
         type(data.get("schema_version")) is not int
-        or data.get("schema_version") != 1
+        or data.get("schema_version") not in (1, 2)
         or type(data.get("mechanism_id")) is not int
         or data["mechanism_id"] != 0
     ):
         raise ValueError("unsupported receipt schema or mechanism")
+    treasury = None
+    if data["schema_version"] == 2:
+        from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
+
+        treasury = EnforcingTreasuryPin.model_validate(data["treasury_pin"])
+    elif data.get("treasury_pin") is not None:
+        raise ValueError("enforcing evidence requires receipt schema 2")
     raw_weights = data.get("weights")
     if not isinstance(raw_weights, dict) or not 0 < len(raw_weights) <= 4096:
         raise ValueError("weights must contain 1..4096 hotkeys")
@@ -97,9 +115,19 @@ def validate_request(data: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("missing provenance")
     provenance: dict[str, Any] = {}
     for name in ("ledger_snapshot_id", "champion_agent_id"):
-        provenance[name] = str(UUID(raw[name]))
+        if name == "champion_agent_id" and treasury is not None and raw[name] is None:
+            provenance[name] = None
+        else:
+            provenance[name] = str(UUID(raw[name]))
     for name in ("ledger_digest", "champion_artifact_sha256", "vector_digest"):
         value = raw[name]
+        if (
+            name == "champion_artifact_sha256"
+            and treasury is not None
+            and value is None
+        ):
+            provenance[name] = None
+            continue
         if (
             not isinstance(value, str)
             or len(value) != 64
@@ -114,12 +142,23 @@ def validate_request(data: dict[str, Any]) -> dict[str, Any]:
         provenance[name] = value
     if provenance["vector_digest"] != canonical_digest(weights):
         raise ValueError("weight vector digest does not match")
+    if (provenance["champion_agent_id"] is None) != (
+        provenance["champion_artifact_sha256"] is None
+    ):
+        raise ValueError("champion provenance must be complete or absent")
     body = {
-        "schema_version": 1,
+        "schema_version": data["schema_version"],
         "mechanism_id": 0,
         "weights": weights,
         "provenance": provenance,
     }
+    if treasury is not None:
+        from ditto_pylon_treasury import validate_service_vector
+
+        if treasury.epoch_index != provenance["epoch_index"]:
+            raise ValueError("treasury pin differs from provenance epoch")
+        validate_service_vector(treasury, weights)
+        body["treasury_pin"] = treasury.model_dump(mode="json")
     if len(json.dumps(body)) > MAX_CIPHERTEXT_BYTES:
         raise ValueError("receipt request is too large")
     return body
@@ -140,6 +179,30 @@ async def create_request(
             status_code=400, detail="invalid weight receipt request"
         ) from exc
     identity = str(service.identity.identity_name)
+    if body["schema_version"] == 1:
+        from ditto_pylon_treasury import require_legacy_dispatch_allowed
+
+        try:
+            require_legacy_dispatch_allowed()
+        except Exception:
+            raise HTTPException(
+                status_code=409, detail="legacy treasury transport refused"
+            ) from None
+    if body["schema_version"] == 2:
+        from ditto_pylon_treasury import configured_request
+
+        from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
+
+        try:
+            configured_request(
+                EnforcingTreasuryPin.model_validate(body["treasury_pin"]),
+                netuid=netuid,
+                validator_hotkey=service.contact_router.hotkey,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=409, detail="treasury guard is not ready"
+            ) from None
     digest = canonical_digest(body)
     try:
         async with session_factory() as session, session.begin():
@@ -367,6 +430,8 @@ def immutable_receipt(envelope: dict[str, Any]) -> dict[str, Any]:
     claim["attempt"] = {
         key: value for key, value in envelope["attempts"][0].items() if key != "status"
     }
+    if envelope["schema_version"] == 2:
+        claim["treasury_pin"] = envelope["treasury_pin"]
     return claim
 
 
@@ -398,7 +463,7 @@ async def acknowledge_request(
 
 
 @asynccontextmanager
-async def record_task(task_id: int | None):
+async def record_task(task_id: int | None, validator_hotkey: str = ""):
     from pylon_service.api._unstable.tasks import StopRetrying
 
     async with session_factory() as session:
@@ -419,10 +484,24 @@ async def record_task(task_id: int | None):
             "weight receipt transmission uncertain; new epoch may submit a new request"
         )
     token = _receipt_task.set(task_id if row is not None else None)
+    if row is not None and (
+        not isinstance(row["body"], dict)
+        or type(row["body"].get("schema_version")) is not int
+        or row["body"]["schema_version"] not in (1, 2)
+    ):
+        _receipt_task.reset(token)
+        raise StopRetrying("weight receipt request body is unavailable")
+    body = (
+        row["body"] if row is not None and row["body"]["schema_version"] == 2 else None
+    )
+    body_token = _treasury_body.set(body)
+    validator_token = _treasury_validator.set(validator_hotkey)
     try:
         yield True
     finally:
         _receipt_task.reset(token)
+        _treasury_body.reset(body_token)
+        _treasury_validator.reset(validator_token)
 
 
 async def prepare_commit(

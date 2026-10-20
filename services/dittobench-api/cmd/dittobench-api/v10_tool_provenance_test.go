@@ -12,6 +12,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
 
 func addV10ProvenanceSession(broker *inferenceBroker, id string) *brokerSession {
@@ -127,6 +128,392 @@ func TestV10ToolRouteRequiresAndConsumesMatchingModelEmission(t *testing.T) {
 		after.MatchedToolCalls != 1 || after.UnmatchedToolCalls != 1 ||
 		!toolEvidenceComplete(after) || after.ToolFindings&toolFindingDuplicateExecution == 0 {
 		t.Fatalf("provenance counters=%+v", after)
+	}
+}
+
+func TestV13ToolReceiptRecoveryUsesOneModelEmission(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v13-receipt-recovery"
+	session := addV10ProvenanceSession(broker, sessionID)
+	session.benchVersion = protocol.BenchVersionV13
+	generation, _, err := broker.beginCaseSnapshot(sessionID, "case-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordV10ModelToolResponse(t, session, generation, `{
+		"choices":[{"message":{"tool_calls":[{
+			"id":"call-1","type":"function","function":{
+				"name":"set_theme","arguments":"{\"theme\":\"dark\"}"
+			}
+		}]}}]
+	}`)
+	endpoint := toolexec.NewServerWithEffectReceiptsV1()
+	endpoint.Register("case-a", toolexec.BuildFixture(7, protocol.ToolCase{ID: "case-a", Category: "settings_change"}))
+	route, stop, err := broker.registerToolWithProvenance(endpoint, "192.0.2.20", false, true, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	call := protocol.ToolExecRequest{
+		CaseID: "case-a", UserID: "user-a", Name: "set_theme",
+		Args:        json.RawMessage(`{"theme":"dark"}`),
+		OperationID: "broker-operation-0001", EffectProtocol: protocol.ToolEffectProtocolV1,
+	}
+	response := postProvenanceTool(t, broker, route, "case-a", call)
+	if response.Code != http.StatusOK {
+		t.Fatalf("versioned tool status=%d body=%s", response.Code, response.Body.String())
+	}
+	var receipt protocol.ToolExecResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.OperationID != call.OperationID || receipt.EffectState != protocol.ToolEffectApplied || receipt.Replayed {
+		t.Fatalf("broker lost first operation receipt: %+v", receipt)
+	}
+	if got := len(endpoint.Observed("case-a")); got != 1 {
+		t.Fatalf("endpoint observed %d effects, want one", got)
+	}
+	retry := postProvenanceTool(t, broker, route, "case-a", call)
+	if retry.Code != http.StatusOK {
+		t.Fatalf("same-ID recovery status=%d body=%s", retry.Code, retry.Body.String())
+	}
+	if err := json.Unmarshal(retry.Body.Bytes(), &receipt); err != nil || !receipt.Replayed {
+		t.Fatalf("same-ID recovery receipt=%+v error=%v", receipt, err)
+	}
+	if got := len(endpoint.Observed("case-a")); got != 1 {
+		t.Fatalf("recovery executed %d effects, want one", got)
+	}
+	recordV10ModelToolResponse(t, session, generation, `{
+		"choices":[{"message":{"tool_calls":[{
+			"id":"call-2","type":"function","function":{
+				"name":"set_theme","arguments":"{\"theme\":\"dark\"}"
+			}
+		}]}}]
+	}`)
+	separate := call
+	separate.OperationID = "broker-operation-0002"
+	if response := postProvenanceTool(t, broker, route, "case-a", separate); response.Code != http.StatusOK {
+		t.Fatalf("separately model-emitted repeat status=%d body=%s", response.Code, response.Body.String())
+	}
+	recordV10ModelToolResponse(t, session, generation, `{
+		"choices":[{"message":{"tool_calls":[{
+			"id":"call-3","type":"function","function":{
+				"name":"list_workflows","arguments":"{}"
+			}
+		}]}}]
+	}`)
+	later := call
+	later.Name = "list_workflows"
+	later.Args = json.RawMessage(`{}`)
+	later.OperationID = "broker-operation-0003"
+	if response := postProvenanceTool(t, broker, route, "case-a", later); response.Code != http.StatusOK {
+		t.Fatalf("unrelated later tool status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := len(endpoint.Observed("case-a")); got != 3 {
+		t.Fatalf("distinct effects=%d, want three", got)
+	}
+	after, err := broker.endCaseSnapshot(sessionID, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ModelToolCalls != 3 || after.EndpointAttempts != 4 ||
+		after.MatchedToolCalls != 3 || after.UnmatchedToolCalls != 0 || !toolEvidenceComplete(after) {
+		t.Fatalf("receipt provenance counters=%+v", after)
+	}
+	otherGeneration, _, err := broker.beginCaseSnapshot(sessionID, "case-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := postProvenanceTool(t, broker, route, "case-a", call); response.Code != http.StatusConflict {
+		t.Fatalf("old-generation replay status=%d body=%s", response.Code, response.Body.String())
+	}
+	other, err := broker.endCaseSnapshot(sessionID, otherGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.EndpointAttempts != 1 || other.UnmatchedToolCalls != 1 ||
+		other.ToolFindings&toolFindingCrossCaseReplay == 0 || len(endpoint.Observed("case-a")) != 3 {
+		t.Fatalf("generation replay provenance=%+v", other)
+	}
+}
+
+func TestV13ToolReceiptLaterHopNeedsAnotherModelEmission(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v13-receipt-later-hop"
+	session := addV10ProvenanceSession(broker, sessionID)
+	session.benchVersion = protocol.BenchVersionV13
+	generation, _, err := broker.beginCaseSnapshot(sessionID, "case-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const emission = `{"choices":[{"message":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"set_theme","arguments":"{\"theme\":\"dark\"}"}}]}}]}`
+	const retryEmission = `{"choices":[{"message":{"tool_calls":[{"id":"call-2","type":"function","function":{"name":"set_theme","arguments":"{\"theme\":\"dark\"}"}}]}}]}`
+	recordV10ModelToolResponse(t, session, generation, emission)
+	endpoint := toolexec.NewServerWithEffectReceiptsV1()
+	endpoint.Register("case-a", toolexec.BuildFixture(7, protocol.ToolCase{ID: "case-a", Category: "settings_change"}))
+	route, stop, err := broker.registerToolWithProvenance(endpoint, "192.0.2.20", false, true, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	call := protocol.ToolExecRequest{
+		CaseID: "case-a", UserID: "user-a", Name: "set_theme",
+		Args: json.RawMessage(`{"theme":"dark"}`), Hop: 0,
+		OperationID: "broker-operation-0001", EffectProtocol: protocol.ToolEffectProtocolV1,
+	}
+	if response := postProvenanceTool(t, broker, route, "case-a", call); response.Code != http.StatusOK {
+		t.Fatalf("first operation status=%d body=%s", response.Code, response.Body.String())
+	}
+	later := call
+	later.Hop = 1
+	if response := postProvenanceTool(t, broker, route, "case-a", later); response.Code != http.StatusConflict {
+		t.Fatalf("unbacked later hop status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := len(endpoint.Observed("case-a")); got != 1 {
+		t.Fatalf("unbacked retry executed %d effects, want one", got)
+	}
+	recordV10ModelToolResponse(t, session, generation, retryEmission)
+	response := postProvenanceTool(t, broker, route, "case-a", later)
+	if response.Code != http.StatusOK {
+		t.Fatalf("model-backed later hop status=%d body=%s", response.Code, response.Body.String())
+	}
+	var receipt protocol.ToolExecResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &receipt); err != nil || !receipt.Replayed {
+		t.Fatalf("later-hop receipt=%+v error=%v", receipt, err)
+	}
+	if got := len(endpoint.Observed("case-a")); got != 1 {
+		t.Fatalf("model-backed retry executed %d effects, want one", got)
+	}
+	after, err := broker.endCaseSnapshot(sessionID, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ModelToolCalls != 2 || after.EndpointAttempts != 3 ||
+		after.MatchedToolCalls != 2 || after.UnmatchedToolCalls != 1 ||
+		after.ToolFindings&toolFindingDuplicateExecution == 0 {
+		t.Fatalf("later-hop provenance counters=%+v", after)
+	}
+}
+
+func TestV13ToolReceiptNewHopIsOneAppliedEffectInSignedProvenance(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v13-receipt-accounting"
+	session := addV10ProvenanceSession(broker, sessionID)
+	session.benchVersion = protocol.BenchVersionV13
+	generation, _, err := broker.beginCaseSnapshot(sessionID, "case-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const emission = `{"choices":[{"message":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"set_theme","arguments":"{\"theme\":\"dark\"}"}}]}}]}`
+	recordV10ModelToolResponse(t, session, generation, emission)
+	endpoint := toolexec.NewServerWithEffectReceiptsV1()
+	endpoint.Register("case-a", toolexec.BuildFixture(7, protocol.ToolCase{ID: "case-a", Category: "settings_change"}))
+	route, stop, err := broker.registerToolWithProvenance(endpoint, "192.0.2.20", false, true, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	call := protocol.ToolExecRequest{CaseID: "case-a", UserID: "user-a", Name: "set_theme",
+		Args: json.RawMessage(`{"theme":"dark"}`), OperationID: "broker-operation-0001", EffectProtocol: protocol.ToolEffectProtocolV1}
+	if response := postProvenanceTool(t, broker, route, "case-a", call); response.Code != http.StatusOK {
+		t.Fatalf("first operation status=%d body=%s", response.Code, response.Body.String())
+	}
+	recordV10ModelToolResponse(t, session, generation, emission)
+	call.Hop = 1
+	replayed := postProvenanceTool(t, broker, route, "case-a", call)
+	var receipt protocol.ToolExecResponse
+	if replayed.Code != http.StatusOK || json.Unmarshal(replayed.Body.Bytes(), &receipt) != nil || !receipt.Replayed {
+		t.Fatalf("model-backed retry status=%d receipt=%+v", replayed.Code, receipt)
+	}
+	observed := endpoint.Observed("case-a")
+	accounting := endpoint.EffectAccounting("case-a")
+	if len(observed) != 1 || accounting != (toolexec.EffectAccounting{Attempts: 2, ReceiptReplays: 1, NewHopReplays: 1, AppliedEffects: 1}) {
+		t.Fatalf("observed=%+v accounting=%+v", observed, accounting)
+	}
+	after, err := broker.endCaseSnapshot(sessionID, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := &protocol.ToolProvenanceEvidence{ModelEmitted: int(after.ModelToolCalls), EndpointAttempts: int(after.EndpointAttempts),
+		Matched: int(after.MatchedToolCalls), Unmatched: int(after.UnmatchedToolCalls), Complete: after.ToolEvidenceComplete}
+	attachEffectAccounting(evidence, accounting)
+	graded := applyV10ToolProvenance(protocol.BenchVersionV13, scorer.ScopeScored,
+		protocol.CaseScore{Kind: protocol.KindTool, ToolScore: 1}, protocol.RunResponse{ToolCalls: observed}, observed,
+		runner.CaseExecution{ToolProvenance: evidence})
+	if graded.ToolScore != 1 || graded.ToolProvenance == nil || !graded.ToolProvenance.Complete ||
+		graded.ToolProvenance.AppliedEffects != 1 || graded.ToolProvenance.NewHopReplays != 1 {
+		t.Fatalf("receipt retry incorrectly changed scored trajectory: %+v", graded)
+	}
+}
+
+func TestV13ConfirmedNotAppliedSameHopRetryKeepsOneModelEmission(t *testing.T) {
+	observed := []protocol.ObservedToolCall{{Name: "search_web"}, {Name: "search_web"}}
+	evidence := &protocol.ToolProvenanceEvidence{
+		ModelEmitted: 1, EndpointAttempts: 2, Matched: 1, Complete: true,
+		EffectAttempts: 2, SameHopRetries: 1, AppliedEffects: 1,
+	}
+	graded := applyV10ToolProvenance(protocol.BenchVersionV13, scorer.ScopeScored,
+		protocol.CaseScore{Kind: protocol.KindTool, ToolScore: 1},
+		protocol.RunResponse{ToolCalls: observed}, observed, runner.CaseExecution{ToolProvenance: evidence})
+	if graded.ToolScore != 1 || graded.ToolProvenance == nil || !graded.ToolProvenance.Complete {
+		t.Fatalf("confirmed not-applied recovery lost credit: %+v", graded)
+	}
+}
+
+func TestV13ToolReceiptRecoveryRejectsChangedIdentity(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v13-receipt-identity"
+	session := addV10ProvenanceSession(broker, sessionID)
+	session.benchVersion = protocol.BenchVersionV13
+	generation, _, err := broker.beginCaseSnapshot(sessionID, "case-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordV10ModelToolResponse(t, session, generation, `{"choices":[{"message":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"set_theme","arguments":"{\"theme\":\"dark\"}"}}]}}]}`)
+	endpoint := toolexec.NewServerWithEffectReceiptsV1()
+	endpoint.Register("case-a", toolexec.BuildFixture(7, protocol.ToolCase{ID: "case-a", Category: "settings_change"}))
+	route, stop, err := broker.registerToolWithProvenance(endpoint, "192.0.2.20", false, true, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	call := protocol.ToolExecRequest{CaseID: "case-a", UserID: "user-a", Name: "set_theme",
+		Args: json.RawMessage(`{"theme":"dark"}`), OperationID: "broker-operation-0001", EffectProtocol: protocol.ToolEffectProtocolV1}
+	if response := postProvenanceTool(t, broker, route, "case-a", call); response.Code != http.StatusOK {
+		t.Fatalf("initial execution status=%d body=%s", response.Code, response.Body.String())
+	}
+	changed := call
+	changed.UserID = "user-b"
+	// The helper signs the capability for changed.UserID and sends that same
+	// user in the body, so this reaches the operation identity check.
+	if response := postProvenanceTool(t, broker, route, "case-a", changed); response.Code != http.StatusConflict {
+		t.Fatalf("changed user status=%d body=%s", response.Code, response.Body.String())
+	}
+	changed = call
+	changed.Args = json.RawMessage(`{"theme":"light"}`)
+	if response := postProvenanceTool(t, broker, route, "case-a", changed); response.Code != http.StatusConflict {
+		t.Fatalf("changed arguments status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := len(endpoint.Observed("case-a")); got != 1 {
+		t.Fatalf("changed identity executed %d effects, want one", got)
+	}
+	after, err := broker.endCaseSnapshot(sessionID, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.MatchedToolCalls != 1 || after.UnmatchedToolCalls != 2 || after.ToolFindings&toolFindingNameArgumentMismatch == 0 {
+		t.Fatalf("identity denial provenance=%+v", after)
+	}
+}
+
+func TestV13ToolReceiptRecoveryRequiresOptInEndpoint(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v13-receipt-legacy"
+	session := addV10ProvenanceSession(broker, sessionID)
+	session.benchVersion = protocol.BenchVersionV13
+	generation, _, err := broker.beginCaseSnapshot(sessionID, "case-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordV10ModelToolResponse(t, session, generation, `{"choices":[{"message":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"set_theme","arguments":"{\"theme\":\"dark\"}"}}]}}]}`)
+	endpoint := toolexec.NewServer()
+	endpoint.Register("case-a", toolexec.BuildFixture(7, protocol.ToolCase{ID: "case-a", Category: "settings_change"}))
+	route, stop, err := broker.registerToolWithProvenance(endpoint, "192.0.2.20", false, true, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	call := protocol.ToolExecRequest{CaseID: "case-a", UserID: "user-a", Name: "set_theme",
+		Args: json.RawMessage(`{"theme":"dark"}`), OperationID: "broker-operation-0001", EffectProtocol: protocol.ToolEffectProtocolV1}
+	if response := postProvenanceTool(t, broker, route, "case-a", call); response.Code != http.StatusConflict {
+		t.Fatalf("legacy route status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := len(endpoint.Observed("case-a")); got != 0 {
+		t.Fatalf("legacy endpoint executed %d effects", got)
+	}
+	after, err := broker.endCaseSnapshot(sessionID, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.MatchedToolCalls != 0 || after.ModelToolCalls != 1 ||
+		after.EndpointAttempts != 1 || after.UnmatchedToolCalls != 1 ||
+		after.ToolFindings&toolFindingUnsupportedEffectProtocol == 0 {
+		t.Fatalf("legacy route denial provenance: %+v", after)
+	}
+}
+
+func TestV13ToolReceiptRecoveryRejectsPreV13Session(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v10-receipt-denial"
+	session := addV10ProvenanceSession(broker, sessionID)
+	generation, _, err := broker.beginCaseSnapshot(sessionID, "case-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordV10ModelToolResponse(t, session, generation, `{"choices":[{"message":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"set_theme","arguments":"{\"theme\":\"dark\"}"}}]}}]}`)
+	endpoint := toolexec.NewServerWithEffectReceiptsV1()
+	endpoint.Register("case-a", toolexec.BuildFixture(7, protocol.ToolCase{ID: "case-a", Category: "settings_change"}))
+	route, stop, err := broker.registerToolWithProvenance(endpoint, "192.0.2.20", false, true, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	call := protocol.ToolExecRequest{CaseID: "case-a", UserID: "user-a", Name: "set_theme",
+		Args: json.RawMessage(`{"theme":"dark"}`), OperationID: "broker-operation-0001", EffectProtocol: protocol.ToolEffectProtocolV1}
+	if response := postProvenanceTool(t, broker, route, "case-a", call); response.Code != http.StatusConflict {
+		t.Fatalf("pre-V13 route status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := len(endpoint.Observed("case-a")); got != 0 {
+		t.Fatalf("pre-V13 route executed %d effects", got)
+	}
+	after, err := broker.endCaseSnapshot(sessionID, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.MatchedToolCalls != 0 || after.ModelToolCalls != 1 ||
+		after.EndpointAttempts != 1 || after.UnmatchedToolCalls != 1 ||
+		after.ToolFindings&toolFindingUnsupportedEffectProtocol == 0 {
+		t.Fatalf("pre-V13 denial provenance: %+v", after)
+	}
+}
+
+func TestV13ToolReceiptRecoveryRecordsProtocolDenials(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v13-receipt-protocol-denial"
+	session := addV10ProvenanceSession(broker, sessionID)
+	session.benchVersion = protocol.BenchVersionV13
+	generation, _, err := broker.beginCaseSnapshot(sessionID, "case-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := toolexec.NewServerWithEffectReceiptsV1()
+	endpoint.Register("case-a", toolexec.BuildFixture(7, protocol.ToolCase{ID: "case-a", Category: "settings_change"}))
+	route, stop, err := broker.registerToolWithProvenance(endpoint, "192.0.2.20", false, true, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	call := protocol.ToolExecRequest{CaseID: "case-a", UserID: "user-a", Name: "set_theme",
+		Args: json.RawMessage(`{"theme":"dark"}`), OperationID: "broker-operation-0001", EffectProtocol: "unsupported"}
+	if response := postProvenanceTool(t, broker, route, "case-a", call); response.Code != http.StatusConflict {
+		t.Fatalf("unsupported protocol status=%d body=%s", response.Code, response.Body.String())
+	}
+	call.EffectProtocol = protocol.ToolEffectProtocolV1
+	call.OperationID = "short"
+	if response := postProvenanceTool(t, broker, route, "case-a", call); response.Code != http.StatusConflict {
+		t.Fatalf("invalid operation ID status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := len(endpoint.Observed("case-a")); got != 0 {
+		t.Fatalf("invalid protocol executed %d effects", got)
+	}
+	after, err := broker.endCaseSnapshot(sessionID, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.EndpointAttempts != 2 || after.UnmatchedToolCalls != 2 || after.MatchedToolCalls != 0 ||
+		after.ToolFindings&toolFindingUnsupportedEffectProtocol == 0 ||
+		after.ToolFindings&toolFindingNameArgumentMismatch != 0 {
+		t.Fatalf("protocol denial provenance=%+v", after)
 	}
 }
 

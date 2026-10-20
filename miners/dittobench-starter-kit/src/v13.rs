@@ -16,12 +16,9 @@
 //!
 //! What lives here:
 //!
-//!  * [`HARNESS_POLICY_PROMPT`] — values-free guidance appended to the wire
-//!    system prompt: answer in the unit the question asked for, never rescale
-//!    or reformat the model's own value on the host; ask a clarifying question
-//!    that names the missing detail and cites what memory search found; list
-//!    before acting on runtime-described options and read the qualifier on a
-//!    near-miss; cite what was found when declining.
+//!  * [`compose_system_prompt`] — the default served path passes the wire
+//!    system prompt through unchanged. The optional local answer-slot rehearsal
+//!    adds only its output-format instruction when explicitly enabled.
 //!  * [`answer_slot_from_prose`] — the ONLY way the kit populates the
 //!    `answer` slot: a verbatim substring of the model's own final text (a
 //!    trailing `Answer:` line the model chose to write). The slot is therefore
@@ -80,29 +77,7 @@ pub const SAFE_HARBOR_TOP_K: usize = 3;
 /// harness-authored span.
 pub const MEMORY_CONTEXT_PREFIX: &str = "Relevant memory context for this turn:";
 
-/// Values-free policy appended to the wire system prompt. It contains no
-/// number, name, or option value, so it can never place a graded value in a
-/// harness-authored span.
-pub const HARNESS_POLICY_PROMPT: &str = "\
-Answering policy:
-- State the answer in your prose, in the unit and form the user asked for. \
-If the user asked for minor units, give minor units; never convert, rescale, \
-or reformat a value you have already produced.
-- If a request is missing a detail you need (which option, which record, \
-which value), do not guess: ask one clarifying question that names the \
-missing detail and mention what you did find in memory while looking.
-- When an option list exists only at runtime (the tool schema says the \
-options are listed by discover_capabilities), call discover_capabilities \
-first and then pass exactly one listed option, spelled as listed. If the \
-user's spelling is close to two listed options, choose the one that carries \
-the qualifier the user used; if it is still ambiguous, ask.
-- When you decline because memory does not support an answer, say what you \
-did find and why it does not answer the question.
-- Do not state more than one candidate value for a single fact; when a fact \
-changed over time, name the current value and say the earlier one was \
-superseded.";
-
-/// Appended after [`HARNESS_POLICY_PROMPT`] only when the `answer` slot is
+/// Appended after the wire system prompt only when the `answer` slot is
 /// enabled ([`ANSWER_SLOT_ENV`]): asks the model for the trailing `Answer:`
 /// line [`answer_slot_from_prose`] copies verbatim, so the slot path is
 /// actually exercised. Values-free like the policy itself.
@@ -112,20 +87,19 @@ with one final line of the form `Answer: <value>` that repeats that value \
 exactly as you wrote it in your prose. Omit the line when you ask a clarifying \
 question or decline.";
 
-/// Appends [`HARNESS_POLICY_PROMPT`] (and, with `answer_slot`,
-/// [`ANSWER_LINE_POLICY_PROMPT`]) to the wire system prompt. The wire prompt
-/// is kept first and unchanged.
+/// Preserve the wire system prompt on the default served path. The optional
+/// local answer-slot rehearsal adds its output-format instruction only when
+/// explicitly enabled.
 pub fn compose_system_prompt(wire_system_prompt: &str, answer_slot: bool) -> String {
+    if !answer_slot {
+        return wire_system_prompt.to_string();
+    }
     let wire = wire_system_prompt.trim_end();
-    let mut policy = HARNESS_POLICY_PROMPT.to_string();
-    if answer_slot {
-        policy.push('\n');
-        policy.push_str(ANSWER_LINE_POLICY_PROMPT);
-    }
     if wire.is_empty() {
-        return policy;
+        ANSWER_LINE_POLICY_PROMPT.to_string()
+    } else {
+        format!("{wire}\n\n{ANSWER_LINE_POLICY_PROMPT}")
     }
-    format!("{wire}\n\n{policy}")
 }
 
 /// Whether the `answer` slot is enabled for this process ([`ANSWER_SLOT_ENV`]
@@ -503,20 +477,19 @@ mod tests {
     }
 
     #[test]
-    fn policy_prompt_is_values_free_and_appended_after_the_wire_prompt() {
-        assert!(!HARNESS_POLICY_PROMPT.chars().any(|c| c.is_ascii_digit()));
+    fn default_prompt_preserves_wire_and_local_slot_instruction_is_values_free() {
         assert!(!ANSWER_LINE_POLICY_PROMPT
             .chars()
             .any(|c| c.is_ascii_digit()));
-        let composed = compose_system_prompt("You are Ditto.", false);
-        assert!(composed.starts_with("You are Ditto.\n\n"));
-        assert!(composed.ends_with(HARNESS_POLICY_PROMPT));
-        assert!(!composed.contains(ANSWER_LINE_POLICY_PROMPT));
-        assert_eq!(compose_system_prompt("  ", false), HARNESS_POLICY_PROMPT);
+        assert_eq!(
+            compose_system_prompt("You are Ditto.\n", false),
+            "You are Ditto.\n"
+        );
+        assert_eq!(compose_system_prompt("  ", false), "  ");
         // The Answer-line request rides only with the slot switch, so the slot
         // path is exercised exactly when the slot can be served.
         let with_slot = compose_system_prompt("You are Ditto.", true);
-        assert!(with_slot.contains(HARNESS_POLICY_PROMPT));
+        assert!(with_slot.starts_with("You are Ditto.\n\n"));
         assert!(with_slot.ends_with(ANSWER_LINE_POLICY_PROMPT));
     }
 

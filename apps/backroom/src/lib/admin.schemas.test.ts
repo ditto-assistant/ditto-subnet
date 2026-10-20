@@ -4,7 +4,15 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
+  SCREENING_SUBMISSION_AGENT_STATUSES,
+  reinstatementRetryBudgetSchema,
+  scoringLeaseConfirmation,
+  scoringLeaseSettingsControlSchema,
+  setScoringLeaseSettingsInputSchema,
+  emissionEligibilityControlSchema,
   auditReasonSchema,
+  baselineDiffManifestSchema,
+  sourceDiffManifestSchema,
   CEILING_DISABLED,
   platformSupportsRetestCohortSize,
   parseContinualRetestSettingsControl,
@@ -19,6 +27,8 @@ import {
   ATH_RULINGS_CONFIRMATION,
   athRulingSchema,
   athRulingPreviewItemSchema,
+  athRulingStepSchema,
+  athRulingExecuteItemSchema,
   athRulingsPreviewResponseSchema,
   athRulingsExecuteResponseSchema,
   athRulingsUploadResponseSchema,
@@ -40,6 +50,7 @@ import {
   validatorAssignmentListSchema,
   screenerReviewControlSchema,
   screenerReviewSettingsSchema,
+  l2ReportCanaryViewSchema,
   screenReviewAuditSchema,
   screeningFailureDiagnosticSchema,
   applyScreenerReviewSettingsInputSchema,
@@ -93,7 +104,11 @@ import {
   listLeaseRevocationsInputSchema,
   leaseRevocationsListSchema,
   screenerCapacityViewSchema,
+  screenerFleetReleaseSchema,
   screeningInfraRetryViewSchema,
+  screenerNodeChannelSettingsConfirmation,
+  screenerNodeChannelSettingsControlSchema,
+  setScreenerNodeChannelSettingsInputSchema,
   screenerProviderSettingsConfirmation,
   screenerProviderSettingsSchema,
   authorizeConfirmationBundleRetestInputSchema,
@@ -107,6 +122,7 @@ import {
   queueValidatorScoreRetestsInputSchema,
   v9ContractRetestListSchema,
   publicLeaderboardSchema,
+  validatorFleetObservabilityMemberSchema,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -303,6 +319,23 @@ describe('admin API schemas', () => {
     expect(screenerCapacityViewSchema.parse(base).event_retention_days).toBeNull()
   })
 
+  it('reports the shared screener bearer posture and null from older Platforms', () => {
+    const base = { snapshot: null, nodes: [], events: [] }
+    expect(screenerCapacityViewSchema.parse({ ...base, legacy_bearer_accepted: false }).legacy_bearer_accepted).toBe(false)
+    expect(screenerCapacityViewSchema.parse(base).legacy_bearer_accepted).toBeNull()
+  })
+
+  it('preserves the signed fixture capability and defaults older releases to false', () => {
+    const release = {
+      builtin_policy_version: 13,
+      revision: 'a'.repeat(40),
+      version: 'v0.330.16',
+      activated_at: 1_800_000_000,
+    }
+    expect(screenerFleetReleaseSchema.parse({ ...release, source_fixture_v1: true }).source_fixture_v1).toBe(true)
+    expect(screenerFleetReleaseSchema.parse(release).source_fixture_v1).toBe(false)
+  })
+
   it('preserves the fenced multi-provider capacity contract', () => {
     const parsed = screenerCapacityViewSchema.parse({
       snapshot: {
@@ -455,6 +488,86 @@ describe('admin API schemas', () => {
     expect(screenerProviderSettingsConfirmation(settings)).toBe(
       'APPLY SCREENER PROVIDERS BUILDS=gcp>targon RUNTIME=gcp>targon SOURCE_REVIEW=gcp GCE_OVERFLOW=DISABLED',
     )
+  })
+
+  it('names production admission closure in the node concurrency confirmation', () => {
+    const settings = {
+      screening_concurrency: 0,
+      sandbox_slots: 4,
+      build_concurrency: 4,
+      runtime_concurrency: 4,
+      source_review_concurrency: 4,
+      canary_concurrency: 1,
+    }
+
+    expect(screenerNodeChannelSettingsConfirmation('subnet-screener-1', settings)).toBe(
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=0 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CANARY=1 CLOSE PRODUCTION ADMISSION',
+    )
+    expect(
+      screenerNodeChannelSettingsConfirmation('subnet-screener-1', {
+        ...settings,
+        screening_concurrency: 4,
+        canary_concurrency: 0,
+      }),
+    ).toBe(
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=4 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CANARY=0',
+    )
+  })
+
+  it('reads a pre-canary node revision with the Platform default but writes all six limits', () => {
+    const legacy = {
+      screening_concurrency: 2,
+      sandbox_slots: 2,
+      build_concurrency: 2,
+      runtime_concurrency: 2,
+      source_review_concurrency: 2,
+    }
+    const revision = {
+      environment: 'prod',
+      node_id: 'subnet-screener-1',
+      revision: 3,
+      parent_revision: 2,
+      settings: legacy,
+      reason: 'Open two production lanes on the primary',
+      actor: 'operator@example.com',
+      created_at: null,
+    }
+    const control = screenerNodeChannelSettingsControlSchema.parse({
+      current: revision,
+      history: [revision],
+      usage: {
+        screening_active: 1,
+        sandbox_active: 0,
+        build_active: 0,
+        runtime_active: 0,
+        source_review_active: 0,
+      },
+    })
+    expect(control.current.settings.canary_concurrency).toBe(1)
+    expect(control.usage?.canary_active).toBe(0)
+    expect(control.usage?.canary_queued).toBe(0)
+
+    const write = {
+      nodeId: 'subnet-screener-1',
+      expectedRevision: 3,
+      reason: 'Reserve both production lanes on the primary',
+      confirmation: 'unused',
+    }
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.safeParse({ ...write, settings: legacy }).success,
+    ).toBe(false)
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.safeParse({
+        ...write,
+        settings: { ...legacy, canary_concurrency: 9 },
+      }).success,
+    ).toBe(false)
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.parse({
+        ...write,
+        settings: { ...legacy, canary_concurrency: 0 },
+      }).settings.canary_concurrency,
+    ).toBe(0)
   })
 
   it('parses aggregate inference controls and rejects unsafe operator input', () => {
@@ -825,6 +938,8 @@ describe('admin API schemas', () => {
     })
     expect(assignments.items[0].score_count).toBe(2)
     expect(assignments.items[0].provisional_composite).toBe(1.25)
+    // A platform that predates the field reads as "no seed", not a guess.
+    expect(assignments.items[0].seed).toBeNull()
     expect(() =>
       releaseValidatorAssignmentInputSchema.parse({
         agentId: assignments.items[0].agent_id,
@@ -833,6 +948,40 @@ describe('admin API schemas', () => {
         reason: 'short',
       }),
     ).toThrow()
+  })
+
+  it('keeps a continual retest lease seed exact and rejects a lossy number', () => {
+    const lease = {
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      agent_name: 'memory-agent',
+      miner_hotkey: '5Miner',
+      validator_hotkey: '5Validator',
+      issued_at: '2026-09-22T17:35:16Z',
+      deadline: '2026-09-22T20:35:16Z',
+      bench_version: 13,
+      attempt_count: 1,
+      score_count: 3,
+      provisional_composite: 0.9,
+      purpose: 'continual_retest',
+      seed: '9007199254740993',
+    }
+    const parsed = validatorAssignmentListSchema.parse({
+      count: 1,
+      generation: 'active',
+      active_bench_version: 13,
+      items: [lease],
+    })
+    expect(parsed.items[0].seed).toBe('9007199254740993')
+    for (const seed of [Number.MAX_SAFE_INTEGER + 2, '-1', '01', '1e3']) {
+      expect(() =>
+        validatorAssignmentListSchema.parse({
+          count: 1,
+          generation: 'active',
+          active_bench_version: 13,
+          items: [{ ...lease, seed }],
+        }),
+      ).toThrow()
+    }
   })
 })
 
@@ -1179,6 +1328,17 @@ type MutableConfirmationValue<T> = T extends string
 type MutableConfirmationBundle = MutableConfirmationValue<
   ReturnType<typeof confirmationBundle>
 >
+
+describe('screening submission search filters', () => {
+  it('lists exactly the generated Platform AgentStatus values', () => {
+    expectTypeOf<(typeof SCREENING_SUBMISSION_AGENT_STATUSES)[number]>().toEqualTypeOf<
+      PlatformComponents['schemas']['AgentStatus']
+    >()
+    expect(new Set(SCREENING_SUBMISSION_AGENT_STATUSES).size).toBe(
+      SCREENING_SUBMISSION_AGENT_STATUSES.length,
+    )
+  })
+})
 
 describe('Bench v9 confirmation bundle schemas', () => {
   it('stays statically exhaustive against the generated Platform response types', () => {
@@ -1896,6 +2056,23 @@ describe('source review causal evidence schema', () => {
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
   })
 
+  it('retains signed v3 I5 proof and rejects an unbound assumption', () => {
+    const proof = {
+      evaluation_assumption: 'A fixed evaluation answer replaces the request answer.',
+      ordinary_product_exclusion: 'The served code skips the deciding model entirely.',
+      assumption_evidence_index: 0,
+    }
+    const finding = {
+      ...generatedFinding,
+      causal_evidence: { ...generatedFinding.causal_evidence, schema_version: 3, i5_proof: proof },
+    } as const
+    expect(sourceReviewFindingSchema.parse(finding).causal_evidence?.i5_proof).toEqual(proof)
+    expect(() => sourceReviewFindingSchema.parse({
+      ...finding,
+      causal_evidence: { ...finding.causal_evidence, i5_proof: { ...proof, assumption_evidence_index: 9 } },
+    })).toThrow(/not bound to source evidence/)
+  })
+
   it('parses and retains the complete policy-v10 invariant sweep', () => {
     const parsed = sourceReviewFindingSchema.parse({
       ...generatedFinding,
@@ -2022,6 +2199,36 @@ describe('source review causal evidence schema', () => {
         role_bindings: [{ ...generatedFinding.causal_evidence.role_bindings[0], line: 999 }],
       },
     })).toThrow(/does not reference/)
+  })
+})
+
+describe('L2 report canary read schema', () => {
+  const view = {
+    canary_id: '797a187d-61ae-46c5-9cc1-7bc310ad0c22',
+    request_id: 'f79ff91e-8132-4bcf-88e9-8c6ca4fa1a12',
+    agent_id: '68129524-aeea-4383-98cd-f74753b61b55',
+    source_attempt_id: '03a15469-3200-46ed-8eb5-3baf234e7918',
+    artifact_sha256: 'a'.repeat(64),
+    target_node_id: 'subnet-screener-1',
+    expected_agent_status: 'rejected',
+    expected_score_count: 0,
+    review_label: 'known_reject',
+    status: 'leased',
+    claimed_instance_id: 'subnet-screener-1-worker-1',
+    report: null,
+    error_code: null,
+    created_at: '2026-09-25T15:15:44Z',
+    completed_at: null,
+  }
+
+  it('preserves the live lease deadline and accepts older responses without it', () => {
+    const lease_expires_at = '2026-09-25T16:00:44Z'
+    expect(l2ReportCanaryViewSchema.parse({ ...view, lease_expires_at }).lease_expires_at)
+      .toBe(lease_expires_at)
+    expect(l2ReportCanaryViewSchema.parse(view).lease_expires_at).toBeUndefined()
+    expect(l2ReportCanaryViewSchema.parse(view).run_mode).toBe('source_only')
+    expect(l2ReportCanaryViewSchema.parse({ ...view, run_mode: 'full_runtime' }).run_mode)
+      .toBe('full_runtime')
   })
 })
 
@@ -2192,6 +2399,18 @@ describe('screener review settings schemas', () => {
 })
 
 describe('screen review audit schema', () => {
+  it('keeps the fixed L3 no-tool subtype in the operator diagnostic', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l3-adjudicator-model-tool-contract',
+      prompt_revision: 'l2-safety-v13', max_steps: 256, steps_used: 3,
+      final_stage: 'adjudicator', model_tool_failure_subcode: 'no_tool_call_after_corrections',
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_tool_failure_subcode: 'model response text',
+    })).toThrow()
+  })
+
   it('accepts the configured L2 step and output ceilings', () => {
     const audit = {
       stage: 'l2', reason_code: 'l2-model-inconclusive', prompt_revision: 'l2-v13',
@@ -2202,6 +2421,26 @@ describe('screen review audit schema', () => {
     expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
     expect(() => screenReviewAuditSchema.parse({ ...audit, max_steps: 257 })).toThrow()
     expect(() => screenReviewAuditSchema.parse({ ...audit, output_tokens_used: 1_000_001 })).toThrow()
+  })
+
+  it('preserves bounded inconclusive choices without accepting source text', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l2-model-inconclusive', prompt_revision: 'l2-v13',
+      max_steps: 256, steps_used: 7, dossier_complete: false,
+      model_categories: ['benchmark_emulation'],
+      model_inconclusive_invariants: ['i5_production_engine'],
+      model_evidence_count: 1, model_causal_role_count: 2,
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_categories: ['src/secret.py'],
+    })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_inconclusive_invariants: ['private finding'],
+    })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_evidence_count: 17,
+    })).toThrow()
   })
 
   it('preserves exact V13 preflight cause and budgets in Backroom diagnostics', () => {
@@ -3440,6 +3679,7 @@ describe('continual retest cohort sizing against an older platform', () => {
   })
   const legacySupport = {
     tie_weighting_mode: false,
+    statistical_band_mode: false,
     ledger_pin_mode: false,
     crown_incumbent_mode: false,
     retest_cohort_size: false,
@@ -3456,6 +3696,7 @@ describe('continual retest cohort sizing against an older platform', () => {
   const legacyPolicy = {
     aggregate_mode: 'enabled' as const,
     tie_weighting_mode: 'disabled' as const,
+    statistical_band_mode: 'disabled' as const,
     ledger_pin_mode: 'live' as const,
     crown_incumbent_mode: 'disabled' as const,
     idle_retests_enabled: true,
@@ -3557,6 +3798,7 @@ describe('continual retest cohort sizing against an older platform', () => {
 
     expect(continualRetestFieldSupport(partial)).toEqual({
       tie_weighting_mode: false,
+      statistical_band_mode: false,
       ledger_pin_mode: false,
       crown_incumbent_mode: false,
       retest_cohort_size: false,
@@ -3573,6 +3815,7 @@ describe('continual retest write contract', () => {
   const complete = {
     aggregate_mode: 'fleet_ready' as const,
     tie_weighting_mode: 'fleet_ready' as const,
+    statistical_band_mode: 'disabled' as const,
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'fleet_ready' as const,
     idle_retests_enabled: false,
@@ -3592,6 +3835,7 @@ describe('continual retest write contract', () => {
     // collapsed cohort, a discarded tie band.
     for (const field of [
       'tie_weighting_mode',
+      'statistical_band_mode',
       'ledger_pin_mode',
       'crown_incumbent_mode',
       'wave_membership',
@@ -3656,6 +3900,7 @@ describe('continual retest write contract', () => {
     ).toEqual({
       aggregate_mode: 'fleet_ready',
       tie_weighting_mode: 'disabled',
+      statistical_band_mode: 'disabled',
       ledger_pin_mode: 'epoch',
       crown_incumbent_mode: 'disabled',
       idle_retests_enabled: false,
@@ -3993,6 +4238,18 @@ describe('validator queue reinstatement schemas', () => {
     },
     created_at: '2026-07-27T19:00:00Z',
   }
+
+  it('accepts the fail-once zero infra-grant cap Platform records today', () => {
+    // MAX_AGENT_INFRA_RETRY_GRANTS is pinned at 0, so a real reinstatement row
+    // carries 0. Rejecting it broke get_validation_retry for every reinstated
+    // agent (2026-10-15, overhorizon v2).
+    const parsed = reinstatementRetryBudgetSchema.parse({
+      ...reinstatement.retry_budget_snapshot,
+      agent_infra_retry_grants: 0,
+      max_agent_infra_retry_grants: 0,
+    })
+    expect(parsed.max_agent_infra_retry_grants).toBe(0)
+  })
 
   it('reports whether an eviction can be reversed right now', () => {
     const parsed = validationRetryDetailSchema.parse({
@@ -4624,6 +4881,35 @@ describe('batched ATH rulings schemas', () => {
     ).toThrow()
   })
 
+  it('parses a hold-free clear as an attest step', () => {
+    const preview = athRulingPreviewItemSchema.parse({
+      index: 0,
+      action: 'clear',
+      agent_id: ruling.agent_id,
+      ok: true,
+      disposition: 'ready',
+      stale_guard: false,
+      would_change_crown: false,
+      steps: ['attest'],
+      reason: 'Reviewed: clean',
+      message: 'will clear without holding (the agent stays on the board)',
+    })
+    expect(preview.steps).toEqual(['attest'])
+    const executed = athRulingExecuteItemSchema.parse({
+      index: 0,
+      action: 'clear',
+      agent_id: ruling.agent_id,
+      status: 'applied',
+      agent_status: 'scored',
+      would_change_crown: false,
+      steps_applied: ['attest'],
+      annotated: true,
+      message: 'ruling applied and audit rows annotated',
+    })
+    expect(executed.steps_applied).toEqual(['attest'])
+    expect(() => athRulingStepSchema.parse('withdraw')).toThrow()
+  })
+
   // The drift guard: every Platform response field has an explicit validator
   // and the key sets match the generated contract in both directions.
   it('mirrors the generated Platform contract field-for-field', () => {
@@ -4644,6 +4930,14 @@ describe('batched ATH rulings schemas', () => {
     >()
     expectTypeOf<ZodInput<typeof athRulingSchema>>().toMatchTypeOf<
       PlatformComponents['schemas']['AdminAthRuling']
+    >()
+    // A step Platform sends must parse here: Zod fails the whole response on
+    // one unknown enum value, which would blank every item of a preview.
+    expectTypeOf<ZodOutput<typeof athRulingStepSchema>>().toEqualTypeOf<
+      NonNullable<PlatformComponents['schemas']['AdminAthRulingPreviewItem']['steps']>[number]
+    >()
+    expectTypeOf<ZodOutput<typeof athRulingStepSchema>>().toEqualTypeOf<
+      NonNullable<PlatformComponents['schemas']['AdminAthRulingExecuteItem']['steps_applied']>[number]
     >()
     expect(
       Object.keys(
@@ -4728,5 +5022,206 @@ describe('batched ATH rulings schemas', () => {
         summary: { ...view.summary, by_state: { ...view.summary.by_state, exploded: 1 } },
       }),
     ).toThrow()
+  })
+})
+
+describe('diff manifest omission fields (issue #480)', () => {
+  const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+  const baselineManifest = {
+    agent_id: agentId,
+    artifact_sha256: 'a'.repeat(64),
+    baseline: {
+      source: 'https://github.com/ditto-assistant/dittobench-starter-kit',
+      revision: 'b'.repeat(40),
+      commit_set_sha256: 'c'.repeat(64),
+      commit_count: 24,
+    },
+    files: [],
+    file_count: 35,
+    identical_count: 30,
+    modified_count: 5,
+    added_count: 0,
+    removed_count: 0,
+    stock_kit_count: 30,
+    custom_file_count: 5,
+    custom_added_lines: 9952,
+    path_aligned: false,
+    truncated: false,
+  }
+  const sourceManifest = {
+    agent_id: agentId,
+    reference_agent_id: agentId,
+    candidate_sha256: 'a'.repeat(64),
+    reference_sha256: 'b'.repeat(64),
+    files: [],
+    file_count: 0,
+    identical_count: 0,
+    modified_count: 0,
+    added_count: 0,
+    removed_count: 0,
+    truncated: false,
+  }
+
+  it('matches the generated Platform contract', () => {
+    type Baseline = PlatformComponents['schemas']['AdminBaselineDiffManifest']
+    expectTypeOf<Baseline['omitted_file_count']>().toEqualTypeOf<number>()
+    expectTypeOf<Baseline['omitted_paths']>().toEqualTypeOf<string[]>()
+    expectTypeOf<Baseline['custom_added_lines_complete']>().toEqualTypeOf<boolean>()
+  })
+
+  it('carries a lower-bound baseline total from a current Platform', () => {
+    const parsed = baselineDiffManifestSchema.parse({
+      ...baselineManifest,
+      omitted_file_count: 1,
+      omitted_paths: ['fixtures/seed-user/pairs.json'],
+      custom_added_lines_complete: false,
+    })
+    expect(parsed.custom_added_lines_complete).toBe(false)
+    expect(parsed.omitted_file_count).toBe(1)
+    expect(parsed.omitted_paths).toEqual(['fixtures/seed-user/pairs.json'])
+  })
+
+  it('treats an older Platform as omitting nothing it can name, completeness unknown', () => {
+    for (const legacy of [
+      baselineManifest,
+      {
+        ...baselineManifest,
+        omitted_file_count: null,
+        omitted_paths: null,
+        custom_added_lines_complete: null,
+      },
+    ]) {
+      const parsed = baselineDiffManifestSchema.parse(legacy)
+      expect(parsed.omitted_file_count).toBe(0)
+      expect(parsed.omitted_paths).toEqual([])
+      expect(parsed.custom_added_lines_complete).toBeNull()
+    }
+  })
+
+  it('accepts copy-review omissions and defaults them for an older Platform', () => {
+    expect(
+      sourceDiffManifestSchema.parse({
+        ...sourceManifest,
+        omitted_file_count: 2,
+        omitted_paths: ['assets/big.txt', 'assets/huge.txt'],
+      }),
+    ).toMatchObject({ omitted_file_count: 2, omitted_paths: ['assets/big.txt', 'assets/huge.txt'] })
+    expect(sourceDiffManifestSchema.parse(sourceManifest)).toMatchObject({
+      omitted_file_count: 0,
+      omitted_paths: [],
+    })
+  })
+})
+
+describe('emission eligibility policy schema', () => {
+  const settings = {
+    enforcement: 'enforce',
+    require_terminal_review: true,
+    exclude_inconclusive: true,
+    exclude_infrastructure_failed: true,
+    exclude_escalated: true,
+    require_completed_review: false,
+    clearance_activation: 'next_window',
+    activation_window_seconds: 3600,
+  }
+  const control = (effective: Record<string, unknown>) => ({
+    current: null,
+    history: [],
+    default: { ...settings, enforcement: 'off' },
+    effective: {
+      revision: 1,
+      scope: '*',
+      settings,
+      checksum: 'ab'.repeat(32),
+      source: 'revision',
+      max_age_seconds: 5,
+      default: { ...settings, enforcement: 'off' },
+      current_window_start: '2026-09-27T12:00:00Z',
+      next_window_start: '2026-09-27T13:00:00Z',
+      ...effective,
+    },
+    confirmation_phrase: 'APPLY EMISSION ELIGIBILITY',
+    recent_shadow_records: [],
+  })
+
+  it('shows enforce rehearsing as shadow until the fleet folds protocol 28', () => {
+    const parsed = emissionEligibilityControlSchema.parse(
+      control({
+        effective_enforcement: 'shadow',
+        fleet_protocol_ready: false,
+        required_protocol: 28,
+      }),
+    )
+    expect(parsed.effective.settings.enforcement).toBe('enforce')
+    expect(parsed.effective).toMatchObject({
+      effective_enforcement: 'shadow',
+      fleet_protocol_ready: false,
+      required_protocol: 28,
+    })
+  })
+})
+
+describe('scoring lease settings (#1156)', () => {
+  it('mirrors the generated Platform response shape', () => {
+    expectTypeOf<keyof ZodOutput<typeof scoringLeaseSettingsControlSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminScoringLeaseSettingsResponse']
+    >()
+    expectTypeOf<
+      keyof ZodOutput<typeof scoringLeaseSettingsControlSchema>['effective']
+    >().toEqualTypeOf<keyof PlatformComponents['schemas']['EffectiveScoringLeaseSettings']>()
+  })
+
+  it('requires the whole policy, the 60-240 bound, and a confirmation naming the TTL', () => {
+    const base = {
+      expectedRevision: 0,
+      settings: { scoring_ticket_ttl_minutes: 150 },
+      reason: 'v11 completions fit well inside 150 minutes',
+      confirmation: scoringLeaseConfirmation(150),
+    }
+    expect(setScoringLeaseSettingsInputSchema.parse(base)).toMatchObject({
+      scope: '*',
+      settings: { scoring_ticket_ttl_minutes: 150 },
+    })
+    expect(scoringLeaseConfirmation(150)).toBe('APPLY SCORING TICKET TTL 150 MINUTES')
+    expect(() =>
+      setScoringLeaseSettingsInputSchema.parse({ ...base, settings: {} }),
+    ).toThrow()
+    for (const minutes of [59, 241]) {
+      expect(() =>
+        setScoringLeaseSettingsInputSchema.parse({
+          ...base,
+          settings: { scoring_ticket_ttl_minutes: minutes },
+          confirmation: scoringLeaseConfirmation(minutes),
+        }),
+      ).toThrow()
+    }
+    expect(() =>
+      setScoringLeaseSettingsInputSchema.parse({
+        ...base,
+        confirmation: scoringLeaseConfirmation(180),
+      }),
+    ).toThrow(/APPLY SCORING TICKET TTL 150 MINUTES/)
+  })
+})
+
+describe('burn settings payout curve ordering', () => {
+  it('refuses an increasing curve on writes but still reads a stored one', async () => {
+    const { burnSettingsSchema, burnSettingsWriteSchema } = await import('./admin.schemas')
+    const increasing = { burn_share: 0, rank_shares: [0.07, 0.1, 0.13, 0.2, 0.5] }
+    expect(burnSettingsWriteSchema.safeParse(increasing).success).toBe(false)
+    expect(burnSettingsSchema.safeParse(increasing).success).toBe(true)
+    expect(
+      burnSettingsWriteSchema.safeParse({ burn_share: 0, rank_shares: [0.5, 0.2, 0.13, 0.1, 0.07] }).success,
+    ).toBe(true)
+  })
+})
+
+describe('validator fleet host specs parity', () => {
+  it('accepts every host_specs shape Platform publishes', () => {
+    type Generated = NonNullable<
+      PlatformComponents['schemas']['PublicValidatorHeartbeat']['host_specs']
+    >
+    type Parsed = NonNullable<ZodInput<typeof validatorFleetObservabilityMemberSchema>['host_specs']>
+    expectTypeOf<Generated>().toMatchTypeOf<Parsed>()
   })
 })

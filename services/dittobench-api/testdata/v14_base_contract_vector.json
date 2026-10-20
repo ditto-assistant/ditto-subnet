@@ -1,0 +1,91 @@
+{
+  "base_canonical": "ditto-v9-base-v1\nschema_version=1\nbench_version=14\nscore_contract.revision=v9-base-enforce-efficiency-v1\nscore_contract.manifest_sha256=861d161cd031d5c40a4c50f0ae0c3d4a4f99a8513ff7fc87239f22104ebe3bb8\nrun_id=run-v14-vector\nartifact_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ndataset_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\ntranscript_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\nordinary_composite_micros=875000\nordinary_stderr_micros=23456\nscore_gates_sha256=1279825049b74176bbf1df54ffc1f79b8cba038796ae526549e438c54e696b90\nsemantic_gate_factor_bps=10000\napplied_gate_factor_bps=10000\neffective_composite_micros=875000\neffective_stderr_micros=23456\n",
+  "base_evidence_sha256": "ebb70f787c4b2deca0574e8958f6653ec9eadfd3144698a28a27643948b84b9a",
+  "details": {
+    "schema_version": 1,
+    "bench_version": 14,
+    "score_contract": {
+      "revision": "v9-base-enforce-efficiency-v1",
+      "manifest_sha256": "861d161cd031d5c40a4c50f0ae0c3d4a4f99a8513ff7fc87239f22104ebe3bb8"
+    },
+    "run_id": "run-v14-vector",
+    "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dataset_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "transcript_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "ordinary_composite_micros": 875000,
+    "ordinary_stderr_micros": 23456,
+    "score_gates": {
+      "schema_version": 1,
+      "bench_version": 14,
+      "rollout_mode": "enforce",
+      "threshold_profile": {
+        "id": "v9-base-enforce-efficiency-v1",
+        "manifest_sha256": "861d161cd031d5c40a4c50f0ae0c3d4a4f99a8513ff7fc87239f22104ebe3bb8"
+      },
+      "model_use": {
+        "administered_cases": 2,
+        "eligible_cases": 2,
+        "successful_inference_cases": 2,
+        "missing_inference_cases": 0,
+        "observed_requests": 2,
+        "successful_requests": 2,
+        "prompt_tokens": 120,
+        "completion_tokens": 40,
+        "excluded": {
+          "preflight": 0,
+          "ablation": 0,
+          "undelivered": 0,
+          "validator_fault": 0
+        },
+        "case_attribution_complete": true,
+        "request_coverage_bps": 10000,
+        "coverage_bps": 10000,
+        "threshold_bps": 1,
+        "result": "passed",
+        "factor_bps": 10000
+      },
+      "authoritative_tool": {
+        "expected_executions": 0,
+        "matched_executions": 0,
+        "missing_executions": 0,
+        "unexpected_executions": 2,
+        "observed_executions": 2,
+        "coverage_bps": 10000,
+        "threshold_bps": 1,
+        "result": "not_applicable",
+        "factor_bps": 10000
+      },
+      "model_dependence": {
+        "administered_cases": 2,
+        "eligible_cases": 2,
+        "dependent_cases": 2,
+        "independent_cases": 0,
+        "slice_attribution_complete": true,
+        "dependence_bps": 10000,
+        "threshold_bps": 1,
+        "result": "passed",
+        "factor_bps": 10000
+      },
+      "claim_provenance": {
+        "administered_cases": 2,
+        "eligible_cases": 2,
+        "not_model_emitted_cases": 0,
+        "answer_in_prompt_cases": 0,
+        "flagged_cases": 0,
+        "unattributed_call_cases": 0,
+        "unsettled_cases": 0,
+        "zeroed_cases": 0,
+        "attribution_complete": true,
+        "posture": "shadow",
+        "flagged_bps": 0,
+        "result": "passed",
+        "factor_bps": 10000
+      }
+    },
+    "score_gates_sha256": "1279825049b74176bbf1df54ffc1f79b8cba038796ae526549e438c54e696b90",
+    "semantic_gate_factor_bps": 10000,
+    "applied_gate_factor_bps": 10000,
+    "effective_composite_micros": 875000,
+    "effective_stderr_micros": 23456
+  }
+}

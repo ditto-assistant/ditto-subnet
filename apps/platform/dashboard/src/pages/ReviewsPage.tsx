@@ -5,6 +5,7 @@ import type { JSX } from "solid-js";
 import { HandleBadge } from "../components/ui/HandleBadge";
 import { MinerAvatar } from "../components/ui/MinerAvatar";
 import { API_BASE } from "../lib/config";
+import { SubmissionDownload } from "../components/account/SubmissionDownload";
 import { authJSON, postJSON } from "../lib/api";
 import { copyText } from "../lib/copy";
 import { dashboardHref, fullEntityHref, spaHref, spaQuery } from "../lib/router";
@@ -109,6 +110,7 @@ interface DittoLinkAttempt {
 interface MinerSubmission {
   agent_id: string;
   name: string;
+  version?: number | null;
   status: string;
   created_at: string;
 }
@@ -126,6 +128,40 @@ interface MinerScreeningFailure {
   detail?: string | null;
   log_tail?: string | null;
   captured_at?: string | null;
+  /**
+   * Bounded source-review outcome (#1249). Review notes, cited locations, and
+   * the court's basis stay operator-side, so the panel never reads any other
+   * review field, including from older cached response shapes.
+   */
+  review_outcome?: MinerScreeningReviewOutcome | null;
+}
+
+interface MinerScreeningReviewOutcome {
+  outcome: string;
+  next_step: string;
+}
+
+const REVIEW_OUTCOME_COPY: Record<string, string> = {
+  cleared: "Source review cleared this submission.",
+  rejected: "Source review rejected this submission.",
+  held_for_operator_review: "Source review is holding this submission for an operator.",
+};
+
+const REVIEW_NEXT_STEP_COPY: Record<string, string> = {
+  none: "No action needed.",
+  await_operator_review: "No action needed now; an operator will decide.",
+  resubmit_after_fix:
+    "Fix the submission and upload a new one, or appeal from the submission page.",
+  contact_operators: "Contact the subnet operators for next steps.",
+};
+
+/** Fixed neutral copy for a known outcome; unknown values render nothing. */
+function reviewOutcomeCopy(review?: MinerScreeningReviewOutcome | null): string {
+  if (!review) return "";
+  const outcome = REVIEW_OUTCOME_COPY[review.outcome];
+  if (!outcome) return "";
+  const next = REVIEW_NEXT_STEP_COPY[review.next_step];
+  return next ? `${outcome} ${next}` : outcome;
 }
 
 interface MinerScreeningFeedback {
@@ -288,7 +324,7 @@ export function ReviewsPage(): JSX.Element {
 
 function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.Element {
   const [hours, setHours] = createSignal(24);
-  const [scopes, setScopes] = createSignal<string[]>(["read", "profile"]);
+  const [scopes, setScopes] = createSignal<string[]>(["read", "profile", "download"]);
   const [pending, setPending] = createSignal<DeviceStart | null>(null);
   const [status, setStatus] = createSignal("idle");
   const [error, setError] = createSignal("");
@@ -965,17 +1001,25 @@ function AccountPanel(): JSX.Element {
                   <li>
                     <a href={"/agent/" + item.agent_id}>{item.name}</a>
                     <span class="muted">
-                      {item.status} · {item.created_at}
+                      {item.version == null ? "Unversioned" : "v" + item.version} · {item.status} ·{" "}
+                      {item.created_at}
                     </span>
-                    <button class="btn ghost" onClick={() => void loadLogs(item.agent_id)}>
-                      Logs
-                    </button>
-                    <button class="btn ghost" onClick={() => void loadScreening(item.agent_id)}>
-                      Screening feedback
-                    </button>
-                    <button class="btn ghost" onClick={() => void loadGateNotes(item.agent_id)}>
-                      Gate notes
-                    </button>
+                    <div class="account-submission-actions">
+                      <SubmissionDownload
+                        agentId={item.agent_id}
+                        name={item.name}
+                        canDownload={me()?.session.scopes.includes("download") === true}
+                      />
+                      <button class="btn ghost" onClick={() => void loadLogs(item.agent_id)}>
+                        Logs
+                      </button>
+                      <button class="btn ghost" onClick={() => void loadScreening(item.agent_id)}>
+                        Screening feedback
+                      </button>
+                      <button class="btn ghost" onClick={() => void loadGateNotes(item.agent_id)}>
+                        Gate notes
+                      </button>
+                    </div>
                     <Show when={logAgent() === item.agent_id}>
                       <Show when={logsError()}>
                         <p class="account-error">{logsError()}</p>
@@ -1145,6 +1189,9 @@ function AccountPanel(): JSX.Element {
                                 </Show>
                                 <Show when={attempt.log_tail}>
                                   <pre>{attempt.log_tail}</pre>
+                                </Show>
+                                <Show when={reviewOutcomeCopy(attempt.review_outcome)}>
+                                  {(copy) => <p class="account-review-outcome">{copy()}</p>}
                                 </Show>
                               </li>
                             )}

@@ -81,7 +81,7 @@ func TestPracticeSubmitAcceptsReleasedV10(t *testing.T) {
 // the same deployment.
 func TestPracticeSubmitStillRejectsV8SourceBuilds(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
-		{"git", `{"bench_version":8,"run_size":"small","git_url":"https://example.com/miner.git"}`},
+		{"git", `{"bench_version":8,"run_size":"small","git_url":"https://example.com/miner.git","git_ref":"2d4c8c53c18be3926dfc954c1ea534e327e84f2b"}`},
 		{"tarball", `{"bench_version":8,"run_size":"small","tarball_url":"https://example.com/source.tgz"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,6 +93,14 @@ func TestPracticeSubmitStillRejectsV8SourceBuilds(t *testing.T) {
 				t.Fatalf("expected the screened-image contract, got %s", rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestPracticeSubmitRejectsMutableGitRef(t *testing.T) {
+	rr := submitOn(newPracticeTestServer(),
+		`{"bench_version":8,"run_size":"small","git_url":"https://example.com/miner.git","git_ref":"main"}`)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "full 40-character lowercase commit SHA") {
+		t.Fatalf("mutable git ref was not rejected at submission: %d %s", rr.Code, rr.Body.String())
 	}
 }
 

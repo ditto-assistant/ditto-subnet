@@ -225,6 +225,14 @@ export function ValidatorAssignmentPanel({
                           : ` · provisional ${item.provisional_composite.toFixed(3)}`}
                       </dd>
                     </div>
+                    {item.seed === null ? null : (
+                      <div>
+                        <dt className="text-[var(--muted)]">Seed</dt>
+                        <dd className="mt-1 break-all font-mono text-[var(--muted-strong)]">
+                          {item.seed}
+                        </dd>
+                      </div>
+                    )}
                   </dl>
                   <button
                     type="button"

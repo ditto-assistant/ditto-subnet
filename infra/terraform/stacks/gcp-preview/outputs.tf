@@ -7,7 +7,7 @@ output "runtime_service_account" {
 }
 
 output "bake_service_account" {
-  value = google_service_account.bake.email
+  value = try(google_service_account.bake[0].email, null)
 }
 
 output "lease_bucket" {

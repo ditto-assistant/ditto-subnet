@@ -6,7 +6,19 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
+
+func attachEffectAccounting(evidence *protocol.ToolProvenanceEvidence, accounting toolexec.EffectAccounting) {
+	if evidence == nil {
+		return
+	}
+	evidence.EffectAttempts = accounting.Attempts
+	evidence.ReceiptReplays = accounting.ReceiptReplays
+	evidence.NewHopReplays = accounting.NewHopReplays
+	evidence.SameHopRetries = accounting.SameHopRetries
+	evidence.AppliedEffects = accounting.AppliedEffects
+}
 
 func appendToolFinding(evidence *protocol.ToolProvenanceEvidence, finding string) {
 	for _, existing := range evidence.Findings {
@@ -49,7 +61,12 @@ func applyV10ToolProvenance(
 	if len(response.ToolCalls) > 0 && evidence.Matched == 0 {
 		appendToolFinding(evidence, "untrusted_self_report_only")
 	}
-	if evidence.Matched != len(observed) {
+	// A new-hop cached receipt consumes a fresh model emission without another
+	// execution. A same-hop retry after confirmed not_applied executes again
+	// without consuming another model emission. Both preserve one effect.
+	expectedMatched := len(observed) - evidence.SameHopRetries + evidence.NewHopReplays
+	if evidence.Matched != expectedMatched || evidence.NewHopReplays > evidence.ReceiptReplays ||
+		evidence.SameHopRetries > len(observed) || evidence.AppliedEffects > evidence.EffectAttempts {
 		evidence.Complete = false
 		appendToolFinding(evidence, "provenance_execution_count_mismatch")
 	}
@@ -58,7 +75,7 @@ func applyV10ToolProvenance(
 		return cs
 	}
 	valid := evidence.Complete && evidence.Unmatched == 0 &&
-		evidence.ModelSelectedNotExecuted == 0 && evidence.Matched == len(observed)
+		evidence.ModelSelectedNotExecuted == 0 && evidence.Matched == expectedMatched
 	if !valid {
 		cs.ToolScore = 0
 		cs.Notes = append(cs.Notes, fmt.Sprintf(
@@ -91,6 +108,11 @@ func summarizeV10ToolProvenance(
 		}
 		summary.ModelEmitted += evidence.ModelEmitted
 		summary.EndpointAttempts += evidence.EndpointAttempts
+		summary.EffectAttempts += evidence.EffectAttempts
+		summary.ReceiptReplays += evidence.ReceiptReplays
+		summary.NewHopReplays += evidence.NewHopReplays
+		summary.SameHopRetries += evidence.SameHopRetries
+		summary.AppliedEffects += evidence.AppliedEffects
 		summary.Matched += evidence.Matched
 		summary.Unmatched += evidence.Unmatched
 		summary.ModelSelectedNotExecuted += evidence.ModelSelectedNotExecuted

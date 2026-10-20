@@ -754,6 +754,12 @@ describe("chip thresholds", () => {
       penalized: false,
     });
     expect(tokenPenaltyChipLabel({ token_penalty: null } as CompositeBreakdown)).toBeNull();
+    expect(
+      tokenPenaltyChipLabel({
+        token_penalty: 0,
+        maximum_token_penalty: 0,
+      } as CompositeBreakdown),
+    ).toBeNull();
     expect(tokenPenaltyChipLabel(null)).toBeNull();
   });
 
@@ -841,6 +847,27 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     expect(byKey["Observed token use"]).toBe(
       (120000).toLocaleString() + " / " + (100000).toLocaleString() + " p95 baseline",
     );
+  });
+
+  it("renders the neutral bench v7+ quality-only token record as an unpenalized factor", () => {
+    const neutral = {
+      ...breakdown,
+      final_composite: 0.558,
+      token_penalty: 0,
+      token_efficiency_multiplier: 1,
+      maximum_token_penalty: 0,
+    };
+    expect(compositeEquationText(neutral)).toBe("0.620 × 0.900 × 1.000 = 0.558");
+    const rows = compositeCalculationRows({
+      tool_mean: 0.7,
+      memory_mean: 0.54,
+      bench_version: 9,
+      composite_breakdown: neutral,
+      token_efficiency: { observed_total_tokens: 120000, budget_percentile: 0 },
+    });
+    const byKey = Object.fromEntries((rows ?? []).map((row) => [row.k, row.v]));
+    expect(byKey["Token efficiency"]).toBe("× 1.000 (−0.0%; max 0%)");
+    expect(byKey["Observed token use"]).toBe((120000).toLocaleString() + " / baseline unavailable");
   });
 
   it("shows the post-continual efficiency fold as separate ranking provenance", () => {

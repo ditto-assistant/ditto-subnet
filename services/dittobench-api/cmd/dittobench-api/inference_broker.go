@@ -222,6 +222,9 @@ type brokerSession struct {
 	sessionToolConsumed         uint64
 	sessionToolInvalidEmissions uint64
 	sessionToolCases            map[string]brokerSessionToolLedger
+	// effectOperations binds a V1 retry to one already consumed model emission.
+	// It never authorizes a new effect: the endpoint owns receipt deduplication.
+	effectOperations map[brokerEffectOperationKey]*brokerEffectOperation
 	// Bench v12 answer-stuffing capture. answerIO records, per active case
 	// generation, the ordered bounded/normalized clean-pass model I/O (value
 	// tokens only -- never the answer key or raw prose). answerIOByCaseID holds
@@ -316,6 +319,7 @@ type brokerSession struct {
 	// already fail the run through usageUnavailable; this counter exists so
 	// finalize can name a rejected request instead of a spent grant.
 	agentRequestRejections uint64
+	admission              map[string]admissionBucket
 	// capacityExhaustions counts calls that used up their whole bounded
 	// backpressure wait budget and gave up. Deliberately its own counter AND
 	// deliberately still infrastructure: a saturated lane is a platform
@@ -623,6 +627,12 @@ type inferenceBroker struct {
 	sleep                 func(context.Context, time.Duration) error
 	relayWait             func(string, bool)
 	terminalAgentFailure  func(string)
+
+	// controlAuthMode mirrors the control plane's DITTOBENCH_CONTROL_AUTH_MODE
+	// so the broker's own check and controlAuth.wrap agree on whether the
+	// published Compose default token still counts as a credential.
+	controlAuthMode       controlAuthMode
+	publicDefaultTokenLog sync.Once
 }
 
 // embeddingBackpressureGate is a validator-wide circuit breaker for the
@@ -801,6 +811,7 @@ type toolRoute struct {
 	provenanceSessionID   string
 	capabilityKey         []byte
 	handler               http.Handler
+	effectProtocolV1      bool
 	slots                 chan struct{}
 }
 
@@ -831,6 +842,21 @@ type brokerSessionToolLedger struct {
 	ToolFindings       uint64
 }
 
+type brokerEffectOperationKey struct {
+	routeID     string
+	caseID      string
+	operationID string
+}
+
+type brokerEffectOperation struct {
+	userID     string
+	name       string
+	argsSHA256 string
+	generation uint64
+	hop        int
+	replays    uint8
+}
+
 // sessionToolProvenanceTotals is the run-level view of the session-wide
 // emission ledger, read once after the last case has returned. Emissions that
 // were never consumed are the run's model_selected_not_executed count: they
@@ -847,6 +873,7 @@ const (
 	toolFindingDuplicateExecution
 	toolFindingCrossCaseReplay
 	toolFindingInvalidModelEmission
+	toolFindingUnsupportedEffectProtocol
 )
 
 // platformGrantDenied marks a platform inference response that declined to
@@ -1197,6 +1224,36 @@ const platformRejectionMessageLimit = 400
 // and the agent-fault attribution above are all untouched, and the response
 // shape stays `{"error": ...}` -- only the human-readable value differs. A body
 // this cannot parse falls back to the old wording rather than failing.
+func cloneAdmission(in map[string]admissionBucket) map[string]admissionBucket {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]admissionBucket, len(in))
+	for code, bucket := range in {
+		out[code] = bucket
+	}
+	return out
+}
+
+func (session *brokerSession) noteAdmissionLocked(status int, detail string) {
+	code := admissionCode(status, detail)
+	if code == "" {
+		return
+	}
+	if session.admission == nil {
+		session.admission = map[string]admissionBucket{}
+	}
+	bucket := session.admission[code]
+	bucket.Count++
+	bucket.HTTPStatus = status
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	if bucket.First == "" {
+		bucket.First = stamp
+	}
+	bucket.Last = stamp
+	session.admission[code] = bucket
+}
+
 func platformRejectionMessage(body []byte) string {
 	if len(body) == 0 || len(body) > 64<<10 {
 		return ""
@@ -1309,6 +1366,7 @@ func newInferenceBroker(maxSessions int, embeddingCapacity ...int) *inferenceBro
 		maxSessions:      maxSessions * 2,
 		embeddingSlots:   make(chan struct{}, capacity),
 		controlToken:     strings.TrimSpace(os.Getenv("DITTOBENCH_BROKER_CONTROL_TOKEN")),
+		controlAuthMode:  controlAuthModeFromEnv(os.Getenv("DITTOBENCH_CONTROL_AUTH_MODE")),
 		platformProxyURL: platformProxyURL,
 		platformTransportURL: configuredPlatformTransportURL(
 			os.Getenv("DITTOBENCH_PLATFORM_INFERENCE_TRANSPORT_URL"), platformProxyURL,
@@ -1409,6 +1467,20 @@ func configuredPlatformTransportURL(raw, canonical string) string {
 	return configuredPlatformProxyURL(raw)
 }
 
+// controlAuthorized admits a caller of the inference-session control routes
+// (prepare, activate, activate-confirmation, cancel).
+//
+// Loopback admission is unchanged here: those peers share the scorer's own
+// network namespace, while the validator always arrives from the Compose
+// bridge and must present the bearer. Retiring source-IP trust is a separate
+// rollout decision (see verifyControlCredential in control_auth.go).
+//
+// The published Compose default (insecureDefaultControlToken) is a literal in
+// a public repository, so it is not a secret. It follows the same staged
+// rollout as the control plane: under shadow it is still accepted, because
+// every validator that never set DITTOBENCH_BROKER_CONTROL_TOKEN depends on it,
+// and the first acceptance is logged as a would-reject; under enforce it is
+// treated as "no token configured" and every non-loopback call is refused.
 func (b *inferenceBroker) controlAuthorized(r *http.Request) bool {
 	ip := net.ParseIP(sourceIP(r.RemoteAddr))
 	if ip != nil && ip.IsLoopback() {
@@ -1418,7 +1490,34 @@ func (b *inferenceBroker) controlAuthorized(r *http.Request) bool {
 		return false
 	}
 	provided, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	return ok && subtle.ConstantTimeCompare([]byte(provided), []byte(b.controlToken)) == 1
+	if !ok || subtle.ConstantTimeCompare([]byte(provided), []byte(b.controlToken)) != 1 {
+		return false
+	}
+	if b.controlToken != insecureDefaultControlToken {
+		return true
+	}
+	if b.controlAuthMode == controlAuthEnforce {
+		log.Printf(
+			"inference control auth rejected: %s %s from %s: the published Compose "+
+				"default token is not a credential; set DITTOBENCH_BROKER_CONTROL_TOKEN "+
+				"to a per-host secret",
+			r.Method, r.URL.Path, clientIP(r),
+		)
+		return false
+	}
+	// Once per process: in shadow, controlAuth.wrap already logs every
+	// would-reject verdict for these routes (it treats this same literal as no
+	// credential), so repeating it per request here would only double the noise.
+	b.publicDefaultTokenLog.Do(func() {
+		log.Printf(
+			"inference control auth (shadow, would reject): %s %s from %s: the "+
+				"published Compose default token is not a credential; set "+
+				"DITTOBENCH_BROKER_CONTROL_TOKEN to a per-host secret before "+
+				"DITTOBENCH_CONTROL_AUTH_MODE=enforce",
+			r.Method, r.URL.Path, clientIP(r),
+		)
+	})
+	return true
 }
 
 func (b *inferenceBroker) requireControl(w http.ResponseWriter, r *http.Request) bool {
@@ -1565,6 +1664,10 @@ func (b *inferenceBroker) registerToolRoute(
 		return registeredToolRoute{}, func() {}, err
 	}
 	b.mu.Lock()
+	effectProtocolV1 := false
+	if endpoint, ok := h.(interface{ SupportsToolEffectReceiptsV1() bool }); ok {
+		effectProtocolV1 = endpoint.SupportsToolEffectReceiptsV1()
+	}
 	b.tools[id] = toolRoute{
 		expectedSourceIP:      expectedSourceIP,
 		allowNATFallback:      allowNATFallback && requireCaseCapability,
@@ -1572,6 +1675,7 @@ func (b *inferenceBroker) registerToolRoute(
 		provenanceSessionID:   provenanceSessionID,
 		capabilityKey:         key,
 		handler:               h,
+		effectProtocolV1:      effectProtocolV1,
 		slots:                 make(chan struct{}, sourceConcurrencyFor(caseConcurrency)),
 	}
 	b.mu.Unlock()
@@ -1632,8 +1736,22 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 	}
 	if route.provenanceSessionID != "" {
 		var call protocol.ToolExecRequest
-		if json.Unmarshal(requestBody, &call) != nil ||
-			!b.consumeModelToolCall(route.provenanceSessionID, caseID, call) {
+		if json.Unmarshal(requestBody, &call) != nil {
+			writeError(w, http.StatusConflict, "tool provenance unavailable")
+			return
+		}
+		var authorized bool
+		if call.EffectProtocol != "" || call.OperationID != "" {
+			if !route.effectProtocolV1 {
+				b.recordEffectOperationDenial(route.provenanceSessionID, caseID, toolFindingUnsupportedEffectProtocol)
+				writeError(w, http.StatusConflict, "tool effect protocol unavailable")
+				return
+			}
+			authorized = b.authorizeEffectOperationV1(route.provenanceSessionID, r.PathValue("id"), caseID, call)
+		} else {
+			authorized = b.consumeModelToolCall(route.provenanceSessionID, caseID, call)
+		}
+		if !authorized {
 			writeError(w, http.StatusConflict, "tool provenance unavailable")
 			return
 		}
@@ -1773,6 +1891,151 @@ func (b *inferenceBroker) consumeModelToolCall(
 	argsSHA256, argsErr := canonicalToolArguments(call.Args)
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	return consumeModelToolCallLocked(session, caseID, call, argsSHA256, argsErr)
+}
+
+// authorizeEffectOperationV1 permits a bounded retransmission of the exact
+// operation already backed by a model emission. A fresh operation still has to
+// consume a fresh emission. Only the V1 endpoint can prove whether the effect
+// was applied, so this broker binding does not itself grant effect credit.
+func (b *inferenceBroker) authorizeEffectOperationV1(
+	sessionID, routeID, caseID string, call protocol.ToolExecRequest,
+) bool {
+	argsSHA256, err := canonicalToolArguments(call.Args)
+	b.mu.RLock()
+	session := b.sessions[sessionID]
+	b.mu.RUnlock()
+	if session == nil {
+		return false
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	generation := session.caseIDs[caseID]
+	if generation == 0 {
+		generation = session.activeCaseGeneration
+	}
+	if generation != 0 && session.caseIDs[caseID] == 0 && session.activeCaseID != caseID {
+		recordEffectDenialLocked(session, caseID, generation, toolFindingCrossCaseReplay)
+		return false
+	}
+	if session.benchVersion < protocol.BenchVersionV13 {
+		recordEffectDenialLocked(session, caseID, generation, toolFindingUnsupportedEffectProtocol)
+		return false
+	}
+	if call.EffectProtocol != protocol.ToolEffectProtocolV1 || !validEffectOperationID(call.OperationID) {
+		recordEffectDenialLocked(session, caseID, generation, toolFindingUnsupportedEffectProtocol)
+		return false
+	}
+	if call.Name == "" || err != nil {
+		recordEffectDenialLocked(session, caseID, generation, toolFindingNameArgumentMismatch)
+		return false
+	}
+	key := brokerEffectOperationKey{routeID: routeID, caseID: caseID, operationID: call.OperationID}
+	if prior := session.effectOperations[key]; prior != nil {
+		if prior.userID != call.UserID || prior.name != call.Name ||
+			prior.argsSHA256 != argsSHA256 {
+			recordEffectDenialLocked(session, caseID, generation, toolFindingNameArgumentMismatch)
+			return false
+		}
+		if prior.generation != generation {
+			recordEffectDenialLocked(session, caseID, generation, toolFindingCrossCaseReplay)
+			return false
+		}
+		if prior.replays >= 3 {
+			recordEffectDenialLocked(session, caseID, generation, toolFindingDuplicateExecution)
+			return false
+		}
+		// A transport retry retains its hop. A later model-emitted retry has a
+		// new hop and must consume its own matching emission before the cached
+		// endpoint receipt can be returned without applying the effect again.
+		if prior.hop != call.Hop {
+			if !consumeModelToolCallLocked(session, caseID, call, argsSHA256, nil) {
+				return false
+			}
+			prior.hop = call.Hop
+			prior.replays++
+			return true
+		}
+		prior.replays++
+		if generation != 0 {
+			snapshot := session.caseSnapshots[generation]
+			snapshot.EndpointAttempts++
+			session.caseSnapshots[generation] = snapshot
+		} else {
+			ledger := session.sessionToolCases[caseID]
+			ledger.EndpointAttempts++
+			session.sessionToolCases[caseID] = ledger
+		}
+		return true
+	}
+	if !consumeModelToolCallLocked(session, caseID, call, argsSHA256, nil) {
+		return false
+	}
+	if session.effectOperations == nil {
+		session.effectOperations = make(map[brokerEffectOperationKey]*brokerEffectOperation)
+	}
+	session.effectOperations[key] = &brokerEffectOperation{
+		userID: call.UserID, name: call.Name, argsSHA256: argsSHA256, generation: generation, hop: call.Hop,
+	}
+	return true
+}
+
+func (b *inferenceBroker) recordEffectOperationDenial(sessionID, caseID string, finding uint64) {
+	b.mu.RLock()
+	session := b.sessions[sessionID]
+	b.mu.RUnlock()
+	if session == nil {
+		return
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	generation := session.caseIDs[caseID]
+	if generation == 0 {
+		generation = session.activeCaseGeneration
+	}
+	if generation != 0 && session.caseIDs[caseID] == 0 && session.activeCaseID != caseID {
+		finding = toolFindingCrossCaseReplay
+	}
+	recordEffectDenialLocked(session, caseID, generation, finding)
+}
+
+func recordEffectDenialLocked(session *brokerSession, caseID string, generation, finding uint64) {
+	if generation != 0 {
+		snapshot := session.caseSnapshots[generation]
+		snapshot.EndpointAttempts++
+		snapshot.UnmatchedToolCalls++
+		snapshot.ToolFindings |= finding
+		session.caseSnapshots[generation] = snapshot
+		return
+	}
+	if session.sessionToolCases == nil {
+		session.sessionToolCases = make(map[string]brokerSessionToolLedger)
+	}
+	ledger := session.sessionToolCases[caseID]
+	ledger.EndpointAttempts++
+	ledger.UnmatchedToolCalls++
+	ledger.ToolFindings |= finding
+	session.sessionToolCases[caseID] = ledger
+}
+
+func validEffectOperationID(id string) bool {
+	if len(id) < 16 || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func consumeModelToolCallLocked(
+	session *brokerSession, caseID string, call protocol.ToolExecRequest,
+	argsSHA256 string, argsErr error,
+) bool {
 	generation := session.caseIDs[caseID]
 	capabilityBound := generation != 0
 	if generation == 0 {
@@ -3844,6 +4107,7 @@ func (b *inferenceBroker) health(w http.ResponseWriter, session *brokerSession) 
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
 		AgentRequestRejections:    session.agentRequestRejections,
+		Admission:                 cloneAdmission(session.admission),
 		CapacityExhaustions:       session.capacityExhaustions,
 		RecoveryWaits:             session.recoveryWaits,
 		RecoveryExhaustions:       session.recoveryExhaustions,
@@ -4122,6 +4386,7 @@ func (b *inferenceBroker) proxy(
 		if atCapacity {
 			session.mu.Lock()
 			session.capacityExhaustions++
+			session.noteAdmissionLocked(responseStatus, "")
 			session.mu.Unlock()
 			return
 		}
@@ -4155,17 +4420,32 @@ func (b *inferenceBroker) proxy(
 		// usageUnavailable is still incremented, unchanged, so the run fails
 		// exactly as before via requireCompleteV7Usage. The new counter is
 		// purely attributive.
-		agentAttributedRejection := trustedChatHandler == nil || preReservationReaderRejection
+		//
+		// A stale refusal is the one 4xx the harness cannot cause. The Platform
+		// compares X-Ditto-Requested-At -- stamped by this broker immediately
+		// before the send -- against its own clock with a 30s window, so it
+		// measures validator clock drift or a stalled upload, never the
+		// harness's bytes. Charging it to the agent spent miners' only attempt
+		// on 5CFtzzb4's intermittent skew; it is infrastructure, and the
+		// unattributed branch already lands on model_relay_unavailable, which
+		// every deployed validator retries without fault.
+		staleRefusal := legacyGateway == "" && trustedChatHandler == nil &&
+			admissionCode(responseStatus, platformRejectionMessage(responseBody)) == "stale_session"
+		agentAttributedRejection := (trustedChatHandler == nil || preReservationReaderRejection) && !staleRefusal
 		session.mu.Lock()
 		session.usageUnavailable++
 		if agentAttributedRejection {
 			session.agentRequestRejections++
+			session.noteAdmissionLocked(responseStatus, platformRejectionMessage(responseBody))
 			if confirmationCase && preReservationReaderRejection {
 				snapshot := session.caseSnapshots[caseGeneration]
 				snapshot.ReaderAgentRejections++
 				session.caseSnapshots[caseGeneration] = snapshot
 			}
 		} else {
+			if staleRefusal {
+				session.noteAdmissionLocked(responseStatus, platformRejectionMessage(responseBody))
+			}
 			session.failures++
 		}
 		session.providerLatency += totalLatency
@@ -4182,8 +4462,13 @@ func (b *inferenceBroker) proxy(
 		}
 		if agentAttributedRejection {
 			log.Printf(
-				"run %s: platform rejected the harness's inference request with %d before any reservation -- AGENT fault, no provider was contacted (rejection #%d): %s",
-				runID, responseStatus, rejections, detail,
+				"run %s: platform rejected the harness's inference request with %d (%s) before any reservation -- AGENT fault, no provider was contacted (rejection #%d): %s",
+				runID, responseStatus, admissionCode(responseStatus, detail), rejections, detail,
+			)
+		} else if staleRefusal {
+			log.Printf(
+				"run %s: platform refused the broker's request timestamp as stale (%d) -- validator clock or transport, NOT an agent fault: %s",
+				runID, responseStatus, detail,
 			)
 		} else {
 			log.Printf(
@@ -4402,6 +4687,7 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
 		AgentRequestRejections:    session.agentRequestRejections,
+		Admission:                 cloneAdmission(session.admission),
 		CapacityExhaustions:       session.capacityExhaustions,
 		RecoveryWaits:             session.recoveryWaits,
 		RecoveryExhaustions:       session.recoveryExhaustions,
@@ -4832,6 +5118,7 @@ func toolFindingNames(bits uint64) []string {
 		{toolFindingDuplicateExecution, "duplicate_tool_execution"},
 		{toolFindingCrossCaseReplay, "cross_case_replay"},
 		{toolFindingInvalidModelEmission, "invalid_model_tool_emission"},
+		{toolFindingUnsupportedEffectProtocol, "unsupported_effect_protocol"},
 	} {
 		if bits&finding.bit != 0 {
 			findings = append(findings, finding.name)

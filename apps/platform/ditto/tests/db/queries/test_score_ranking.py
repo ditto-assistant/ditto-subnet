@@ -21,6 +21,7 @@ Three things are pinned here:
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -31,13 +32,14 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.efficiency import epoch_index_for
-from ditto.db.models import Agent, ValidatorHeartbeat, ValidatorTicket
+from ditto.db.models import Agent, Score, ValidatorHeartbeat, ValidatorTicket
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.confirmation_scores import (
     ConfirmationSeedScore,
@@ -229,6 +231,97 @@ class TestComparator:
 
         assert winner.agent_id == strong.agent_id
         assert winner.composite == pytest.approx(0.90)
+
+    def test_registered_sibling_represents_a_family_whose_best_row_is_deregistered(
+        self,
+    ) -> None:
+        retired = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.95,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        registered = _CrownRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=3),
+            composite=0.80,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE + timedelta(days=3),
+        )
+
+        [winner] = dedupe_owner_rows(
+            [retired, registered],
+            scores={retired.agent_id: 0.95, registered.agent_id: 0.80},
+            registered_hotkeys={registered.miner_hotkey},
+        )
+
+        assert winner.agent_id == registered.agent_id
+        # The deregistered row is outside the winner's crown band, so the
+        # registered generation keeps its own arrival time.
+        assert winner.fold_first_seen == registered.first_seen
+
+        close_retired = _CrownRow(
+            agent_id=_uuid("3"),
+            miner_hotkey="5" + "C" * 47,
+            first_seen=_BASE,
+            composite=0.8004,
+            bench_version=5,
+            emission_owner_root="coldkey:owner-b",
+            crown_first_seen=_BASE,
+        )
+        close_registered = _CrownRow(
+            agent_id=_uuid("4"),
+            miner_hotkey="5" + "D" * 47,
+            first_seen=_BASE + timedelta(days=3),
+            composite=0.8000,
+            bench_version=5,
+            emission_owner_root="coldkey:owner-b",
+            crown_first_seen=_BASE + timedelta(days=3),
+        )
+        [heir] = dedupe_owner_rows(
+            [close_retired, close_registered],
+            scores={
+                close_retired.agent_id: 0.8004,
+                close_registered.agent_id: 0.8000,
+            },
+            registered_hotkeys={close_registered.miner_hotkey},
+        )
+        assert heir.agent_id == close_registered.agent_id
+        assert heir.fold_first_seen == close_retired.first_seen
+
+    def test_a_fully_deregistered_family_stays_visible_but_can_be_omitted(
+        self,
+    ) -> None:
+        only = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+
+        [shown] = dedupe_owner_rows(
+            [only],
+            scores={only.agent_id: 0.90},
+            registered_hotkeys=set(),
+        )
+        assert shown.agent_id == only.agent_id
+        assert (
+            dedupe_owner_rows(
+                [only],
+                scores={only.agent_id: 0.90},
+                registered_hotkeys=set(),
+                omit_unregistered_families=True,
+            )
+            == []
+        )
 
     def test_a_tied_resubmission_is_shown_and_keeps_the_crown(self) -> None:
         first = _CrownRow(
@@ -1434,6 +1527,412 @@ class TestContinuationFloor:
         assert isinstance(details, dict)
         assert set(details) == {"composite_stderr", "confirmation_seeds"}
         assert details["confirmation_seeds"] is None
+
+    @pytest.mark.parametrize(
+        "document",
+        [None, {}, [], [{"composite_stderr": 99}], 8, "text", True],
+    )
+    async def test_partial_details_preserves_non_object_and_missing_key_semantics(
+        self, session_maker: async_sessionmaker[AsyncSession], document
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "P" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        async with session_maker() as session, session.begin():
+            for score in await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            ):
+                score.details = document
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                bench_version=_BENCH,
+                include_fingerprints=False,
+                details_keys=("composite_stderr", "confirmation_seeds", "missing"),
+            )
+        assert len(rows) == 1
+        assert rows[0].details == {
+            "composite_stderr": None,
+            "confirmation_seeds": None,
+            "missing": None,
+        }
+
+    @pytest.mark.parametrize("family_members", [False, True])
+    async def test_partial_details_preserves_signed_median_and_arbitrary_keys(
+        self, session_maker: async_sessionmaker[AsyncSession], family_members: bool
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "Q" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        async with session_maker() as session, session.begin():
+            for score in await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            ):
+                score.details = {
+                    "composite_stderr": score.composite / 100,
+                    'odd".key': {"signed_row": score.validator_hotkey},
+                    "explicit_null": None,
+                    "audit_payload": "large irrelevant telemetry" * 5000,
+                }
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                bench_version=_BENCH,
+                include_fingerprints=False,
+                include_family_members=family_members,
+                details_keys=(
+                    "composite_stderr",
+                    'odd".key',
+                    "explicit_null",
+                    'odd".key',
+                ),
+            )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.composite == 0.8
+        assert row.validator_hotkey == _VALIDATORS[0]
+        assert row.details == {
+            "composite_stderr": 0.008,
+            'odd".key': {"signed_row": _VALIDATORS[0]},
+            "explicit_null": None,
+        }
+        assert row.stored_composite_stderr == 0.008
+
+    @pytest.mark.parametrize("cache_mode", ["current", "null", "legacy", "array_decoy"])
+    async def test_fold_projection_keeps_exact_median_and_legacy_fallback(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        cache_mode: str,
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "S" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        keys = ("composite_stderr", "confirmation_seeds", "confirmation_composites")
+        async with session_maker() as session, session.begin():
+            for score in await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            ):
+                score.details = {
+                    "composite_stderr": score.composite / 100,
+                    "confirmation_seeds": [11, 22],
+                    "confirmation_composites": [score.composite, 0.95],
+                    "audit_payload": "irrelevant audit telemetry" * 5000,
+                }
+        if cache_mode != "current":
+            trigger = "scores_stderr_projection_refresh"
+            # Simulate interrupted migration/rollback and a malformed internal
+            # cache. Production writes cannot supply one: the trigger derives it.
+            async with session_maker() as session, session.begin():
+                await session.execute(
+                    text(f"ALTER TABLE scores DISABLE TRIGGER {trigger}")
+                )
+                projection = {
+                    "null": None,
+                    "legacy": {"composite_stderr": 99},
+                    "array_decoy": list(keys),
+                }[cache_mode]
+                await session.execute(
+                    text(
+                        "UPDATE scores SET "
+                        "stderr_projection=CAST(:projection AS jsonb) "
+                        "WHERE agent_id=:agent_id"
+                    ),
+                    {
+                        "projection": None
+                        if projection is None
+                        else json.dumps(projection),
+                        "agent_id": agent_id,
+                    },
+                )
+                await session.execute(
+                    text(f"ALTER TABLE scores ENABLE TRIGGER {trigger}")
+                )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session, bench_version=_BENCH, details_keys=keys
+            )
+        assert len(rows) == 1
+        assert rows[0].validator_hotkey == _VALIDATORS[0]
+        assert rows[0].details == {
+            "composite_stderr": 0.008,
+            "confirmation_seeds": [11, 22],
+            "confirmation_composites": [0.8, 0.95],
+        }
+        assert rows[0].stored_composite_stderr == 0.008
+
+    @pytest.mark.parametrize("keys", [(), ("bench_version",), ("bench_version",) * 2])
+    async def test_partial_details_empty_and_single_key_projection(
+        self, session_maker: async_sessionmaker[AsyncSession], keys: tuple[str, ...]
+    ) -> None:
+        await _seed(
+            session_maker,
+            hotkey="5" + "R" * 47,
+            composites=(0.9,) * 3,
+            created_at=_BASE,
+        )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session, bench_version=_BENCH, details_keys=keys
+            )
+        assert len(rows) == 1
+        assert rows[0].details == ({"bench_version": _BENCH} if keys else {})
+
+    @pytest.mark.parametrize("family_members", [False, True])
+    async def test_scalar_stderr_stays_bound_to_the_signed_median_row(
+        self, session_maker: async_sessionmaker[AsyncSession], family_members: bool
+    ) -> None:
+        agent_id = await _seed(
+            session_maker,
+            hotkey="5" + "M" * 47,
+            composites=(0.8, 0.9, 0.7),
+            created_at=_BASE,
+        )
+        async with session_maker() as session, session.begin():
+            scores = await session.scalars(
+                select(Score).where(Score.agent_id == agent_id)
+            )
+            for score in scores:
+                score.details = {
+                    "composite_stderr": score.composite / 100,
+                    "audit_payload": "large unused telemetry" * 5000,
+                }
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                bench_version=_BENCH,
+                include_details=False,
+                include_fingerprints=False,
+                include_family_members=family_members,
+            )
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.composite == 0.8
+        assert row.validator_hotkey == _VALIDATORS[0]
+        assert row.stored_composite_stderr == 0.008
+        assert row.details is None
+
+    async def test_scalar_stderr_degrades_to_none_on_malformed_values(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """The no-details scalar stderr extraction must never abort the read.
+
+        The extraction runs when ``include_details=False``, where the whole
+        leaderboard read rides on it. A malformed ``composite_stderr`` (boolean,
+        nonnumeric string, out-of-float8-range number) has to degrade to NULL —
+        the same contract the Python-side reader keeps on shipped-details reads —
+        instead of raising at the double-precision cast and 500ing the read.
+        """
+        malformed = {
+            "bool": True,
+            "string": "abc",
+            # 1e309 is a 310-digit plain decimal once JSONB normalizes it: an
+            # out-of-float8-range number, exactly what production could hold.
+            "out_of_range": int("1" + "0" * 309),
+            "huge_integer": int("9" * 309),
+            "float8_max_plus_one": int(
+                "179769313486231570814527423731704356798070567525844996598917"
+                "476803157260780028538760589558632766878171540458953514382464"
+                "234321326889464182768467546703537516986049910576551282076245"
+                "490090389328944075868508455133942304583236903222948165808559"
+                "332123348274797826204144723168738177180919299881250404026184"
+                "124858369"
+            ),
+        }
+        agents: dict[str, UUID] = {}
+        for label, value in malformed.items():
+            agent_id = uuid4()
+            agents[label] = agent_id
+            async with session_maker() as session, session.begin():
+                session.add(
+                    Agent(
+                        agent_id=agent_id,
+                        miner_hotkey="5" + label[0] * 47,
+                        name=f"stderr-{label}",
+                        sha256="ab" * 32,
+                        size_bytes=524288,
+                        status=AgentStatus.SCORED,
+                        created_at=_BASE,
+                    )
+                )
+                session.add(
+                    Score(
+                        agent_id=agent_id,
+                        validator_hotkey=_VALIDATORS[0],
+                        run_id=f"{label}-0",
+                        seed=987654321,
+                        composite=0.9,
+                        tool_mean=0.9,
+                        memory_mean=0.9,
+                        median_ms=500,
+                        n=114,
+                        generated_at=_BASE,
+                        signature="ab" * 64,
+                        details={"composite_stderr": value, "bench_version": _BENCH},
+                        bench_version=_BENCH,
+                    )
+                )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                bench_version=_BENCH,
+                dedupe_owners=False,
+            )
+        by_agent = {row.agent_id: row for row in rows}
+        for label, agent_id in agents.items():
+            assert by_agent[agent_id].stored_composite_stderr is None, label
+
+    async def test_scalar_stderr_reads_valid_values_without_details(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """The no-details branch still carries a well-formed stored stderr."""
+        agent_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey="5" + "V" * 47,
+                    name="stderr-valid",
+                    sha256="ab" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=_BASE,
+                )
+            )
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATORS[0],
+                    run_id="valid-0",
+                    seed=987654321,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=114,
+                    generated_at=_BASE,
+                    signature="ab" * 64,
+                    details={"composite_stderr": 0.0125, "bench_version": _BENCH},
+                    bench_version=_BENCH,
+                )
+            )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                bench_version=_BENCH,
+                dedupe_owners=False,
+            )
+        assert rows[0].stored_composite_stderr == 0.0125
+
+    async def test_scalar_stderr_admits_float8_max_integer(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A 309-digit integer within float8 range must not degrade to None.
+
+        1e308 is finite but renders as a 309-digit plain decimal once JSONB
+        normalizes it, so a length-only guard would reject a value the
+        details-fetching path returns fine.
+        """
+        agent_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey="5" + "M" * 47,
+                    name="stderr-max",
+                    sha256="ab" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=_BASE,
+                )
+            )
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATORS[0],
+                    run_id="max-0",
+                    seed=987654321,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=114,
+                    generated_at=_BASE,
+                    signature="ab" * 64,
+                    details={"composite_stderr": 1e308, "bench_version": _BENCH},
+                    bench_version=_BENCH,
+                )
+            )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                bench_version=_BENCH,
+                dedupe_owners=False,
+            )
+        assert rows[0].stored_composite_stderr == 1e308
+
+    async def test_scalar_stderr_admits_subnormal_decimals(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A magnitude-below-1 value may normalize to 311+ chars; keep it.
+
+        1e-309 renders as a 311-character "0.000…001" decimal, which a
+        length-only guard rejects, but it casts to a finite float8 exactly as
+        the details-fetching path returns it.
+        """
+        agent_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey="5" + "T" * 47,
+                    name="stderr-tiny",
+                    sha256="ab" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=_BASE,
+                )
+            )
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATORS[0],
+                    run_id="tiny-0",
+                    seed=987654321,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=114,
+                    generated_at=_BASE,
+                    signature="ab" * 64,
+                    details={"composite_stderr": 1e-309, "bench_version": _BENCH},
+                    bench_version=_BENCH,
+                )
+            )
+        async with session_maker() as session:
+            rows = await list_eligible_ledger(
+                session,
+                include_fingerprints=False,
+                include_details=False,
+                bench_version=_BENCH,
+                dedupe_owners=False,
+            )
+        assert rows[0].stored_composite_stderr == 1e-309
 
     async def test_no_floor_below_five_finalized_owners(
         self, session_maker: async_sessionmaker[AsyncSession]

@@ -461,3 +461,78 @@ func TestParseOpenNameRoundTrip(t *testing.T) {
 		t.Fatal("a pre-ownership name must not parse as owned")
 	}
 }
+
+// failNextFlush closes the stream's file under its buffered writer, the way a
+// disk error (EIO, ENOSPC) would surface on the next flush.
+func failNextFlush(t *testing.T, spool *Spooler) {
+	t.Helper()
+	if err := spool.WaitIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	spool.mu.Lock()
+	defer spool.mu.Unlock()
+	if len(spool.files) != 1 {
+		t.Fatalf("open streams=%d", len(spool.files))
+	}
+	for _, sf := range spool.files {
+		_ = sf.f.Close()
+	}
+}
+
+func TestFailedFlushCountsEveryBufferedRecordAsDropped(t *testing.T) {
+	dir := t.TempDir()
+	spool, err := NewSpooler(SpoolOptions{Dir: dir, RotateBytes: 1 << 30, RotateInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		spool.Record(sampleRecord(KindChat, i))
+	}
+	failNextFlush(t, spool)
+	if err := spool.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ready, _ := os.ReadDir(filepath.Join(dir, readyDirName))
+	open, _ := os.ReadDir(filepath.Join(dir, openDirName))
+	if spool.Dropped() != 3 || len(ready) != 0 || len(open) != 0 {
+		t.Fatalf("dropped=%d ready=%d open=%d; want 3 dropped and no empty artifact",
+			spool.Dropped(), len(ready), len(open))
+	}
+	if spool.diskBytes.Load() != 0 {
+		t.Fatalf("budget still counts %d lost bytes", spool.diskBytes.Load())
+	}
+}
+
+func TestFailedFlushShipsOnlyRecordsThatReachedDisk(t *testing.T) {
+	dir := t.TempDir()
+	spool, err := NewSpooler(SpoolOptions{Dir: dir, RotateBytes: 1 << 30, RotateInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 {
+		spool.Record(sampleRecord(KindChat, i))
+	}
+	if err := spool.WaitIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	spool.flushAndRotateStale() // the first two records reach disk
+	for i := 2; i < 5; i++ {
+		spool.Record(sampleRecord(KindChat, i))
+	}
+	failNextFlush(t, spool)
+	if err := spool.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ready, _ := os.ReadDir(filepath.Join(dir, readyDirName))
+	if spool.Dropped() != 3 || len(ready) != 1 {
+		t.Fatalf("dropped=%d ready=%d; want the 3 buffered records dropped and 1 file shipped",
+			spool.Dropped(), len(ready))
+	}
+	body, err := os.ReadFile(filepath.Join(dir, readyDirName, ready[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Count(string(body), "\n"); lines != 2 {
+		t.Fatalf("shipped %d records, want the 2 that reached disk", lines)
+	}
+}

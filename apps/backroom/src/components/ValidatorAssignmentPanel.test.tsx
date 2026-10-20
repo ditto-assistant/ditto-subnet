@@ -41,6 +41,7 @@ const assignment: ValidatorAssignment = {
   purpose: 'canonical_quorum',
   agent_status: 'evaluating',
   first_reported_at: null,
+  seed: null,
 }
 
 describe('ValidatorAssignmentPanel', () => {
@@ -56,6 +57,25 @@ describe('ValidatorAssignmentPanel', () => {
     expect(screen.getByText('Deadline')).toBeTruthy()
     expect(screen.getByText('2 of 3 accepted · provisional 0.810')).toBeTruthy()
     expect(screen.getByText('90cb5697… · 5Validat…')).toBeTruthy()
+    expect(screen.queryByText('Seed')).toBeNull()
+  })
+
+  it('shows the exact continual retest seed so paired leases can be matched', () => {
+    render(
+      <ValidatorAssignmentPanel
+        initialItems={[
+          {
+            ...assignment,
+            purpose: 'continual_retest',
+            seed: '9007199254740993',
+          },
+        ]}
+        readOnly
+      />,
+    )
+
+    expect(screen.getByText('Seed')).toBeTruthy()
+    expect(screen.getByText('9007199254740993')).toBeTruthy()
   })
 
   it('requires an explicit audit reason and releases the exact lease', async () => {

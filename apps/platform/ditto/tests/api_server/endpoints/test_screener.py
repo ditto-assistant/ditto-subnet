@@ -8,10 +8,11 @@ sr25519 dev keypair so the verification path runs for real.
 from __future__ import annotations
 
 import asyncio
-import base64
+import contextlib
 import hashlib
 import io
 import json
+import logging
 import tarfile
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -47,16 +48,20 @@ from ditto.api_models.system_health import (
     SystemMetrics,
     system_metrics_signing_token,
 )
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.datapipeline import DataPipelineError, NullGenerator
+from ditto.api_server.deferred_source_review import INTEGRITY_DOUBLE_CHECK_REASON
 from ditto.api_server.dependencies import (
     get_chain_client,
     get_dataset_generator,
     get_session,
     get_storage_client,
 )
+from ditto.api_server.endpoints import screener as screener_endpoint
 from ditto.api_server.endpoints.public import screening_dispute_signing_message
 from ditto.api_server.endpoints.screener import (
+    AUTO_REVIEW_RETRY_PUBLIC_REASON,
+    V2_UNREVIEWABLE_PUBLIC_REASON,
     _fanout_response_model_matches,
     _heartbeat_signing_message,
     _public_screening_reason,
@@ -65,6 +70,7 @@ from ditto.api_server.endpoints.screener import (
 from ditto.api_server.middleware.error_envelope import (
     ERROR_CODE_AGENT_NOT_FOUND,
     ERROR_CODE_AGENT_NOT_SCREENABLE,
+    ERROR_CODE_SCREEN_RESULT_CONSTRAINT_VIOLATION,
     ERROR_CODE_SCREENER_AUTH,
     ERROR_CODE_VALIDATION,
 )
@@ -84,12 +90,10 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutMember,
     EvaluationPayment,
-    ProviderOutageCircuit,
     Score,
     ScoreAuditEntry,
     ScoredPolicyRescreenRelease,
     ScreenedImageUpload,
-    ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
     ScreenerFanoutShadowReview,
     ScreenerHeartbeat,
@@ -124,14 +128,23 @@ from ditto.db.queries.screening import (
     MAX_SCREENING_EXPIRIES,
     POLICY_ONLY_RESCREEN_REASON,
 )
+from ditto.db.queries.screening_infra_retry import (
+    INFRA_AUTO_RETRY_REASON_CODES,
+    plan_infra_retries,
+)
 from ditto.db.queries.tickets import issue_ticket, ticket_attempt_cap
 from ditto.tests.legacy_era import retired_era_writes_allowed
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     AdjudicationCompletionReceipt,
+    ScoredRuntimeEvidenceLease,
     ScreenResultOutcome,
     ScreenReviewAudit,
     SourceReviewAdjudication,
+    SourceReviewInvariant,
+    SourceReviewInvariantAssessment,
+    SourceReviewInvariantDecision,
+    SourceReviewInvariantDisposition,
     SourceReviewNote,
     completion_receipt_signing_message,
     source_review_notes_digest,
@@ -326,6 +339,35 @@ def test_unknown_container_contract_detail_stays_public_safe() -> None:
             "is operator-owned and is retried automatically with backoff for a "
             "limited time, then held for an operator retry.",
         ),
+        (
+            "screener error: PlatformError: platform changed screening policy "
+            "during claim: expected 12, received 13 SECRET_FROM_WORKER",
+            "worker-claim-not-started",
+            "The screening worker released this submission before starting it. "
+            "This is operator-owned and is retried automatically with backoff for "
+            "a limited time, then held for an operator retry.",
+        ),
+        (
+            "screener error: private policy infrastructure unavailable "
+            "SECRET_FROM_WORKER",
+            "source-review-adjudicator-key-unavailable",
+            "Source review was unavailable on the screening node before "
+            "screening completed. This is operator-owned and is retried "
+            "automatically with backoff for a limited time, then held for an "
+            "operator retry.",
+        ),
+        (
+            "build failed: [timeout after 2700s]\nSECRET_FROM_BUILD",
+            "docker-build-timeout",
+            "Docker image build exceeded the 45-minute build time limit. "
+            "Reduce build time by caching dependencies or simplifying the Dockerfile.",
+        ),
+        (
+            "build failed: SECRET_FROM_BUILD",
+            "docker-build-timeout",
+            "Docker image build exceeded the configured build time limit. "
+            "Reduce build time by caching dependencies or simplifying the Dockerfile.",
+        ),
     ],
 )
 def test_public_docker_build_reason_is_actionable_and_redacted(
@@ -352,10 +394,11 @@ def _result_payload(
         and policy_version == SCREENING_POLICY_VERSION
         and "outcome" not in overrides
     ):
-        # Legacy no-attempt fixtures exercise the pre-policy-9 compatibility
-        # path. Policy 9 and later require an attempt-bound typed outcome, so a
-        # v10 bump must not accidentally turn the fixture into an invalid v9
-        # verdict.
+        # No-attempt fixtures build a well-formed pre-policy-9 body so tests can
+        # assert Platform refuses it (every verdict must name the caller's
+        # claimed attempt). Policy 9 and later require an attempt-bound typed
+        # outcome, so a v10 bump must not turn the fixture into an invalid v9
+        # verdict that fails model validation instead.
         policy_version = 8
     if passed and isinstance(attempt_id, UUID):
         overrides.setdefault("outcome", ScreenResultOutcome.PASS)
@@ -452,6 +495,141 @@ def _result_payload(
     if isinstance(body.get("image_upload_id"), UUID):
         body["image_upload_id"] = str(body["image_upload_id"])
     return body
+
+
+async def _seed_running_attempt(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    agent_id: UUID,
+    screener_hotkey: str = _SCREENER_HOTKEY,
+    policy_version: int = SCREENING_POLICY_VERSION,
+    started_at: datetime | None = None,
+    deadline: datetime | None = None,
+    status: str = "running",
+    review_settings: ScreenerReviewSettingsRevision | None = None,
+    review_settings_instance_id: str = "ditto-screener-prod",
+) -> UUID:
+    """Persist a live screening lease, as a claim by ``screener_hotkey`` would."""
+    attempt_id = uuid4()
+    started_at = started_at or datetime.now(UTC)
+    async with maker() as session, session.begin():
+        attempt = ScreeningAttempt(
+            attempt_id=attempt_id,
+            agent_id=agent_id,
+            screener_hotkey=screener_hotkey,
+            policy_version=policy_version,
+            status=status,
+            started_at=started_at,
+            deadline=deadline or started_at + timedelta(minutes=30),
+        )
+        if review_settings is not None:
+            attempt.review_settings_revision = review_settings.revision
+            attempt.review_settings_instance_id = review_settings_instance_id
+            attempt.review_settings_scope = review_settings.scope
+            attempt.review_settings_checksum = review_settings.checksum
+        session.add(attempt)
+    return attempt_id
+
+
+async def _seed_overdue_attempt(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    agent_id: UUID,
+    screener_hotkey: str = _SCREENER_HOTKEY,
+    rescreen_release: bool = False,
+) -> UUID:
+    """Persist a running lease whose deadline passed while no sweep ran."""
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=screener_hotkey,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="running",
+                started_at=now - timedelta(minutes=20),
+                deadline=now - timedelta(minutes=1),
+            )
+        )
+        if rescreen_release:
+            activation = ScreenerPolicyActivation(
+                parent_revision=0,
+                target_policy_version=SCREENING_POLICY_VERSION + 1,
+                activate_at=now + timedelta(days=1),
+                rescreen_scored=True,
+                reason="scored rescreen canary whose lease went overdue",
+                actor="test",
+            )
+            session.add(activation)
+            await session.flush()
+            session.add(
+                ScoredPolicyRescreenRelease(
+                    release_id=uuid4(),
+                    activation_revision=activation.revision,
+                    target_policy_version=SCREENING_POLICY_VERSION + 1,
+                    agent_id=agent_id,
+                    position=1,
+                    state="running",
+                    attempt_id=attempt_id,
+                    actor="test",
+                    reason="scored rescreen canary whose lease went overdue",
+                )
+            )
+    return attempt_id
+
+
+async def _seed_review_settings_revision(
+    maker: async_sessionmaker[AsyncSession], settings: ScreenerReviewSettings
+) -> ScreenerReviewSettingsRevision:
+    async with maker() as session, session.begin():
+        revision = ScreenerReviewSettingsRevision(
+            parent_revision=0,
+            scope="ditto-screener-prod",
+            settings=settings.model_dump(mode="json"),
+            checksum=_review_settings_checksum(settings),
+            reason="bounded lease lifetime test",
+            actor="test",
+        )
+        session.add(revision)
+    return revision
+
+
+async def _attempt_deadline(
+    maker: async_sessionmaker[AsyncSession], attempt_id: UUID
+) -> datetime:
+    async with maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        return attempt.deadline
+
+
+async def _screening_heartbeat(
+    client: httpx.AsyncClient,
+    *,
+    agent_id: UUID,
+    timestamp: int,
+    stage: str,
+    started_at: datetime,
+    instance_id: str | None = None,
+) -> datetime | None:
+    """Send an accepted screening heartbeat; return the renewed lease, if any."""
+    response = await client.post(
+        "/api/v1/screener/heartbeat",
+        json=_heartbeat_payload(
+            timestamp=timestamp,
+            state="screening",
+            active_agent_id=agent_id,
+            protocol_version=2 if instance_id is None else 3,
+            instance_id=instance_id,
+            progress={"stage": stage, "started_at": int(started_at.timestamp())},
+        ),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["accepted"] is True
+    lease_deadline = response.json()["lease_deadline"]
+    return datetime.fromisoformat(lease_deadline) if lease_deadline else None
 
 
 async def _seed_verified_image_upload(
@@ -553,6 +731,8 @@ def _heartbeat_payload(
                     "activated_at",
                 )
             )
+            if protocol_version >= 8:
+                release_token += ",1" if release.get("source_fixture_v1") else ",0"
         message = (
             "ditto-screener-heartbeat:v4:"
             f"{_SCREENER_HOTKEY}:0.4.2:{protocol_version}:"
@@ -825,25 +1005,6 @@ async def _seed_agent(
     return aid
 
 
-async def _seed_targon_first(
-    maker: async_sessionmaker[AsyncSession],
-) -> None:
-    async with maker() as session, session.begin():
-        session.add(
-            ScreenerProviderSettingsRevision(
-                environment="prod",
-                parent_revision=0,
-                settings={
-                    "runtime_provider_priority": ["targon", "gcp"],
-                    "source_review_provider_priority": ["targon", "gcp"],
-                    "build_provider_priority": ["targon", "gcp"],
-                },
-                reason="Exercise explicitly selected decomposed screening lanes",
-                actor="test",
-            )
-        )
-
-
 async def _seed_score(
     maker: async_sessionmaker[AsyncSession],
     *,
@@ -897,7 +1058,7 @@ async def _seed_screener_node(
                 token_hash=hashlib.sha256(token.encode()).hexdigest(),
                 token_expires_at=datetime.now(UTC) + timedelta(hours=1),
                 status="active",
-                capacity=screening_concurrency,
+                capacity=max(1, screening_concurrency),
             )
         )
         session.add(
@@ -912,10 +1073,30 @@ async def _seed_screener_node(
         )
 
 
-def _bounded_review_audit(*, steps_used: int = 6) -> ScreenReviewAudit:
+async def _seed_hetzner_primary(
+    maker: async_sessionmaker[AsyncSession], *, screening_concurrency: int = 2
+) -> None:
+    await _seed_screener_node(
+        maker,
+        node_id="subnet-screener-1",
+        hotkey="5PrimaryHetznerHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        token="primary-hetzner-token-at-least-32-characters",
+        screening_concurrency=screening_concurrency,
+    )
+    async with maker() as session, session.begin():
+        await session.execute(
+            update(ScreenerNode)
+            .where(ScreenerNode.node_id == "subnet-screener-1")
+            .values(provider="hetzner")
+        )
+
+
+def _bounded_review_audit(
+    *, steps_used: int = 6, reason_code: str = "source-review-inconclusive"
+) -> ScreenReviewAudit:
     return ScreenReviewAudit(
         stage="l1",
-        reason_code="source-review-inconclusive",
+        reason_code=reason_code,
         prompt_revision="source-review-v9",
         harness_revision="policy-v9",
         max_steps=8,
@@ -932,8 +1113,54 @@ def _bounded_review_audit(*, steps_used: int = 6) -> ScreenReviewAudit:
 
 
 @pytest.fixture(autouse=True)
-def _authenticate_screener_client(client: httpx.AsyncClient) -> None:
+async def _authenticate_screener_client(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client.headers.update(_AUTH_HEADER)
+    # The legacy fleet principal may claim only when the current primary has
+    # known positive admission. Seed that production precondition for ordinary
+    # claim/attempt tests, leaving explicit fallback policy cases independent.
+    claim_classes = {
+        "TestClaim",
+        "TestQuarantineAdmin",
+        "TestArtifactFetchAuditTrail",
+        "TestArtifact",
+        "TestScreenedImageUpload",
+        "TestSubmitResult",
+        "TestVerdictLeaseOwnership",
+        "TestQuarantineReviewContext",
+    }
+    independent_policy_tests = {
+        "test_legacy_gcp_claim_waits_for_fenced_overflow_capacity",
+        "test_legacy_gcp_and_watchdog_share_fallback_admission",
+        "test_legacy_gcp_held_claim_still_sweeps_overdue_attempts",
+        "test_zero_admission_is_a_full_stop_for_automatic_retries",
+    }
+    test_class = request.node.cls
+    if (
+        test_class is not None
+        and (
+            test_class.__name__ in claim_classes
+            or request.node.originalname
+            == "test_watchdog_is_quiet_while_controller_lease_is_fresh"
+        )
+        and request.node.originalname not in independent_policy_tests
+    ):
+        from ditto.db.queries import screener_provider_settings as provider_settings
+
+        # Keep the default revision at zero for unrelated claim tests while
+        # giving its GCP-first route a real, open primary admission source.
+        monkeypatch.setattr(
+            provider_settings,
+            "DEFAULT_SCREENER_PROVIDER_SETTINGS",
+            provider_settings.DEFAULT_SCREENER_PROVIDER_SETTINGS.model_copy(
+                update={"primary_node_id": "subnet-screener-1"}
+            ),
+        )
+        await _seed_hetzner_primary(session_maker)
 
 
 async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
@@ -1358,946 +1585,6 @@ def _capacity_payload(epoch: str) -> dict[str, object]:
 
 
 class TestFederatedScreenerNodes:
-    async def test_submission_source_review_is_attempt_bound_and_digest_verified(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        await _seed_targon_first(session_maker)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        _install_storage(app)
-        app.state.config = replace(
-            app.state.config,
-            screener_auth=replace(
-                app.state.config.screener_auth,
-                controller_api_token=_CONTROLLER_TOKEN,
-            ),
-        )
-        async with session_maker() as session, session.begin():
-            session.add(
-                TrustedImageBuild(
-                    build_id=uuid4(),
-                    environment="prod",
-                    component="screener",
-                    source_repository=(
-                        "https://github.com/ditto-assistant/ditto-subnet.git"
-                    ),
-                    source_sha="a" * 40,
-                    context_path=".",
-                    dockerfile_path="workers/screener/Dockerfile",
-                    destination=(
-                        "us-central1-docker.pkg.dev/ditto-app-dev/"
-                        "ditto-public-runtime/screener:sha-test"
-                    ),
-                    status="succeeded",
-                    provider="targon",
-                    image_digest="sha256:" + "b" * 64,
-                    completed_at=datetime.now(UTC),
-                    created_by="test",
-                    reason="provide a pinned reviewed source worker image",
-                )
-            )
-        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-        attempt_id = claim.json()["items"][0]["attempt_id"]
-        build_queued = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-            headers=_AUTH_HEADER,
-            json={"attempt_id": attempt_id},
-        )
-        assert build_queued.status_code == 200, build_queued.text
-        async with session_maker() as session, session.begin():
-            build = await session.get(
-                SubmissionImageBuild, UUID(build_queued.json()["build_id"])
-            )
-            assert build is not None
-            build.status = "succeeded"
-            build.runtime_status = "succeeded"
-            build.completed_at = datetime.now(UTC)
-            build.runtime_completed_at = datetime.now(UTC)
-        queued = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/submission-source-reviews",
-            headers=_AUTH_HEADER,
-            json={"attempt_id": attempt_id},
-        )
-        assert queued.status_code == 200, queued.text
-        review_id = queued.json()["review_id"]
-        controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
-        circuit_now = datetime.now(UTC)
-        async with session_maker() as session, session.begin():
-            session.add(
-                ProviderOutageCircuit(
-                    provider="openrouter",
-                    state="open",
-                    epoch=uuid4(),
-                    opened_at=circuit_now,
-                    retry_at=circuit_now + timedelta(minutes=2),
-                    last_failure_at=circuit_now,
-                    failure_count=1,
-                    last_status=429,
-                    last_error_code="upstream_http_429",
-                    updated_at=circuit_now,
-                )
-            )
-        blocked = await client.post(
-            "/api/v1/screener/controller/submission-source-reviews/claim",
-            headers=controller_headers,
-            json={"environment": "prod", "controller_epoch": "builder:test"},
-        )
-        assert blocked.status_code == 200, blocked.text
-        assert blocked.json()["review"] is None
-        async with session_maker() as session, session.begin():
-            circuit = await session.get(ProviderOutageCircuit, "openrouter")
-            assert circuit is not None
-            circuit.retry_at = circuit_now - timedelta(seconds=1)
-        leased = await client.post(
-            "/api/v1/screener/controller/submission-source-reviews/claim",
-            headers=controller_headers,
-            json={"environment": "prod", "controller_epoch": "builder:test"},
-        )
-        assert leased.status_code == 200, leased.text
-        job = leased.json()["review"]
-        assert job["review_id"] == review_id
-        assert job["image_reference"].endswith("@sha256:" + "b" * 64)
-        running = await client.put(
-            f"/api/v1/screener/controller/submission-source-reviews/{review_id}",
-            headers=controller_headers,
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:test",
-                "status": "running",
-                "provider_resource_id": "wrk-source-review",
-            },
-        )
-        assert running.status_code == 204, running.text
-        now = datetime.now(UTC)
-        async with session_maker() as session, session.begin():
-            attempt = await session.get(
-                ScreeningAttempt, UUID(attempt_id), with_for_update=True
-            )
-            review = await session.get(
-                SubmissionSourceReview, UUID(review_id), with_for_update=True
-            )
-            assert attempt is not None
-            assert review is not None
-            attempt.deadline = now + timedelta(minutes=1)
-            review.lease_expires_at = now + timedelta(minutes=20)
-        waiting = await client.get(
-            f"/api/v1/screener/agent/{agent_id}/submission-source-reviews/{review_id}",
-            headers=_AUTH_HEADER,
-            params={"attempt_id": attempt_id},
-        )
-        assert waiting.status_code == 200, waiting.text
-        assert waiting.json()["status"] == "running"
-        async with session_maker() as session:
-            attempt = await session.get(ScreeningAttempt, UUID(attempt_id))
-            review = await session.get(SubmissionSourceReview, UUID(review_id))
-            assert attempt is not None
-            assert review is not None
-            assert review.lease_expires_at is not None
-            assert attempt.deadline > now + timedelta(minutes=9)
-            assert attempt.deadline <= review.lease_expires_at
-        job_headers = {"Authorization": f"Bearer {job['job_token']}"}
-        source = await client.get(
-            f"/api/v1/screener/submission-source-reviews/{review_id}/source",
-            headers=job_headers,
-        )
-        assert source.status_code == 200, source.text
-        assert source.json()["artifact_sha256"] == _SHA256
-        async with session_maker() as session:
-            source_attempt = await session.get(ScreeningAttempt, UUID(attempt_id))
-            assert source_attempt is not None
-            expected_policy_version = source_attempt.policy_version
-        assert source.json()["policy_version"] == expected_policy_version
-        mismatched = await client.post(
-            f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
-            headers=job_headers,
-            json={
-                "observation": {
-                    "ok": False,
-                    "categories": [],
-                    "adjudication": {
-                        "decision": "escalate",
-                        "reason": "test policy mismatch",
-                        "model": "test-model",
-                        "prompt_revision": "adjudicator-v3-policy-v999",
-                        "policy_version": expected_policy_version + 1,
-                        "escalation_code": "test-policy-mismatch",
-                    },
-                }
-            },
-        )
-        assert mismatched.status_code == 409, mismatched.text
-        assert mismatched.json()["message"] == (
-            "source-review adjudication policy mismatch"
-        )
-        mismatched_prompt = await client.post(
-            f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
-            headers=job_headers,
-            json={
-                "observation": {
-                    "ok": False,
-                    "categories": [],
-                    "adjudication": {
-                        "decision": "escalate",
-                        "reason": "test prompt mismatch",
-                        "model": "test-model",
-                        "prompt_revision": "adjudicator-v3-policy-v999",
-                        "policy_version": expected_policy_version,
-                        "escalation_code": "test-policy-mismatch",
-                    },
-                }
-            },
-        )
-        assert mismatched_prompt.status_code == 409, mismatched_prompt.text
-        assert mismatched_prompt.json()["message"] == (
-            "source-review adjudication policy mismatch"
-        )
-        complete = await client.post(
-            f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
-            headers=job_headers,
-            json={
-                "observation": {
-                    "ok": True,
-                    "risk_level": "low",
-                    "categories": [],
-                    "clearance_certified": True,
-                }
-            },
-        )
-        assert complete.status_code == 200, complete.text
-        cleanup = await client.post(
-            f"/api/v1/screener/controller/submission-source-reviews/{review_id}"
-            "/cleanup-required",
-            headers=controller_headers,
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:test",
-                "provider_resource_id": "wrk-source-review",
-            },
-        )
-        assert cleanup.status_code == 204, cleanup.text
-        ready = await client.get(
-            f"/api/v1/screener/agent/{agent_id}/submission-source-reviews/{review_id}",
-            headers=_AUTH_HEADER,
-            params={"attempt_id": attempt_id},
-        )
-        assert ready.status_code == 200, ready.text
-        assert ready.json()["observation"]["clearance_certified"] is True
-        async with session_maker() as session:
-            row = await session.get(SubmissionSourceReview, UUID(review_id))
-            assert row is not None
-            assert row.job_token_hash is None
-            assert row.status == "succeeded"
-            assert row.error_code is None
-
-    async def test_openrouter_429_completion_parks_review_without_spending_attempt(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        await _seed_targon_first(session_maker)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        _install_storage(app)
-        release_rental = AsyncMock(return_value=True)
-        app.state.targon_rental_loop = SimpleNamespace(release_rental=release_rental)
-        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
-        review_id = uuid4()
-        epoch = uuid4()
-        token = "source-review-job-token"
-        now = datetime.now(UTC)
-        async with session_maker() as session, session.begin():
-            session.add_all(
-                [
-                    SubmissionSourceReview(
-                        review_id=review_id,
-                        agent_id=agent_id,
-                        attempt_id=attempt_id,
-                        environment="prod",
-                        artifact_sha256=_SHA256,
-                        status="running",
-                        provider="targon",
-                        provider_resource_id="wrk-source-overload",
-                        attempt_count=2,
-                        controller_epoch="builder:test",
-                        lease_expires_at=now + timedelta(minutes=30),
-                        job_token_hash=hashlib.sha256(token.encode()).hexdigest(),
-                        job_token_expires_at=now + timedelta(minutes=30),
-                    ),
-                    ProviderOutageCircuit(
-                        provider="openrouter",
-                        state="open",
-                        epoch=epoch,
-                        opened_at=now,
-                        retry_at=now + timedelta(minutes=2),
-                        last_failure_at=now,
-                        failure_count=1,
-                        last_status=429,
-                        last_error_code="source_review_http_429",
-                        updated_at=now,
-                    ),
-                ]
-            )
-
-        complete = await client.post(
-            f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
-            headers={"Authorization": f"Bearer {token}"},
-            json={
-                "observation": {
-                    "ok": False,
-                    "risk_level": None,
-                    "categories": [],
-                    "error_code": "source-review-http-429",
-                    "failure_disposition": "retryable_infra",
-                }
-            },
-        )
-        assert complete.status_code == 200, complete.text
-        async with session_maker() as session:
-            review = await session.get(SubmissionSourceReview, review_id)
-            attempt = await session.get(ScreeningAttempt, attempt_id)
-            assert review is not None
-            assert attempt is not None
-            assert review.status == "queued"
-            assert review.attempt_count == 2
-            assert review.provider_outage_epoch == epoch
-            assert review.job_token_hash is None
-            assert review.provider_resource_id is None
-            assert attempt.status == "running"
-        release_rental.assert_awaited_once_with("wrk-source-overload")
-
-    async def test_submission_build_is_attempt_bound_and_fully_verified(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        await _seed_targon_first(session_maker)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        storage = _install_storage(app)
-        app.state.config = replace(
-            app.state.config,
-            screener_auth=replace(
-                app.state.config.screener_auth,
-                controller_api_token=_CONTROLLER_TOKEN,
-            ),
-        )
-        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-        attempt_id = claim.json()["items"][0]["attempt_id"]
-        queued = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-            headers=_AUTH_HEADER,
-            json={"attempt_id": attempt_id},
-        )
-        assert queued.status_code == 200, queued.text
-        build_id = queued.json()["build_id"]
-        assert queued.json()["status"] == "queued"
-        assert "download_url" in queued.json() and queued.json()["download_url"] is None
-
-        controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
-        leased = await client.post(
-            "/api/v1/screener/controller/submission-image-builds/claim",
-            headers=controller_headers,
-            json={"environment": "prod", "controller_epoch": "builder:test"},
-        )
-        assert leased.status_code == 200, leased.text
-        job = leased.json()["build"]
-        assert job["build_id"] == build_id
-        job_token = job["job_token"]
-        async with session_maker() as session:
-            row = await session.get(SubmissionImageBuild, UUID(build_id))
-            assert row is not None
-            assert row.job_token_hash != job_token
-            assert row.job_token_hash is not None and len(row.job_token_hash) == 64
-
-        running = await client.put(
-            f"/api/v1/screener/controller/submission-image-builds/{build_id}",
-            headers=controller_headers,
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:test",
-                "status": "running",
-                "provider_resource_id": "wrk-attempt-bound",
-            },
-        )
-        assert running.status_code == 204, running.text
-        controller_status = await client.get(
-            f"/api/v1/screener/controller/submission-image-builds/{build_id}",
-            headers=controller_headers,
-            params={"environment": "prod", "controller_epoch": "builder:test"},
-        )
-        assert controller_status.status_code == 200, controller_status.text
-        assert controller_status.json()["status"] == "running"
-        assert set(controller_status.json()) == {"build_id", "status"}
-        job_headers = {"Authorization": f"Bearer {job_token}"}
-        source = await client.get(
-            f"/api/v1/screener/submission-image-builds/{build_id}/source",
-            headers=job_headers,
-        )
-        assert source.status_code == 200, source.text
-        assert base64.b64decode(source.json()["source_url_b64"]).startswith(b"https://")
-        assert source.json()["artifact_sha256"] == _SHA256
-
-        output_sha = "12" * 32
-        image_id = "sha256:" + "ab" * 32
-        upload = await client.post(
-            f"/api/v1/screener/submission-image-builds/{build_id}/upload",
-            headers=job_headers,
-            json={
-                "output_sha256": output_sha,
-                "output_size_bytes": 123,
-                "image_id": image_id,
-            },
-        )
-        assert upload.status_code == 200, upload.text
-        assert base64.b64decode(upload.json()["upload_url_b64"]).startswith(b"https://")
-        required = upload.json()["required_headers"]
-        assert required["Content-Length"] == "123"
-        assert required["x-amz-meta-artifact-sha256"] == _SHA256
-        expected_metadata = {
-            "sha256": output_sha,
-            "build-id": build_id,
-            "attempt-id": attempt_id,
-            "artifact-sha256": _SHA256,
-        }
-        storage.head_object.side_effect = None
-        storage.head_object.return_value = ObjectMetadata(
-            size_bytes=123, metadata=expected_metadata
-        )
-        storage.verify_object_sha256.return_value = VerifiedObject(
-            size_bytes=123, sha256=output_sha
-        )
-        complete = await client.post(
-            f"/api/v1/screener/submission-image-builds/{build_id}/complete",
-            headers=job_headers,
-            json={
-                "output_sha256": output_sha,
-                "output_size_bytes": 123,
-                "image_id": image_id,
-            },
-        )
-        assert complete.status_code == 200, complete.text
-        assert complete.json() == {"verified": True}
-        async with session_maker() as session:
-            stored = await session.get(SubmissionImageBuild, UUID(build_id))
-            assert stored is not None
-            assert stored.output_image_id == image_id
-        controller_complete = await client.get(
-            f"/api/v1/screener/controller/submission-image-builds/{build_id}",
-            headers=controller_headers,
-            params={"environment": "prod", "controller_epoch": "builder:test"},
-        )
-        assert controller_complete.status_code == 200, controller_complete.text
-        assert controller_complete.json()["status"] == "succeeded"
-        storage.verify_object_sha256.assert_awaited_with(
-            key=f"remote-builds/{build_id}/image.tar", expected_size_bytes=123
-        )
-
-        runtime = await client.post(
-            "/api/v1/screener/controller/submission-runtime-smokes/claim",
-            headers=controller_headers,
-            json={"environment": "prod", "controller_epoch": "builder:test"},
-        )
-        assert runtime.status_code == 200, runtime.text
-        assert runtime.json()["artifact"]["build_id"] == build_id
-        assert base64.b64decode(
-            runtime.json()["artifact"]["archive_url_b64"]
-        ).startswith(b"https://")
-        runtime_fallback = await client.post(
-            f"/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result",
-            headers=controller_headers,
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:test",
-                "status": "fallback_required",
-                "provider_resource_id": "wrk-runtime",
-                "error_code": "TARGON_RUNTIME_HEALTH_FAILED",
-            },
-        )
-        assert runtime_fallback.status_code == 204, runtime_fallback.text
-
-        runtime_cleanup = await client.post(
-            f"/api/v1/screener/controller/submission-image-builds/{build_id}"
-            "/runtime-cleanup-required",
-            headers=controller_headers,
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:test",
-                "provider_resource_id": "wrk-runtime",
-            },
-        )
-        assert runtime_cleanup.status_code == 204, runtime_cleanup.text
-
-        ready = await client.get(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds/{build_id}",
-            headers=_AUTH_HEADER,
-            params={"attempt_id": attempt_id},
-        )
-        assert ready.status_code == 200, ready.text
-        assert ready.json()["status"] == "succeeded"
-        assert ready.json()["runtime_status"] == "fallback_required"
-        assert ready.json()["output_sha256"] == output_sha
-        assert ready.json()["download_url"].startswith("https://")
-
-        cleanup = await client.post(
-            f"/api/v1/screener/controller/submission-image-builds/{build_id}/cleanup-required",
-            headers=controller_headers,
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:test",
-                "provider_resource_id": "wrk-attempt-bound",
-            },
-        )
-        assert cleanup.status_code == 204, cleanup.text
-        async with session_maker() as session:
-            events = list(
-                await session.scalars(
-                    select(ScreenerCapacityEvent).where(
-                        ScreenerCapacityEvent.event_type == "provider_cleanup_required"
-                    )
-                )
-            )
-            assert len(events) == 2
-            assert all(event.provider == "targon" for event in events)
-            assert any("zero-replica" in event.detail for event in events)
-            assert any("runtime-smoke" in event.detail for event in events)
-
-        consumed = await client.delete(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds/{build_id}",
-            headers=_AUTH_HEADER,
-            params={"attempt_id": attempt_id},
-        )
-        assert consumed.status_code == 204, consumed.text
-        storage.delete_object.assert_awaited_with(
-            key=f"remote-builds/{build_id}/image.tar"
-        )
-        async with session_maker() as session:
-            row = await session.get(SubmissionImageBuild, UUID(build_id))
-            assert row is not None and row.status == "consumed"
-
-    async def test_runtime_success_queues_source_review(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        await _seed_targon_first(session_maker)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        _install_storage(app)
-        app.state.config = replace(
-            app.state.config,
-            screener_auth=replace(
-                app.state.config.screener_auth,
-                controller_api_token=_CONTROLLER_TOKEN,
-            ),
-        )
-        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-        attempt_id = claim.json()["items"][0]["attempt_id"]
-        queued = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-            headers=_AUTH_HEADER,
-            json={"attempt_id": attempt_id},
-        )
-        assert queued.status_code == 200, queued.text
-        build_id = queued.json()["build_id"]
-        async with session_maker() as session, session.begin():
-            row = await session.get(SubmissionImageBuild, UUID(build_id))
-            assert row is not None
-            row.status = "succeeded"
-            row.output_sha256 = "12" * 32
-            row.output_size_bytes = 123
-            row.runtime_status = "running"
-            row.controller_epoch = "builder:test"
-            row.completed_at = datetime.now(UTC)
-        finished = await client.post(
-            f"/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result",
-            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:test",
-                "status": "succeeded",
-                "provider_resource_id": "wrk-runtime",
-                "image_reference": (
-                    "us-central1-docker.pkg.dev/ditto-app-dev/"
-                    "ditto-screening-candidates/miner@sha256:" + "ab" * 32
-                ),
-            },
-        )
-        assert finished.status_code == 204, finished.text
-        async with session_maker() as session:
-            review = await session.scalar(
-                select(SubmissionSourceReview).where(
-                    SubmissionSourceReview.attempt_id == UUID(attempt_id)
-                )
-            )
-            assert review is not None
-            assert review.status == "queued"
-            assert review.artifact_sha256 == _SHA256
-
-    async def test_controller_claim_admits_uploaded_agent_without_gce_worker(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        await _seed_targon_first(session_maker)
-        _install_db(app, session_maker)
-        app.state.config = replace(
-            app.state.config,
-            screener_auth=replace(
-                app.state.config.screener_auth,
-                controller_api_token=_CONTROLLER_TOKEN,
-            ),
-        )
-        claimed = await client.post(
-            "/api/v1/screener/controller/submission-image-builds/claim",
-            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
-            json={"environment": "prod", "controller_epoch": "builder:test"},
-        )
-        assert claimed.status_code == 200, claimed.text
-        job = claimed.json()["build"]
-        assert job is not None
-        assert job["agent_id"] == str(agent_id)
-        async with session_maker() as session:
-            agent = await session.get(Agent, agent_id)
-            assert agent is not None
-            assert agent.status == AgentStatus.SCREENING
-
-    async def test_controller_claim_is_refused_when_platform_owns_miner_rentals(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        _install_db(app, session_maker)
-        app.state.targon_rental_loop = object()
-        app.state.config = replace(
-            app.state.config,
-            screener_auth=replace(
-                app.state.config.screener_auth,
-                controller_api_token=_CONTROLLER_TOKEN,
-            ),
-        )
-        claimed = await client.post(
-            "/api/v1/screener/controller/submission-image-builds/claim",
-            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:ditto-screener-capacity-prod:1",
-            },
-        )
-        assert claimed.status_code == 200, claimed.text
-        assert claimed.json()["build"] is None
-        smoke = await client.post(
-            "/api/v1/screener/controller/submission-runtime-smokes/claim",
-            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:ditto-screener-capacity-prod:1",
-            },
-        )
-        assert smoke.status_code == 200, smoke.text
-        assert smoke.json()["artifact"] is None
-        review = await client.post(
-            "/api/v1/screener/controller/submission-source-reviews/claim",
-            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:ditto-screener-capacity-prod:1",
-            },
-        )
-        assert review.status_code == 200, review.text
-        assert review.json()["review"] is None
-
-    async def test_platform_attests_targon_pass_without_screener_signature(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        await _seed_targon_first(session_maker)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        storage = _install_storage(app)
-        generator = _FakeGenerator(sha="ee" * 32)
-        _install_generator(app, generator)
-        config_digest = "ab" * 32
-        app.state.config = replace(
-            app.state.config,
-            screener_auth=replace(
-                app.state.config.screener_auth,
-                controller_api_token=_CONTROLLER_TOKEN,
-            ),
-        )
-        async with session_maker() as session, session.begin():
-            session.add(
-                TrustedImageBuild(
-                    build_id=uuid4(),
-                    environment="prod",
-                    component="screener",
-                    source_repository=(
-                        "https://github.com/ditto-assistant/ditto-subnet.git"
-                    ),
-                    source_sha="a" * 40,
-                    context_path=".",
-                    dockerfile_path="workers/screener/Dockerfile",
-                    destination=(
-                        "us-central1-docker.pkg.dev/ditto-app-dev/"
-                        "ditto-public-runtime/screener:sha-test"
-                    ),
-                    status="succeeded",
-                    provider="targon",
-                    image_digest="sha256:" + "b" * 64,
-                    completed_at=datetime.now(UTC),
-                    created_by="test",
-                    reason="provide a pinned reviewed source worker image",
-                )
-            )
-        controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
-        claimed = await client.post(
-            "/api/v1/screener/controller/submission-image-builds/claim",
-            headers=controller_headers,
-            json={"environment": "prod", "controller_epoch": "builder:test"},
-        )
-        assert claimed.status_code == 200, claimed.text
-        job = claimed.json()["build"]
-        build_id = job["build_id"]
-        attempt_id = job["attempt_id"]
-        async with session_maker() as session, session.begin():
-            row = await session.get(SubmissionImageBuild, UUID(build_id))
-            assert row is not None
-            row.status = "succeeded"
-            row.output_sha256 = "12" * 32
-            row.output_size_bytes = 123
-            row.output_image_id = "sha256:" + config_digest
-            row.runtime_status = "running"
-            row.controller_epoch = "builder:test"
-            row.completed_at = datetime.now(UTC)
-        smoked = await client.post(
-            f"/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result",
-            headers=controller_headers,
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:test",
-                "status": "succeeded",
-                "provider_resource_id": "wrk-runtime",
-                "image_reference": (
-                    "us-central1-docker.pkg.dev/ditto-app-dev/"
-                    "ditto-screening-candidates/miner@sha256:" + "cd" * 32
-                ),
-            },
-        )
-        assert smoked.status_code == 204, smoked.text
-        leased = await client.post(
-            "/api/v1/screener/controller/submission-source-reviews/claim",
-            headers=controller_headers,
-            json={"environment": "prod", "controller_epoch": "builder:test"},
-        )
-        assert leased.status_code == 200, leased.text
-        review = leased.json()["review"]
-        complete = await client.post(
-            f"/api/v1/screener/submission-source-reviews/{review['review_id']}/complete",
-            headers={"Authorization": f"Bearer {review['job_token']}"},
-            json={
-                "observation": {
-                    "ok": True,
-                    "risk_level": "low",
-                    "categories": [],
-                    "clearance_certified": True,
-                }
-            },
-        )
-        assert complete.status_code == 200, complete.text
-        storage.copy_object.assert_awaited()
-        async with session_maker() as session:
-            agent = await session.get(Agent, agent_id)
-            assert agent is not None
-            assert agent.status == AgentStatus.EVALUATING
-            assert agent.screened_image_sha256 == "12" * 32
-            assert agent.screened_image_id == "sha256:" + config_digest
-            attempt = await session.get(ScreeningAttempt, UUID(attempt_id))
-            assert attempt is not None
-            assert attempt.status == "passed"
-            dataset = (
-                await session.scalars(
-                    select(BenchmarkDataset).where(
-                        BenchmarkDataset.agent_id == agent_id
-                    )
-                )
-            ).one()
-            assert dataset.sha256 == "ee" * 32
-            assert generator.calls == 1
-
-    async def test_consuming_succeeded_build_keeps_pending_runtime_archive(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        await _seed_targon_first(session_maker)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        storage = _install_storage(app)
-        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-        attempt_id = claim.json()["items"][0]["attempt_id"]
-        queued = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-            headers=_AUTH_HEADER,
-            json={"attempt_id": attempt_id},
-        )
-        assert queued.status_code == 200, queued.text
-        build_id = queued.json()["build_id"]
-        async with session_maker() as session, session.begin():
-            row = await session.get(SubmissionImageBuild, UUID(build_id))
-            assert row is not None
-            row.status = "succeeded"
-            row.output_sha256 = "12" * 32
-            row.output_size_bytes = 123
-            row.runtime_status = "pending"
-            row.completed_at = datetime.now(UTC)
-
-        consumed = await client.delete(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds/{build_id}",
-            headers=_AUTH_HEADER,
-            params={"attempt_id": attempt_id},
-        )
-
-        assert consumed.status_code == 204, consumed.text
-        storage.delete_object.assert_not_awaited()
-        async with session_maker() as session:
-            row = await session.get(SubmissionImageBuild, UUID(build_id))
-            assert row is not None
-            assert row.status == "consumed"
-            assert row.runtime_status == "pending"
-            assert row.runtime_error_code is None
-            assert row.runtime_completed_at is None
-
-        app.state.config = replace(
-            app.state.config,
-            screener_auth=replace(
-                app.state.config.screener_auth,
-                controller_api_token=_CONTROLLER_TOKEN,
-            ),
-        )
-        runtime = await client.post(
-            "/api/v1/screener/controller/submission-runtime-smokes/claim",
-            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
-            json={"environment": "prod", "controller_epoch": "prod:epoch"},
-        )
-        assert runtime.status_code == 200, runtime.text
-        assert runtime.json()["artifact"]["build_id"] == build_id
-
-    async def test_consuming_succeeded_build_keeps_in_flight_runtime_archive(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        await _seed_targon_first(session_maker)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        storage = _install_storage(app)
-        app.state.config = replace(
-            app.state.config,
-            screener_auth=replace(
-                app.state.config.screener_auth,
-                controller_api_token=_CONTROLLER_TOKEN,
-            ),
-        )
-        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-        attempt_id = claim.json()["items"][0]["attempt_id"]
-        queued = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-            headers=_AUTH_HEADER,
-            json={"attempt_id": attempt_id},
-        )
-        assert queued.status_code == 200, queued.text
-        build_id = queued.json()["build_id"]
-        async with session_maker() as session, session.begin():
-            row = await session.get(SubmissionImageBuild, UUID(build_id))
-            assert row is not None
-            row.status = "succeeded"
-            row.output_sha256 = "12" * 32
-            row.output_size_bytes = 123
-            row.runtime_status = "running"
-            row.controller_epoch = "prod:epoch"
-            row.completed_at = datetime.now(UTC)
-
-        consumed = await client.delete(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds/{build_id}",
-            headers=_AUTH_HEADER,
-            params={"attempt_id": attempt_id},
-        )
-
-        assert consumed.status_code == 204, consumed.text
-        storage.delete_object.assert_not_awaited()
-        async with session_maker() as session:
-            row = await session.get(SubmissionImageBuild, UUID(build_id))
-            assert row is not None
-            assert row.status == "consumed"
-            assert row.runtime_status == "running"
-            assert row.runtime_error_code is None
-
-        finished = await client.post(
-            f"/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result",
-            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
-            json={
-                "environment": "prod",
-                "controller_epoch": "prod:epoch",
-                "status": "fallback_required",
-                "error_code": "TARGON_RUNTIME_PROVIDER_ERROR",
-            },
-        )
-        assert finished.status_code == 204, finished.text
-        storage.delete_object.assert_awaited_with(
-            key=f"remote-builds/{build_id}/image.tar"
-        )
-
-    async def test_submission_build_rejects_wrong_attempt_and_job_token(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        _install_storage(app)
-        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-        attempt_id = claim.json()["items"][0]["attempt_id"]
-        wrong = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-            headers=_AUTH_HEADER,
-            json={"attempt_id": str(uuid4())},
-        )
-        assert wrong.status_code == 409
-        queued = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-            headers=_AUTH_HEADER,
-            json={"attempt_id": attempt_id},
-        )
-        build_id = queued.json()["build_id"]
-        rejected = await client.get(
-            f"/api/v1/screener/submission-image-builds/{build_id}/source",
-            headers={"Authorization": "Bearer wrong-attempt-token"},
-        )
-        assert rejected.status_code == 401
-
     async def test_trusted_build_enqueue_is_concurrently_idempotent(
         self,
         app: FastAPI,
@@ -2340,7 +1627,7 @@ class TestFederatedScreenerNodes:
             )
         assert count == 1
 
-    async def test_miner_provider_policy_does_not_park_trusted_release_build(
+    async def test_trusted_runner_registers_digest_without_provider_lease(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -2354,197 +1641,75 @@ class TestFederatedScreenerNodes:
                 controller_api_token=_CONTROLLER_TOKEN,
             ),
         )
-        async with session_maker() as session, session.begin():
-            session.add(
-                ScreenerProviderSettingsRevision(
-                    environment="prod",
-                    parent_revision=0,
-                    settings={
-                        "runtime_provider_priority": ["targon", "gcp"],
-                        "source_review_provider_priority": ["targon", "gcp"],
-                        "build_provider_priority": ["gcp"],
-                    },
-                    reason="Disable Targon builders during provider maintenance",
-                    actor="operator@example.com",
-                )
-            )
         headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
-        settings = await client.get(
-            "/api/v1/screener/controller/provider-settings?environment=prod",
-            headers=headers,
-        )
-        assert settings.status_code == 200, settings.text
-        assert settings.json()["settings"]["build_provider_priority"] == ["gcp"]
-
         queued = await client.post(
             "/api/v1/screener/controller/trusted-image-builds",
             headers=headers,
             json={
                 "component": "screener",
-                "source_sha": "e" * 40,
-                "reason": "prove operator-disabled Targon fallback is immediate",
+                "source_sha": "d" * 40,
+                "reason": "trusted release build",
             },
         )
         assert queued.status_code == 200, queued.text
-        assert queued.json()["status"] == "queued"
-        assert queued.json()["error_code"] is None
-
-    async def test_third_expired_build_lease_requests_explicit_fallback(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        app.state.config = replace(
-            app.state.config,
-            screener_auth=replace(
-                app.state.config.screener_auth,
-                controller_api_token=_CONTROLLER_TOKEN,
-            ),
-        )
-        build_id = uuid4()
-        now = datetime.now(UTC)
-        async with session_maker() as session, session.begin():
-            session.add(
-                TrustedImageBuild(
-                    build_id=build_id,
-                    environment="prod",
-                    component="screener",
-                    source_repository=(
-                        "https://github.com/ditto-assistant/ditto-subnet.git"
-                    ),
-                    source_sha="d" * 40,
-                    context_path=".",
-                    dockerfile_path="workers/screener/Dockerfile",
-                    destination="registry.invalid/screener:sha-test",
-                    status="leased",
-                    provider="targon",
-                    attempt_count=3,
-                    controller_epoch="builder:stale",
-                    lease_expires_at=now - timedelta(seconds=1),
-                    created_by="release-test",
-                    reason="exhaust the bounded provider lease budget",
-                )
-            )
-        headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
-        claim = await client.post(
-            "/api/v1/screener/controller/trusted-image-builds/claim",
-            headers=headers,
-            json={"environment": "prod", "controller_epoch": "builder:next"},
-        )
-        assert claim.status_code == 200, claim.text
-        assert claim.json()["build"] is None
-        detail = await client.get(
-            f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
-            headers=headers,
-        )
-        assert detail.status_code == 200, detail.text
-        assert detail.json()["status"] == "fallback_required"
-        assert detail.json()["error_code"] == "TARGON_BUILD_LEASE_EXHAUSTED"
-
-    async def test_trusted_build_claim_is_leased_and_digest_bound(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        app.state.config = replace(
-            app.state.config,
-            screener_auth=replace(
-                app.state.config.screener_auth,
-                controller_api_token=_CONTROLLER_TOKEN,
-            ),
-        )
-        build_id = uuid4()
-        async with session_maker() as session, session.begin():
-            session.add(
-                TrustedImageBuild(
-                    build_id=build_id,
-                    environment="prod",
-                    component="screener",
-                    source_repository=(
-                        "https://github.com/ditto-assistant/ditto-subnet.git"
-                    ),
-                    source_sha="a" * 40,
-                    context_path=".",
-                    dockerfile_path="workers/screener/Dockerfile",
-                    destination=(
-                        "us-central1-docker.pkg.dev/ditto-app-dev/"
-                        "ditto-public-runtime/screener:sha-test"
-                    ),
-                    status="queued",
-                    created_by="release-test",
-                    reason="verify the dedicated trusted builder contract",
-                )
-            )
-        headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
-        claim = await client.post(
-            "/api/v1/screener/controller/trusted-image-builds/claim",
-            headers=headers,
-            json={"environment": "prod", "controller_epoch": "builder:test"},
-        )
-        assert claim.status_code == 200, claim.text
-        assert claim.json()["build"]["status"] == "leased"
-
-        invalid = await client.put(
-            f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
+        build = queued.json()
+        assert build["status"] == "fallback_required"
+        assert build["provider"] == "gcp"
+        result = await client.put(
+            f"/api/v1/screener/controller/trusted-image-builds/{build['build_id']}",
             headers=headers,
             json={
                 "environment": "prod",
-                "controller_epoch": "builder:test",
+                "controller_epoch": build["controller_epoch"],
                 "status": "succeeded",
-                "provider": "targon",
-                "provider_resource_id": "rental-test",
+                "provider": "gcp",
+                "provider_resource_id": "github-run-123",
+                "image_digest": "sha256:" + "a" * 64,
             },
         )
-        assert invalid.status_code == 422
-
-        completed = await client.put(
-            f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
-            headers=headers,
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:test",
-                "status": "succeeded",
-                "provider": "targon",
-                "provider_resource_id": "rental-test",
-                "image_digest": "sha256:" + "b" * 64,
-            },
-        )
-        assert completed.status_code == 200, completed.text
-        assert completed.json()["image_digest"] == "sha256:" + "b" * 64
-
+        assert result.status_code == 200, result.text
+        assert result.json()["image_digest"] == "sha256:" + "a" * 64
         latest = await client.get(
-            "/api/v1/screener/controller/trusted-image-builds/latest?environment=prod",
+            "/api/v1/screener/controller/trusted-image-builds/latest",
             headers=headers,
         )
         assert latest.status_code == 200, latest.text
-        assert latest.json()["build_id"] == str(build_id)
-        assert latest.json()["source_sha"] == "a" * 40
-        assert latest.json()["image_digest"] == "sha256:" + "b" * 64
-
-        overwritten = await client.put(
-            f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
+        assert latest.json()["build_id"] == build["build_id"]
+        retry = await client.post(
+            "/api/v1/screener/controller/trusted-image-builds",
             headers=headers,
             json={
-                "environment": "prod",
-                "controller_epoch": "builder:test",
-                "status": "failed",
-                "provider": "targon",
-                "provider_resource_id": "rental-test",
-                "error_code": "LATE_PROVIDER_ERROR",
+                "component": "screener",
+                "source_sha": "d" * 40,
+                "reason": "retry the same release",
             },
         )
-        assert overwritten.status_code == 409
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["build_id"] == build["build_id"]
+        assert retry.json()["status"] == "succeeded"
+        assert retry.json()["image_digest"] == "sha256:" + "a" * 64
 
-    async def test_trusted_build_cleanup_required_records_event_without_clobber(
+    async def test_controller_capacity_put_expires_overdue_attempts(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
+        first_agent = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        second_agent = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING,
+            name="beta-agent",
+            sha256="ef" * 32,
+        )
+        first_attempt = await _seed_overdue_attempt(
+            session_maker, agent_id=first_agent, rescreen_release=True
+        )
+        second_attempt = await _seed_overdue_attempt(
+            session_maker,
+            agent_id=second_agent,
+            screener_hotkey="5OtherFleetSweepHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        )
         _install_db(app, session_maker)
         app.state.config = replace(
             app.state.config,
@@ -2553,81 +1718,36 @@ class TestFederatedScreenerNodes:
                 controller_api_token=_CONTROLLER_TOKEN,
             ),
         )
-        build_id = uuid4()
-        async with session_maker() as session, session.begin():
-            session.add(
-                TrustedImageBuild(
-                    build_id=build_id,
-                    environment="prod",
-                    component="screener",
-                    source_repository=(
-                        "https://github.com/ditto-assistant/ditto-subnet.git"
-                    ),
-                    source_sha="f" * 40,
-                    context_path=".",
-                    dockerfile_path="workers/screener/Dockerfile",
-                    destination=(
-                        "us-central1-docker.pkg.dev/ditto-app-dev/"
-                        "ditto-public-runtime/screener:sha-cleanup"
-                    ),
-                    status="succeeded",
-                    provider="targon",
-                    provider_resource_id="wrk-trusted-cleanup",
-                    image_digest="sha256:" + "c" * 64,
-                    controller_epoch="builder:cleanup",
-                    created_by="release-test",
-                    reason="prove trusted Kaniko cleanup is durable",
-                    completed_at=datetime.now(UTC),
-                )
-            )
-        headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
-        cleanup = await client.post(
-            f"/api/v1/screener/controller/trusted-image-builds/{build_id}"
-            "/cleanup-required",
-            headers=headers,
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:cleanup",
-                "provider_resource_id": "wrk-trusted-cleanup",
-            },
+
+        response = await client.put(
+            "/api/v1/screener/controller/capacity",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json=_capacity_payload("prod:sweep"),
         )
-        assert cleanup.status_code == 204, cleanup.text
-        stale = await client.post(
-            f"/api/v1/screener/controller/trusted-image-builds/{build_id}"
-            "/cleanup-required",
-            headers=headers,
-            json={
-                "environment": "prod",
-                "controller_epoch": "builder:other",
-                "provider_resource_id": "wrk-trusted-cleanup",
-            },
-        )
-        assert stale.status_code == 409
-        detail = await client.get(
-            f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
-            headers=headers,
-        )
-        assert detail.status_code == 200, detail.text
-        assert detail.json()["status"] == "succeeded"
-        assert detail.json()["error_code"] is None
-        assert detail.json()["image_digest"] == "sha256:" + "c" * 64
+
+        assert response.status_code == 200, response.text
         async with session_maker() as session:
-            events = list(
-                await session.scalars(
-                    select(ScreenerCapacityEvent).where(
-                        ScreenerCapacityEvent.event_type == "provider_cleanup_required"
-                    )
+            attempts = [
+                await session.get(ScreeningAttempt, attempt_id)
+                for attempt_id in (first_attempt, second_attempt)
+            ]
+            release = await session.scalar(
+                select(ScoredPolicyRescreenRelease).where(
+                    ScoredPolicyRescreenRelease.attempt_id == first_attempt
                 )
             )
-            assert len(events) == 1
-            assert events[0].provider == "targon"
-            assert "trusted Kaniko" in events[0].detail
+        assert [attempt.status if attempt else None for attempt in attempts] == [
+            "expired",
+            "expired",
+        ]
+        assert release is not None and release.state == "paused"
 
-    async def test_current_controller_can_release_lease_for_graceful_handoff(
+    async def test_controller_capacity_put_survives_a_failed_lease_sweep(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _install_db(app, session_maker)
         app.state.config = replace(
@@ -2637,34 +1757,22 @@ class TestFederatedScreenerNodes:
                 controller_api_token=_CONTROLLER_TOKEN,
             ),
         )
-        headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
-        first = await client.put(
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.screener.sweep_screening_leases",
+            AsyncMock(side_effect=RuntimeError("sweep failed")),
+        )
+
+        response = await client.put(
             "/api/v1/screener/controller/capacity",
-            headers=headers,
-            json=_capacity_payload("prod:first"),
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json=_capacity_payload("prod:sweep"),
         )
-        assert first.status_code == 200, first.text
 
-        released = await client.post(
-            "/api/v1/screener/controller/release",
-            headers=headers,
-            json={"environment": "prod", "controller_epoch": "prod:first"},
-        )
-        assert released.status_code == 204, released.text
-
-        second = await client.put(
-            "/api/v1/screener/controller/capacity",
-            headers=headers,
-            json=_capacity_payload("prod:second"),
-        )
-        assert second.status_code == 200, second.text
-
-        stale_release = await client.post(
-            "/api/v1/screener/controller/release",
-            headers=headers,
-            json={"environment": "prod", "controller_epoch": "prod:first"},
-        )
-        assert stale_release.status_code == 409
+        assert response.status_code == 200, response.text
+        assert response.json()["controller_epoch"] == "prod:sweep"
+        async with session_maker() as session:
+            snapshot = await session.get(ScreenerCapacitySnapshot, "prod")
+        assert snapshot is not None and snapshot.controller_epoch == "prod:sweep"
 
     async def test_controller_lease_fences_other_epochs_and_bootstraps_node(
         self,
@@ -2706,14 +1814,14 @@ class TestFederatedScreenerNodes:
         assert still_owned.status_code == 204
 
         node_id = "ditto-screener-prod-test"
-        resource_id = "targon-workload-test"
+        resource_id = "hetzner-node-test"
         grant = await client.post(
             "/api/v1/screener/controller/bootstrap-grants",
             headers=controller_headers,
             json={
                 "environment": "prod",
                 "node_id": node_id,
-                "provider": "targon",
+                "provider": "hetzner",
                 "provider_resource_id": resource_id,
                 "controller_epoch": "prod:first",
                 "image_reference": (
@@ -2729,7 +1837,7 @@ class TestFederatedScreenerNodes:
         timestamp = int(datetime.now(UTC).timestamp())
         message = (
             "ditto-screener-node-register:v1:"
-            f"prod:{node_id}:targon:{resource_id}:"
+            f"prod:{node_id}:hetzner:{resource_id}:"
             f"{node_keypair.ss58_address}:{timestamp}:{registration_id}"
         )
         registration = await client.post(
@@ -2740,7 +1848,7 @@ class TestFederatedScreenerNodes:
             json={
                 "environment": "prod",
                 "node_id": node_id,
-                "provider": "targon",
+                "provider": "hetzner",
                 "provider_resource_id": resource_id,
                 "screener_hotkey": node_keypair.ss58_address,
                 "timestamp": timestamp,
@@ -2758,7 +1866,7 @@ class TestFederatedScreenerNodes:
             json={
                 "environment": "prod",
                 "node_id": node_id,
-                "provider": "targon",
+                "provider": "hetzner",
                 "provider_resource_id": resource_id,
                 "screener_hotkey": node_keypair.ss58_address,
                 "timestamp": timestamp,
@@ -3079,7 +2187,7 @@ class TestFederatedScreenerNodes:
             json={
                 "environment": "prod",
                 "node_id": node_id,
-                "provider": "targon",
+                "provider": "hetzner",
                 "provider_resource_id": resource_id,
                 "screener_hotkey": node_keypair.ss58_address,
                 "timestamp": timestamp,
@@ -3090,6 +2198,188 @@ class TestFederatedScreenerNodes:
         # Enrollment recovery closes once the node has successfully rotated;
         # the consumed bootstrap token cannot recover an older authority.
         assert replay.status_code == 401
+
+    async def test_controller_nodes_reports_admission_closed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        now = datetime.now(UTC)
+        for node_id, concurrency in (("closed-node", 0), ("open-node", 2)):
+            hotkey = f"5{node_id}HotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+            await _seed_screener_node(
+                session_maker,
+                node_id=node_id,
+                hotkey=hotkey,
+                token=f"{node_id}-token-at-least-32-characters",
+                screening_concurrency=concurrency,
+            )
+            async with session_maker() as session, session.begin():
+                session.add(
+                    ScreenerHeartbeat(
+                        screener_hotkey=hotkey,
+                        instance_id=node_id,
+                        software_version="0.21.0",
+                        protocol_version=4,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        state="polling",
+                        first_seen_at=now - timedelta(days=1),
+                        reported_at=now - timedelta(seconds=5),
+                        seen_at=now - timedelta(seconds=5),
+                        signature="ab" * 64,
+                    )
+                )
+
+        response = await client.get(
+            "/api/v1/screener/controller/nodes?environment=prod",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+        )
+
+        assert response.status_code == 200, response.text
+        nodes = {node["node_id"]: node for node in response.json()["nodes"]}
+        assert nodes["closed-node"]["admission_open"] is False
+        assert nodes["closed-node"]["screening_concurrency"] == 0
+        assert nodes["closed-node"]["ready"] is True
+        assert nodes["open-node"]["admission_open"] is True
+        assert nodes["open-node"]["ready"] is True
+
+    async def test_controller_nodes_attributes_legacy_gcp_instances(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        now = datetime.now(UTC)
+        enrolled_hotkey = "5EnrolledNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        await _seed_screener_node(
+            session_maker,
+            node_id="enrolled-node",
+            hotkey=enrolled_hotkey,
+            token="enrolled-node-token-at-least-32-characters",
+            screening_concurrency=1,
+        )
+        agent_ids: list[UUID] = []
+        for index, (hotkey, deadline) in enumerate(
+            (
+                (_SCREENER_HOTKEY, None),
+                (_SCREENER_HOTKEY, None),
+                (_SCREENER_HOTKEY, None),
+                (_SCREENER_HOTKEY, now - timedelta(minutes=1)),
+                (enrolled_hotkey, None),
+            )
+        ):
+            agent_ids.append(
+                await _seed_agent(
+                    session_maker,
+                    status=AgentStatus.SCREENING,
+                    name=f"attributed-agent-{index}",
+                    sha256=f"{index:064x}",
+                )
+            )
+            await _seed_running_attempt(
+                session_maker,
+                agent_id=agent_ids[-1],
+                screener_hotkey=hotkey,
+                started_at=now - timedelta(minutes=5),
+                deadline=deadline,
+            )
+        async with session_maker() as session, session.begin():
+            for hotkey, instance_id, state, active_agent_id in (
+                (enrolled_hotkey, "enrolled-node", "screening", agent_ids[4]),
+                (_SCREENER_HOTKEY, "ditto-screener-fleet-busy", "screening", None),
+                (
+                    _SCREENER_HOTKEY,
+                    "ditto-screener-fleet-claimed",
+                    "polling",
+                    agent_ids[1],
+                ),
+                (_SCREENER_HOTKEY, "ditto-screener-fleet-idle", "polling", None),
+            ):
+                session.add(
+                    ScreenerHeartbeat(
+                        screener_hotkey=hotkey,
+                        instance_id=instance_id,
+                        software_version="0.21.0",
+                        protocol_version=4,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        state=state,
+                        active_agent_id=active_agent_id,
+                        first_seen_at=now - timedelta(days=1),
+                        reported_at=now - timedelta(seconds=5),
+                        seen_at=now - timedelta(seconds=5),
+                        signature="ab" * 64,
+                    )
+                )
+
+        response = await client.get(
+            "/api/v1/screener/controller/nodes?environment=prod",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        # Expired leases and enrolled-node leases are not legacy GCP work.
+        assert body["legacy_gcp_running_attempts"] == 3
+        nodes = {node["node_id"]: node for node in body["nodes"]}
+        assert nodes["enrolled-node"]["instance_busy"] is None
+        assert nodes["ditto-screener-fleet-busy"]["instance_busy"] is True
+        assert nodes["ditto-screener-fleet-claimed"]["instance_busy"] is True
+        assert nodes["ditto-screener-fleet-idle"]["instance_busy"] is False
+        # The shared hotkey still marks every legacy row as leased.
+        assert nodes["ditto-screener-fleet-idle"]["active_lease"] is True
+
+    async def test_watchdog_leaves_operator_admission_closure_stopped(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        capacity = await client.put(
+            "/api/v1/screener/controller/capacity",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json={
+                **_capacity_payload("prod:first"),
+                "runnable_backlog": 2,
+                "desired_slots": 1,
+                "gce_target": 0,
+                "fallback_reason": "HETZNER_PRIMARY_ADMISSION_CLOSED",
+            },
+        )
+        assert capacity.status_code == 200, capacity.text
+
+        response = await client.get(
+            "/api/v1/public/screener-capacity-watchdog?environment=prod"
+        )
+
+        # Zero admission is a deliberate global stop, not a host failure.
+        assert response.status_code == 200
+        assert response.json()["activate_fallback"] is False
+        assert response.json()["reason"] == "controller_fresh"
 
     async def test_watchdog_is_quiet_while_controller_lease_is_fresh(
         self,
@@ -3386,7 +2676,7 @@ class TestHeartbeat:
                     policy_version=SCREENING_POLICY_VERSION,
                     status="running",
                     started_at=started,
-                    deadline=started + timedelta(minutes=30),
+                    deadline=started + timedelta(minutes=10),
                 )
             )
         timestamp = int(datetime.now(UTC).timestamp())
@@ -3412,7 +2702,7 @@ class TestHeartbeat:
             )
             assert attempt is not None
             assert attempt.deadline == renewed_deadline
-        unchanged = await client.post(
+        same_stage = await client.post(
             "/api/v1/screener/heartbeat",
             json=_heartbeat_payload(
                 timestamp=timestamp + 1,
@@ -3425,15 +2715,19 @@ class TestHeartbeat:
                 },
             ),
         )
-        assert unchanged.status_code == 200
-        assert unchanged.json()["accepted"] is True
-        assert unchanged.json()["lease_deadline"] is None
+        assert same_stage.status_code == 200
+        assert same_stage.json()["accepted"] is True
+        # Liveness alone renews: a long stage must not outlive a frozen lease.
+        same_stage_deadline = datetime.fromisoformat(
+            same_stage.json()["lease_deadline"]
+        )
+        assert same_stage_deadline >= renewed_deadline
         async with session_maker() as session:
             attempt = await session.scalar(
                 select(ScreeningAttempt).where(ScreeningAttempt.agent_id == agent_id)
             )
             assert attempt is not None
-            assert attempt.deadline == renewed_deadline
+            assert attempt.deadline == same_stage_deadline
         advanced = await client.post(
             "/api/v1/screener/heartbeat",
             json=_heartbeat_payload(
@@ -3492,6 +2786,263 @@ class TestHeartbeat:
         assert entry["online"] is False
         assert entry["active_agent_id"] is None
         assert entry["screening_progress"] is None
+
+    async def test_screening_heartbeat_renews_without_stage_advance(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        claimed_at = datetime.now(UTC).replace(microsecond=0)
+        attempt_id = await _seed_running_attempt(
+            session_maker,
+            agent_id=agent_id,
+            started_at=claimed_at,
+            deadline=claimed_at + timedelta(minutes=10),
+        )
+        timestamp = int(claimed_at.timestamp())
+        assert await _screening_heartbeat(
+            client,
+            agent_id=agent_id,
+            timestamp=timestamp,
+            stage="source_review_60",
+            started_at=claimed_at,
+        )
+        for step in (1, 2, 3):
+            # Age the claim four minutes per step instead of sleeping in L2.
+            async with session_maker() as session, session.begin():
+                await session.execute(
+                    update(ScreeningAttempt)
+                    .where(ScreeningAttempt.attempt_id == attempt_id)
+                    .values(
+                        started_at=ScreeningAttempt.started_at - timedelta(minutes=4),
+                        deadline=ScreeningAttempt.deadline - timedelta(minutes=4),
+                    )
+                )
+            renewed = await _screening_heartbeat(
+                client,
+                agent_id=agent_id,
+                timestamp=timestamp + step,
+                stage="source_review_60",
+                started_at=claimed_at,
+            )
+            assert renewed is not None
+            assert renewed > datetime.now(UTC) + timedelta(minutes=9)
+            assert await _attempt_deadline(session_maker, attempt_id) == renewed
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert attempt is not None
+            # Twelve minutes into one stage, well past the original lease.
+            assert attempt.deadline > attempt.started_at + timedelta(minutes=20)
+
+    async def test_same_stage_renewal_is_capped_by_attempt_lifetime(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        revision = await _seed_review_settings_revision(
+            session_maker,
+            ScreenerReviewSettings(
+                source_review_timeout_seconds=60,
+                timeout_seconds=30,
+                adjudicator_mode="shadow",
+                adjudicator_timeout_seconds=120,
+            ),
+        )
+        now = datetime.now(UTC).replace(microsecond=0)
+        timestamp = int(now.timestamp())
+        # Bound: 60 s L1 + 30 s L2 + 120 s court + 45 min non-review work.
+        bound_started = now - timedelta(minutes=45)
+        bound_cap = bound_started + timedelta(minutes=48, seconds=30)
+        # Unbound attempts fall back to a 150 minute lifetime.
+        unbound_started = now - timedelta(minutes=145)
+        unbound_cap = unbound_started + timedelta(minutes=150)
+        for index, (started, cap, review_settings) in enumerate(
+            (
+                (bound_started, bound_cap, revision),
+                (unbound_started, unbound_cap, None),
+            )
+        ):
+            agent_id = await _seed_agent(
+                session_maker, status=AgentStatus.SCREENING, name=f"capped-{index}"
+            )
+            attempt_id = await _seed_running_attempt(
+                session_maker,
+                agent_id=agent_id,
+                started_at=started,
+                deadline=now + timedelta(minutes=1),
+                review_settings=review_settings,
+                review_settings_instance_id="legacy",
+            )
+            assert (
+                await _screening_heartbeat(
+                    client,
+                    agent_id=agent_id,
+                    timestamp=timestamp + 2 * index,
+                    stage="source_review_60",
+                    started_at=started,
+                )
+                == cap
+            )
+            assert (
+                await _screening_heartbeat(
+                    client,
+                    agent_id=agent_id,
+                    timestamp=timestamp + 2 * index + 1,
+                    stage="source_review_60",
+                    started_at=started,
+                )
+                is None
+            )
+            assert await _attempt_deadline(session_maker, attempt_id) == cap
+
+    async def test_sibling_instance_heartbeat_does_not_renew(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        revision = await _seed_review_settings_revision(
+            session_maker, ScreenerReviewSettings()
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        started = datetime.now(UTC).replace(microsecond=0)
+        deadline = started + timedelta(minutes=5)
+        attempt_id = await _seed_running_attempt(
+            session_maker,
+            agent_id=agent_id,
+            started_at=started,
+            deadline=deadline,
+            review_settings=revision,
+            review_settings_instance_id="subnet-screener-1-worker-1",
+        )
+        timestamp = int(started.timestamp())
+        sibling = await _screening_heartbeat(
+            client,
+            agent_id=agent_id,
+            timestamp=timestamp,
+            stage="source_review_60",
+            started_at=started,
+            instance_id="subnet-screener-1-worker-2",
+        )
+        assert sibling is None
+        assert await _attempt_deadline(session_maker, attempt_id) == deadline
+        owner = await _screening_heartbeat(
+            client,
+            agent_id=agent_id,
+            timestamp=timestamp,
+            stage="source_review_60",
+            started_at=started,
+            instance_id="subnet-screener-1-worker-1",
+        )
+        assert owner is not None
+        assert await _attempt_deadline(session_maker, attempt_id) == owner
+
+    async def test_building_after_preflight_source_review_renews(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        started = datetime.now(UTC).replace(microsecond=0)
+        attempt_id = await _seed_running_attempt(
+            session_maker,
+            agent_id=agent_id,
+            started_at=started,
+            deadline=started + timedelta(minutes=10),
+        )
+        timestamp = int(started.timestamp())
+        stages = ("source_review_90", "building", "starting", "downloading")
+        leases = [
+            await _screening_heartbeat(
+                client,
+                agent_id=agent_id,
+                timestamp=timestamp + offset,
+                stage=stage,
+                started_at=started,
+            )
+            for offset, stage in enumerate(stages)
+        ]
+        # The static preflight lead is reviewed before the build; only a real
+        # regression past it (back to downloading) stops renewing.
+        assert all(lease is not None for lease in leases[:3])
+        assert leases[3] is None
+        assert await _attempt_deadline(session_maker, attempt_id) == leases[2]
+
+    async def test_dead_attempt_or_changed_job_does_not_renew(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        now = datetime.now(UTC).replace(microsecond=0)
+        timestamp = int(now.timestamp())
+        live_agent = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING, name="live-agent"
+        )
+        live_attempt = await _seed_running_attempt(
+            session_maker,
+            agent_id=live_agent,
+            started_at=now,
+            deadline=now + timedelta(minutes=10),
+        )
+        renewed = await _screening_heartbeat(
+            client,
+            agent_id=live_agent,
+            timestamp=timestamp,
+            stage="building",
+            started_at=now,
+        )
+        assert renewed is not None
+        restarted = await _screening_heartbeat(
+            client,
+            agent_id=live_agent,
+            timestamp=timestamp + 1,
+            stage="building",
+            started_at=now + timedelta(seconds=1),
+        )
+        assert restarted is None
+        assert await _attempt_deadline(session_maker, live_attempt) == renewed
+        started = now - timedelta(minutes=20)
+        for index, (status, deadline) in enumerate(
+            (
+                ("running", now - timedelta(seconds=1)),
+                ("expired", now - timedelta(seconds=1)),
+                ("passed", now + timedelta(minutes=1)),
+            )
+        ):
+            agent_id = await _seed_agent(
+                session_maker, status=AgentStatus.SCREENING, name=f"dead-{index}"
+            )
+            attempt_id = await _seed_running_attempt(
+                session_maker,
+                agent_id=agent_id,
+                started_at=started,
+                deadline=deadline,
+                status=status,
+            )
+            assert (
+                await _screening_heartbeat(
+                    client,
+                    agent_id=agent_id,
+                    timestamp=timestamp + 2 + index,
+                    stage="source_review_60",
+                    started_at=started,
+                )
+                is None
+            )
+            async with session_maker() as session:
+                attempt = await session.get(ScreeningAttempt, attempt_id)
+                assert attempt is not None
+                assert (attempt.status, attempt.deadline) == (status, deadline)
 
     async def test_records_signed_metrics_and_is_publicly_visible(
         self,
@@ -3706,6 +3257,38 @@ class TestHeartbeat:
         payload["release"] = {"builtin_policy_version": SCREENING_POLICY_VERSION + 5}
         response = await client.post("/api/v1/screener/heartbeat", json=payload)
         assert response.status_code == 401, response.text
+
+    async def test_v8_fixture_capability_is_signed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        payload = _heartbeat_payload(
+            protocol_version=8,
+            instance_id="subnet-screener-1-worker-1",
+            review_settings=_V5_REVIEW_SETTINGS,
+            host_specs={
+                "cpu_count": 4,
+                "memory_total_mib": 8000,
+                "disk_total_gib": 80,
+                "architecture": "x86_64",
+            },
+            release={
+                "builtin_policy_version": SCREENING_POLICY_VERSION,
+                "source_fixture_v1": True,
+            },
+        )
+        accepted = await client.post("/api/v1/screener/heartbeat", json=payload)
+        assert accepted.status_code == 200, accepted.text
+        tampered = dict(payload)
+        tampered["release"] = {
+            "builtin_policy_version": SCREENING_POLICY_VERSION,
+            "source_fixture_v1": False,
+        }
+        refused = await client.post("/api/v1/screener/heartbeat", json=tampered)
+        assert refused.status_code == 401, refused.text
 
     async def test_v7_requires_the_release_it_announces(
         self,
@@ -4346,6 +3929,101 @@ class TestQueue:
         assert response.status_code == 401
         assert response.json()["error_code"] == ERROR_CODE_SCREENER_AUTH
 
+    @pytest.mark.parametrize("enabled", [True, False])
+    async def test_legacy_bearer_switch_gates_the_shared_fleet_token(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        caplog: pytest.LogCaptureFixture,
+        enabled: bool,
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth, legacy_bearer_enabled=enabled
+            ),
+        )
+        with caplog.at_level(logging.INFO):
+            response = await client.get("/api/v1/screener/queue")
+        if enabled:
+            assert response.status_code == 200, response.text
+            return
+        assert response.status_code == 401
+        assert response.json()["error_code"] == ERROR_CODE_SCREENER_AUTH
+        assert "SCREENER_LEGACY_BEARER_ENABLED=false" in caplog.text
+        assert "test-screener-token" not in caplog.text
+
+    async def test_disabled_legacy_bearer_keeps_node_and_controller_tokens(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        node_hotkey = "5LegacyOffNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        node_token = "legacy-off-node-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id="legacy-off-node",
+            hotkey=node_hotkey,
+            token=node_token,
+            screening_concurrency=1,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        _install_storage(app)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                legacy_bearer_enabled=False,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        node_headers = {
+            "Authorization": f"Bearer {node_token}",
+            "X-Screener-Hotkey": node_hotkey,
+        }
+        claim = await client.post(_CLAIM_URL, headers=node_headers)
+        assert claim.status_code == 200, claim.text
+        assert claim.json()["items"][0]["agent_id"] == str(agent_id)
+        node_settings = await client.get(
+            "/api/v1/screener/nodes/channel-settings",
+            headers=node_headers,
+        )
+        assert node_settings.status_code == 200, node_settings.text
+        controller_nodes = await client.get(
+            "/api/v1/screener/controller/nodes",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+        )
+        assert controller_nodes.status_code == 200, controller_nodes.text
+        review_id = uuid4()
+        job_token = "legacy-off-source-review-job-token"
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                SubmissionSourceReview(
+                    review_id=review_id,
+                    agent_id=agent_id,
+                    attempt_id=UUID(claim.json()["items"][0]["attempt_id"]),
+                    environment="prod",
+                    artifact_sha256=_SHA256,
+                    status="running",
+                    job_token_hash=hashlib.sha256(job_token.encode()).hexdigest(),
+                    job_token_expires_at=now + timedelta(minutes=10),
+                    lease_expires_at=now + timedelta(minutes=10),
+                )
+            )
+        source = await client.get(
+            f"/api/v1/screener/submission-source-reviews/{review_id}/source",
+            headers={"Authorization": f"Bearer {job_token}"},
+        )
+        assert source.status_code == 200, source.text
+        assert source.json()["artifact_sha256"] == _SHA256
+
     async def test_dedicated_screener_needs_no_validator_permit(
         self,
         app: FastAPI,
@@ -4376,11 +4054,14 @@ class TestQueue:
 
 
 class TestClaim:
+    @pytest.mark.parametrize("setup_delay", [0, 0.65])
     async def test_busy_claim_gate_returns_before_node_row_lock(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        setup_delay: float,
     ) -> None:
         node_id = "claim-gate-node"
         hotkey = "5ClaimGateNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
@@ -4392,8 +4073,38 @@ class TestClaim:
             token=token,
             screening_concurrency=2,
         )
-        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
+        gate_entered = asyncio.Event()
+        release_contender = asyncio.Event()
+        real_try_lock = screener_endpoint.try_acquire_screening_claim_lock
+        gate_results: list[bool] = []
+
+        async def synchronized_try_lock(session: AsyncSession) -> bool:
+            gate_entered.set()
+            await release_contender.wait()
+            result = await real_try_lock(session)
+            gate_results.append(result)
+            return result
+
+        monkeypatch.setattr(
+            screener_endpoint, "try_acquire_screening_claim_lock", synchronized_try_lock
+        )
+        if setup_delay:
+            real_sweep = screener_endpoint._sweep_screening_leases
+
+            async def delayed_sweep(*args, **kwargs):
+                # Exercise loaded setup without replacing its real DB work.
+                await asyncio.sleep(setup_delay)
+                return await real_sweep(*args, **kwargs)
+
+            monkeypatch.setattr(
+                screener_endpoint, "_sweep_screening_leases", delayed_sweep
+            )
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Screener-Hotkey": hotkey,
+        }
 
         async with session_maker() as owner, owner.begin():
             # Reproduce both locks that the old endpoint took in the opposite
@@ -4407,19 +4118,44 @@ class TestClaim:
                 select(func.pg_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
             )
 
-            response = await asyncio.wait_for(
-                client.post(
-                    _CLAIM_URL,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "X-Screener-Hotkey": hotkey,
-                    },
-                ),
-                timeout=0.5,
-            )
+            contender = asyncio.create_task(client.post(_CLAIM_URL, headers=headers))
+            try:
+                # Auth, lease sweep and policy reads precede this gate. Bound
+                # setup separately, then keep the original response deadline
+                # around the actual nonblocking SQL with both holder locks held.
+                await asyncio.wait_for(gate_entered.wait(), timeout=5)
+                async with asyncio.timeout(0.5):
+                    release_contender.set()
+                    response = await contender
+            finally:
+                if not contender.done():
+                    contender.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await contender
 
-        assert response.status_code == 200, response.text
-        assert response.json()["items"] == []
+            assert response.status_code == 200, response.text
+            assert response.json()["items"] == []
+            assert response.headers["X-Ditto-Claim-Empty-Reason"] == "claim_lock_busy"
+            assert gate_results == [False]
+            async with session_maker() as probe:
+                assert (
+                    await probe.scalar(
+                        select(func.count()).select_from(ScreeningAttempt)
+                    )
+                    == 0
+                )
+                agent = await probe.get(Agent, agent_id)
+                assert agent is not None and agent.status == AgentStatus.UPLOADED
+                node = await probe.get(ScreenerNode, node_id)
+                assert node is not None
+                assert node.token_hash == hashlib.sha256(token.encode()).hexdigest()
+
+        # The unchanged bearer and same artifact can claim after lock release.
+        retry = await client.post(_CLAIM_URL, headers=headers)
+        assert retry.status_code == 200, retry.text
+        assert gate_results == [False, True]
+        assert len(retry.json()["items"]) == 1
+        assert retry.json()["items"][0]["agent_id"] == str(agent_id)
 
     async def test_concurrent_node_claims_obey_node_limit_not_heartbeat_count(
         self,
@@ -4508,6 +4244,95 @@ class TestClaim:
             )
         assert running == 2
 
+    async def test_claim_zero_admission_sets_empty_reason_header(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        node_id = "closed-admission-node"
+        hotkey = "5ClosedAdmissionNodeHotkeyXXXXXXXXXXXXXXXXXXXXXX"
+        token = "closed-admission-node-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id=node_id,
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=0,
+        )
+        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.screener._admission_closed_logged_at", {}
+        )
+        headers = {"Authorization": f"Bearer {token}", "X-Screener-Hotkey": hotkey}
+
+        with caplog.at_level(logging.INFO, logger="ditto.api_server.endpoints"):
+            first = await client.post(_CLAIM_URL, headers=headers)
+            second = await client.post(_CLAIM_URL, headers=headers)
+
+        for response in (first, second):
+            assert response.status_code == 200, response.text
+            assert response.json()["items"] == []
+            assert response.headers["X-Ditto-Claim-Empty-Reason"] == (
+                "admission_closed"
+            )
+        closed_logs = [
+            record.getMessage()
+            for record in caplog.records
+            if "admission closed" in record.getMessage()
+        ]
+        assert closed_logs == [
+            f"screener node={node_id} admission closed: "
+            "screening_concurrency=0 active=0"
+        ]
+
+    async def test_claim_full_admission_sets_admission_full(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        node_id = "full-admission-node"
+        hotkey = "5FullAdmissionNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXX"
+        token = "full-admission-node-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id=node_id,
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=1,
+        )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add_all(
+                [
+                    Agent(
+                        agent_id=uuid4(),
+                        miner_hotkey=f"5HK-endpoint-full-admission-{index}",
+                        name=f"endpoint-full-admission-{index}",
+                        sha256=f"{index + 1:02x}" * 32,
+                        status=AgentStatus.UPLOADED,
+                        created_at=now + timedelta(seconds=index),
+                    )
+                    for index in range(2)
+                ]
+            )
+        _install_db(app, session_maker)
+        headers = {"Authorization": f"Bearer {token}", "X-Screener-Hotkey": hotkey}
+
+        admitted = await client.post(_CLAIM_URL, headers=headers)
+        full = await client.post(_CLAIM_URL, headers=headers)
+
+        assert admitted.status_code == 200, admitted.text
+        assert len(admitted.json()["items"]) == 1
+        assert "X-Ditto-Claim-Empty-Reason" not in admitted.headers
+        assert full.status_code == 200, full.text
+        assert full.json()["items"] == []
+        assert full.headers["X-Ditto-Claim-Empty-Reason"] == "admission_full"
+
     async def test_legacy_gcp_claim_waits_for_fenced_overflow_capacity(
         self,
         app: FastAPI,
@@ -4515,6 +4340,7 @@ class TestClaim:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         """The shared GCP principal must not outrun a healthy Hetzner primary."""
+        await _seed_hetzner_primary(session_maker)
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         now = datetime.now(UTC)
         async with session_maker() as session, session.begin():
@@ -4563,6 +4389,7 @@ class TestClaim:
 
         assert held.status_code == 200, held.text
         assert held.json()["items"] == []
+        assert held.headers["X-Ditto-Claim-Empty-Reason"] == "legacy_gcp_held"
         async with session_maker() as session:
             agent = await session.get(Agent, agent_id)
             assert agent is not None
@@ -4588,15 +4415,386 @@ class TestClaim:
 
         assert admitted.status_code == 200, admitted.text
         assert admitted.json()["items"][0]["agent_id"] == str(agent_id)
+        assert "X-Ditto-Claim-Empty-Reason" not in admitted.headers
 
-    async def test_legacy_gcp_claim_fails_closed_after_controller_lease_expires(
+    @pytest.mark.parametrize(
+        ("controller", "policy", "admitted", "fallback"),
+        [
+            ("missing", "open", True, True),
+            ("stale", "open", True, True),
+            ("unready", "open", True, True),
+            ("fresh-zero", "open", False, False),
+            ("fresh-target", "open", True, False),
+            ("fresh-mismatch", "open", False, False),
+            ("stale", "disabled", False, False),
+            ("missing", "disabled", False, False),
+            ("unready", "disabled", False, False),
+            ("stale", "closed", False, False),
+            ("missing", "closed", False, False),
+            ("unready", "closed", False, False),
+            ("fresh-target", "closed", False, False),
+            ("stale", "unknown", False, False),
+            ("missing", "unknown", False, False),
+            ("unready", "unknown", False, False),
+            ("stale", "no-admission", False, False),
+            ("stale", "other-environment", False, False),
+            ("stale", "wrong-provider", False, False),
+            ("stale", "capped-zero", False, False),
+            ("missing", "gcp-first", True, True),
+            ("fresh-zero", "gcp-first", False, False),
+            ("fresh-zero-mismatch", "gcp-first", False, False),
+            ("fresh-target", "gcp-first", True, False),
+            ("missing", "gcp-first-closed", False, False),
+            ("missing", "mixed-gcp-first", True, True),
+            ("missing", "mixed-gcp-first-closed", False, False),
+            ("stale", "gcp-first-unknown", False, False),
+            ("unready", "gcp-first-no-admission", False, False),
+            ("stale", "retired-open", True, True),
+            ("fresh-zero", "retired-open", False, False),
+            ("fresh-zero-mismatch", "retired-open", False, False),
+            ("fresh-target", "retired-open", True, False),
+            ("stale", "retired-closed", False, False),
+            ("stale", "retired-unknown", False, False),
+            ("missing", "mixed-retired-open", True, True),
+            ("stale", "mixed-retired-closed", False, False),
+            ("stale", "mixed-retired-unknown", False, False),
+        ],
+    )
+    async def test_legacy_gcp_and_watchdog_share_fallback_admission(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        controller: str,
+        policy: str,
+        admitted: bool,
+        fallback: bool,
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        now = datetime.now(UTC)
+        if policy not in (
+            "unknown",
+            "retired-unknown",
+            "gcp-first-unknown",
+            "mixed-retired-unknown",
+        ):
+            await _seed_hetzner_primary(
+                session_maker,
+                screening_concurrency=0 if "closed" in policy else 2,
+            )
+        async with session_maker() as session, session.begin():
+            primary = await session.get(ScreenerNode, "subnet-screener-1")
+            if primary is not None:
+                # Loss of host readiness must not suppress fallback for a
+                # primary whose admission the operator has left open.
+                primary.status = "draining"
+                if policy == "other-environment":
+                    primary.environment = "dev"
+                if policy == "wrong-provider":
+                    primary.provider = "gcp"
+                if policy in ("no-admission", "gcp-first-no-admission"):
+                    channels = await session.scalar(
+                        select(ScreenerNodeChannelSettingsRevision)
+                    )
+                    assert channels is not None
+                    await session.delete(channels)
+            provider = (
+                "gcp"
+                if policy.startswith(("gcp-first", "mixed-gcp-first"))
+                else "targon"
+                if policy.startswith(("retired-", "mixed-retired"))
+                else "hetzner"
+            )
+            priorities = [provider] if provider == "gcp" else [provider, "gcp"]
+            if policy.startswith("mixed-gcp-first"):
+                priorities = ["hetzner", "gcp"]
+            session.add(
+                ScreenerProviderSettingsRevision(
+                    environment="prod",
+                    parent_revision=0,
+                    settings={
+                        "runtime_provider_priority": priorities,
+                        "source_review_provider_priority": priorities,
+                        "build_provider_priority": (
+                            ["gcp", "hetzner"]
+                            if policy.startswith("mixed-gcp-first")
+                            else ["targon", "gcp"]
+                            if policy.startswith("mixed-retired")
+                            else priorities
+                        ),
+                        "gce_overflow_enabled": (
+                            policy != "disabled" and provider == "hetzner"
+                        ),
+                        "primary_node_id": "subnet-screener-1",
+                        "gce_overflow_max_instances": (
+                            0 if policy == "capped-zero" else 6
+                        ),
+                    },
+                    reason="Exercise shared GCP watchdog and claim admission",
+                    actor="test",
+                )
+            )
+            if controller != "missing":
+                payload = _capacity_payload("prod:test")
+                payload.pop("events")
+                session.add(
+                    ScreenerCapacitySnapshot(
+                        **{
+                            **payload,
+                            # Stale/unready recovery does not depend on the
+                            # obsolete target or provider revision.
+                            "provider_settings_revision": (
+                                1 if controller in ("fresh-zero", "fresh-target") else 0
+                            ),
+                            "provider_ready": controller != "unready",
+                            "controller_heartbeat_at": now,
+                            "controller_lease_expires_at": now
+                            + timedelta(seconds=-1 if controller == "stale" else 180),
+                            "gce_target": (
+                                1
+                                if controller in ("fresh-target", "fresh-mismatch")
+                                else 0
+                            ),
+                        }
+                    )
+                )
+        _install_db(app, session_maker)
+        watchdog = await client.get(
+            "/api/v1/public/screener-capacity-watchdog?environment=prod"
+        )
+        assert watchdog.status_code == 200, watchdog.text
+        assert watchdog.json()["activate_fallback"] is fallback
+        assert watchdog.json()["reason"] == {
+            "missing": "controller_missing",
+            "stale": "controller_stale",
+            "unready": "provider_not_ready",
+        }.get(controller, "controller_fresh")
+        assert watchdog.json()["controller_stale"] is (
+            controller in ("missing", "stale")
+        )
+        assert watchdog.headers["Cache-Control"] == "no-store"
+
+        response = await client.post(_CLAIM_URL)
+
+        assert response.status_code == 200, response.text
+        if admitted:
+            assert response.json()["items"][0]["agent_id"] == str(agent_id)
+            assert "X-Ditto-Claim-Empty-Reason" not in response.headers
+        else:
+            assert response.json()["items"] == []
+            assert response.headers["X-Ditto-Claim-Empty-Reason"] == "legacy_gcp_held"
+            async with session_maker() as session:
+                agent = await session.get(Agent, agent_id)
+                assert agent is not None
+                assert agent.status == AgentStatus.UPLOADED
+
+    async def test_zero_admission_is_a_full_stop_for_automatic_retries(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        """A due infrastructure retry starts only in an open screener slot."""
         now = datetime.now(UTC)
+        node_id = "zero-admission-node"
+        hotkey = "5ZeroAdmissionNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXX"
+        token = "zero-admission-node-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id=node_id,
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=1,
+        )
+        agent_ids = [
+            await _seed_agent(
+                session_maker,
+                status=AgentStatus.SCREENING_FAILED,
+                name=f"infra-parked-{index}",
+                miner_hotkey=f"5HK-zero-admission-{index}",
+                sha256=f"{index + 1:02x}" * 32,
+            )
+            for index in range(3)
+        ]
+        async with session_maker() as session, session.begin():
+            # The operator closes admission on the only node, and a Hetzner
+            # primary without GCE overflow holds the legacy route too.
+            session.add(
+                ScreenerNodeChannelSettingsRevision(
+                    environment="prod",
+                    node_id=node_id,
+                    parent_revision=1,
+                    settings={"screening_concurrency": 0},
+                    reason="Close screening admission",
+                    actor="test",
+                )
+            )
+            session.add(
+                ScreenerProviderSettingsRevision(
+                    environment="prod",
+                    parent_revision=0,
+                    settings={
+                        "runtime_provider_priority": ["hetzner", "gcp"],
+                        "source_review_provider_priority": ["hetzner", "gcp"],
+                        "build_provider_priority": ["hetzner", "gcp"],
+                        "gce_overflow_enabled": False,
+                        "primary_node_id": node_id,
+                    },
+                    reason="Exercise zero screening admission",
+                    actor="test",
+                )
+            )
+            # Spaced past the breaker window, and every backoff has elapsed.
+            session.add_all(
+                ScreeningAttempt(
+                    attempt_id=uuid4(),
+                    agent_id=agent_id,
+                    screener_hotkey=hotkey,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="failed",
+                    started_at=now - timedelta(hours=3, minutes=10 * index),
+                    deadline=now - timedelta(hours=2),
+                    finished_at=now - timedelta(hours=2, minutes=10 * index),
+                    reason_code=INFRA_AUTO_RETRY_REASON_CODES[0],
+                )
+                for index, agent_id in enumerate(agent_ids)
+            )
+        async with session_maker() as session:
+            plan = await plan_infra_retries(session, now=now)
+        assert set(plan.claimable_agent_ids) == set(agent_ids)
+        _install_db(app, session_maker)
+        node_headers = {"Authorization": f"Bearer {token}", "X-Screener-Hotkey": hotkey}
+
+        for headers in (node_headers, _AUTH_HEADER):
+            closed = await client.post(_CLAIM_URL, headers=headers)
+            assert closed.status_code == 200, closed.text
+            assert closed.json()["items"] == []
+        async with session_maker() as session:
+            statuses = set(
+                await session.scalars(
+                    select(Agent.status).where(Agent.agent_id.in_(agent_ids))
+                )
+            )
+            running = await session.scalar(
+                select(func.count())
+                .select_from(ScreeningAttempt)
+                .where(ScreeningAttempt.status == "running")
+            )
+        assert statuses == {AgentStatus.SCREENING_FAILED}
+        assert running == 0
+
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreenerNodeChannelSettingsRevision(
+                    environment="prod",
+                    node_id=node_id,
+                    parent_revision=2,
+                    settings={"screening_concurrency": 1},
+                    reason="Open one screening slot",
+                    actor="test",
+                )
+            )
+        opened = await client.post(_CLAIM_URL, headers=node_headers)
+        assert opened.status_code == 200, opened.text
+        items = opened.json()["items"]
+        assert len(items) == 1
+        assert UUID(items[0]["agent_id"]) in agent_ids
+        full = await client.post(_CLAIM_URL, headers=node_headers)
+        assert full.status_code == 200, full.text
+        assert full.json()["items"] == []
+
+    async def test_claim_with_zero_admission_still_expires_overdue_attempts(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        hotkey = "5ZeroAdmissionSweepHotkeyXXXXXXXXXXXXXXXXXXXXXXX"
+        token = "zero-admission-sweep-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id="zero-admission-sweep-node",
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=0,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_overdue_attempt(
+            session_maker,
+            agent_id=agent_id,
+            screener_hotkey=hotkey,
+            rescreen_release=True,
+        )
+        _install_db(app, session_maker)
+
+        response = await client.post(
+            _CLAIM_URL,
+            headers={"Authorization": f"Bearer {token}", "X-Screener-Hotkey": hotkey},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["items"] == []
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            agent = await session.get(Agent, agent_id)
+            release = await session.scalar(
+                select(ScoredPolicyRescreenRelease).where(
+                    ScoredPolicyRescreenRelease.attempt_id == attempt_id
+                )
+            )
+        assert attempt is not None and attempt.status == "expired"
+        assert agent is not None and agent.status == AgentStatus.SCREENING_FAILED
+        assert release is not None and release.state == "paused"
+
+    async def test_claim_from_draining_node_expires_overdue_attempts_before_refusing(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        node_id = "draining-sweep-node"
+        hotkey = "5DrainingSweepNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXX"
+        token = "draining-sweep-node-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id=node_id,
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=2,
+        )
+        async with session_maker() as session, session.begin():
+            await session.execute(
+                update(ScreenerNode)
+                .where(ScreenerNode.node_id == node_id)
+                .values(status="draining")
+            )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_overdue_attempt(
+            session_maker, agent_id=agent_id, screener_hotkey=hotkey
+        )
+        _install_db(app, session_maker)
+
+        response = await client.post(
+            _CLAIM_URL,
+            headers={"Authorization": f"Bearer {token}", "X-Screener-Hotkey": hotkey},
+        )
+
+        assert response.status_code == 409, response.text
+        assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            agent = await session.get(Agent, agent_id)
+        assert attempt is not None and attempt.status == "expired"
+        assert agent is not None and agent.status == AgentStatus.SCREENING_FAILED
+
+    async def test_legacy_gcp_held_claim_still_sweeps_overdue_attempts(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_overdue_attempt(session_maker, agent_id=agent_id)
         async with session_maker() as session, session.begin():
             session.add(
                 ScreenerProviderSettingsRevision(
@@ -4609,32 +4807,8 @@ class TestClaim:
                         "gce_overflow_enabled": True,
                         "primary_node_id": "subnet-screener-1",
                     },
-                    reason="Exercise stale GCP overflow fence",
+                    reason="Hold the legacy GCP principal behind the primary",
                     actor="test",
-                )
-            )
-            session.add(
-                ScreenerCapacitySnapshot(
-                    environment="prod",
-                    controller_epoch="prod:expired",
-                    controller_source_sha="a" * 40,
-                    provider_settings_revision=1,
-                    provider_ready=True,
-                    controller_heartbeat_at=now - timedelta(minutes=4),
-                    controller_lease_expires_at=now - timedelta(seconds=1),
-                    runnable_backlog=1,
-                    active_leases=0,
-                    desired_slots=1,
-                    global_cap=6,
-                    targon_capability="nogo",
-                    targon_available=0,
-                    targon_healthy=0,
-                    targon_pending=0,
-                    targon_draining=0,
-                    gce_target=1,
-                    gce_healthy=1,
-                    gce_pending=0,
-                    gce_draining=0,
                 )
             )
         _install_db(app, session_maker)
@@ -4643,6 +4817,105 @@ class TestClaim:
 
         assert response.status_code == 200, response.text
         assert response.json()["items"] == []
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None and attempt.status == "expired"
+
+    async def test_claim_lock_miss_still_sweeps_overdue_attempts(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        hotkey = "5ClaimLockMissSweepHotkeyXXXXXXXXXXXXXXXXXXXXXXX"
+        token = "claim-lock-miss-sweep-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id="claim-lock-miss-sweep-node",
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=2,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_overdue_attempt(
+            session_maker, agent_id=agent_id, screener_hotkey=hotkey
+        )
+        _install_db(app, session_maker)
+
+        async with session_maker() as owner, owner.begin():
+            await owner.execute(
+                select(func.pg_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
+            )
+            # Bound the response while the lock is held; allow for shared CI load.
+            response = await asyncio.wait_for(
+                client.post(
+                    _CLAIM_URL,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "X-Screener-Hotkey": hotkey,
+                    },
+                ),
+                timeout=3.0,
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["items"] == []
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None and attempt.status == "expired"
+
+    async def test_orphan_past_deadline_during_zero_admission_is_failed_not_expired(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        hotkey = "5OverdueOrphanSweepHotkeyXXXXXXXXXXXXXXXXXXXXXXX"
+        token = "overdue-orphan-sweep-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id="overdue-orphan-sweep-node",
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=0,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_overdue_attempt(
+            session_maker, agent_id=agent_id, screener_hotkey=hotkey
+        )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreenerHeartbeat(
+                    screener_hotkey=hotkey,
+                    instance_id="overdue-orphan-sweep-worker",
+                    software_version="0.21.0",
+                    protocol_version=4,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    state="polling",
+                    active_agent_id=None,
+                    first_seen_at=now - timedelta(days=1),
+                    reported_at=now - timedelta(seconds=5),
+                    seen_at=now - timedelta(seconds=5),
+                    signature="ab" * 64,
+                )
+            )
+        _install_db(app, session_maker)
+
+        response = await client.post(
+            _CLAIM_URL,
+            headers={"Authorization": f"Bearer {token}", "X-Screener-Hotkey": hotkey},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["items"] == []
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            agent = await session.get(Agent, agent_id)
+        assert attempt is not None
+        assert attempt.status == "failed"
+        assert attempt.reason_code == "worker-lease-orphaned"
+        assert agent is not None and agent.status == AgentStatus.SCREENING_FAILED
 
     async def test_mechanical_admission_claim_uses_its_dedicated_contract_fields(
         self,
@@ -4809,11 +5082,13 @@ class TestClaim:
         assert replay.status_code == 200
         assert replay.json()["status"] == AgentStatus.EVALUATING
 
+    @pytest.mark.parametrize("reason_code", ["docker-build", "docker-build-timeout"])
     async def test_signed_local_build_feedback_is_private_and_persisted(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        reason_code: str,
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
@@ -4827,8 +5102,12 @@ class TestClaim:
             passed=False,
             attempt_id=attempt_id,
             outcome="deterministic_reject",
-            detail="build failed: Cargo dependency could not be read",
-            reason_code="docker-build",
+            detail=(
+                "build failed: [timeout after 2700s]"
+                if reason_code == "docker-build-timeout"
+                else "build failed: Cargo dependency could not be read"
+            ),
+            reason_code=reason_code,
             private_failure_detail=(
                 "Cargo could not read vendor/harness/Cargo.toml; token=secret-value"
             ),
@@ -4860,6 +5139,8 @@ class TestClaim:
         assert attempt.failure_captured_at is not None
         assert agent.screening_reason is not None
         assert "Cargo.toml" not in agent.screening_reason
+        if reason_code == "docker-build-timeout":
+            assert "45-minute" in agent.screening_reason
 
     async def test_exact_duplicate_waits_for_usable_owner_then_rejects_before_screen(
         self,
@@ -5427,7 +5708,9 @@ class TestClaim:
             refused_pass = await client.post(
                 f"/api/v1/screener/agent/{agent_id}/result", json=legacy_pass
             )
-            assert refused_pass.status_code == 409, refused_pass.text
+            # The shared protocol now refuses this shape before the
+            # endpoint's own v13 transport guard is reached.
+            assert refused_pass.status_code == 422, refused_pass.text
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result", json=payload
         )
@@ -5478,6 +5761,165 @@ class TestClaim:
                 "hold" if policy_version == 13 else "reject"
             )
             assert event.next_agent_status == expected_status
+
+    async def test_v13_adjudicated_clear_transport_matches_worker(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The worker's held v13 court clear is accepted; its PASS form is not."""
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        settings = ScreenerReviewSettings(mode="enforce", adjudicator_mode="enforce")
+        checksum = _review_settings_checksum(settings)
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=checksum,
+                reason="enforced v13 court",
+                actor="test",
+            )
+            session.add(revision)
+            await session.flush()
+            revision_id = revision.revision
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            agent.status = AgentStatus.SCREENING
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    artifact_sha256=_SHA256,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=13,
+                    status="running",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now + timedelta(minutes=9),
+                    review_settings_revision=revision_id,
+                    review_settings_instance_id="ditto-screener-prod",
+                    review_settings_scope="*",
+                    review_settings_checksum=checksum,
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        adjudication = SourceReviewAdjudication(
+            decision="clear",
+            reason="The served model authors the graded response at src/main.rs:6.",
+            clear_clause="model_authors_graded_slot",
+            citations=[{"path": "src/main.rs", "line": 6}],
+            notes_considered=1,
+            model="z-ai/glm-5.3-flash",
+            prompt_revision="adjudicator-v7-policy-v13",
+            completion_receipt=AdjudicationCompletionReceipt(
+                elapsed_ms=4300,
+                first_tool_call_ms=2000,
+                first_tool_observation="stream_delta",
+                observed_model="z-ai/glm-5.3-flash",
+                gateway_provider="openrouter",
+                observed_upstream="together",
+                request_count=1,
+                final_request_prompt_bytes=8000,
+                final_request_wire_bytes=700,
+                final_request_event_count=4,
+                prompt_tokens=200,
+                completion_tokens=80,
+            ),
+        )
+        assert adjudication.completion_receipt is not None
+        receipt_signature = _sign(
+            completion_receipt_signing_message(
+                screener_hotkey=_SCREENER_HOTKEY,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                artifact_sha256=_SHA256,
+                adjudication_digest=adjudication.canonical_digest(),
+                receipt=adjudication.completion_receipt,
+            )
+        )
+        court = {
+            "review_settings_revision": revision_id,
+            "review_settings_instance_id": "ditto-screener-prod",
+            "review_settings_scope": "*",
+            "review_settings_checksum": checksum,
+            "adjudication_digest": adjudication.canonical_digest(),
+            "adjudication": adjudication.model_dump(mode="json"),
+            "completion_receipt_signature": receipt_signature,
+        }
+        # Exactly what the worker signs for a v13 court clear: a quarantine
+        # whose public reason is the last policy evidence code.
+        held = _result_payload(
+            agent_id,
+            passed=False,
+            policy_version=13,
+            attempt_id=attempt_id,
+            outcome="quarantine",
+            manifest_digest="12" * 32,
+            reason_code="source-review-awaiting-v13-verification",
+            evidence=[
+                {
+                    "module_id": "luna-source-review",
+                    "code": "source-review-adjudicated",
+                    "summary": "final source-review adjudication completed",
+                },
+                {
+                    "module_id": "luna-source-review",
+                    "code": "source-review-awaiting-v13-verification",
+                    "summary": "source adjudication held pending v13 verification",
+                },
+            ],
+            **court,
+        )
+        legacy_pass = _result_payload(
+            agent_id,
+            passed=True,
+            policy_version=13,
+            attempt_id=attempt_id,
+            manifest_digest="12" * 32,
+            **court,
+        )
+        unsigned = {**held}
+        unsigned.pop("completion_receipt_signature")
+        forged = {**held, "completion_receipt_signature": _sign(b"other receipt")}
+        url = f"/api/v1/screener/agent/{agent_id}/result"
+
+        refused_pass = await client.post(url, json=legacy_pass)
+        assert refused_pass.status_code == 422, refused_pass.text
+        missing_signature = await client.post(url, json=unsigned)
+        assert missing_signature.status_code == 422, missing_signature.text
+        rejected = await client.post(url, json=forged)
+        assert rejected.status_code in {401, 403}, rejected.text
+        response = await client.post(url, json=held)
+        replay = await client.post(url, json=held)
+
+        assert response.status_code == 200, response.text
+        assert replay.status_code == 200, replay.text
+        assert response.json()["status"] == AgentStatus.QUARANTINED
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            retained = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            event = await session.scalar(
+                select(ScreeningReviewEvent).where(
+                    ScreeningReviewEvent.attempt_id == attempt_id
+                )
+            )
+            assert agent is not None and agent.status == AgentStatus.QUARANTINED
+            assert attempt is not None and attempt.status == "quarantined"
+            assert retained is not None and retained.status == "active"
+            assert retained.evidence is not None
+            assert retained.evidence[-1]["code"] == "adjudicated-source-review-clear"
+            assert retained.court_completion_receipt is not None
+            assert retained.court_completion_receipt["observed_upstream"] == "together"
+            assert event is not None and event.effective_decision == "hold"
 
     async def test_completed_court_refusal_retains_signed_telemetry_without_release(
         self,
@@ -5635,6 +6077,300 @@ class TestClaim:
             assert attempt.review_settings_revision == claimed_revision_id
             assert attempt.review_settings_checksum == claimed_checksum
 
+    @staticmethod
+    async def _bind_settings(
+        session_maker: async_sessionmaker[AsyncSession],
+        settings: ScreenerReviewSettings,
+    ) -> dict[str, str | int]:
+        """Publish ``settings`` globally and return the matching claim binding."""
+        checksum = _review_settings_checksum(settings)
+        async with session_maker() as session, session.begin():
+            revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=checksum,
+                reason="signed runtime lease claim test",
+                actor="test",
+            )
+            session.add(revision)
+            await session.flush()
+            revision_id = revision.revision
+        return {
+            "policy_version": SCREENING_POLICY_VERSION,
+            "review_settings_revision": revision_id,
+            "review_settings_instance_id": "ditto-screener-fleet-test",
+            "review_settings_scope": "*",
+            "review_settings_checksum": checksum,
+        }
+
+    @staticmethod
+    async def _claim_v13_bound(
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        binding: dict[str, str | int],
+        *,
+        lease_available: bool,
+        bench_version: int = 13,
+        bench_versions: dict[UUID, int] | None = None,
+        limit: int = 1,
+    ) -> httpx.Response:
+        """Claim policy-13 attempts under ``binding`` with a controlled lease."""
+        monkeypatch.setattr(
+            "ditto.db.queries.screening.effective_screening_policy_version",
+            lambda: 13,
+        )
+
+        async def arrival(_session: AsyncSession, *, agent: Agent) -> int:
+            return (bench_versions or {}).get(agent.agent_id, bench_version)
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.screener.arrival_bench_version", arrival
+        )
+
+        async def lease_lookup(
+            _session: AsyncSession,
+            *,
+            attempt_id: UUID,
+            artifact_sha256: str,
+            policy_version: int,
+            bench_version: int,
+        ) -> ScoredRuntimeEvidenceLease | None:
+            if not lease_available or policy_version != 13 or bench_version != 13:
+                return None
+            revision = "a" * 40
+            keys = ("DITTOBENCH_MODEL",)
+            return ScoredRuntimeEvidenceLease(
+                attempt_id=attempt_id,
+                artifact_sha256=artifact_sha256,
+                policy_version=13,
+                bench_version=13,
+                scorer_source_revision=revision,
+                release_descriptor_digest="sha256:" + "b" * 64,
+                scorer_image_digest="sha256:" + "c" * 64,
+                scorer_env_sha256=hashlib.sha256(
+                    (
+                        "scored-runtime-env-v1\n13\n"
+                        + revision
+                        + "\n"
+                        + "\n".join(keys)
+                    ).encode()
+                ).hexdigest(),
+                injected_keys=keys,
+                validator_count=3,
+                observed_at=int(datetime.now(UTC).timestamp()),
+            )
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.screener.scored_runtime_evidence_for_lease",
+            lease_lookup,
+        )
+        return await client.post(
+            "/api/v1/screener/claim",
+            params={**binding, "limit": limit},
+            headers=_AUTH_HEADER,
+        )
+
+    @staticmethod
+    async def _assert_still_queued(
+        session_maker: async_sessionmaker[AsyncSession], agent_id: UUID
+    ) -> None:
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempts = list(
+                await session.scalars(
+                    select(ScreeningAttempt).where(
+                        ScreeningAttempt.agent_id == agent_id
+                    )
+                )
+            )
+        assert agent is not None
+        assert agent.status == AgentStatus.UPLOADED
+        assert attempts == []
+
+    async def test_claim_withholds_v13_attempt_without_cohort_lease_when_l3_disabled(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        binding = await self._bind_settings(
+            session_maker, ScreenerReviewSettings(mode="enforce", l3_enabled=False)
+        )
+
+        with caplog.at_level(logging.WARNING, logger="ditto.api_server.endpoints"):
+            withheld = await self._claim_v13_bound(
+                client, monkeypatch, binding, lease_available=False
+            )
+
+        assert withheld.status_code == 200, withheld.text
+        assert withheld.json()["items"] == []
+        assert withheld.headers["X-Ditto-Claim-Empty-Reason"] == (
+            "scorer_cohort_unavailable"
+        )
+        assert any(
+            "scorer_cohort_unavailable" in record.getMessage()
+            and str(agent_id) in record.getMessage()
+            and "reason=no_cohort_packet" in record.getMessage()
+            for record in caplog.records
+        )
+        await self._assert_still_queued(session_maker, agent_id)
+
+        # Once the cohort can certify the lease, the same agent is leased with it.
+        leased = await self._claim_v13_bound(
+            client, monkeypatch, binding, lease_available=True
+        )
+        assert leased.status_code == 200, leased.text
+        item = leased.json()["items"][0]
+        assert item["agent_id"] == str(agent_id)
+        assert item["policy_version"] == 13
+        assert item["scored_runtime_evidence"]["attempt_id"] == item["attempt_id"]
+
+    async def test_non_v13_arrival_at_the_head_does_not_stall_the_queue(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A per-agent missing lease is leased as before, never withheld.
+
+        Withholding it would roll back every claim while that agent stays at
+        the head of the queue, starving the V13 arrivals behind it.
+        """
+        now = datetime.now(UTC)
+        head = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="non-v13-head",
+            sha256="1" * 64,
+            created_at=now - timedelta(hours=2),
+        )
+        behind = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="v13-behind",
+            sha256="2" * 64,
+            created_at=now - timedelta(hours=1),
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        binding = await self._bind_settings(
+            session_maker, ScreenerReviewSettings(mode="enforce", l3_enabled=False)
+        )
+
+        claimed = []
+        with caplog.at_level(logging.WARNING, logger="ditto.api_server.endpoints"):
+            for _ in range(2):
+                response = await self._claim_v13_bound(
+                    client,
+                    monkeypatch,
+                    binding,
+                    lease_available=True,
+                    bench_versions={head: 12},
+                )
+                assert response.status_code == 200, response.text
+                assert "X-Ditto-Claim-Empty-Reason" not in response.headers
+                claimed.extend(response.json()["items"])
+
+        assert [item["agent_id"] for item in claimed] == [str(head), str(behind)]
+        # The head keeps main's behaviour: leased without a lease, so the
+        # worker holds it inconclusive instead of retrying a per-agent cause.
+        assert claimed[0]["bench_version"] == 12
+        assert claimed[0]["scored_runtime_evidence"] is None
+        assert claimed[1]["bench_version"] == 13
+        assert (
+            claimed[1]["scored_runtime_evidence"]["attempt_id"]
+            == (claimed[1]["attempt_id"])
+        )
+        assert not any(
+            "scorer_cohort_unavailable" in record.getMessage()
+            for record in caplog.records
+        )
+
+    async def test_missing_cohort_lease_does_not_roll_back_other_batch_items(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        now = datetime.now(UTC)
+        v13 = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="v13-unavailable",
+            sha256="3" * 64,
+            created_at=now - timedelta(hours=2),
+        )
+        v12 = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            name="v12-behind",
+            sha256="4" * 64,
+            created_at=now - timedelta(hours=1),
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        binding = await self._bind_settings(
+            session_maker, ScreenerReviewSettings(mode="enforce", l3_enabled=False)
+        )
+
+        response = await self._claim_v13_bound(
+            client,
+            monkeypatch,
+            binding,
+            lease_available=False,
+            bench_versions={v12: 12},
+            limit=2,
+        )
+
+        assert response.status_code == 200, response.text
+        assert "X-Ditto-Claim-Empty-Reason" not in response.headers
+        items = response.json()["items"]
+        assert [item["agent_id"] for item in items] == [str(v13), str(v12)]
+        assert all(item["scored_runtime_evidence"] is None for item in items)
+        assert all(item["attempt_id"] for item in items)
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            ScreenerReviewSettings(mode="enforce", l3_enabled=True),
+            ScreenerReviewSettings(mode="shadow", l3_enabled=False),
+        ],
+        ids=["l3-enabled", "l2-shadow"],
+    )
+    async def test_claim_returns_attempt_without_lease_when_not_required(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        settings: ScreenerReviewSettings,
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await self._claim_v13_bound(
+            client,
+            monkeypatch,
+            await self._bind_settings(session_maker, settings),
+            lease_available=False,
+        )
+
+        assert response.status_code == 200, response.text
+        item = response.json()["items"][0]
+        assert item["agent_id"] == str(agent_id)
+        assert item["policy_version"] == 13
+        assert item["scored_runtime_evidence"] is None
+
     async def test_integrity_double_check_runs_on_the_pinned_stronger_posture(
         self,
         app: FastAPI,
@@ -5698,10 +6434,7 @@ class TestClaim:
                     agent_id=agent_id,
                     status="pending",
                     opened_at=opened_at,
-                    original_reason=(
-                        "Top-five rank qualified this submission for an "
-                        "integrity double-check"
-                    ),
+                    original_reason=INTEGRITY_DOUBLE_CHECK_REASON,
                     original_policy_version=SCREENING_POLICY_VERSION,
                     original_evidence={
                         "previous_status": AgentStatus.SCORED.value,
@@ -6620,6 +7353,73 @@ class TestQuarantineAdmin:
             str(historical),
             str(current),
         }
+
+    async def test_validator_assignment_list_reports_exact_lease_seed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Two continual leases on one agent prove their shared seed exactly.
+
+        The seed is above 2**53, so a JSON number would round it and two
+        different seeds could compare equal. A lease with no seed yet reads
+        null rather than a fabricated value.
+        """
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        retested = await _seed_agent(
+            session_maker, status=AgentStatus.SCORED, name="continual-lease"
+        )
+        unseeded = await _seed_agent(
+            session_maker, status=AgentStatus.EVALUATING, name="unseeded-lease"
+        )
+        shared_seed = 9_007_199_254_740_993
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add_all(
+                [
+                    ValidatorTicket(
+                        agent_id=retested,
+                        validator_hotkey=hotkey,
+                        slot_id="slot-1",
+                        status=TicketStatus.ISSUED,
+                        purpose=TicketPurpose.CONTINUAL_RETEST,
+                        issued_at=now,
+                        deadline=now + timedelta(minutes=45),
+                        bench_version=_TARGET_VERSION,
+                        seed=shared_seed,
+                        attempt_count=1,
+                    )
+                    for hotkey in ("5ContinualLeaseA", "5ContinualLeaseB")
+                ]
+                + [
+                    ValidatorTicket(
+                        agent_id=unseeded,
+                        validator_hotkey="5UnseededLease",
+                        status=TicketStatus.ISSUED,
+                        issued_at=now,
+                        deadline=now + timedelta(minutes=50),
+                        bench_version=_TARGET_VERSION,
+                        attempt_count=1,
+                    )
+                ]
+            )
+        _install_db(app, session_maker)
+
+        listing = await client.get(
+            "/api/v1/admin/validator-assignments",
+            headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
+        )
+
+        assert listing.status_code == 200, listing.text
+        by_hotkey = {item["validator_hotkey"]: item for item in listing.json()["items"]}
+        for hotkey in ("5ContinualLeaseA", "5ContinualLeaseB"):
+            assert by_hotkey[hotkey]["purpose"] == "continual_retest"
+            assert by_hotkey[hotkey]["seed"] == "9007199254740993"
+        assert by_hotkey["5UnseededLease"]["seed"] is None
 
     @pytest.mark.parametrize(
         ("resolution", "expected_status"),
@@ -7885,6 +8685,39 @@ class TestQuarantineAdmin:
         assert "private_failure_log_tail" not in ordinary.json()["attempts"][0]
         assert wrong_owner.status_code == 404
         assert missing_actor.status_code == 422
+
+        inconclusive_audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-v13",
+            max_steps=256,
+            steps_used=7,
+            model_disposition="inconclusive",
+            resolution_basis="insufficient_static_evidence",
+            dossier_complete=False,
+            model_categories=["benchmark_emulation"],
+            model_inconclusive_invariants=["i5_production_engine"],
+            model_evidence_count=1,
+            model_causal_role_count=2,
+        )
+        async with session_maker() as session, session.begin():
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert quarantine is not None
+            quarantine.review_audit = inconclusive_audit.model_dump(mode="json")
+            quarantine.review_audit_digest = inconclusive_audit.canonical_digest()
+        updated = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/attempts/"
+            f"{attempt_id}/failure-diagnostic",
+            headers=headers,
+        )
+        assert updated.status_code == 200
+        assert updated.json()["l2_review_diagnostic"] == inconclusive_audit.model_dump(
+            mode="json"
+        )
 
     async def test_lists_text_free_l4_outcomes_with_honest_missing_success_trace(
         self,
@@ -9155,7 +9988,7 @@ class TestQuarantineAdmin:
                     deadline=now + timedelta(minutes=50),
                     finished_at=now,
                     public_reason="Screening was interrupted; manual retry required",
-                    reason_code="source-review-retryable-infra",
+                    reason_code="source-review-model-timeout",
                 )
             )
             canary_revision_id = canary_revision.revision
@@ -10330,6 +11163,41 @@ class TestScreenedImageUpload:
                 ScreenedImageUpload, UUID(upload["image_upload_id"])
             )
             assert row is not None and row.status == "verified"
+        # A gateway can drop the response of a completion that landed; the
+        # worker's replay is answered as verified without touching storage.
+        replay = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
+            f"{upload['image_upload_id']}/complete",
+            headers=_AUTH_HEADER,
+            json={
+                **metadata,
+                "storage_upload_id": upload["storage_upload_id"],
+                "parts": [{"part_number": 1, "etag": '"etag-1"'}],
+            },
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json() == {"verified": True}
+        storage.complete_multipart_upload.assert_awaited_once()
+        storage.verify_object_sha256.assert_awaited_once()
+        # The replay can land after the multipart session expired.
+        async with session_maker() as session, session.begin():
+            row = await session.get(
+                ScreenedImageUpload, UUID(upload["image_upload_id"])
+            )
+            assert row is not None
+            row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        late = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
+            f"{upload['image_upload_id']}/complete",
+            headers=_AUTH_HEADER,
+            json={
+                **metadata,
+                "storage_upload_id": upload["storage_upload_id"],
+                "parts": [{"part_number": 1, "etag": '"etag-1"'}],
+            },
+        )
+        assert late.status_code == 200, late.text
+        assert late.json() == {"verified": True}
         reuse = await client.post(
             f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
             f"{upload['image_upload_id']}/part",
@@ -10502,6 +11370,62 @@ class TestScreenedImageUpload:
         assert response.status_code == 409
         storage.delete_object.assert_awaited_once()
 
+    async def test_completion_replay_after_consumed_session_verifies_object(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        storage = _install_storage(app)
+        attempt_id = (await client.post(_CLAIM_URL)).json()["items"][0]["attempt_id"]
+        metadata = {
+            "attempt_id": attempt_id,
+            "sha256": "12" * 32,
+            "size_bytes": 123,
+            "image_id": "sha256:" + "34" * 32,
+            "image_ref": f"ditto-screen/{agent_id}:latest",
+        }
+        upload = (
+            await client.post(
+                f"/api/v1/screener/agent/{agent_id}/screened-image-upload",
+                json=metadata,
+            )
+        ).json()
+        # The first request completed the object, then died before marking the
+        # row verified: storage no longer knows the multipart session.
+        storage.complete_multipart_upload.side_effect = ObjectNotFoundError("gone")
+        storage.head_object.side_effect = None
+        storage.head_object.return_value = ObjectMetadata(
+            size_bytes=123,
+            metadata={
+                "sha256": "12" * 32,
+                "image-id": "sha256:" + "34" * 32,
+                "image-ref": f"ditto-screen/{agent_id}:latest",
+                "attempt-id": attempt_id,
+                "image-upload-id": upload["image_upload_id"],
+            },
+        )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
+            f"{upload['image_upload_id']}/complete",
+            json={
+                **metadata,
+                "storage_upload_id": upload["storage_upload_id"],
+                "parts": [{"part_number": 1, "etag": '"etag"'}],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        storage.verify_object_sha256.assert_awaited_once()
+        async with session_maker() as session:
+            row = await session.get(
+                ScreenedImageUpload, UUID(upload["image_upload_id"])
+            )
+            assert row is not None and row.status == "verified"
+
     async def test_missing_multipart_upload_is_typed_conflict(
         self,
         app: FastAPI,
@@ -10526,6 +11450,7 @@ class TestScreenedImageUpload:
             )
         ).json()
         storage.complete_multipart_upload.side_effect = ObjectNotFoundError("missing")
+        storage.head_object.side_effect = ObjectNotFoundError("missing")
 
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/screened-image-upload/"
@@ -10539,6 +11464,7 @@ class TestScreenedImageUpload:
 
         assert response.status_code == 409
         assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+        storage.delete_object.assert_not_awaited()
 
     async def test_signed_pass_verifies_and_persists_uploaded_image(
         self,
@@ -10722,11 +11648,16 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=8
+        )
 
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
             json=_result_payload(
                 agent_id,
+                attempt_id=attempt_id,
+                policy_version=8,
                 passed=False,
                 detail="build failed: cargo error SECRET_FROM_BUILD",
             ),
@@ -10740,10 +11671,16 @@ class TestSubmitResult:
             assert agent.screening_reason == "Docker image build failed"
             assert agent.screening_policy_version == 0
             assert "SECRET_FROM_BUILD" not in agent.screening_reason
-            synthetic = await s.scalar(
-                select(ScreeningAttempt).where(ScreeningAttempt.agent_id == agent_id)
-            )
-            assert synthetic is not None and synthetic.artifact_sha256 is None
+            attempts = (
+                await s.scalars(
+                    select(ScreeningAttempt).where(
+                        ScreeningAttempt.agent_id == agent_id
+                    )
+                )
+            ).all()
+            assert [(row.attempt_id, row.status) for row in attempts] == [
+                (attempt_id, "rejected")
+            ]
 
     async def test_rust_contract_rejection_persists_actionable_reason(
         self,
@@ -11043,6 +11980,135 @@ class TestSubmitResult:
             assert release is not None
             assert release.state == "terminal"
 
+    async def test_v13_policy_only_rescreen_pass_records_its_review_event(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A scored agent's clean v13 rescreen leaves an auditable review row.
+
+        The policy-only lane reuses the retained image but reruns source review,
+        so its pass is a reviewed clearance. It must snapshot the attempt's
+        receipts like any other screen, exactly once across verdict replays
+        (#2672).
+        """
+        target_policy = 13
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            screening_policy_version=target_policy - 1,
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            activation = ScreenerPolicyActivation(
+                parent_revision=0,
+                target_policy_version=target_policy,
+                activate_at=now - timedelta(minutes=1),
+                rescreen_scored=True,
+                canary_only=True,
+                reason="rescreen one scored agent under policy v13",
+                actor="test",
+            )
+            session.add(activation)
+            agent = await session.get(Agent, agent_id, with_for_update=True)
+            assert agent is not None
+            agent.screened_image_sha256 = "12" * 32
+            agent.screened_image_size_bytes = 123
+            agent.screened_image_id = "sha256:" + "34" * 32
+            agent.screened_image_ref = f"ditto-screen/{agent_id}:retained"
+            agent.screened_image_upload_id = uuid4()
+            agent.screened_image_verified_at = now - timedelta(days=1)
+            await session.flush()
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    artifact_sha256=_SHA256,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=target_policy,
+                    status="running",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now + timedelta(minutes=44),
+                    reason_code=POLICY_ONLY_RESCREEN_REASON,
+                    public_reason=None,
+                )
+            )
+            await session.flush()
+            session.add(
+                ScoredPolicyRescreenRelease(
+                    release_id=uuid4(),
+                    activation_revision=activation.revision,
+                    target_policy_version=target_policy,
+                    agent_id=agent_id,
+                    position=1,
+                    state="running",
+                    attempt_id=attempt_id,
+                    actor="test",
+                    reason="rescreen one scored agent under policy v13",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.screener_policy_activation.invalidate()
+
+        # The policy-only lane validates the archive before source review and
+        # records that receipt while its lease is running.
+        receipt = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/verification-receipts",
+            json={
+                "attempt_id": str(attempt_id),
+                "artifact_sha256": _SHA256,
+                "policy_version": target_policy,
+                "check_code": "archive_sha",
+                "evidence_sha256": mechanical_evidence_sha256(
+                    check_code="archive_sha", artifact_sha256=_SHA256
+                ),
+            },
+        )
+        assert receipt.status_code == 204, receipt.text
+        payload = _result_payload(
+            agent_id,
+            attempt_id=attempt_id,
+            policy_version=target_policy,
+            passed=True,
+            policy_only=True,
+        )
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        replay = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+
+        assert response.status_code == 200, response.text
+        assert replay.status_code == 200, replay.text
+        assert response.json()["status"] == AgentStatus.SCORED
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert attempt is not None
+            assert attempt.status == "passed"
+            events = (
+                await session.scalars(
+                    select(ScreeningReviewEvent).where(
+                        ScreeningReviewEvent.attempt_id == attempt_id
+                    )
+                )
+            ).all()
+            assert len(events) == 1
+            event = events[0]
+            assert event.event_kind == "automated"
+            assert event.policy_version == target_policy
+            assert event.outcome == "pass"
+            assert event.effective_decision == "pass"
+            assert event.prior_agent_status == AgentStatus.SCORED.value
+            assert event.next_agent_status == AgentStatus.SCORED.value
+            assert event.actor == f"screener:{_SCREENER_HOTKEY}"
+            assert [
+                row["check_code"] for row in event.evidence["verification_receipts"]
+            ] == ["archive_sha"]
+
     async def test_infrastructure_failure_is_parked_not_rejected(
         self,
         app: FastAPI,
@@ -11052,11 +12118,16 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=8
+        )
 
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
             json=_result_payload(
                 agent_id,
+                attempt_id=attempt_id,
+                policy_version=8,
                 passed=False,
                 detail="screener error: Docker daemon unavailable SECRET",
             ),
@@ -11077,10 +12148,15 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=8
+        )
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
             json=_result_payload(
                 agent_id,
+                attempt_id=attempt_id,
+                policy_version=8,
                 passed=False,
                 detail="model canary observed no model call",
             ),
@@ -11510,12 +12586,23 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
         _install_db(app, session_maker)
         _install_chain(app)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
-            json=_result_payload(agent_id, passed=False),
+            json=_result_payload(
+                agent_id,
+                attempt_id=attempt_id,
+                passed=False,
+                outcome="deterministic_reject",
+            ),
         )
         assert response.status_code == 409
         assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert agent is not None and agent.status == AgentStatus.EVALUATING
+            assert attempt is not None and attempt.status == "running"
 
     async def test_verdict_on_scored_agent_returns_409(
         self,
@@ -11526,9 +12613,13 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.SCORED)
         _install_db(app, session_maker)
         _install_chain(app)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
+        await _seed_verified_image_upload(
+            session_maker, agent_id=agent_id, attempt_id=attempt_id
+        )
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
-            json=_result_payload(agent_id, passed=True),
+            json=_result_payload(agent_id, passed=True, attempt_id=attempt_id),
         )
         assert response.status_code == 409
         assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
@@ -11542,7 +12633,14 @@ class TestSubmitResult:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
-        payload = _result_payload(agent_id)
+        claim = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
+        payload = _result_payload(
+            agent_id,
+            attempt_id=attempt_id,
+            passed=False,
+            outcome="deterministic_reject",
+        )
         payload["signature"] = "ab" * 64  # well-formed but wrong
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result", json=payload
@@ -11556,18 +12654,29 @@ class TestSubmitResult:
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        # A pass signed by the screener must not be replayable as a fail: the
-        # signature binds the ``passed`` flag, so flipping it 401s.
+        # A parked-infrastructure verdict signed by the screener must not be
+        # replayable as a rejection: the signature binds the typed outcome, so
+        # flipping it 401s.
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
-        payload = _result_payload(agent_id, passed=True)
-        payload["passed"] = False  # grief attempt: replay the pass sig as a fail
+        claim = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
+        payload = _result_payload(
+            agent_id,
+            attempt_id=attempt_id,
+            passed=False,
+            outcome="retryable_infra",
+        )
+        payload["outcome"] = "deterministic_reject"  # grief attempt
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result", json=payload
         )
         assert response.status_code == 401
         assert response.json()["error_code"] == ERROR_CODE_SCREENER_AUTH
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None and agent.status == AgentStatus.SCREENING
 
     async def test_payload_hotkey_must_match_authenticated_hotkey(
         self,
@@ -11597,10 +12706,884 @@ class TestSubmitResult:
         aid = uuid4()
         response = await client.post(
             f"/api/v1/screener/agent/{aid}/result",
-            json=_result_payload(aid, passed=False),
+            json=_result_payload(
+                aid,
+                attempt_id=uuid4(),
+                passed=False,
+                outcome="deterministic_reject",
+            ),
         )
         assert response.status_code == 404
         assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_FOUND
+
+    @pytest.mark.parametrize(
+        "reason_code",
+        [
+            "l2-runtime-evidence-unavailable",
+            "source-review-read-budget-exhausted",
+            "source-review-step-budget-exhausted",
+            "source-review-lease-budget-exhausted",
+            "behavioral-oracle-passed",
+            "l2-model-inconclusive",
+            "source-review-inconclusive",
+        ],
+    )
+    async def test_v13_inconclusive_with_review_audit_persists(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        reason_code: str,
+    ) -> None:
+        # A strict V13 INCONCLUSIVE carries its audit under the deciding
+        # evidence code, not only the historical no-verdict allowlist.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=13
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        audit = _bounded_review_audit(reason_code=reason_code)
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            policy_version=13,
+            attempt_id=attempt_id,
+            outcome="inconclusive",
+            manifest_digest="12" * 32,
+            reason_code=reason_code,
+            review_audit_digest=audit.canonical_digest(),
+            review_audit=audit.model_dump(mode="json"),
+        )
+        if reason_code == "source-review-inconclusive":
+            # The worker retains later oracle observations while signing the
+            # reason from the source reviewer that decided INCONCLUSIVE.
+            payload["evidence"] = [
+                {
+                    "module_id": "private-source-review",
+                    "code": reason_code,
+                    "summary": "bounded source review exhausted",
+                },
+                {
+                    "module_id": "oracle",
+                    "code": "behavioral-oracle-passed",
+                    "summary": "behavioral oracle completed",
+                },
+            ]
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.SCREENING_FAILED
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert agent is not None and agent.status == AgentStatus.SCREENING_FAILED
+            assert attempt is not None and attempt.status == "expired"
+            assert attempt.reason_code == reason_code
+            assert quarantine is not None
+            assert quarantine.reason_code == reason_code
+            assert quarantine.review_audit_digest == audit.canonical_digest()
+            assert quarantine.review_audit == audit.model_dump(mode="json")
+
+    @pytest.mark.parametrize(
+        ("prior_reason_code", "budget_stop_reason", "expected_status"),
+        [
+            ("l2-model-inconclusive", "none", AgentStatus.REJECTED),
+            ("l2-model-inconclusive", None, AgentStatus.REJECTED),
+            # A stopped review never finished, so it is not V2 evidence.
+            ("l2-model-inconclusive", "time", AgentStatus.SCREENING_FAILED),
+            # Only a prior complete static review counts toward the cap.
+            ("l3-adjudicator-http-403", "none", AgentStatus.SCREENING_FAILED),
+            (None, "none", AgentStatus.SCREENING_FAILED),
+        ],
+    )
+    async def test_v13_repeated_static_inconclusive_is_a_v2_reject(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        prior_reason_code: str | None,
+        budget_stop_reason: str | None,
+        expected_status: AgentStatus,
+    ) -> None:
+        # Policy v13 has no indefinite INCONCLUSIVE outcome. The second complete
+        # source review that ends insufficient_static_evidence finalizes as
+        # V2.platform_verification_failed: a reject that proves no violation.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        if prior_reason_code is not None:
+            prior_id = await _seed_running_attempt(
+                session_maker,
+                agent_id=agent_id,
+                policy_version=13,
+                started_at=datetime.now(UTC) - timedelta(hours=2),
+                status="expired",
+            )
+            async with session_maker() as session, session.begin():
+                prior = await session.get(ScreeningAttempt, prior_id)
+                assert prior is not None
+                prior.reason_code = prior_reason_code
+                prior.finished_at = datetime.now(UTC) - timedelta(hours=1)
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=13
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-terra-source-review-v51-policy-v13",
+            max_steps=256,
+            steps_used=24,
+            model_disposition="inconclusive",
+            resolution_basis="insufficient_static_evidence",
+            dossier_complete=True,
+            model_inconclusive_invariants=["i2_evidence_retention"],
+            budget_stop_reason=budget_stop_reason,
+            final_stage="critic",
+        )
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            policy_version=13,
+            attempt_id=attempt_id,
+            outcome="inconclusive",
+            manifest_digest="12" * 32,
+            reason_code="l2-model-inconclusive",
+            review_audit_digest=audit.canonical_digest(),
+            review_audit=audit.model_dump(mode="json"),
+        )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == expected_status
+        # A worker that retries the same signed report gets the same answer.
+        replay = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["status"] == expected_status
+
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert agent is not None and attempt is not None
+            assert quarantine is not None
+            # The worker's signed inconclusive audit is retained either way.
+            assert quarantine.review_audit == audit.model_dump(mode="json")
+            assert quarantine.status == "resolved"
+            if expected_status == AgentStatus.REJECTED:
+                assert agent.status == AgentStatus.REJECTED
+                assert agent.screening_reason_code == (
+                    "verification-incomplete-unreviewable"
+                )
+                assert agent.screening_reason == V2_UNREVIEWABLE_PUBLIC_REASON
+                assert "No violation was found" in agent.screening_reason
+                assert attempt.status == "rejected"
+                assert attempt.reason_code == "verification-incomplete-unreviewable"
+                assert quarantine.reason_code == "verification-incomplete-unreviewable"
+                assert quarantine.resolution == "reject"
+                assert quarantine.resolved_by == "platform:v13-v2-unreviewable"
+            else:
+                assert agent.status == AgentStatus.SCREENING_FAILED
+                assert attempt.status == "expired"
+                assert attempt.reason_code == "l2-model-inconclusive"
+
+    async def test_v13_v2_reject_needs_policy_v13(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # V2 is a policy v13 outcome; an older policy's inconclusive stays parked.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        for _ in range(3):
+            prior_id = await _seed_running_attempt(
+                session_maker, agent_id=agent_id, policy_version=12, status="expired"
+            )
+            async with session_maker() as session, session.begin():
+                prior = await session.get(ScreeningAttempt, prior_id)
+                assert prior is not None
+                prior.reason_code = "l2-model-inconclusive"
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=13
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-terra-source-review-v51-policy-v13",
+            max_steps=256,
+            steps_used=24,
+            model_disposition="inconclusive",
+            resolution_basis="insufficient_static_evidence",
+            budget_stop_reason="none",
+        )
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                policy_version=13,
+                attempt_id=attempt_id,
+                outcome="inconclusive",
+                manifest_digest="12" * 32,
+                reason_code="l2-model-inconclusive",
+                review_audit_digest=audit.canonical_digest(),
+                review_audit=audit.model_dump(mode="json"),
+            ),
+        )
+        # Prior policy-v12 reviews do not count toward the v13 tally.
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.SCREENING_FAILED
+
+    @pytest.mark.parametrize(
+        ("variant", "expected_status"),
+        [
+            ("confirmed", AgentStatus.REJECTED),
+            # Only the L3-confirmed reason code can reject; any other hold stays.
+            ("other_code", AgentStatus.QUARANTINED),
+            ("no_breach", AgentStatus.QUARANTINED),
+            ("policy_12", AgentStatus.QUARANTINED),
+            ("other_artifact", AgentStatus.QUARANTINED),
+        ],
+    )
+    async def test_v13_l3_confirmed_violation_is_a_screener_reject(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        variant: str,
+        expected_status: AgentStatus,
+    ) -> None:
+        # Policy v13: a breach the independent L3 adjudicator confirmed is the
+        # screener's to reject; every weaker hold still waits for review.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        policy_version = 12 if variant == "policy_12" else 13
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=policy_version
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        finding = _confirmed_violation_finding(
+            artifact_sha256="cd" * 32 if variant == "other_artifact" else _SHA256,
+            breach=variant != "no_breach",
+        )
+        digest = finding.canonical_digest()
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            policy_version=policy_version,
+            attempt_id=attempt_id,
+            outcome="quarantine",
+            manifest_digest="56" * 32,
+            finding_digest=digest,
+            reason_code=(
+                "source-safety-behavioral-risk"
+                if variant == "other_code"
+                else "source-review-confirmed-violation"
+            ),
+            evidence=_review_evidence(digest),
+            finding=finding.model_dump(mode="json"),
+        )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == expected_status
+        replay = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["status"] == expected_status
+
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert agent is not None and attempt is not None
+            assert quarantine is not None
+            if expected_status == AgentStatus.REJECTED:
+                assert attempt.status == "rejected"
+                assert quarantine.status == "resolved"
+                assert quarantine.resolution == "reject"
+                assert quarantine.resolved_by == "platform:v13-confirmed-violation"
+                assert agent.screening_reason is not None
+                assert agent.screening_reason.startswith(
+                    "Rejected under screening policy v13"
+                )
+                assert "I5 production engine" in agent.screening_reason
+                assert "src/main.rs:2" in agent.screening_reason
+                assert quarantine.resolution_reason == agent.screening_reason
+            else:
+                assert quarantine.status == "active"
+                assert quarantine.resolution is None
+
+    @pytest.mark.parametrize("decision", [None, "reject", "clear", "escalate"])
+    def test_confirmed_violation_reason_binds_artifact_and_court(
+        self, decision: str | None
+    ) -> None:
+        finding = _confirmed_violation_finding()
+        second = finding.invariant_assessment.decisions  # type: ignore[union-attr]
+        decisions = [
+            item.model_copy(
+                update={
+                    "disposition": SourceReviewInvariantDisposition.BREACH,
+                    "evidence_indices": [0],
+                }
+            )
+            if item.invariant
+            in {
+                SourceReviewInvariant.MODEL_INVOCATION,
+                SourceReviewInvariant.DERIVED_VALUE_AUTHORITY,
+            }
+            else item
+            for item in second
+        ]
+        finding = finding.model_copy(
+            update={
+                "invariant_assessment": SourceReviewInvariantAssessment(
+                    decisions=decisions
+                )
+            }
+        )
+        payload = SimpleNamespace(
+            outcome=ScreenResultOutcome.QUARANTINE,
+            policy_version=13,
+            reason_code="source-review-confirmed-violation",
+            finding=finding,
+            adjudication=(
+                None if decision is None else SimpleNamespace(decision=decision)
+            ),
+        )
+        reason = screener_endpoint._confirmed_violation_reason(
+            payload,  # type: ignore[arg-type]
+            artifact_sha256=_SHA256.upper(),
+        )
+        if decision in {None, "reject"}:
+            assert reason is not None
+            # Every confirmed breach is named, not just the first two.
+            for label in ("I1 model invocation", "I4 ", "I5 production engine"):
+                assert label in reason
+        else:
+            # An opposing court decision always wins over the confirmed code.
+            assert reason is None
+
+    async def test_result_integrity_error_returns_409_and_logs(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # A malformed stored code trips screening_quarantines_reason_code_check
+        # inside the verdict transaction: a definitive not-applied 409, never a
+        # 500 that leaves the worker guessing and the attempt to the orphan sweep.
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.screener.INCONCLUSIVE_REASON_CODE",
+            "Not A Reason Code",
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, policy_version=13
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        with caplog.at_level("ERROR", logger="ditto.api_server.endpoints.screener"):
+            response = await client.post(
+                f"/api/v1/screener/agent/{agent_id}/result",
+                json=_result_payload(
+                    agent_id,
+                    passed=False,
+                    policy_version=13,
+                    attempt_id=attempt_id,
+                    outcome="inconclusive",
+                ),
+            )
+
+        assert response.status_code == 409, response.text
+        assert response.json()["error_code"] == (
+            ERROR_CODE_SCREEN_RESULT_CONSTRAINT_VIOLATION
+        )
+        assert response.json()["message"].startswith("result-constraint-violation")
+        assert "screening_quarantines_reason_code_check" in caplog.text
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            quarantine_count = await session.scalar(
+                select(func.count()).select_from(ScreeningQuarantine)
+            )
+            assert agent is not None and agent.status == AgentStatus.SCREENING
+            assert attempt is not None and attempt.status == "running"
+            assert quarantine_count == 0
+
+
+_OTHER_NODE_KEYPAIR = bittensor.Keypair.create_from_uri("//Bob")
+_OTHER_NODE_HOTKEY = _OTHER_NODE_KEYPAIR.ss58_address
+_OTHER_NODE_TOKEN = "lease-ownership-node-token-at-least-32-characters"
+_OTHER_NODE_HEADERS = {
+    "Authorization": f"Bearer {_OTHER_NODE_TOKEN}",
+    "X-Screener-Hotkey": _OTHER_NODE_HOTKEY,
+}
+
+
+def _signed_failure(
+    keypair: bittensor.Keypair,
+    *,
+    agent_id: UUID,
+    attempt_id: UUID | None,
+    outcome: str | None,
+    policy_version: int = SCREENING_POLICY_VERSION,
+) -> dict[str, object]:
+    """A correctly signed failure verdict from ``keypair``'s own hotkey."""
+    hotkey = keypair.ss58_address
+    if outcome is not None and attempt_id is None:
+        # The typed v5 signing payload cannot be built without an attempt.
+        signature = "ab" * 64
+    else:
+        message = verdict_signing_message(
+            screener_hotkey=hotkey,
+            agent_id=agent_id,
+            attempt_id=attempt_id,
+            passed=False,
+            policy_version=policy_version,
+            outcome=ScreenResultOutcome(outcome) if outcome is not None else None,
+        )
+        signature = keypair.sign(message).hex()
+    body: dict[str, object] = {
+        "screener_hotkey": hotkey,
+        "signature": signature,
+        "passed": False,
+        "policy_version": policy_version,
+        "detail": "",
+    }
+    if outcome is not None:
+        body["outcome"] = outcome
+    if attempt_id is not None:
+        body["attempt_id"] = str(attempt_id)
+    return body
+
+
+async def _verdict_state(
+    maker: async_sessionmaker[AsyncSession], agent_id: UUID
+) -> tuple[AgentStatus, str | None, list[tuple[UUID, str]]]:
+    async with maker() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        attempts = (
+            await session.scalars(
+                select(ScreeningAttempt)
+                .where(ScreeningAttempt.agent_id == agent_id)
+                .order_by(ScreeningAttempt.started_at)
+            )
+        ).all()
+        return (
+            agent.status,
+            agent.screening_reason,
+            [(row.attempt_id, row.status) for row in attempts],
+        )
+
+
+class TestVerdictLeaseOwnership:
+    """Every verdict must settle the caller's own claimed screening attempt."""
+
+    @pytest.mark.parametrize("leased_to_other_node", [False, True])
+    @pytest.mark.parametrize(
+        ("outcome", "policy_version"),
+        [
+            ("deterministic_reject", SCREENING_POLICY_VERSION),
+            ("retryable_infra", SCREENING_POLICY_VERSION),
+            (None, 8),
+        ],
+    )
+    async def test_verdict_without_attempt_is_refused_without_state_change(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        outcome: str | None,
+        policy_version: int,
+        leased_to_other_node: bool,
+    ) -> None:
+        agent_id = await _seed_agent(
+            session_maker,
+            status=(
+                AgentStatus.SCREENING if leased_to_other_node else AgentStatus.UPLOADED
+            ),
+        )
+        if leased_to_other_node:
+            await _seed_running_attempt(
+                session_maker, agent_id=agent_id, screener_hotkey=_OTHER_NODE_HOTKEY
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        before = await _verdict_state(session_maker, agent_id)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=None,
+                outcome=outcome,
+                policy_version=policy_version,
+            ),
+        )
+
+        assert response.status_code == 409, response.text
+        assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+        # No agent transition and no minted attempt.
+        assert await _verdict_state(session_maker, agent_id) == before
+
+    @pytest.mark.parametrize("outcome", ["deterministic_reject", "retryable_infra"])
+    async def test_fleet_principal_cannot_settle_another_nodes_attempt(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        outcome: str,
+    ) -> None:
+        await _seed_screener_node(
+            session_maker,
+            node_id="lease-ownership-owner-node",
+            hotkey=_OTHER_NODE_HOTKEY,
+            token=_OTHER_NODE_TOKEN,
+            screening_concurrency=1,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        other_attempt = await _seed_running_attempt(
+            session_maker, agent_id=agent_id, screener_hotkey=_OTHER_NODE_HOTKEY
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        before = await _verdict_state(session_maker, agent_id)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR, agent_id=agent_id, attempt_id=other_attempt, outcome=outcome
+            ),
+        )
+
+        assert response.status_code == 409, response.text
+        assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+        assert await _verdict_state(session_maker, agent_id) == before
+
+        owner = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            headers=_OTHER_NODE_HEADERS,
+            json=_signed_failure(
+                _OTHER_NODE_KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=other_attempt,
+                outcome=outcome,
+            ),
+        )
+        assert owner.status_code == 200, owner.text
+
+    async def test_enrolled_node_cannot_settle_the_fleet_principals_attempt(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_screener_node(
+            session_maker,
+            node_id="lease-ownership-node",
+            hotkey=_OTHER_NODE_HOTKEY,
+            token=_OTHER_NODE_TOKEN,
+            screening_concurrency=1,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claim = await client.post(_CLAIM_URL)
+        fleet_attempt = UUID(claim.json()["items"][0]["attempt_id"])
+        before = await _verdict_state(session_maker, agent_id)
+        assert before[2] == [(fleet_attempt, "running")]
+
+        for attempt_id in (fleet_attempt, None):
+            response = await client.post(
+                f"/api/v1/screener/agent/{agent_id}/result",
+                headers=_OTHER_NODE_HEADERS,
+                json=_signed_failure(
+                    _OTHER_NODE_KEYPAIR,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    outcome="deterministic_reject",
+                ),
+            )
+            assert response.status_code == 409, response.text
+            assert response.json()["error_code"] == ERROR_CODE_AGENT_NOT_SCREENABLE
+
+        assert await _verdict_state(session_maker, agent_id) == before
+        owner = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=fleet_attempt,
+                outcome="deterministic_reject",
+            ),
+        )
+        assert owner.status_code == 200, owner.text
+
+    async def test_attempt_for_a_different_agent_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        owned_agent = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        owned_attempt = await _seed_running_attempt(session_maker, agent_id=owned_agent)
+        target_agent = await _seed_agent(
+            session_maker,
+            status=AgentStatus.UPLOADED,
+            miner_hotkey="5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+            sha256="cd" * 32,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        owned_before = await _verdict_state(session_maker, owned_agent)
+        target_before = await _verdict_state(session_maker, target_agent)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{target_agent}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=target_agent,
+                attempt_id=owned_attempt,
+                outcome="deterministic_reject",
+            ),
+        )
+
+        assert response.status_code == 409, response.text
+        assert await _verdict_state(session_maker, owned_agent) == owned_before
+        assert await _verdict_state(session_maker, target_agent) == target_before
+        owner = await client.post(
+            f"/api/v1/screener/agent/{owned_agent}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=owned_agent,
+                attempt_id=owned_attempt,
+                outcome="deterministic_reject",
+            ),
+        )
+        assert owner.status_code == 200, owner.text
+
+    async def test_policy_version_mismatch_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        before = await _verdict_state(session_maker, agent_id)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                outcome="deterministic_reject",
+                policy_version=SCREENING_POLICY_VERSION + 1,
+            ),
+        )
+
+        assert response.status_code == 409, response.text
+        assert await _verdict_state(session_maker, agent_id) == before
+        matching = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                outcome="deterministic_reject",
+            ),
+        )
+        assert matching.status_code == 200, matching.text
+
+    async def test_expired_attempt_re_leased_to_another_node_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        stale_attempt = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=stale_attempt,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="expired",
+                    started_at=now - timedelta(hours=2),
+                    deadline=now - timedelta(hours=1),
+                    finished_at=now - timedelta(hours=1),
+                )
+            )
+        await _seed_running_attempt(
+            session_maker, agent_id=agent_id, screener_hotkey=_OTHER_NODE_HOTKEY
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        before = await _verdict_state(session_maker, agent_id)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=stale_attempt,
+                outcome="deterministic_reject",
+            ),
+        )
+
+        assert response.status_code == 409, response.text
+        assert await _verdict_state(session_maker, agent_id) == before
+
+    @pytest.mark.parametrize(
+        ("outcome", "agent_status", "attempt_status"),
+        [
+            ("deterministic_reject", AgentStatus.REJECTED, "rejected"),
+            ("retryable_infra", AgentStatus.SCREENING_FAILED, "failed"),
+            ("pass", AgentStatus.EVALUATING, "passed"),
+        ],
+    )
+    async def test_owner_settles_its_claimed_attempt(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        outcome: str,
+        agent_status: AgentStatus,
+        attempt_status: str,
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claim = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
+        if outcome == "pass":
+            await _seed_verified_image_upload(
+                session_maker, agent_id=agent_id, attempt_id=attempt_id
+            )
+            payload = _result_payload(agent_id, passed=True, attempt_id=attempt_id)
+        else:
+            payload = _signed_failure(
+                _KEYPAIR, agent_id=agent_id, attempt_id=attempt_id, outcome=outcome
+            )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == agent_status
+        status, _reason, attempts = await _verdict_state(session_maker, agent_id)
+        assert status == agent_status
+        assert attempts == [(attempt_id, attempt_status)]
+
+    async def test_owner_replay_is_idempotent_and_not_open_to_other_principals(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_screener_node(
+            session_maker,
+            node_id="lease-ownership-replay-node",
+            hotkey=_OTHER_NODE_HOTKEY,
+            token=_OTHER_NODE_TOKEN,
+            screening_concurrency=1,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claim = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
+        payload = _signed_failure(
+            _KEYPAIR,
+            agent_id=agent_id,
+            attempt_id=attempt_id,
+            outcome="deterministic_reject",
+        )
+        url = f"/api/v1/screener/agent/{agent_id}/result"
+
+        first = await client.post(url, json=payload)
+        assert first.status_code == 200, first.text
+        async with session_maker() as session:
+            recorded = await session.get(ScreeningAttempt, attempt_id)
+            assert recorded is not None
+            finished_at = recorded.finished_at
+        settled = await _verdict_state(session_maker, agent_id)
+        assert settled[0] == AgentStatus.REJECTED
+        assert settled[2] == [(attempt_id, "rejected")]
+
+        replay = await client.post(url, json=payload)
+        assert replay.status_code == 200, replay.text
+        assert replay.json() == {
+            "agent_id": str(agent_id),
+            "status": AgentStatus.REJECTED,
+            "accepted": True,
+        }
+        assert await _verdict_state(session_maker, agent_id) == settled
+        async with session_maker() as session:
+            replayed = await session.get(ScreeningAttempt, attempt_id)
+            assert replayed is not None and replayed.finished_at == finished_at
+
+        # The idempotent branch is reachable only by the attempt's owner.
+        foreign = await client.post(
+            url,
+            headers=_OTHER_NODE_HEADERS,
+            json=_signed_failure(
+                _OTHER_NODE_KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                outcome="deterministic_reject",
+            ),
+        )
+        assert foreign.status_code == 409, foreign.text
+        # A different verdict for the settled attempt is a conflict, not a replay.
+        conflicting = await client.post(
+            url,
+            json=_signed_failure(
+                _KEYPAIR,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                outcome="retryable_infra",
+            ),
+        )
+        assert conflicting.status_code == 409, conflicting.text
+        assert await _verdict_state(session_maker, agent_id) == settled
 
 
 _ADMIN_HEADERS = {
@@ -11622,6 +13605,34 @@ def _review_finding(artifact_sha256: str = _SHA256) -> SourceReviewFinding:
             )
         ],
         summary="Deterministic shortcut bypasses the general provider path.",
+    )
+
+
+def _confirmed_violation_finding(
+    *, artifact_sha256: str = _SHA256, breach: bool = True
+) -> SourceReviewFinding:
+    """A v13 finding whose I5 decision is the breach L3 confirmed."""
+    decisions = [
+        SourceReviewInvariantDecision(
+            invariant=invariant,
+            disposition=(
+                SourceReviewInvariantDisposition.BREACH
+                if breach and invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+                else SourceReviewInvariantDisposition.INCONCLUSIVE
+            ),
+            summary="Request-keyed table answers before any model call.",
+            evidence_indices=(
+                [0]
+                if breach and invariant == SourceReviewInvariant.PRODUCTION_ENGINE
+                else []
+            ),
+        )
+        for invariant in SourceReviewInvariant
+    ]
+    return _review_finding(artifact_sha256).model_copy(
+        update={
+            "invariant_assessment": SourceReviewInvariantAssessment(decisions=decisions)
+        }
     )
 
 
@@ -12223,11 +14234,22 @@ class TestQuarantineReviewContext:
             "agentic-source-review-tripwire"
         ]
 
+    @pytest.mark.parametrize(
+        "reason_code",
+        [
+            "source-review-model-response-invalid",
+            # An archive the court could not open or read, or a screen whose
+            # source reviewer never started: only the node key failure has its
+            # own automatic code.
+            "source-review-unavailable",
+        ],
+    )
     async def test_retryable_infra_tells_the_miner_manual_retry_is_required(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        reason_code: str,
     ) -> None:
         """The legacy worker outcome must describe the fail-closed policy."""
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -12243,7 +14265,7 @@ class TestQuarantineReviewContext:
                 passed=False,
                 attempt_id=attempt_id,
                 outcome="retryable_infra",
-                reason_code="source-review-model-response-invalid",
+                reason_code=reason_code,
             ),
         )
 
@@ -12258,13 +14280,33 @@ class TestQuarantineReviewContext:
             )
             attempt = await session.get(ScreeningAttempt, attempt_id)
             assert attempt is not None
-            assert attempt.reason_code == "source-review-model-response-invalid"
+            assert attempt.reason_code == reason_code
 
-    async def test_docker_build_infrastructure_promises_only_the_automatic_retry(
+    @pytest.mark.parametrize(
+        ("reason_code", "detail"),
+        [
+            (
+                "docker-build-infrastructure",
+                "screener error: Docker build infrastructure: daemon down",
+            ),
+            (
+                "worker-claim-not-started",
+                "screener error: ClaimResponseInvalid: screening claim response "
+                "invalid: items.0.name: Field required",
+            ),
+            (
+                "source-review-adjudicator-key-unavailable",
+                "screener error: private policy infrastructure unavailable",
+            ),
+        ],
+    )
+    async def test_fleet_owned_infrastructure_promises_only_the_automatic_retry(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        reason_code: str,
+        detail: str,
     ) -> None:
         """The miner-facing text must match what the claim path really does."""
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -12280,8 +14322,8 @@ class TestQuarantineReviewContext:
                 passed=False,
                 attempt_id=attempt_id,
                 outcome="retryable_infra",
-                reason_code="docker-build-infrastructure",
-                detail="screener error: Docker build infrastructure: daemon down",
+                reason_code=reason_code,
+                detail=detail,
             ),
         )
 
@@ -12295,7 +14337,7 @@ class TestQuarantineReviewContext:
             attempt = await session.get(ScreeningAttempt, attempt_id)
             assert attempt is not None
             assert attempt.status == "failed"
-            assert attempt.reason_code == "docker-build-infrastructure"
+            assert attempt.reason_code == reason_code
             assert attempt.public_reason == refreshed.screening_reason
 
     async def test_withdrawn_agent_is_not_promised_an_automatic_retry(
@@ -12396,6 +14438,221 @@ class TestQuarantineReviewContext:
         parked = await client.post(_CLAIM_URL)
         assert parked.status_code == 200
         assert parked.json()["items"] == []
+
+    async def test_review_nonverdict_retries_automatically_then_parks(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # A provider fault ends the review with no verdict on the artifact.
+        # Platform grants the retry itself, a bounded number of times, and the
+        # submission returns to the queue instead of waiting on an operator.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        reasons: list[str | None] = []
+        codes: list[str | None] = []
+        for _ in range(3):
+            claimed = await client.post(_CLAIM_URL)
+            assert claimed.status_code == 200
+            items = claimed.json()["items"]
+            assert [item["agent_id"] for item in items] == [str(agent_id)]
+            attempt_id = UUID(items[0]["attempt_id"])
+            response = await client.post(
+                f"/api/v1/screener/agent/{agent_id}/result",
+                json=_result_payload(
+                    agent_id,
+                    passed=False,
+                    attempt_id=attempt_id,
+                    outcome="retryable_infra",
+                    reason_code="l3-adjudicator-model-provider-fault",
+                    detail="L3 adjudicator provider fault",
+                ),
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["status"] == AgentStatus.SCREENING_FAILED
+            async with session_maker() as session:
+                agent = await session.get(Agent, agent_id)
+                assert agent is not None
+                reasons.append(agent.screening_reason)
+                codes.append(agent.screening_reason_code)
+            if len(reasons) == 3:
+                break
+        assert reasons == [
+            AUTO_REVIEW_RETRY_PUBLIC_REASON,
+            AUTO_REVIEW_RETRY_PUBLIC_REASON,
+            "Screening was interrupted; manual retry required",
+        ]
+        async with session_maker() as session:
+            overrides = list(
+                await session.scalars(
+                    select(ScreeningRetryOverride).where(
+                        ScreeningRetryOverride.agent_id == agent_id
+                    )
+                )
+            )
+        assert [row.actor for row in overrides] == ["platform:auto-review-retry"] * 2
+        assert codes == [None, None, "l3-adjudicator-model-provider-fault"]
+        # The cap is spent: the third park waits for an operator again.
+        parked = await client.post(_CLAIM_URL)
+        assert parked.status_code == 200
+        assert parked.json()["items"] == []
+
+    async def test_automatic_retry_cap_is_shared_by_one_artifact(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # A resubmitted copy of the same bytes does not get a fresh allowance.
+        earlier = await _seed_agent(
+            session_maker, status=AgentStatus.REJECTED, name="earlier-copy"
+        )
+        async with session_maker() as session, session.begin():
+            for _ in range(2):
+                attempt = ScreeningAttempt(
+                    attempt_id=uuid4(),
+                    agent_id=earlier,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=13,
+                    started_at=datetime.now(UTC) - timedelta(hours=3),
+                    deadline=datetime.now(UTC) - timedelta(hours=2),
+                    status="expired",
+                )
+                session.add(attempt)
+                await session.flush()
+                session.add(
+                    ScreeningRetryOverride(
+                        override_id=uuid4(),
+                        agent_id=earlier,
+                        attempt_id=attempt.attempt_id,
+                        artifact_sha256=_SHA256,
+                        expected_score_count=0,
+                        reason="Automatic retry",
+                        actor="platform:auto-review-retry",
+                        created_at=datetime.now(UTC) - timedelta(hours=2),
+                    )
+                )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="retryable_infra",
+                reason_code="l3-critic-model-provider-fault",
+                detail="L3 critic provider fault",
+            ),
+        )
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            grant = await session.scalar(
+                select(ScreeningRetryOverride).where(
+                    ScreeningRetryOverride.agent_id == agent_id
+                )
+            )
+            assert grant is None
+
+    async def test_first_complete_inconclusive_retries_once_then_v2_rejects(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # Policy v13: the automatic retry of the first complete inconclusive
+        # review is the published V2 retry; the second one is terminal.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-terra-source-review-v51-policy-v13",
+            max_steps=256,
+            steps_used=24,
+            model_disposition="inconclusive",
+            resolution_basis="insufficient_static_evidence",
+            dossier_complete=True,
+            model_inconclusive_invariants=["i2_evidence_retention"],
+            budget_stop_reason="none",
+            final_stage="critic",
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        statuses: list[str] = []
+        for minutes_ago in (2, 0):
+            attempt_id = await _seed_running_attempt(
+                session_maker,
+                agent_id=agent_id,
+                policy_version=13,
+                started_at=datetime.now(UTC) - timedelta(minutes=minutes_ago),
+            )
+            response = await client.post(
+                f"/api/v1/screener/agent/{agent_id}/result",
+                json=_result_payload(
+                    agent_id,
+                    passed=False,
+                    policy_version=13,
+                    attempt_id=attempt_id,
+                    outcome="inconclusive",
+                    manifest_digest="12" * 32,
+                    reason_code="l2-model-inconclusive",
+                    review_audit_digest=audit.canonical_digest(),
+                    review_audit=audit.model_dump(mode="json"),
+                ),
+            )
+            assert response.status_code == 200, response.text
+            statuses.append(response.json()["status"])
+            if minutes_ago:
+                async with session_maker() as session:
+                    agent = await session.get(Agent, agent_id)
+                    assert agent is not None
+                    assert agent.screening_reason == AUTO_REVIEW_RETRY_PUBLIC_REASON
+                    grant = await session.scalar(
+                        select(ScreeningRetryOverride).where(
+                            ScreeningRetryOverride.attempt_id == attempt_id
+                        )
+                    )
+                    assert grant is not None
+                    assert grant.actor == "platform:auto-review-retry"
+                async with session_maker() as session, session.begin():
+                    agent = await session.get(Agent, agent_id)
+                    assert agent is not None
+                    agent.status = AgentStatus.SCREENING
+        assert statuses == [AgentStatus.SCREENING_FAILED, AgentStatus.REJECTED]
+
+    async def test_ineligible_inconclusive_code_still_parks_for_operator(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(session_maker, agent_id=agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="retryable_infra",
+                reason_code="source-review-unavailable",
+                detail="source reviewer never started",
+            ),
+        )
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            grant = await session.scalar(
+                select(ScreeningRetryOverride).where(
+                    ScreeningRetryOverride.agent_id == agent_id
+                )
+            )
+            assert grant is None
 
     async def test_missing_context_is_404(
         self,
@@ -12718,10 +14975,32 @@ def test_shadow_review_accepts_a_full_length_provider_trajectory() -> None:
 class TestQuarantineBaselineDiff:
     """The starter-kit subtraction an operator relies on to find real code."""
 
+    AUTHORED_LINES = 9952
+
+    @staticmethod
+    def _full_kit_with_large_authored_baseline(root: str = "") -> dict[str, bytes]:
+        """Issue #480's shape: the whole kit, fixtures first, big authored source.
+
+        The kit alone carries ~2.4 MB of text, most of it fixture JSON that tar
+        stores before ``src/``; the authored ``src/baseline.rs`` is ~10k lines.
+        """
+        from ditto.api_server.starter_kit import starter_kit_head_text
+
+        files = {path: text.encode() for path, text in starter_kit_head_text().items()}
+        files["src/baseline.rs"] = "".join(
+            f"pub fn authored_step_{i:05d}(x: u64) -> u64 {{ x ^ {i} }}\n"
+            for i in range(TestQuarantineBaselineDiff.AUTHORED_LINES)
+        ).encode()
+        ordered = sorted(
+            files, key=lambda path: (not path.startswith("fixtures/"), path)
+        )
+        return {f"{root}{path}": files[path] for path in ordered}
+
     async def _seed_kit_derived_agent(
         self,
         app: FastAPI,
         session_maker: async_sessionmaker[AsyncSession],
+        files: dict[str, bytes] | None = None,
     ) -> tuple[UUID, MagicMock]:
 
         from ditto.api_server.starter_kit import starter_kit_head_text
@@ -12732,11 +15011,12 @@ class TestQuarantineBaselineDiff:
         )
         head = starter_kit_head_text()
         # A realistic submission: verbatim kit files plus the miner's own code.
-        files = {
-            "Cargo.toml": head["Cargo.toml"].encode(),
-            "src/baseline.rs": head["src/baseline.rs"].encode(),
-            "src/solver.rs": b"fn solve_as_of() -> u64 {\n    42\n}\n",
-        }
+        if files is None:
+            files = {
+                "Cargo.toml": head["Cargo.toml"].encode(),
+                "src/baseline.rs": head["src/baseline.rs"].encode(),
+                "src/solver.rs": b"fn solve_as_of() -> u64 {\n    42\n}\n",
+            }
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
             for name, raw in files.items():
@@ -12787,6 +15067,86 @@ class TestQuarantineBaselineDiff:
         assert body["baseline"]["revision"]
         assert body["baseline"]["source"].endswith("dittobench-starter-kit")
         assert body["path_aligned"] is False
+        # A small archive fits the text budget: nothing omitted, total exact.
+        assert body["omitted_file_count"] == 0
+        assert body["omitted_paths"] == []
+        assert body["custom_added_lines_complete"] is True
+
+    async def test_large_authored_file_is_counted_and_skipped_file_is_omitted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # Issue #480: this archive used to return src/baseline.rs as
+        # {status: removed, candidate_lines: 0} and a custom total near zero.
+        agent_id, _storage = await self._seed_kit_derived_agent(
+            app, session_maker, self._full_kit_with_large_authored_baseline()
+        )
+        response = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/baseline-diff",
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        by_path = {entry["path"]: entry for entry in body["files"]}
+
+        authored = by_path["src/baseline.rs"]
+        assert authored["status"] == "modified"
+        assert authored["candidate_lines"] == self.AUTHORED_LINES
+        assert authored["stock_kit"] is False
+        assert body["custom_added_lines"] >= self.AUTHORED_LINES
+        # The kit's largest fixture no longer fits the combined text budget. It
+        # is named as not compared, never reported as a deleted file.
+        assert body["omitted_paths"] == ["fixtures/seed-user/pairs.json"]
+        assert body["omitted_file_count"] == 1
+        assert body["custom_added_lines_complete"] is False
+        assert "fixtures/seed-user/pairs.json" not in by_path
+        assert body["removed_count"] == 0
+        assert body["path_aligned"] is False
+
+        # The single-file diff reads the skipped file on its own.
+        detail = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/baseline-diff/file",
+            params={"path": "fixtures/seed-user/pairs.json"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert detail.status_code == 200
+        detail_body = detail.json()
+        assert detail_body["candidate_present"] is True
+        assert detail_body["reference_present"] is True
+        assert detail_body["identical"] is True
+        assert detail_body["stock_kit"] is True
+
+    async def test_wrapped_archive_aligns_skipped_paths_too(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id, _storage = await self._seed_kit_derived_agent(
+            app,
+            session_maker,
+            self._full_kit_with_large_authored_baseline(root="agent/"),
+        )
+        response = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/baseline-diff",
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["path_aligned"] is True
+        assert body["omitted_paths"] == ["fixtures/seed-user/pairs.json"]
+        assert body["removed_count"] == 0
+        assert body["custom_added_lines"] >= self.AUTHORED_LINES
+
+        detail = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/baseline-diff/file",
+            params={"path": "fixtures/seed-user/pairs.json"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert detail.status_code == 200
+        assert detail.json()["identical"] is True
 
     async def test_file_diff_returns_bounded_body_and_stock_flag(
         self,

@@ -412,6 +412,59 @@ def _top_provisional_contenders(
     )
 
 
+def _fifo_arrival(
+    fifo_start_at: datetime | None, *, agent: AgentEntity = Agent
+) -> ColumnElement[datetime]:
+    """A row's queue arrival, clamped to the era's FIFO start when there is one."""
+    if fifo_start_at is None:
+        return agent.created_at
+    return case(
+        (agent.created_at < fifo_start_at, fifo_start_at),
+        else_=agent.created_at,
+    )
+
+
+def _live_assignment_count(
+    *, bench_version: int, now: datetime, agent: AgentEntity = Agent
+) -> ColumnElement[int]:
+    """Live non-canary leases a row holds at ``bench_version``."""
+    return (
+        select(func.count())
+        .where(
+            ValidatorTicket.agent_id == agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+            ValidatorTicket.bench_version == bench_version,
+            ValidatorTicket.status == TicketStatus.ISSUED,
+            ValidatorTicket.deadline > now,
+        )
+        .correlate(agent)
+        .scalar_subquery()
+    )
+
+
+def _occupied_quorum_slots(
+    *, bench_version: int, now: datetime, agent: AgentEntity = Agent
+) -> ColumnElement[int]:
+    """Quorum slots a row has spent: scored tickets plus live leases."""
+    return (
+        select(func.count())
+        .where(
+            ValidatorTicket.agent_id == agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+            ValidatorTicket.bench_version == bench_version,
+            or_(
+                ValidatorTicket.status == TicketStatus.SCORED,
+                and_(
+                    ValidatorTicket.status == TicketStatus.ISSUED,
+                    ValidatorTicket.deadline > now,
+                ),
+            ),
+        )
+        .correlate(agent)
+        .scalar_subquery()
+    )
+
+
 def queue_order_terms(
     *,
     bench_version: int,
@@ -436,14 +489,7 @@ def queue_order_terms(
     """
     from ditto.db.queries.scores import SCORING_QUORUM
 
-    fifo_age = (
-        case(
-            (agent.created_at < fifo_start_at, fifo_start_at),
-            else_=agent.created_at,
-        )
-        if fifo_start_at is not None
-        else agent.created_at
-    )
+    fifo_age = _fifo_arrival(fifo_start_at, agent=agent)
     if completion_first:
         # Keep the fresh-submission lane independent of the ordinary queue's
         # contender, coverage, artifact, and continuation-floor priorities. Age
@@ -483,17 +529,8 @@ def queue_order_terms(
         ),
         0.0,
     )
-    live_assignment_count = (
-        select(func.count())
-        .where(
-            ValidatorTicket.agent_id == agent.agent_id,
-            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
-            ValidatorTicket.bench_version == bench_version,
-            ValidatorTicket.status == TicketStatus.ISSUED,
-            ValidatorTicket.deadline > now,
-        )
-        .correlate(agent)
-        .scalar_subquery()
+    live_assignment_count = _live_assignment_count(
+        bench_version=bench_version, now=now, agent=agent
     )
     # A median-of-three cannot be bounded safely after one score. Once two
     # scores exist, their maximum is the best final median the third score can
@@ -867,26 +904,76 @@ async def miner_has_newer_canonical_work(
     )
 
 
+V13_SCORER_COHORT_BENCH_VERSION = 13
+"""The only version a scorer cohort pin can name (a schema check constraint)."""
+
+
 async def quorum_capable_validator_hotkeys(
     session: AsyncSession, *, bench_version: int, now: datetime
 ) -> set[str]:
-    """Validators whose fresh signed heartbeat advertises ``bench_version``.
+    """Validators that can actually be issued new work at ``bench_version``.
 
-    The fleet that could actually contribute a score at this version, which is
-    the denominator for asking whether a submission can still reach quorum.
-    Same notion of "capable" the previous-generation gate feeds into
-    :func:`~ditto.db.queries.desired_era_backlog.desired_era_work_outstanding`.
+    The fleet that could still contribute a score at this version, which is the
+    denominator for asking whether a submission can still reach quorum. A
+    validator belongs to it only when all three hold:
+
+    * its fresh signed heartbeat advertises ``bench_version`` -- the same
+      capability test the previous-generation gate feeds into
+      :func:`~ditto.db.queries.desired_era_backlog.desired_era_work_outstanding`;
+    * the operator has not paused its issuance, read through the same slot
+      policy and :func:`validator_issuance_paused` the job handler applies;
+    * at v13, once a scorer cohort is pinned, it is a pinned member. Issuance
+      (``pinned_validator_allowed``) refuses every nonmember, so a nonmember's
+      heartbeat is a quorum slot nobody can ever fill. Before activation there
+      is no pin and the version check alone decides, exactly as it did.
+
+    Counting a validator that can never be handed the work inflates the
+    reachability ceiling in :func:`selected_owner_agent_id`: a generation whose
+    only remaining cohort member had spent its budget still looked reachable,
+    stayed pinned, and held its owner's newer upload at ``owner_serialized``.
+
+    Membership, not packet convergence, is the cohort test: a fleet auto-update
+    briefly splits the members' signed packets, and that pause in issuance is
+    transient rather than a slot that is gone for good.
 
     Read once per issuance or preview and passed down, so the owner loop in
     :func:`preview_queue_order` does not re-read the heartbeat table per owner.
     """
     from ditto.db.queries.benchmark_rollout import heartbeat_supports_version
 
-    return {
+    capable = {
         heartbeat.validator_hotkey
         for heartbeat in (await session.scalars(select(ValidatorHeartbeat))).all()
         if heartbeat_supports_version(heartbeat, now=now, version=bench_version)
     }
+    if not capable:
+        return capable
+    # Imported lazily: importing ``ditto.api_server`` assembles the whole app,
+    # and ``v13_scorer_cohort`` itself imports from ``ditto.db.queries``. These
+    # are the job handler's own definitions, so the two cannot drift.
+    from ditto.api_server.validator_slot_settings import (
+        settings_from_row,
+        validator_issuance_paused,
+    )
+    from ditto.db.queries.validator_slot_settings import (
+        latest_validator_slot_settings_revision,
+    )
+
+    slot_settings = settings_from_row(
+        await latest_validator_slot_settings_revision(session)
+    )
+    capable = {
+        hotkey
+        for hotkey in capable
+        if not validator_issuance_paused(slot_settings, validator_hotkey=hotkey)
+    }
+    if bench_version == V13_SCORER_COHORT_BENCH_VERSION:
+        from ditto.api_server.v13_scorer_cohort import current_pin
+
+        pin = await current_pin(session)
+        if pin is not None:
+            capable &= set(pin.hotkeys)
+    return capable
 
 
 async def selected_owner_agent_id(
@@ -1316,23 +1403,7 @@ async def preview_queue_order(
     # classified ``evaluating`` instead, so it never arrives here. What does
     # arrive is the row whose slots are all spent without a lease to show for
     # it, and calling that one "up next" is the divergence this closes.
-    occupied_quorum_slots = (
-        select(func.count())
-        .where(
-            ValidatorTicket.agent_id == Agent.agent_id,
-            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
-            ValidatorTicket.bench_version == bench_version,
-            or_(
-                ValidatorTicket.status == TicketStatus.SCORED,
-                and_(
-                    ValidatorTicket.status == TicketStatus.ISSUED,
-                    ValidatorTicket.deadline > now,
-                ),
-            ),
-        )
-        .correlate(Agent)
-        .scalar_subquery()
-    )
+    occupied_quorum_slots = _occupied_quorum_slots(bench_version=bench_version, now=now)
     leasable = set(
         await session.scalars(
             select(Agent.agent_id).where(
@@ -1444,6 +1515,42 @@ async def preview_queue_order(
         )
         for rank, (_, agent_id) in enumerate(ranked, start=1)
     }
+
+
+async def unleased_queue_backlog(
+    session: AsyncSession,
+    *,
+    bench_version: int,
+    now: datetime,
+    rollout: BenchmarkRollout | None,
+) -> tuple[int, datetime | None]:
+    """Count and earliest FIFO arrival of fleet-eligible rows nobody holds.
+
+    The same validator-independent candidate filter and quorum-slot count the
+    preview's ``not_leasable`` gate uses, restricted to rows with no live lease
+    at all. Owner serialization and each validator's own exclusions are not
+    applied, so the count is an upper bound on what the next poll could lease.
+    """
+    from ditto.db.queries.scores import SCORING_QUORUM
+
+    fifo_start_at = await resolve_fifo_start_at(
+        session, bench_version=bench_version, rollout=rollout
+    )
+    count, earliest = (
+        await session.execute(
+            select(func.count(), func.min(_fifo_arrival(fifo_start_at))).where(
+                _live_assignment_count(bench_version=bench_version, now=now) == 0,
+                _occupied_quorum_slots(bench_version=bench_version, now=now)
+                < SCORING_QUORUM,
+                *queue_candidate_predicate(
+                    bench_version=bench_version,
+                    artifact_mode=preview_artifact_mode(bench_version),
+                    rollout=rollout,
+                ),
+            )
+        )
+    ).one()
+    return int(count), earliest
 
 
 def _similarity_detail(

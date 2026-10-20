@@ -1,6 +1,6 @@
 ---
 name: ditto-subnet-release-ops
-description: Design, implement, audit, or operate ditto-subnet semantic releases, affected-component CI, container builds, automatic application deployments, validator rollouts, screener autoscaling and trusted builds, Targon-first capacity with GCE fallback, GCP IAM/WIF, Cloudflare Workers, Terraform, Ansible, and rollback. Use for release or live-runtime work where exact SHA, credentials, provider safety, or activation boundaries matter.
+description: Design, implement, audit, or operate ditto-subnet semantic releases, affected-component CI, container builds, automatic application deployments, validator rollouts, screener autoscaling and trusted builds, Hetzner primary capacity with GCE overflow, GCP IAM/WIF, Cloudflare Workers, Terraform, Ansible, and rollback. Use for release or live-runtime work where exact SHA, credentials, provider safety, or activation boundaries matter.
 ---
 
 # Ditto Subnet Release Ops
@@ -31,7 +31,7 @@ Read [`references/release-ops-index.md`](references/release-ops-index.md), then 
 
 - Automatic application deploys may follow a semantic release from `main`.
 - Terraform always uses reviewed plan and protected apply; application workflows do not apply infrastructure.
-- Never read or print `TARGON_API_KEY` or other provider secrets. Use Secret Manager indirection and tests that consume values without returning them.
+- Never read or print provider secrets. Use Secret Manager indirection and tests that consume values without returning them.
 - Never place cloud, GitHub, Platform, or provider credentials in untrusted build/runtime environments.
 - Do not create service accounts or IAM bindings out of band merely to bypass an unapplied Terraform bootstrap.
 
@@ -53,6 +53,29 @@ Do not delete `/opt/ditto-platform-relay/traces`. A 30G boot disk is too small;
 grow with `gcloud compute disks resize` then `growpart`/`resize2fs` **before**
 Terraform. Protected apply must not replace the VMs.
 
+## Screener fleet release activation
+
+`scripts/screener-fleet-auto-update.sh` activates each signed fleet descriptor on the Hetzner primary only after cosign, exact-revision, and closed-manifest checks pass. By default (`SCREENER_FLEET_ROLLOUT_MODE=rolling`) it does not drain the fleet. It flips `current`, the `:active` analyzer tag, and `release.env`, then sends SIGTERM to each worker's main process only. Idle workers restart on the candidate within about 10 s, and busy ones sign their verdict and then restart, so claim capacity survives a busy release. The updater never stops, restarts, or kills a running worker.
+
+- If any worker fails to settle on the candidate (settle 30 s, start window 300 s), every worker rolls back and the descriptor goes to `failed-candidate`.
+- If no worker reaches the candidate within the 70 min bound, it rolls back without suppressing the descriptor, so the next tick retries.
+
+It falls back to the whole-fleet drain (`stop_fleet` plus the lease-bound hold from #2287) when:
+
+- the operator sets the `drain-all` mode;
+- there is no previous release;
+- a running worker is above the requested count;
+- a live worker's release is unresolvable; or
+- the analyzer build inputs differ from any live worker's release.
+
+The journal says `draining every worker before activation: <reason>`. Inspect `/var/lib/ditto-screener-fleet/updater/drain-status.env` (`PHASE=rolling|active|rolled_back|draining|held|aborted`) and `held-workers` for workers still finishing on the previous release. Mixed worker `release` values in Backroom during a roll are expected; a target-revision field is not yet published. Details: `docs/hetzner-screener-fleet.md` § Rolling activation.
+
 ## Capacity invariants
 
-Targon is primary. GCE normally targets zero and is a bounded residual/failure fallback. The controller must be fenced and count pending workers; an independently fenced GCP watchdog may add fallback capacity only when backlog exists and the primary heartbeat is stale. Fail closed when provider isolation cannot be proven.
+The enrolled Hetzner worker is primary. GCE normally targets zero and supplies bounded backlog or outage capacity. The controller must be fenced and count pending workers; an independent GCP watchdog may add fallback capacity only when backlog exists, controller authority is missing, expired, or unready, and current Platform policy confirms positive primary admission. Fail closed when provider isolation cannot be proven.
+
+GCE scale-in re-reads `/controller/nodes` after the fenced renew. Both zero and partial scale-in currently defer: the 180-second controller lease cannot fence new legacy claims for the full duration of a physical GCE deletion, even when all members are idle at the reread. Zero scale-in also requires a known zero legacy running-attempt count and every running managed-group member ready and idle; partial scale-in needs a per-instance claim fence. A failed read or unknown running-attempt count also defers (`GCE_SCALE_IN_DEFERRED`, not a provider failure). A deferral keeps publishing the lower desired target, so it does not reopen claims while the controller lease is fresh. Physical excess capacity remains until a durable claim fence is implemented or an operator safely drains it.
+
+`SCREENING=0` on the primary is an operator closure and a global full stop (`HETZNER_PRIMARY_ADMISSION_CLOSED`): GCE does not overflow it and the watchdog does not activate fallback for it, whatever the backlog, `gce_overflow_enabled`, provider order, or the host's readiness and heartbeat. Reopening needs a deliberate `screening_concurrency >= 1` activation. A primary the controller cannot vouch for (failed node read, omitted row, missing admission setting) fails closed as `HETZNER_PRIMARY_UNKNOWN`; only a known-open, unready primary overflows. A stale routing revision that still names Targon first honors the same closed/unknown stop; its `RETIRED_PROVIDER_ROUTING` GCE fallback applies only to a known-open primary.
+
+A failed Platform routing or node-inventory read holds the current GCE target for `--inventory-failure-hold-passes` passes (default 4) with `PLATFORM_INVENTORY_UNAVAILABLE`. A routing read failure keeps the controller's physical target unchanged until fresh policy returns, including after that hold expires. After the hold, the controller marks itself unready so the independent watchdog can serve an open primary's backlog under current Platform policy; closed or unknown admission remains stopped. The controller reuses the last good routing revision cached in its state file; only a controller without one publishes the synthetic, unclaimable revision 0 (`PROVIDER_ROUTING_UNAVAILABLE`). Pass events ride the fenced first renew and a scale-in deferral rides the completed renew; a deferral that continues with the same target and reason is not sent again. The controller records an event as sent, in its state file, only after the renew carrying it succeeds. Platform has no capacity-event idempotency key, so delivery is at least once, not exactly once: a renew whose response is lost, or a crash or failed state write right after a successful renew, can send that event once more on the next pass.

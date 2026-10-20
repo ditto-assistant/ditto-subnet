@@ -146,6 +146,7 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_WALLET_HOTKEY` | Hotkey file inside that wallet. |
 | `PYLON_TOKEN` | Random token generated above. |
 | `VALIDATOR_BENCHMARK_CAPACITY` | Full-run slots this host advertises, `1`-`8`. Leave unset to take the compose default of `8` (the protocol maximum) so the platform's cap is the only lever; the platform decides how many are actually used. Set `4` on a 16 GB host — see the sizing table. |
+| `VALIDATOR_LONGMEM_CAPACITY` | LongMemEval confirmation slots, `0`-`4` and at most half of `VALIDATOR_BENCHMARK_CAPACITY` rounded up. Leave unset to derive it (`8` → `4`, `4` → `2`); `0` disables the lane. |
 | `VALIDATOR_DISK_PERCENT_CEILING` | Stop claiming tickets at or above this disk usage (default `95`). `0` disables; otherwise a multiple of 5 in `[50, 100]`. |
 | `VALIDATOR_MEMORY_PERCENT_CEILING` | Same, for memory (default `95`). |
 | `VALIDATOR_CPU_PERCENT_CEILING` | Same, for CPU. Defaults to `0` (disabled) -- a pinned CPU is a working benchmark host, not a failing one. |
@@ -558,8 +559,12 @@ identical weights across asynchronous validator upgrades.
 
 ## Optional observability
 
-Add the shared `WANDB_API_KEY` supplied by Ditto to `.env`, or set
-`WANDB_MODE=disabled`. Never commit the key.
+W&B telemetry is optional and defaults to `WANDB_MODE=disabled`. Enable it only
+after obtaining a dedicated, independently revocable write credential for this
+validator. Set that validator's `WANDB_API_KEY` locally and switch
+`WANDB_MODE=online`; never commit the key or reuse a team-wide key. Operators
+must revoke or rotate the dedicated credential when a validator leaves the
+fleet. Scoring does not depend on W&B telemetry.
 
 The validator also sends a signed public heartbeat with its version, source
 digest, phase, and coarse health; the platform uses it to route compatible
@@ -584,8 +589,8 @@ is running.
 
 Heartbeat protocol 10 adds authoritative bounded capacity: configured and
 healthy slot ids, admission state, and privacy-safe progress for every active
-benchmark. Active heartbeats refresh every 30 seconds, with changed aggregate
-question counts eligible every 15 seconds. The stack advertises eight slots by
+benchmark. Active heartbeats refresh every 10 seconds, with changed aggregate
+question counts eligible every 5 seconds. The stack advertises eight slots by
 default — the protocol maximum — and the platform's operator cap decides how many
 receive tickets; draining or paused validators advertise no healthy slots and
 receive no new work.
@@ -666,8 +671,10 @@ otherwise ineligible newer generation cannot shadow an older eligible winner.
 
 ### Evidence-tied emission shares
 
-Protocol 20 adds an operator-gated alternative to the fixed
-`65% / 14% / 10% / 7% / 4%` KOTH shares. When the ledger carries
+Protocol 20 adds an operator-gated alternative to the configured KOTH shares
+(frozen default `65% / 14% / 10% / 7% / 4%`; from protocol 31 the ledger may
+serve an operator curve as `rank_shares`, withheld until every recently-live
+weight setter reports v31). When the ledger carries
 `tie_weighting_mode: pool`, validators group contiguous recipients that are
 evidence-tied, pool only the rank shares those recipients occupy, and divide
 that pool equally. Four tied tail recipients therefore receive `8.75%` each;
@@ -699,6 +706,23 @@ the exact rollback to fixed shares. `fleet_ready` exposes the ledger marker only
 after every recently live weight-setting validator advertises protocol 20;
 there is no force override because a mixed fold would split consensus. A merge
 or validator rollout alone therefore does not activate tie pooling.
+
+### Statistical band cap (protocol 29)
+
+The paired dethrone branch already caps its statistical term at twice the KOTH
+margin. Protocol 29 extends that cap to paired tie/cohort membership and the
+unpaired dethrone and contested-confirmation branches. This prevents noisy
+scores from widening payout groups or making an incumbent unreachable. The
+cap is applied before the existing version decay and optional ceiling clamp.
+
+The shipped `statistical_band_mode: disabled` policy preserves the pre-29 fold
+exactly. An operator may select `fleet_ready`; Platform serves the additive
+`statistical_band_mode: capped` ledger marker only after every recently-live
+weight-setting validator reports protocol 29. The epoch pin freezes the marker
+for every reader until the next pin. A protocol-28 validator that rejoins while
+a capped pin remains active receives HTTP 428 instead of folding that pin with
+the older rule. There is no force override and no production setting change
+from merging the code.
 
 ### Epoch-pinned ledger
 
@@ -750,3 +774,36 @@ every recently-live weight-setting validator reports protocol 27, there is
 no force override, and `crown_incumbent_mode: disabled` is the exact
 rollback. A pin taken while the marker is off records no incumbent, so a
 flip lands at the next pin for the whole fleet.
+
+### Provisional incumbent (protocol 28)
+
+Holding the crown and being paid are separate facts. When the operator's
+terminal-review emission gate is enforcing
+([`emission-eligibility.md`](../apps/platform/docs/emission-eligibility.md)), an
+artifact whose own source review is unresolved leaves the payable `entries`.
+If that artifact is the incumbent -- the previous pin's champion's owner has
+no payable generation, only its best withheld one -- the pin serves it as
+`provisional_incumbent`, with `crown_incumbent_agent_id` set to its id. It is
+the only withheld entry that can reach the fold.
+
+Being unpaid does not exempt it from score proofs. It still decides who holds
+the crown and the tail, so the validator verifies it exactly like a payable
+row: at least three signed quorum receipts from distinct validators, each
+bound to this agent, its lease and its benchmark version, with the row equal
+to the lower-median receipt, plus the same v9 confirmation checks. If any of
+that fails, the validator rejects the whole ledger and leaves its weights
+unchanged for the epoch, as it would for an unverifiable entry. It never drops
+the field and folds the rest, because that would quietly crown and pay the
+runner-up.
+
+The fold adds it to the pool as the crown incumbent and derives the champion,
+tail, tie pooling and score-ceiling cohort exactly as above. Every share it is
+allocated then burns: a challenger that clears the band over it is crowned and
+paid as usual, a provisional incumbent that keeps the crown leaves the 65%
+slot unpaid, and one that lands in a tail slot leaves that slot unpaid. Nobody
+else's share grows. A ledger without the field folds exactly as protocol 27.
+
+Platform only filters a held incumbent out of `entries` after every
+recently-live weight-setting validator reports protocol 28; until then
+`enforce` behaves exactly like `shadow`, because a protocol-27 validator would
+ignore the field and crown and pay the runner-up.

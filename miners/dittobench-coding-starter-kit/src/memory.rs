@@ -83,6 +83,39 @@ struct RegistryInner {
     cases: RwLock<HashMap<CaseKey, Arc<CaseMemory>>>,
     next_claim_id: AtomicU64,
     seed_ttl: Duration,
+    /// Test-only hook that suspends retrieval right after the claim is taken.
+    #[cfg(test)]
+    retrieval_pause: std::sync::Mutex<Option<RetrievalPause>>,
+}
+
+#[cfg(test)]
+struct RetrievalPause {
+    claimed: Arc<tokio::sync::Notify>,
+    resume: Arc<tokio::sync::Notify>,
+}
+
+/// Resets a claim that `retrieve_for_version` acquired but did not hand to its
+/// caller: a store error, or the future being dropped during the search (the
+/// client disconnected or the executor timed out). The case then stays seeded
+/// and claimable, and `purge_expired` can expire it, instead of staying claimed
+/// forever. Once retrieval succeeds, the caller's run owns the claim.
+struct ClaimAcquisition {
+    entry: Arc<CaseMemory>,
+    claim_id: u64,
+    armed: bool,
+}
+
+impl Drop for ClaimAcquisition {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.entry.claim_id.compare_exchange(
+                self.claim_id,
+                0,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -97,6 +130,8 @@ impl Default for MemoryRegistry {
                 cases: RwLock::new(HashMap::new()),
                 next_claim_id: AtomicU64::new(1),
                 seed_ttl: DEFAULT_SEED_TTL,
+                #[cfg(test)]
+                retrieval_pause: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -278,6 +313,24 @@ impl MemoryRegistry {
             .claim_id
             .compare_exchange(0, claim_id, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| MemoryError::AlreadyClaimed)?;
+        let mut acquisition = ClaimAcquisition {
+            entry: Arc::clone(&entry),
+            claim_id,
+            armed: true,
+        };
+        #[cfg(test)]
+        {
+            let pause = self
+                .inner
+                .retrieval_pause
+                .lock()
+                .ok()
+                .and_then(|mut hook| hook.take());
+            if let Some(pause) = pause {
+                pause.claimed.notify_one();
+                pause.resume.notified().await;
+            }
+        }
         let result = entry
             .store
             .search_memories(SearchMemoriesRequest {
@@ -304,18 +357,9 @@ impl MemoryRegistry {
                     })
                     .collect()
             });
-        match result {
-            Ok(memories) => Ok(MemoryClaim { memories, claim_id }),
-            Err(error) => {
-                let _ = entry.claim_id.compare_exchange(
-                    claim_id,
-                    0,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
-                Err(error)
-            }
-        }
+        let memories = result?;
+        acquisition.armed = false;
+        Ok(MemoryClaim { memories, claim_id })
     }
 
     /// Removes a case only when `claim_id` still owns its execution claim.
@@ -354,6 +398,8 @@ impl MemoryRegistry {
                 cases: RwLock::new(HashMap::new()),
                 next_claim_id: AtomicU64::new(1),
                 seed_ttl,
+                #[cfg(test)]
+                retrieval_pause: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -699,6 +745,45 @@ mod tests {
                 .await
         );
         assert_eq!(registry.active_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn dropped_retrieval_releases_the_claim_it_acquired() {
+        // The claim is taken before `search_memories().await`. Dropping the run
+        // there (disconnect or executor timeout) must not strand the case.
+        let registry = MemoryRegistry::default();
+        registry
+            .seed(seed_request("profile-a", "parser module invariant"))
+            .await
+            .unwrap();
+        let claimed = Arc::new(tokio::sync::Notify::new());
+        *registry.inner.retrieval_pause.lock().unwrap() = Some(RetrievalPause {
+            claimed: Arc::clone(&claimed),
+            resume: Arc::new(tokio::sync::Notify::new()),
+        });
+
+        let claimed_wait = claimed.notified();
+        let retrieving = registry.clone();
+        let retrieval = tokio::spawn(async move {
+            retrieving
+                .retrieve("ticket-1", "case-1", "profile-a", "parser", 4)
+                .await
+        });
+        claimed_wait.await;
+        retrieval.abort();
+        assert!(retrieval.await.unwrap_err().is_cancelled());
+
+        // The dropped retrieval released its claim, so the case is claimable
+        // again rather than stuck until the process restarts.
+        let claim = registry
+            .retrieve("ticket-1", "case-1", "profile-a", "parser", 4)
+            .await
+            .unwrap();
+        assert!(
+            registry
+                .finish_claim("ticket-1", "case-1", claim.claim_id())
+                .await
+        );
     }
 
     #[tokio::test]

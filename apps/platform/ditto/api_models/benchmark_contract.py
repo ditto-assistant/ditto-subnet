@@ -86,6 +86,9 @@ _CONTRACTS = {
     # authority (activation remains a deliberate POST after the v13
     # qualification report).
     13: BenchmarkContract(13, 9, True, False),
+    # v14 retains the v13 generator/grader surface with a distinct epoch and
+    # action-scoped declarative over-call scoring. Availability is not activation.
+    14: BenchmarkContract(14, 9, True, False),
 }
 
 

@@ -30,6 +30,18 @@
     "source": "fn run(req: Request) { let selected = model_select(req); let result = execute_internal_tool(req.user_id, selected); let answer = model_with_result(result); return_response(answer, executed_transcript_calls()); }"
   },
   {
+    "id": "safe-local-memory-id-guard-preserves-external-catalog",
+    "disposition": "safe",
+    "category": "none",
+    "source": "def run(req):\n    offered = req.tools\n    selected = model_select(offered)\n    if selected.name == 'fetch_memories':\n        if selected.args['pair_id'] not in local_user_records(req.user_id):\n            return blocked_local_memory_id()\n        return fetch_local_memory(selected.args['pair_id'])\n    return req.tool_endpoint.post(selected.name, selected.args)  # external pair_id belongs to the offered external schema"
+  },
+  {
+    "id": "violation-external-pair-id-blocked-by-local-memory-guard",
+    "disposition": "violation",
+    "category": "mandatory_contract_failure",
+    "source": "def run(req):\n    offered = req.tools  # includes external lookup_pair(pair_id: str)\n    selected = model_select(offered)\n    if selected.name == 'fetch_memories':\n        return fetch_local_memory(selected.args['pair_id'])\n    if selected.args.get('pair_id') not in local_user_records(req.user_id):\n        return blocked_before_endpoint()  # external pair_id is not a local memory ID\n    return req.tool_endpoint.post(selected.name, selected.args)"
+  },
+  {
     "id": "safe-request-local-identical-tool-memoization",
     "disposition": "safe",
     "category": "none",

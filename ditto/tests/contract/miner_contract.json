@@ -774,13 +774,24 @@
       "signature": {
         "pattern": "^[0-9a-fA-F]{128}$",
         "type": "string"
+      },
+      "signature_nonce": {
+        "format": "uuid4",
+        "type": "string"
+      },
+      "signature_timestamp": {
+        "maximum": 9223372036854775807,
+        "minimum": 1,
+        "type": "integer"
       }
     },
     "required": [
       "hotkey",
       "sha256",
       "file_size_bytes",
-      "signature"
+      "signature",
+      "signature_timestamp",
+      "signature_nonce"
     ],
     "type": "object"
   },

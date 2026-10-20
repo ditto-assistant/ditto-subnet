@@ -18,8 +18,8 @@ func TestV13EnvelopeGenerationIsExplicitAndNotActivated(t *testing.T) {
 	if !protocol.SupportedBenchVersion(protocol.BenchVersionV13) {
 		t.Fatal("v13 deterministic generation is not supported")
 	}
-	if protocol.NewestSupportedBenchVersion() != protocol.BenchVersionV13 {
-		t.Fatalf("newest supported version %d, want 13", protocol.NewestSupportedBenchVersion())
+	if protocol.NewestSupportedBenchVersion() != protocol.BenchVersionV14 {
+		t.Fatalf("newest supported version %d, want 14", protocol.NewestSupportedBenchVersion())
 	}
 	want := map[string]Profile{
 		"small":  {Tools: 6, Mem: 6, Waves: 1, RawPairsFrac: 0, IsoCases: 0},

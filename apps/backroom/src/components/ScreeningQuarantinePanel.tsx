@@ -894,8 +894,14 @@ export function ScreeningQuarantinePanel({
                                 {item.agent_id}
                               </p>
                             </div>
-                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${item.status === 'active' ? 'bg-[var(--amber-dim)] text-[var(--amber)]' : 'bg-white/[0.06] text-[var(--muted-strong)]'}`}>
-                              {item.status === 'active' ? 'Needs decision' : item.resolution ?? 'Resolved'}
+                            {/* An active row behind an already banned/rejected agent is
+                                reconciliation work, not a review (ditto-subnet#2038). */}
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${item.status === 'active' && !item.terminal_ghost ? 'bg-[var(--amber-dim)] text-[var(--amber)]' : 'bg-white/[0.06] text-[var(--muted-strong)]'}`}>
+                              {item.terminal_ghost
+                                ? `Agent ${item.agent_status ?? 'terminal'} · reconcile`
+                                : item.status === 'active'
+                                  ? 'Needs decision'
+                                  : item.resolution ?? 'Resolved'}
                             </span>
                           </div>
                           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -1246,6 +1252,12 @@ export function ScreeningQuarantinePanel({
                   </span>
                 </div>
                 <p className="mt-2 leading-5 text-[var(--muted)]">{item.reason}</p>
+                {item.public_reason_code ? (
+                  <p className="mt-2 font-mono text-[10px] leading-4 text-[var(--muted-strong)]">
+                    Public audit {item.public_reason_code}
+                    {item.public_record_hash ? ` · ${item.public_record_hash}` : ''}
+                  </p>
+                ) : null}
                 <p className="mt-1 text-[10px] text-[var(--muted)]">{item.message}</p>
               </div>
             ))}

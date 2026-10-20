@@ -931,6 +931,28 @@ CREATE FUNCTION public.reject_screening_review_event_mutation() RETURNS trigger
 
 
 --
+-- Name: reject_treasury_public_event_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_treasury_public_event_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+          RAISE EXCEPTION 'treasury public receipt history is append only';
+        END $$;
+
+
+--
+-- Name: reject_treasury_settings_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_treasury_settings_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+          RAISE EXCEPTION 'treasury policy history is append only';
+        END $$;
+
+
+--
 -- Name: reject_v13_private_generation_mutation(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -999,6 +1021,24 @@ CREATE FUNCTION public.reject_verification_replay_receipt_change() RETURNS trigg
 
 
 --
+-- Name: scores_stderr_projection_refresh(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.scores_stderr_projection_refresh() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+                BEGIN
+                    NEW.stderr_projection := jsonb_build_object(
+                        'composite_stderr', NEW.details->'composite_stderr',
+                        'confirmation_seeds', NEW.details->'confirmation_seeds',
+                        'confirmation_composites',
+                        NEW.details->'confirmation_composites');
+                    RETURN NEW;
+                END
+                $$;
+
+
+--
 -- Name: stamp_review_deadline_activation_created_at(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1010,6 +1050,46 @@ CREATE FUNCTION public.stamp_review_deadline_activation_created_at() RETURNS tri
             RETURN NEW;
         END;
         $$;
+
+
+--
+-- Name: verify_treasury_public_reconciliation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.verify_treasury_public_reconciliation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+          IF NEW.state = 'reconciled' THEN
+            PERFORM 1 FROM treasury_public_events finalized
+            WHERE finalized.id = NEW.finalized_event_id
+              AND finalized.payment_id = NEW.payment_id
+              AND finalized.event_kind = 'gm_token_deposit'
+              AND finalized.state = 'chain_finalized'
+              AND finalized.block_hash = NEW.block_hash
+              AND finalized.extrinsic_index = NEW.extrinsic_index
+              AND finalized.event_index = NEW.event_index
+              AND finalized.policy_revision = NEW.policy_revision
+              AND finalized.burn_revision = NEW.burn_revision
+              AND finalized.burn_share_micros = NEW.burn_share_micros
+              AND finalized.denominator = NEW.denominator
+              AND finalized.maintenance_bps = NEW.maintenance_bps
+              AND finalized.gm_bps = NEW.gm_bps
+              AND finalized.allocation_bps = NEW.allocation_bps
+              AND finalized.allocated_alpha_rao = NEW.allocated_alpha_rao
+              AND finalized.source_alpha_rao = NEW.source_alpha_rao
+              AND finalized.route = NEW.route
+              AND finalized.deposit_asset = NEW.deposit_asset
+              AND finalized.deposit_amount_atomic = NEW.deposit_amount_atomic
+              AND finalized.public_sender = NEW.public_sender
+              AND finalized.public_recipient = NEW.public_recipient
+              AND finalized.event_at <= NEW.event_at;
+            IF NOT FOUND THEN
+              RAISE EXCEPTION
+                'GM credit reconciliation lacks matching finalized deposit';
+            END IF;
+          END IF;
+          RETURN NEW;
+        END $$;
 
 
 SET default_tablespace = '';
@@ -1148,7 +1228,7 @@ CREATE TABLE public.artifact_fetch_audit (
     detail jsonb,
     fetched_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_artifact_fetch_audit_artifact_fetch_audit_bench_vers_dafe CHECK (((bench_version IS NULL) OR (bench_version > 0))),
-    CONSTRAINT ck_artifact_fetch_audit_artifact_fetch_audit_requester__148f CHECK ((requester_kind = ANY (ARRAY['validator'::text, 'screener'::text, 'admin'::text, 'public'::text]))),
+    CONSTRAINT ck_artifact_fetch_audit_artifact_fetch_audit_requester__148f CHECK ((requester_kind = ANY (ARRAY['validator'::text, 'screener'::text, 'admin'::text, 'public'::text, 'miner'::text]))),
     CONSTRAINT ck_artifact_fetch_audit_artifact_fetch_audit_requester__901e CHECK (((requester_kind = 'public'::text) = (requester_id IS NULL)))
 );
 
@@ -2978,6 +3058,69 @@ CREATE TABLE public.efficiency_cohort_snapshots (
 
 
 --
+-- Name: emission_eligibility_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.emission_eligibility_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_emission_eligibility_settings_revisions_emission_eli_1c86 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_emission_eligibility_settings_revisions_emission_eli_2d1c CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_emission_eligibility_settings_revisions_emission_eli_5ee4 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_emission_eligibility_settings_revisions_emission_eli_9009 CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_emission_eligibility_settings_revisions_emission_eli_e7d6 CHECK ((scope = '*'::text))
+);
+
+
+--
+-- Name: emission_eligibility_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.emission_eligibility_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: emission_eligibility_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.emission_eligibility_settings_revisions_revision_seq OWNED BY public.emission_eligibility_settings_revisions.revision;
+
+
+--
+-- Name: emission_eligibility_shadow_records; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.emission_eligibility_shadow_records (
+    record_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    bench_version integer NOT NULL,
+    state text NOT NULL,
+    reason text NOT NULL,
+    policy_revision integer NOT NULL,
+    policy_checksum text NOT NULL,
+    enforcement text NOT NULL,
+    window_start timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_emission_eligibility_shadow_records_emission_eligibi_0253 CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_emission_eligibility_shadow_records_emission_eligibi_2dab CHECK ((length(policy_checksum) = 64)),
+    CONSTRAINT ck_emission_eligibility_shadow_records_emission_eligibi_be6a CHECK ((enforcement = ANY (ARRAY['off'::text, 'shadow'::text, 'enforce'::text])))
+);
+
+
+--
 -- Name: evaluation_payments; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3058,6 +3201,32 @@ CREATE SEQUENCE public.hotkey_ban_audit_seq_seq
 --
 
 ALTER SEQUENCE public.hotkey_ban_audit_seq_seq OWNED BY public.hotkey_ban_audit.seq;
+
+
+--
+-- Name: inference_admission_rejections; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inference_admission_rejections (
+    rejection_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    lane text NOT NULL,
+    http_status integer NOT NULL,
+    admission_code text NOT NULL,
+    grant_id uuid,
+    validator_hotkey text,
+    correlation_id uuid NOT NULL,
+    request_bytes integer NOT NULL,
+    byte_limit integer,
+    platform_revision text NOT NULL,
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_1f3d CHECK (((length(platform_revision) >= 1) AND (length(platform_revision) <= 64))),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_2750 CHECK ((lane = ANY (ARRAY['inference'::text, 'embedding'::text]))),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_3c4a CHECK (((validator_hotkey IS NULL) OR ((length(validator_hotkey) >= 1) AND (length(validator_hotkey) <= 120)))),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_b2b6 CHECK ((http_status = ANY (ARRAY[400, 403, 409, 413]))),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_b85b CHECK ((request_bytes >= 0)),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_dd0f CHECK ((admission_code = ANY (ARRAY['invalid_json'::text, 'invalid_schema'::text, 'request_too_large'::text, 'stale_session'::text, 'model_not_allowed'::text, 'grant_not_servable'::text]))),
+    CONSTRAINT ck_inference_admission_rejections_inference_admission_r_e0a9 CHECK (((byte_limit IS NULL) OR (byte_limit >= 0)))
+);
 
 
 --
@@ -3813,6 +3982,7 @@ CREATE TABLE public.scores (
     model_prompt_tokens bigint,
     model_completion_tokens bigint,
     gate_evidence jsonb,
+    stderr_projection jsonb,
     CONSTRAINT ck_scores_scores_bench_version_positive CHECK ((bench_version > 0)),
     CONSTRAINT ck_scores_scores_gate_evidence_bench_floor CHECK (((gate_evidence IS NULL) OR (bench_version >= 13))),
     CONSTRAINT scores_composite_check CHECK (((composite >= (0)::double precision) AND (composite <= (1)::double precision))),
@@ -3821,6 +3991,47 @@ CREATE TABLE public.scores (
     CONSTRAINT scores_n_check CHECK ((n >= 0)),
     CONSTRAINT scores_tool_mean_check CHECK (((tool_mean >= (0)::double precision) AND (tool_mean <= (1)::double precision)))
 );
+
+
+--
+-- Name: scoring_lease_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scoring_lease_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_scoring_lease_settings_revisions_scoring_lease_setti_3377 CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_scoring_lease_settings_revisions_scoring_lease_setti_3fa0 CHECK ((scope = '*'::text)),
+    CONSTRAINT ck_scoring_lease_settings_revisions_scoring_lease_setti_47b6 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_scoring_lease_settings_revisions_scoring_lease_setti_a198 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_scoring_lease_settings_revisions_scoring_lease_setti_d4a0 CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: scoring_lease_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.scoring_lease_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: scoring_lease_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.scoring_lease_settings_revisions_revision_seq OWNED BY public.scoring_lease_settings_revisions.revision;
 
 
 --
@@ -3986,14 +4197,14 @@ CREATE TABLE public.screener_heartbeats (
 CREATE TABLE public.screener_l2_report_canaries (
     canary_id uuid NOT NULL,
     request_id uuid NOT NULL,
-    agent_id uuid NOT NULL,
-    source_attempt_id uuid NOT NULL,
+    agent_id uuid,
+    source_attempt_id uuid,
     artifact_sha256 text NOT NULL,
     policy_version integer NOT NULL,
     bench_version integer NOT NULL,
     target_node_id text NOT NULL,
-    expected_agent_status text NOT NULL,
-    expected_score_count integer NOT NULL,
+    expected_agent_status text,
+    expected_score_count integer,
     review_label text NOT NULL,
     status text DEFAULT 'queued'::text NOT NULL,
     claimed_instance_id text,
@@ -4006,11 +4217,21 @@ CREATE TABLE public.screener_l2_report_canaries (
     error_code text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     completed_at timestamp with time zone,
-    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_label_check CHECK ((review_label = ANY (ARRAY['candidate_clear'::text, 'known_reject'::text]))),
+    run_mode text DEFAULT 'source_only'::text NOT NULL,
+    source_attestation jsonb,
+    source_kind text DEFAULT 'submission'::text NOT NULL,
+    fixture_key text,
+    review_settings_revision integer,
+    review_settings_scope text,
+    review_settings_checksum text,
+    CONSTRAINT ck_screener_l2_report_canaries_review_settings_pin_check CHECK ((((review_settings_revision IS NULL) AND (review_settings_scope IS NULL) AND (review_settings_checksum IS NULL)) OR ((review_settings_revision IS NOT NULL) AND (review_settings_scope IS NOT NULL) AND (review_settings_checksum IS NOT NULL) AND (review_settings_revision > 0) AND (review_settings_scope ~ '^l2-report-canary(-|$)'::text) AND (review_settings_checksum ~ '^[0-9a-f]{64}$'::text)))),
+    CONSTRAINT ck_screener_l2_report_canaries_run_mode_check CHECK ((run_mode = ANY (ARRAY['source_only'::text, 'full_runtime'::text]))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_label_check CHECK ((review_label = ANY (ARRAY['unreviewed'::text, 'candidate_clear'::text, 'known_reject'::text]))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_runtime_check CHECK (((runtime_evidence_sha256 IS NULL) OR (runtime_evidence_sha256 ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_scores_check CHECK ((expected_score_count >= 0)),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_scores_check CHECK (((expected_score_count IS NULL) OR (expected_score_count >= 0))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_sha_check CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'succeeded'::text, 'incomplete'::text, 'expired'::text]))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_sourc_7561 CHECK ((((source_kind = 'submission'::text) AND (agent_id IS NOT NULL) AND (source_attempt_id IS NOT NULL) AND (fixture_key IS NULL) AND (expected_agent_status IS NOT NULL) AND (expected_score_count IS NOT NULL)) OR ((source_kind = 'canonical_starter_fixture'::text) AND (agent_id IS NULL) AND (source_attempt_id IS NULL) AND (fixture_key IS NOT NULL) AND (expected_agent_status IS NULL) AND (expected_score_count IS NULL) AND (run_mode = 'source_only'::text)))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_status_check CHECK ((status = ANY (ARRAY['awaiting_review'::text, 'ready'::text, 'queued'::text, 'leased'::text, 'succeeded'::text, 'incomplete'::text, 'expired'::text]))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_token_check CHECK (((lease_token_hash IS NULL) OR (lease_token_hash ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_v13_check CHECK (((policy_version = 13) AND (bench_version = 13)))
 );
@@ -4436,7 +4657,6 @@ CREATE TABLE public.screening_quarantines (
     review_notes jsonb,
     court_diagnostic jsonb,
     court_completion_receipt jsonb,
-    CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_099b CHECK (((review_audit IS NULL) OR (reason_code = ANY (ARRAY['source-review-inconclusive'::text, 'agentic-source-review-tripwire'::text, 'l2-model-inconclusive'::text, 'l2-model-total-budget'::text, 'l2-model-tool-budget'::text, 'l2-model-step-budget'::text])))),
     CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_93b8 CHECK (((review_audit IS NULL) = (review_audit_digest IS NULL))),
     CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_b69b CHECK (((review_audit_digest IS NULL) OR (review_audit_digest ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_screening_quarantines_screening_quarantines_review_n_a86e CHECK (((review_notes IS NULL) = (review_notes_digest IS NULL))),
@@ -4708,7 +4928,8 @@ CREATE TABLE public.source_emission_collector_cursors (
     block_hash text NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     runtime_code_hash text,
-    last_blocked_reason text
+    last_blocked_reason text,
+    reveal_plan_shadow jsonb
 );
 
 
@@ -4968,6 +5189,312 @@ CREATE TABLE public.submission_source_reviews (
 
 
 --
+-- Name: transcript_mirror_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.transcript_mirror_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    enabled boolean DEFAULT false NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_transcript_mirror_settings_revisions_transcript_mirr_4f0e CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_transcript_mirror_settings_revisions_transcript_mirr_9b9e CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_transcript_mirror_settings_revisions_transcript_mirr_d58a CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120)))
+);
+
+
+--
+-- Name: transcript_mirror_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.transcript_mirror_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: transcript_mirror_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.transcript_mirror_settings_revisions_revision_seq OWNED BY public.transcript_mirror_settings_revisions.revision;
+
+
+--
+-- Name: treasury_ledger_samples; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_ledger_samples (
+    id bigint NOT NULL,
+    netuid integer NOT NULL,
+    epoch_index bigint NOT NULL,
+    block_number bigint NOT NULL,
+    block_hash text NOT NULL,
+    block_at timestamp with time zone NOT NULL,
+    sampled_at timestamp with time zone DEFAULT now() NOT NULL,
+    collector_hotkey text NOT NULL,
+    collector_coldkey text NOT NULL,
+    collector_uid integer,
+    collector_incentive double precision,
+    collector_emission_rao bigint,
+    collector_total_rao bigint NOT NULL,
+    collector_locked_rao bigint NOT NULL,
+    collector_available_rao bigint NOT NULL,
+    collector_lock_perpetual boolean,
+    owner_hotkey text,
+    owner_conviction_rao bigint,
+    most_convicted_hotkey text,
+    holdings jsonb DEFAULT '[]'::jsonb NOT NULL,
+    CONSTRAINT ck_treasury_ledger_samples_treasury_ledger_samples_nonnegative CHECK (((collector_total_rao >= 0) AND (collector_locked_rao >= 0) AND (collector_available_rao >= 0)))
+);
+
+
+--
+-- Name: treasury_ledger_samples_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.treasury_ledger_samples ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.treasury_ledger_samples_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: treasury_manual_bridge_state; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_manual_bridge_state (
+    id integer NOT NULL,
+    report jsonb NOT NULL,
+    received_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: treasury_manual_bridge_state_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.treasury_manual_bridge_state_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: treasury_manual_bridge_state_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.treasury_manual_bridge_state_id_seq OWNED BY public.treasury_manual_bridge_state.id;
+
+
+--
+-- Name: treasury_manual_transfers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_manual_transfers (
+    request_id text NOT NULL,
+    envelope jsonb NOT NULL,
+    digest text NOT NULL,
+    actor text NOT NULL,
+    status text NOT NULL,
+    report jsonb,
+    receipt jsonb,
+    last_error text,
+    dispatch_attempted_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_treasury_manual_transfers_treasury_manual_identity CHECK (((length(digest) = 64) AND ((length(actor) >= 1) AND (length(actor) <= 254)))),
+    CONSTRAINT ck_treasury_manual_transfers_treasury_manual_status CHECK ((status = ANY (ARRAY['queued'::text, 'dispatched'::text, 'pending'::text, 'audit_pending'::text, 'published'::text, 'failed'::text, 'refused'::text])))
+);
+
+
+--
+-- Name: treasury_public_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_public_events (
+    id bigint NOT NULL,
+    payment_id text NOT NULL,
+    event_kind text NOT NULL,
+    state text NOT NULL,
+    finalized_event_id bigint,
+    event_at timestamp with time zone NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    policy_revision integer NOT NULL,
+    burn_revision integer NOT NULL,
+    burn_share_micros integer NOT NULL,
+    denominator text NOT NULL,
+    maintenance_bps integer NOT NULL,
+    gm_bps integer NOT NULL,
+    allocation_bps integer NOT NULL,
+    allocated_alpha_rao bigint NOT NULL,
+    source_alpha_rao bigint NOT NULL,
+    route text NOT NULL,
+    deposit_asset text NOT NULL,
+    deposit_amount_atomic bigint NOT NULL,
+    credited_usd_nano bigint,
+    bounty_award_id text,
+    accepted_work_ref text,
+    public_sender text NOT NULL,
+    public_recipient text NOT NULL,
+    block_hash text NOT NULL,
+    extrinsic_index integer NOT NULL,
+    event_index integer NOT NULL,
+    actor_provenance text NOT NULL,
+    actor_public_id text NOT NULL,
+    verification_source text NOT NULL,
+    bucket_id text,
+    policy_digest text,
+    epoch_index bigint,
+    CONSTRAINT ck_treasury_public_events_treasury_public_actor_id CHECK (((length(actor_public_id) >= 3) AND (length(actor_public_id) <= 120))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_actor_provenance CHECK ((actor_provenance = ANY (ARRAY['treasury_signer'::text, 'gm_reconciler'::text, 'bounty_executor'::text, 'treasury_observer'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_allocation CHECK ((((maintenance_bps >= 0) AND (maintenance_bps <= 10000)) AND ((gm_bps >= 0) AND (gm_bps <= 10000)) AND ((allocation_bps >= 0) AND (allocation_bps <= 10000)) AND (allocated_alpha_rao >= 0) AND (((source_alpha_rao > 0) AND (denominator <> 'not_attributed'::text)) OR ((event_kind = 'vendor_payment'::text) AND (denominator = 'not_attributed'::text) AND (source_alpha_rao = 0) AND (allocated_alpha_rao = 0))) AND (burn_revision >= 0) AND ((burn_share_micros >= 0) AND (burn_share_micros <= 1000000)))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_amounts CHECK (((deposit_amount_atomic > 0) AND (deposit_asset = ANY (ARRAY['TAO'::text, 'SN28_ALPHA'::text, 'SN118_ALPHA'::text])))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_denominator CHECK ((denominator = ANY (ARRAY['miner_emission'::text, 'released_miner_emission'::text, 'collector_liquid_emission'::text, 'not_attributed'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_indexes CHECK (((extrinsic_index >= 0) AND (event_index >= 0))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_kind CHECK ((((event_kind = ANY (ARRAY['service_distribution'::text, 'vendor_payment'::text])) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'gm_token_deposit'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'gm_credit_purchase'::text) AND (state = 'reconciled'::text) AND (finalized_event_id IS NOT NULL) AND (credited_usd_nano IS NOT NULL) AND (credited_usd_nano > 0) AND (bounty_award_id IS NULL) AND (accepted_work_ref IS NULL)) OR ((event_kind = 'maintenance_bounty'::text) AND (state = 'chain_finalized'::text) AND (finalized_event_id IS NULL) AND (credited_usd_nano IS NULL) AND (bounty_award_id IS NOT NULL) AND (accepted_work_ref IS NOT NULL) AND ((length(bounty_award_id) >= 8) AND (length(bounty_award_id) <= 120)) AND ((length(accepted_work_ref) >= 8) AND (length(accepted_work_ref) <= 240))))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_purpose_allocation CHECK (((event_kind = ANY (ARRAY['service_distribution'::text, 'vendor_payment'::text])) OR ((event_kind = 'maintenance_bounty'::text) AND (allocation_bps = maintenance_bps)) OR ((event_kind <> ALL (ARRAY['service_distribution'::text, 'vendor_payment'::text, 'maintenance_bounty'::text])) AND (allocation_bps = gm_bps)))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_route CHECK ((route = ANY (ARRAY['alpha_to_tao'::text, 'alpha_to_gm_alpha'::text, 'alpha_transfer'::text, 'alpha_to_tao_bounty'::text, 'tao_transfer'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_state CHECK ((state = ANY (ARRAY['chain_finalized'::text, 'reconciled'::text]))),
+    CONSTRAINT ck_treasury_public_events_treasury_public_verification_source CHECK ((verification_source = ANY (ARRAY['finalized_chain_rpc'::text, 'chain_and_provider_reconciliation'::text])))
+);
+
+
+--
+-- Name: treasury_public_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.treasury_public_events ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.treasury_public_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: treasury_runtime_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_runtime_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_treasury_runtime_revisions_treasury_runtime_checksum_check CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_treasury_runtime_revisions_treasury_runtime_parent_check CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_treasury_runtime_revisions_treasury_runtime_reason_check CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: treasury_runtime_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.treasury_runtime_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: treasury_runtime_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.treasury_runtime_revisions_revision_seq OWNED BY public.treasury_runtime_revisions.revision;
+
+
+--
+-- Name: treasury_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_treasury_settings_revisions_treasury_settings_checksum_check CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_treasury_settings_revisions_treasury_settings_parent_check CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_treasury_settings_revisions_treasury_settings_reason_check CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: treasury_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.treasury_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: treasury_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.treasury_settings_revisions_revision_seq OWNED BY public.treasury_settings_revisions.revision;
+
+
+--
+-- Name: treasury_verified_receipts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_verified_receipts (
+    receipt_id text NOT NULL,
+    request_digest text NOT NULL,
+    stage text NOT NULL,
+    parent_receipt_id text,
+    policy_digest text NOT NULL,
+    collector_policy_digest text NOT NULL,
+    bucket_id text NOT NULL,
+    block_hash text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    epoch_index bigint NOT NULL,
+    source_block bigint,
+    amount_atomic bigint NOT NULL,
+    public_event_id bigint,
+    settings_revision integer NOT NULL,
+    extrinsic_index integer NOT NULL,
+    event_index integer NOT NULL,
+    proof jsonb NOT NULL,
+    published boolean NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_treasury_verified_receipts_treasury_verified_bounds CHECK (((amount_atomic > 0) AND (epoch_index >= 0) AND ((source_block IS NULL) OR (source_block > 0)) AND (extrinsic_index >= 0) AND (event_index >= 0))),
+    CONSTRAINT ck_treasury_verified_receipts_treasury_verified_parent CHECK ((((stage = 'service_distribution'::text) AND (parent_receipt_id IS NULL) AND (source_block IS NOT NULL)) OR ((stage = 'vendor_payment'::text) AND (((parent_receipt_id IS NULL) AND (source_block IS NULL)) OR ((parent_receipt_id IS NOT NULL) AND (source_block IS NOT NULL)))))),
+    CONSTRAINT ck_treasury_verified_receipts_treasury_verified_publication CHECK ((published = (public_event_id IS NOT NULL))),
+    CONSTRAINT ck_treasury_verified_receipts_treasury_verified_stage CHECK ((stage = ANY (ARRAY['service_distribution'::text, 'vendor_payment'::text])))
+);
+
+
+--
 -- Name: trusted_image_builds; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5175,7 +5702,7 @@ CREATE TABLE public.v13_scorer_cohort_pins (
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_settings_check_4272 CHECK ((length(slot_settings_checksum) = 64)),
-    CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_three_hotkeys_check CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND (jsonb_array_length(hotkeys) = 3))),
+    CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_three_hotkeys_check CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND ((jsonb_array_length(hotkeys) >= 3) AND (jsonb_array_length(hotkeys) <= 16)))),
     CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_version_check CHECK ((bench_version = 13))
 );
 
@@ -5216,7 +5743,7 @@ CREATE TABLE public.v13_scorer_cohort_rotations (
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_sett_c460 CHECK ((length(slot_settings_checksum) = 64)),
-    CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_thre_54aa CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND (jsonb_array_length(hotkeys) = 3))),
+    CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_thre_54aa CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND ((jsonb_array_length(hotkeys) >= 3) AND (jsonb_array_length(hotkeys) <= 16)))),
     CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_vers_0d33 CHECK ((bench_version = 13))
 );
 
@@ -5262,6 +5789,7 @@ CREATE TABLE public.validator_heartbeats (
     confirmation_progress jsonb,
     updater_status jsonb,
     weights_fold jsonb,
+    host_specs jsonb,
     CONSTRAINT validator_heartbeats_code_digest_length_check CHECK ((length(code_digest) = 64)),
     CONSTRAINT validator_heartbeats_protocol_version_check CHECK ((protocol_version > 0)),
     CONSTRAINT validator_heartbeats_signature_length_check CHECK ((length(signature) = 128)),
@@ -5604,6 +6132,13 @@ ALTER TABLE ONLY public.efficiency_bonus_settings_revisions ALTER COLUMN revisio
 
 
 --
+-- Name: emission_eligibility_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.emission_eligibility_settings_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: hotkey_ban_audit seq; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -5629,6 +6164,13 @@ ALTER TABLE ONLY public.queue_policy_settings_revisions ALTER COLUMN revision SE
 --
 
 ALTER TABLE ONLY public.score_audit_log ALTER COLUMN seq SET DEFAULT nextval('public.score_audit_log_seq_seq'::regclass);
+
+
+--
+-- Name: scoring_lease_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scoring_lease_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.scoring_lease_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -5685,6 +6227,34 @@ ALTER TABLE ONLY public.submission_deposit_address_revisions ALTER COLUMN revisi
 --
 
 ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.submission_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: transcript_mirror_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.transcript_mirror_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.transcript_mirror_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: treasury_manual_bridge_state id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_manual_bridge_state ALTER COLUMN id SET DEFAULT nextval('public.treasury_manual_bridge_state_id_seq'::regclass);
+
+
+--
+-- Name: treasury_runtime_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_runtime_revisions ALTER COLUMN revision SET DEFAULT nextval('public.treasury_runtime_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: treasury_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.treasury_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -6526,6 +7096,22 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 
 --
+-- Name: emission_eligibility_settings_revisions emission_eligibility_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_settings_revisions
+    ADD CONSTRAINT emission_eligibility_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
+-- Name: emission_eligibility_shadow_records emission_eligibility_shadow_window_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_shadow_records
+    ADD CONSTRAINT emission_eligibility_shadow_window_key UNIQUE (agent_id, bench_version, policy_revision, window_start);
+
+
+--
 -- Name: evaluation_payments evaluation_payments_agent_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7086,11 +7672,35 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 
 --
+-- Name: emission_eligibility_settings_revisions pk_emission_eligibility_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_settings_revisions
+    ADD CONSTRAINT pk_emission_eligibility_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: emission_eligibility_shadow_records pk_emission_eligibility_shadow_records; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_shadow_records
+    ADD CONSTRAINT pk_emission_eligibility_shadow_records PRIMARY KEY (record_id);
+
+
+--
 -- Name: feedback_track_contributions pk_feedback_track_contributions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.feedback_track_contributions
     ADD CONSTRAINT pk_feedback_track_contributions PRIMARY KEY (contribution_id);
+
+
+--
+-- Name: inference_admission_rejections pk_inference_admission_rejections; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inference_admission_rejections
+    ADD CONSTRAINT pk_inference_admission_rejections PRIMARY KEY (rejection_id);
 
 
 --
@@ -7203,6 +7813,14 @@ ALTER TABLE ONLY public.scored_policy_rescreen_releases
 
 ALTER TABLE ONLY public.scored_screening_snapshot_restorations
     ADD CONSTRAINT pk_scored_screening_snapshot_restorations PRIMARY KEY (restoration_id);
+
+
+--
+-- Name: scoring_lease_settings_revisions pk_scoring_lease_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scoring_lease_settings_revisions
+    ADD CONSTRAINT pk_scoring_lease_settings_revisions PRIMARY KEY (revision);
 
 
 --
@@ -7462,6 +8080,70 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 
 --
+-- Name: transcript_mirror_settings_revisions pk_transcript_mirror_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.transcript_mirror_settings_revisions
+    ADD CONSTRAINT pk_transcript_mirror_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: treasury_ledger_samples pk_treasury_ledger_samples; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_ledger_samples
+    ADD CONSTRAINT pk_treasury_ledger_samples PRIMARY KEY (id);
+
+
+--
+-- Name: treasury_manual_bridge_state pk_treasury_manual_bridge_state; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_manual_bridge_state
+    ADD CONSTRAINT pk_treasury_manual_bridge_state PRIMARY KEY (id);
+
+
+--
+-- Name: treasury_manual_transfers pk_treasury_manual_transfers; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_manual_transfers
+    ADD CONSTRAINT pk_treasury_manual_transfers PRIMARY KEY (request_id);
+
+
+--
+-- Name: treasury_public_events pk_treasury_public_events; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_public_events
+    ADD CONSTRAINT pk_treasury_public_events PRIMARY KEY (id);
+
+
+--
+-- Name: treasury_runtime_revisions pk_treasury_runtime_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_runtime_revisions
+    ADD CONSTRAINT pk_treasury_runtime_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: treasury_settings_revisions pk_treasury_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_settings_revisions
+    ADD CONSTRAINT pk_treasury_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: treasury_verified_receipts pk_treasury_verified_receipts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_verified_receipts
+    ADD CONSTRAINT pk_treasury_verified_receipts PRIMARY KEY (receipt_id);
+
+
+--
 -- Name: trusted_image_builds pk_trusted_image_builds; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7678,6 +8360,14 @@ ALTER TABLE ONLY public.scores
 
 
 --
+-- Name: scoring_lease_settings_revisions scoring_lease_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scoring_lease_settings_revisions
+    ADD CONSTRAINT scoring_lease_settings_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
 -- Name: screener_fanout_shadow_reviews screener_fanout_shadow_reviews_attempt_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7875,6 +8565,62 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 ALTER TABLE ONLY public.screening_verification_replays
     ADD CONSTRAINT svrp_request_id_key UNIQUE (request_id);
+
+
+--
+-- Name: transcript_mirror_settings_revisions transcript_mirror_settings_parent_revision_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.transcript_mirror_settings_revisions
+    ADD CONSTRAINT transcript_mirror_settings_parent_revision_key UNIQUE (parent_revision);
+
+
+--
+-- Name: treasury_ledger_samples treasury_ledger_samples_netuid_epoch; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_ledger_samples
+    ADD CONSTRAINT treasury_ledger_samples_netuid_epoch UNIQUE (netuid, epoch_index);
+
+
+--
+-- Name: treasury_public_events treasury_public_chain_event_state; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_public_events
+    ADD CONSTRAINT treasury_public_chain_event_state UNIQUE (block_hash, extrinsic_index, event_index, state);
+
+
+--
+-- Name: treasury_public_events treasury_public_payment_state; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_public_events
+    ADD CONSTRAINT treasury_public_payment_state UNIQUE (payment_id, state);
+
+
+--
+-- Name: treasury_runtime_revisions treasury_runtime_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_runtime_revisions
+    ADD CONSTRAINT treasury_runtime_parent_key UNIQUE (parent_revision);
+
+
+--
+-- Name: treasury_settings_revisions treasury_settings_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_settings_revisions
+    ADD CONSTRAINT treasury_settings_parent_key UNIQUE (parent_revision);
+
+
+--
+-- Name: treasury_verified_receipts treasury_verified_chain_effect; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_verified_receipts
+    ADD CONSTRAINT treasury_verified_chain_effect UNIQUE (block_hash, extrinsic_index, event_index);
 
 
 --
@@ -8144,6 +8890,13 @@ CREATE INDEX agents_created_agent_idx ON public.agents USING btree (created_at, 
 --
 
 CREATE INDEX agents_miner_hotkey_idx ON public.agents USING btree (miner_hotkey);
+
+
+--
+-- Name: agents_name_pattern_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX agents_name_pattern_idx ON public.agents USING btree (name text_pattern_ops);
 
 
 --
@@ -8574,10 +9327,38 @@ CREATE INDEX efficiency_cohort_snapshots_board_idx ON public.efficiency_cohort_s
 
 
 --
+-- Name: emission_eligibility_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX emission_eligibility_scope_revision_idx ON public.emission_eligibility_settings_revisions USING btree (scope, revision);
+
+
+--
+-- Name: emission_eligibility_shadow_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX emission_eligibility_shadow_agent_idx ON public.emission_eligibility_shadow_records USING btree (agent_id, created_at);
+
+
+--
+-- Name: emission_eligibility_shadow_window_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX emission_eligibility_shadow_window_idx ON public.emission_eligibility_shadow_records USING btree (window_start, created_at);
+
+
+--
 -- Name: evaluation_payments_available_credit_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX evaluation_payments_available_credit_idx ON public.evaluation_payments USING btree (miner_hotkey) WHERE (agent_id IS NULL);
+
+
+--
+-- Name: evaluation_payments_miner_coldkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX evaluation_payments_miner_coldkey_idx ON public.evaluation_payments USING btree (miner_coldkey);
 
 
 --
@@ -8599,6 +9380,20 @@ CREATE INDEX feedback_track_user_idx ON public.feedback_track_contributions USIN
 --
 
 CREATE INDEX hotkey_ban_audit_hotkey_recorded_idx ON public.hotkey_ban_audit USING btree (hotkey, recorded_at);
+
+
+--
+-- Name: inference_admission_rejections_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX inference_admission_rejections_created_idx ON public.inference_admission_rejections USING btree (created_at);
+
+
+--
+-- Name: inference_admission_rejections_grant_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX inference_admission_rejections_grant_idx ON public.inference_admission_rejections USING btree (grant_id, created_at);
 
 
 --
@@ -8770,6 +9565,13 @@ CREATE INDEX score_audit_log_agent_id_idx ON public.score_audit_log USING btree 
 
 
 --
+-- Name: score_audit_log_event_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX score_audit_log_event_agent_idx ON public.score_audit_log USING btree (event, agent_id);
+
+
+--
 -- Name: scored_policy_rescreen_releases_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8802,6 +9604,13 @@ CREATE INDEX scores_bench_timeline_idx ON public.scores USING btree (bench_versi
 --
 
 CREATE INDEX scores_bench_version_agent_composite_idx ON public.scores USING btree (bench_version, agent_id, composite, validator_hotkey) INCLUDE (updated_at);
+
+
+--
+-- Name: scoring_lease_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX scoring_lease_settings_scope_revision_idx ON public.scoring_lease_settings_revisions USING btree (scope, revision);
 
 
 --
@@ -8858,6 +9667,13 @@ CREATE INDEX screener_heartbeats_active_agent_idx ON public.screener_heartbeats 
 --
 
 CREATE INDEX screener_heartbeats_seen_at_idx ON public.screener_heartbeats USING btree (seen_at);
+
+
+--
+-- Name: screener_l2_canary_fixture_key_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX screener_l2_canary_fixture_key_idx ON public.screener_l2_report_canaries USING btree (fixture_key) WHERE (fixture_key IS NOT NULL);
 
 
 --
@@ -8934,7 +9750,7 @@ CREATE INDEX screening_attempts_agent_started_idx ON public.screening_attempts U
 -- Name: screening_attempts_infra_failed_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = 'docker-build-infrastructure'::text));
+CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = ANY (ARRAY['docker-build-infrastructure'::text, 'worker-claim-not-started'::text, 'l2-runtime-evidence-unavailable'::text, 'source-review-adjudicator-key-unavailable'::text])));
 
 
 --
@@ -9110,6 +9926,27 @@ CREATE UNIQUE INDEX svrr_replay_code_idx ON public.screening_verification_replay
 --
 
 CREATE UNIQUE INDEX svrso_replay_check_idx ON public.screening_verification_replay_signed_observations USING btree (replay_id, check_code);
+
+
+--
+-- Name: treasury_manual_unfinished; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX treasury_manual_unfinished ON public.treasury_manual_transfers USING btree (status, created_at);
+
+
+--
+-- Name: treasury_public_event_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX treasury_public_event_at_idx ON public.treasury_public_events USING btree (event_at, id);
+
+
+--
+-- Name: treasury_verified_distribution_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX treasury_verified_distribution_source ON public.treasury_verified_receipts USING btree (epoch_index, source_block, bucket_id) WHERE (stage = 'service_distribution'::text);
 
 
 --
@@ -9540,6 +10377,13 @@ CREATE TRIGGER scores_reject_benchmark_canary BEFORE INSERT OR UPDATE ON public.
 
 
 --
+-- Name: scores scores_stderr_projection_refresh; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER scores_stderr_projection_refresh BEFORE INSERT OR UPDATE OF details, stderr_projection ON public.scores FOR EACH ROW EXECUTE FUNCTION public.scores_stderr_projection_refresh();
+
+
+--
 -- Name: screening_attempts screening_attempt_artifact_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -9558,6 +10402,48 @@ CREATE TRIGGER screening_review_events_immutable BEFORE DELETE OR UPDATE ON publ
 --
 
 CREATE TRIGGER screening_verification_replay_private_receipts_immutable BEFORE DELETE OR UPDATE ON public.screening_verification_replay_private_receipts FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: treasury_public_events treasury_public_events_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_public_events_immutable BEFORE DELETE OR UPDATE ON public.treasury_public_events FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_public_event_mutation();
+
+
+--
+-- Name: treasury_public_events treasury_public_reconciliation_verified; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_public_reconciliation_verified BEFORE INSERT ON public.treasury_public_events FOR EACH ROW EXECUTE FUNCTION public.verify_treasury_public_reconciliation();
+
+
+--
+-- Name: treasury_runtime_revisions treasury_runtime_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_runtime_immutable BEFORE DELETE OR UPDATE ON public.treasury_runtime_revisions FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_settings_mutation();
+
+
+--
+-- Name: treasury_runtime_revisions treasury_runtime_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_runtime_no_truncate BEFORE TRUNCATE ON public.treasury_runtime_revisions FOR EACH STATEMENT EXECUTE FUNCTION public.reject_treasury_settings_mutation();
+
+
+--
+-- Name: treasury_settings_revisions treasury_settings_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_settings_immutable BEFORE DELETE OR UPDATE ON public.treasury_settings_revisions FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_settings_mutation();
+
+
+--
+-- Name: treasury_verified_receipts treasury_verified_receipts_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_verified_receipts_immutable BEFORE DELETE OR UPDATE ON public.treasury_verified_receipts FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_public_event_mutation();
 
 
 --
@@ -10301,6 +11187,14 @@ ALTER TABLE ONLY public.conversation_assessments
 
 
 --
+-- Name: emission_eligibility_shadow_records fk_emission_eligibility_shadow_records_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_eligibility_shadow_records
+    ADD CONSTRAINT fk_emission_eligibility_shadow_records_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
 -- Name: inference_grants fk_inference_grants_agent_id_validator_tickets; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10538,6 +11432,38 @@ ALTER TABLE ONLY public.screening_verification_replays
 
 ALTER TABLE ONLY public.screening_verification_replays
     ADD CONSTRAINT fk_screening_verification_replays_source_attempt_id_scr_729c FOREIGN KEY (source_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: treasury_public_events fk_treasury_public_events_finalized_event_id_treasury_p_3f2e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_public_events
+    ADD CONSTRAINT fk_treasury_public_events_finalized_event_id_treasury_p_3f2e FOREIGN KEY (finalized_event_id) REFERENCES public.treasury_public_events(id);
+
+
+--
+-- Name: treasury_verified_receipts fk_treasury_verified_receipts_parent_receipt_id_treasur_92b6; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_verified_receipts
+    ADD CONSTRAINT fk_treasury_verified_receipts_parent_receipt_id_treasur_92b6 FOREIGN KEY (parent_receipt_id) REFERENCES public.treasury_verified_receipts(receipt_id);
+
+
+--
+-- Name: treasury_verified_receipts fk_treasury_verified_receipts_public_event_id_treasury__9775; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_verified_receipts
+    ADD CONSTRAINT fk_treasury_verified_receipts_public_event_id_treasury__9775 FOREIGN KEY (public_event_id) REFERENCES public.treasury_public_events(id);
+
+
+--
+-- Name: treasury_verified_receipts fk_treasury_verified_receipts_settings_revision_treasur_f7d8; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_verified_receipts
+    ADD CONSTRAINT fk_treasury_verified_receipts_settings_revision_treasur_f7d8 FOREIGN KEY (settings_revision) REFERENCES public.treasury_settings_revisions(revision);
 
 
 --
@@ -10802,6 +11728,14 @@ ALTER TABLE ONLY public.screened_image_uploads
 
 ALTER TABLE ONLY public.screener_heartbeats
     ADD CONSTRAINT screener_heartbeats_active_agent_id_fkey FOREIGN KEY (active_agent_id) REFERENCES public.agents(agent_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screener_l2_report_canaries screener_l2_canary_review_settings_revision_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT screener_l2_canary_review_settings_revision_fkey FOREIGN KEY (review_settings_scope, review_settings_revision) REFERENCES public.screener_review_settings_revisions(scope, revision) ON DELETE RESTRICT;
 
 
 --

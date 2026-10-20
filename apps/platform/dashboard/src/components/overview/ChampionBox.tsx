@@ -47,9 +47,11 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
         : shortKey(emissions()?.champion_miner_hotkey)) || "Unidentified champion"
     );
   };
+  const championRecipient = () =>
+    (emissions()?.recipients || []).find((r) => r.role === "champion");
   const share = (): number | undefined => {
     const e = emissions();
-    const recipient = (e?.recipients || []).find((r) => r.role === "champion");
+    const recipient = championRecipient();
     return recipient && Number.isFinite(recipient.share_of_miner_pool)
       ? recipient.share_of_miner_pool
       : e?.champion_share;
@@ -148,6 +150,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                       : share()) as number,
                   )}
                 </b>
+                {!scoreCeilingPool() && championRecipient()?.paid === false ? " unpaid" : ""}
               </span>
             </Show>
             <Show when={!scoreCeilingPool() && foldArrival(championEntry() || {})}>

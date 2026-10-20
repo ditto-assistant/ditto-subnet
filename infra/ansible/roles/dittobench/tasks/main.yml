@@ -125,14 +125,14 @@
         dest: /usr/local
         remote_src: true
 
-# --- GitHub token: clone the private repo over HTTPS + BuildKit gh_token ---
+# --- GitHub token: clone the private repo over HTTPS (host-side only) ---
 - name: Read the validator GitHub token from Secret Manager
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ dittobench_gh_token_secret }} --project={{ dittobench_gcp_project }}"
   register: dittobench_gh_token
   changed_when: false
   no_log: true
 
-- name: Write the BuildKit gh_token secret file
+- name: Write the GitHub token file
   ansible.builtin.copy:
     content: "{{ dittobench_gh_token.stdout }}"
     dest: "{{ dittobench_gh_token_file }}"

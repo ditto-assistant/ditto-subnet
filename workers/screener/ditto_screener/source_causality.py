@@ -87,7 +87,7 @@ def test_only_line_numbers(path: str, text: str) -> frozenset[int]:
         return frozenset(range(1, len(text.splitlines()) + 1))
     if not normalized.endswith(".rs"):
         return frozenset()
-    return test_only_item_lines(mask_comments(text).splitlines())
+    return test_only_item_lines(mask_comments(text, path).splitlines())
 
 
 def mask_test_only_source(path: str, text: str) -> str:

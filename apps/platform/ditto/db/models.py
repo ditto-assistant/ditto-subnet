@@ -438,6 +438,13 @@ class Agent(Base):
         ),
         Index("agents_miner_hotkey_idx", "miner_hotkey"),
         Index("agents_sha256_idx", "sha256"),
+        # Operator submission search: exact name and literal ``LIKE 'x%'``
+        # prefix. ``text_pattern_ops`` because the collation is not ``C``.
+        Index(
+            "agents_name_pattern_idx",
+            "name",
+            postgresql_ops={"name": "text_pattern_ops"},
+        ),
         Index("agents_created_agent_idx", "created_at", "agent_id"),
         # Exact-repack duplicate lookups for the quarantine review console.
         Index("agents_normalized_source_hash_idx", "normalized_source_hash"),
@@ -630,10 +637,16 @@ class ScreeningAttempt(Base):
             "screening_attempts_infra_failed_idx",
             "finished_at",
             postgresql_where=text(
-                "status = 'failed' AND reason_code = 'docker-build-infrastructure'"
+                "status = 'failed' AND reason_code IN "
+                "('docker-build-infrastructure', 'worker-claim-not-started', "
+                "'l2-runtime-evidence-unavailable', "
+                "'source-review-adjudicator-key-unavailable')"
             ),
             sqlite_where=text(
-                "status = 'failed' AND reason_code = 'docker-build-infrastructure'"
+                "status = 'failed' AND reason_code IN "
+                "('docker-build-infrastructure', 'worker-claim-not-started', "
+                "'l2-runtime-evidence-unavailable', "
+                "'source-review-adjudicator-key-unavailable')"
             ),
         ),
         Index(
@@ -1611,13 +1624,6 @@ class ScreeningQuarantine(Base):
             name="screening_quarantines_review_notes_pair_check",
         ),
         CheckConstraint(
-            "review_audit IS NULL OR reason_code IN "
-            "('source-review-inconclusive', 'agentic-source-review-tripwire', "
-            "'l2-model-inconclusive', 'l2-model-total-budget', "
-            "'l2-model-tool-budget', 'l2-model-step-budget')",
-            name="screening_quarantines_review_audit_reason_check",
-        ),
-        CheckConstraint(
             "reason_code ~ '^[a-z0-9][a-z0-9-]{0,63}$'",
             name="screening_quarantines_reason_code_check",
         ),
@@ -1910,6 +1916,8 @@ class EvaluationPayment(Base):
             name="evaluation_payments_extrinsic_index_check",
         ),
         Index("evaluation_payments_miner_hotkey_idx", "miner_hotkey"),
+        # Operator submission search by payment-time owner.
+        Index("evaluation_payments_miner_coldkey_idx", "miner_coldkey"),
         Index(
             "evaluation_payments_available_credit_idx",
             "miner_hotkey",
@@ -4633,6 +4641,16 @@ class Score(Base):
     details: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Optional per-case breakdown ``{"per_case": [...]}`` for audit."""
 
+    stderr_projection: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Database-derived JSON fold fields, preserving original types and nulls.
+
+    A trigger derives this from details on inserts and relevant updates,
+    including old application writers. SQL NULL means not yet backfilled;
+    the ledger falls back to details only for those rows. Never wire authority.
+    """
+
     gate_evidence: Mapped[dict | None] = mapped_column(
         _NULLABLE_JSON_VARIANT, nullable=True
     )
@@ -5571,6 +5589,7 @@ class ValidatorHeartbeat(Base):
     stack_health: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     updater_status: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     weights_fold: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    host_specs: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Which pinned ledger the validator last folded (heartbeat protocol v27)."""
     benchmark_capacity: Mapped[dict | None] = mapped_column(
         _JSON_VARIANT, nullable=True
@@ -6526,6 +6545,42 @@ class ArtifactReleaseSettingsRevision(Base):
     )
 
 
+class TranscriptMirrorSettingsRevision(Base):
+    """Append-only gate for copying quorum transcripts into the public bucket."""
+
+    __tablename__ = "transcript_mirror_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="transcript_mirror_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="transcript_mirror_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="transcript_mirror_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="transcript_mirror_settings_parent_revision_key",
+        ),
+    )
+
+
 class SubmissionSettingsRevision(Base):
     """Append-only, operator-audited miner submission settings revision."""
 
@@ -6767,6 +6822,11 @@ class SourceEmissionCollectorCursor(Base):
     )
     runtime_code_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Running comparison of the reveal-anchored planner against the event
+    # planner; see source_emission_collector._shadow_reveal_plan.
+    reveal_plan_shadow: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
 
 
 class SourceEmissionVectorBinding(Base):
@@ -7005,19 +7065,36 @@ class ScreenerL2ReportCanary(Base):
 
     canary_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
     request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
-    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
-    source_attempt_id: Mapped[UUID] = mapped_column(
-        SaUUID(as_uuid=True), nullable=False
+    # A public source fixture has no miner Agent or ScreeningAttempt row.
+    agent_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    source_attempt_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    source_kind: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="submission"
     )
+    fixture_key: Mapped[str | None] = mapped_column(Text)
     artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
     bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
     target_node_id: Mapped[str] = mapped_column(Text, nullable=False)
-    expected_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
-    expected_score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_agent_status: Mapped[str | None] = mapped_column(Text)
+    expected_score_count: Mapped[int | None] = mapped_column(Integer)
     review_label: Mapped[str] = mapped_column(Text, nullable=False)
+    run_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="source_only"
+    )
+    # A newly verified current object for an older null-SHA attempt. This does
+    # not claim what the historical attempt executed and never changes it.
+    source_attestation: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    # Scheduling-time posture pin: an immutable ``l2-report-canary*`` revision
+    # this canary runs under instead of the claiming node's effective posture,
+    # so a canary experiment never needs a node- or worker-scoped revision.
+    review_settings_revision: Mapped[int | None] = mapped_column(Integer)
+    review_settings_scope: Mapped[str | None] = mapped_column(Text)
+    review_settings_checksum: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     claimed_instance_id: Mapped[str | None] = mapped_column(Text)
+    # Claim-time binding the completion report must echo; equals the pin above
+    # when one is set, else the claiming worker's node-effective revision.
     settings_revision: Mapped[int | None] = mapped_column(Integer)
     settings_checksum: Mapped[str | None] = mapped_column(Text)
     runtime_evidence_sha256: Mapped[str | None] = mapped_column(Text)
@@ -7038,23 +7115,67 @@ class ScreenerL2ReportCanary(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(["target_node_id"], ["screener_nodes.node_id"]),
+        # The stamped scope must be the pinned revision's own scope (through
+        # the unique ``(scope, revision)`` index), so the CHECK below guards
+        # the revision actually pinned, not only a copied label.
+        ForeignKeyConstraint(
+            ["review_settings_scope", "review_settings_revision"],
+            [
+                "screener_review_settings_revisions.scope",
+                "screener_review_settings_revisions.revision",
+            ],
+            ondelete="RESTRICT",
+            name="screener_l2_canary_review_settings_revision_fkey",
+        ),
         UniqueConstraint("request_id", name="screener_l2_canary_request_key"),
         CheckConstraint(
             "artifact_sha256 ~ '^[0-9a-f]{64}$'", name="screener_l2_canary_sha_check"
+        ),
+        # Verbatim from 2026_09_29_bind_l2_canary_review_settings_pin.py. The
+        # scope clause is the database backstop that a pin can never name a
+        # production (``*``, node, or worker) scope; it admits exactly what
+        # ``is_l2_report_canary_scope`` admits.
+        CheckConstraint(
+            "(review_settings_revision IS NULL "
+            "AND review_settings_scope IS NULL "
+            "AND review_settings_checksum IS NULL) OR "
+            "(review_settings_revision IS NOT NULL "
+            "AND review_settings_scope IS NOT NULL "
+            "AND review_settings_checksum IS NOT NULL "
+            "AND review_settings_revision > 0 "
+            "AND review_settings_scope ~ '^l2-report-canary(-|$)' "
+            "AND review_settings_checksum ~ '^[0-9a-f]{64}$')",
+            name="review_settings_pin_check",
         ),
         CheckConstraint(
             "policy_version = 13 AND bench_version = 13",
             name="screener_l2_canary_v13_check",
         ),
         CheckConstraint(
-            "expected_score_count >= 0", name="screener_l2_canary_scores_check"
+            "expected_score_count IS NULL OR expected_score_count >= 0",
+            name="screener_l2_canary_scores_check",
         ),
         CheckConstraint(
-            "review_label IN ('candidate_clear', 'known_reject')",
+            "(source_kind = 'submission' AND agent_id IS NOT NULL AND "
+            "source_attempt_id IS NOT NULL AND fixture_key IS NULL AND "
+            "expected_agent_status IS NOT NULL AND expected_score_count IS NOT NULL) "
+            "OR (source_kind = 'canonical_starter_fixture' AND agent_id IS NULL AND "
+            "source_attempt_id IS NULL AND fixture_key IS NOT NULL AND "
+            "expected_agent_status IS NULL AND expected_score_count IS NULL AND "
+            "run_mode = 'source_only')",
+            name="screener_l2_canary_source_kind_check",
+        ),
+        CheckConstraint(
+            "review_label IN ('unreviewed', 'candidate_clear', 'known_reject')",
             name="screener_l2_canary_label_check",
         ),
         CheckConstraint(
-            "status IN ('queued', 'leased', 'succeeded', 'incomplete', 'expired')",
+            "run_mode IN ('source_only', 'full_runtime')",
+            name="run_mode_check",
+        ),
+        CheckConstraint(
+            "status IN ('awaiting_review', 'ready', 'queued', 'leased', "
+            "'succeeded', 'incomplete', 'expired')",
             name="screener_l2_canary_status_check",
         ),
         CheckConstraint(
@@ -7068,6 +7189,12 @@ class ScreenerL2ReportCanary(Base):
         ),
         Index("screener_l2_canary_queue_idx", "target_node_id", "status", "created_at"),
         Index(
+            "screener_l2_canary_fixture_key_idx",
+            "fixture_key",
+            unique=True,
+            postgresql_where=text("fixture_key IS NOT NULL"),
+        ),
+        Index(
             "screener_l2_canary_one_active_source_idx",
             "source_attempt_id",
             unique=True,
@@ -7077,7 +7204,12 @@ class ScreenerL2ReportCanary(Base):
 
 
 class V13ScorerCohortPin(Base):
-    """Immutable, operator-audited V13 scorer and runtime packet admission."""
+    """Immutable, operator-audited V13 scorer and runtime packet admission.
+
+    ``hotkeys`` names three to sixteen members; the per-agent quorum stays three
+    distinct validators. The constraint keeps its historical ``three_hotkeys``
+    name so the deployed constraint is replaced in place.
+    """
 
     __tablename__ = "v13_scorer_cohort_pins"
 
@@ -7095,7 +7227,8 @@ class V13ScorerCohortPin(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_pin_version_check"),
         CheckConstraint(
-            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            "jsonb_typeof(hotkeys) = 'array' "
+            "AND jsonb_array_length(hotkeys) BETWEEN 3 AND 16",
             name="v13_scorer_pin_three_hotkeys_check",
         ),
         CheckConstraint(
@@ -7126,7 +7259,8 @@ class V13ScorerCohortRotation(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_rotation_version_check"),
         CheckConstraint(
-            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            "jsonb_typeof(hotkeys) = 'array' "
+            "AND jsonb_array_length(hotkeys) BETWEEN 3 AND 16",
             name="v13_scorer_rotation_three_hotkeys_check",
         ),
         CheckConstraint(
@@ -7880,6 +8014,69 @@ class InferenceRoutingAudit(Base):
     __table_args__ = (Index("inference_routing_audit_history_idx", "recorded_at"),)
 
 
+class InferenceAdmissionRejection(Base):
+    """A request refused before any inference_requests row existed.
+
+    The columns are operational telemetry only. Prompt text, bodies, headers,
+    and provider credentials are not stored.
+    """
+
+    __tablename__ = "inference_admission_rejections"
+
+    rejection_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    lane: Mapped[str] = mapped_column(Text, nullable=False)
+    http_status: Mapped[int] = mapped_column(Integer, nullable=False)
+    admission_code: Mapped[str] = mapped_column(Text, nullable=False)
+    grant_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    validator_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correlation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    request_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    byte_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    platform_revision: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "lane IN ('inference', 'embedding')",
+            name="inference_admission_rejections_lane_check",
+        ),
+        CheckConstraint(
+            "http_status IN (400, 403, 409, 413)",
+            name="inference_admission_rejections_status_check",
+        ),
+        CheckConstraint(
+            "admission_code IN ("
+            "'invalid_json', 'invalid_schema', 'request_too_large', "
+            "'stale_session', 'model_not_allowed', 'grant_not_servable')",
+            name="inference_admission_rejections_code_check",
+        ),
+        CheckConstraint(
+            "request_bytes >= 0",
+            name="inference_admission_rejections_bytes_check",
+        ),
+        CheckConstraint(
+            "byte_limit IS NULL OR byte_limit >= 0",
+            name="inference_admission_rejections_limit_check",
+        ),
+        CheckConstraint(
+            "length(platform_revision) BETWEEN 1 AND 64",
+            name="inference_admission_rejections_revision_check",
+        ),
+        CheckConstraint(
+            "validator_hotkey IS NULL OR length(validator_hotkey) BETWEEN 1 AND 120",
+            name="inference_admission_rejections_hotkey_check",
+        ),
+        Index(
+            "inference_admission_rejections_grant_idx",
+            "grant_id",
+            "created_at",
+        ),
+        Index("inference_admission_rejections_created_idx", "created_at"),
+    )
+
+
 class InferenceRequest(Base):
     """Replay ledger and bounded accounting for one proxy request."""
 
@@ -8525,6 +8722,9 @@ class ScoreAuditEntry(Base):
     __table_args__ = (
         UniqueConstraint("entry_hash", name="score_audit_log_entry_hash_key"),
         Index("score_audit_log_agent_id_idx", "agent_id"),
+        # Admission probes filter one exact event string per agent; see the
+        # 2026_10_06 migration of the same name.
+        Index("score_audit_log_event_agent_idx", "event", "agent_id"),
     )
 
 
@@ -8641,6 +8841,102 @@ class ContinualRetestSettingsRevision(Base):
     )
 
 
+class TreasuryManualBridgeState(Base):
+    __tablename__ = "treasury_manual_bridge_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+
+class TreasuryManualTransfer(Base):
+    __tablename__ = "treasury_manual_transfers"
+    request_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    envelope: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    report: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    receipt: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    dispatch_attempted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','dispatched','pending','audit_pending',"
+            "'published','failed','refused')",
+            name="treasury_manual_status",
+        ),
+        CheckConstraint(
+            "length(digest)=64 AND length(actor) BETWEEN 1 AND 254",
+            name="treasury_manual_identity",
+        ),
+        Index("treasury_manual_unfinished", "status", "created_at"),
+    )
+
+
+class TreasuryRuntimeRevision(Base):
+    """Append-only public approvals and guarded producer mode; never signer custody."""
+
+    __tablename__ = "treasury_runtime_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint("parent_revision >= 0", name="treasury_runtime_parent_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="treasury_runtime_checksum_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="treasury_runtime_reason_check",
+        ),
+        UniqueConstraint("parent_revision", name="treasury_runtime_parent_key"),
+    )
+
+
+class TreasurySettingsRevision(Base):
+    """Append-only shadow policy; no validator or signer consumes it."""
+
+    __tablename__ = "treasury_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("parent_revision >= 0", name="treasury_settings_parent_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="treasury_settings_checksum_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="treasury_settings_reason_check"
+        ),
+        UniqueConstraint("parent_revision", name="treasury_settings_parent_key"),
+    )
+
+
 class BurnSettingsRevision(Base):
     """Append-only operator policy for the subnet-owner emission burn.
 
@@ -8693,6 +8989,128 @@ class BurnSettingsRevision(Base):
             "parent_revision",
             name="burn_settings_scope_parent_key",
         ),
+    )
+
+
+class EmissionEligibilitySettingsRevision(Base):
+    """Append-only operator posture binding emissions to a terminal review.
+
+    Shaped exactly like :class:`BurnSettingsRevision` because it has the same
+    blast radius: it decides which scored artifacts the validator fold may pay.
+    ``enforcement`` ships ``off``, so a row must exist before anything is
+    withheld and the log answers "who turned this on, when, and why".
+
+    See :mod:`ditto.api_models.emission_eligibility`.
+    """
+
+    __tablename__ = "emission_eligibility_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="emission_eligibility_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="emission_eligibility_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="emission_eligibility_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="emission_eligibility_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="emission_eligibility_actor_check",
+        ),
+        Index(
+            "emission_eligibility_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="emission_eligibility_scope_parent_key",
+        ),
+    )
+
+
+class EmissionEligibilityShadowRecord(Base):
+    """Append-only rehearsal: one artifact ``enforce`` would have withheld.
+
+    Written while the posture is ``shadow`` (and, for an audit trail, while it is
+    ``enforce``), so an operator can read the exact blast radius of flipping the
+    switch before flipping it -- and afterwards, read why a row left the fold.
+
+    One row per ``(agent_id, bench_version, policy_revision, window_start)``:
+    validators poll the ledger every 30 seconds, so without that key this table
+    would grow by the size of the withheld set twice a minute. The unique index
+    makes the write an idempotent ``ON CONFLICT DO NOTHING``.
+    """
+
+    __tablename__ = "emission_eligibility_shadow_records"
+
+    record_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """NOT NULL on purpose: it is part of the idempotency key below, and a
+    nullable column would let every 30-second validator poll insert another
+    row (``NULL`` never conflicts with ``NULL`` in Postgres)."""
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    enforcement: Mapped[str] = mapped_column(Text, nullable=False)
+    window_start: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'",
+            name="emission_eligibility_shadow_sha_check",
+        ),
+        CheckConstraint(
+            "enforcement IN ('off', 'shadow', 'enforce')",
+            name="emission_eligibility_shadow_enforcement_check",
+        ),
+        CheckConstraint(
+            "length(policy_checksum) = 64",
+            name="emission_eligibility_shadow_checksum_check",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            "policy_revision",
+            "window_start",
+            name="emission_eligibility_shadow_window_key",
+        ),
+        Index(
+            "emission_eligibility_shadow_window_idx",
+            "window_start",
+            "created_at",
+        ),
+        Index("emission_eligibility_shadow_agent_idx", "agent_id", "created_at"),
     )
 
 
@@ -9149,6 +9567,58 @@ class InferenceConcurrencySettingsRevision(Base):
     )
 
 
+class ScoringLeaseSettingsRevision(Base):
+    """Append-only operator policy for scoring lease clocks (#1156).
+
+    Governs the deadline stamped on NEW canonical scoring and score-retest
+    replacement tickets. A live ticket keeps the deadline it was minted with.
+    Each revision stores the whole policy; see
+    ``ditto.api_models.scoring_lease_settings`` for the bounds.
+    """
+
+    __tablename__ = "scoring_lease_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="scoring_lease_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="scoring_lease_settings_checksum_check"
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="scoring_lease_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="scoring_lease_settings_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="scoring_lease_settings_actor_check",
+        ),
+        Index(
+            "scoring_lease_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="scoring_lease_settings_scope_parent_key",
+        ),
+    )
+
+
 class ValidatorSlotSettingsRevision(Base):
     """Append-only, operator-audited concurrent-benchmark-slot policy revision.
 
@@ -9278,10 +9748,10 @@ class ArtifactFetchAudit(Base):
     the question this column answers is "which door did they come through"."""
 
     requester_kind: Mapped[str] = mapped_column(Text, nullable=False)
-    """``validator`` | ``screener`` | ``admin`` | ``public``."""
+    """``validator`` | ``screener`` | ``admin`` | ``public`` | ``miner``."""
 
     requester_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    """Hotkey (validator/screener) or admin actor. NULL only for ``public``."""
+    """Hotkey (validator/screener/miner) or admin actor. NULL only for ``public``."""
 
     requester_instance_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Screener worker instance within the shared-hotkey fleet, when known.
@@ -9316,7 +9786,7 @@ class ArtifactFetchAudit(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "requester_kind IN ('validator', 'screener', 'admin', 'public')",
+            "requester_kind IN ('validator', 'screener', 'admin', 'public', 'miner')",
             name="artifact_fetch_audit_requester_kind_check",
         ),
         CheckConstraint(
@@ -10999,4 +11469,260 @@ class AdminActivityOutcome(Base):
             "status IN ('succeeded', 'failed', 'recorded')",
             name="admin_activity_outcome_status",
         ),
+    )
+
+
+class TreasuryVerifiedReceipt(Base):
+    """Private append-only canonical chain proofs; no signed extrinsics/credentials."""
+
+    __tablename__ = "treasury_verified_receipts"
+    receipt_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    stage: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_receipt_id: Mapped[str | None] = mapped_column(Text)
+    epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    collector_policy_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    bucket_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source_block: Mapped[int | None] = mapped_column(BigInteger)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    proof: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    public_event_id: Mapped[int | None] = mapped_column(BigInteger)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["parent_receipt_id"], ["treasury_verified_receipts.receipt_id"]
+        ),
+        ForeignKeyConstraint(
+            ["settings_revision"], ["treasury_settings_revisions.revision"]
+        ),
+        ForeignKeyConstraint(["public_event_id"], ["treasury_public_events.id"]),
+        UniqueConstraint(
+            "block_hash",
+            "extrinsic_index",
+            "event_index",
+            name="treasury_verified_chain_effect",
+        ),
+        CheckConstraint(
+            "stage IN ('service_distribution', 'vendor_payment')",
+            name="treasury_verified_stage",
+        ),
+        CheckConstraint(
+            (
+                "amount_atomic > 0 AND epoch_index >= 0 AND (source_block IS "
+                "NULL OR source_block > 0) AND extrinsic_index >= 0 AND "
+                "event_index >= 0"
+            ),
+            name="treasury_verified_bounds",
+        ),
+        CheckConstraint(
+            "published = (public_event_id IS NOT NULL)",
+            name="treasury_verified_publication",
+        ),
+        CheckConstraint(
+            (
+                "(stage = 'service_distribution' AND parent_receipt_id IS "
+                "NULL AND source_block IS NOT NULL) OR (stage = "
+                "'vendor_payment' AND ((parent_receipt_id IS NULL AND "
+                "source_block IS NULL) OR (parent_receipt_id IS NOT NULL AND "
+                "source_block IS NOT NULL)))"
+            ),
+            name="treasury_verified_parent",
+        ),
+        Index(
+            "treasury_verified_distribution_source",
+            "epoch_index",
+            "source_block",
+            "bucket_id",
+            postgresql_where=text("stage = 'service_distribution'"),
+        ),
+    )
+
+
+class TreasuryLedgerSample(Base):
+    """One per-epoch reading of the Gamma collector from finalized chain state.
+
+    Append-only and public: every column is a public chain value read at
+    ``block_hash``, so any sample can be re-derived from an archive node. The
+    gap between what the collector earned and how its balance moved is what a
+    verified treasury receipt must explain.
+    """
+
+    __tablename__ = "treasury_ledger_samples"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    block_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    sampled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    collector_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    collector_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    collector_uid: Mapped[int | None] = mapped_column(Integer)
+    collector_incentive: Mapped[float | None] = mapped_column(Float)
+    collector_emission_rao: Mapped[int | None] = mapped_column(BigInteger)
+    collector_total_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_locked_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_available_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_lock_perpetual: Mapped[bool | None] = mapped_column(Boolean)
+    owner_hotkey: Mapped[str | None] = mapped_column(Text)
+    owner_conviction_rao: Mapped[int | None] = mapped_column(BigInteger)
+    most_convicted_hotkey: Mapped[str | None] = mapped_column(Text)
+    holdings: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "netuid", "epoch_index", name="treasury_ledger_samples_netuid_epoch"
+        ),
+        CheckConstraint(
+            "collector_total_rao >= 0 AND collector_locked_rao >= 0 "
+            "AND collector_available_rao >= 0",
+            name="treasury_ledger_samples_nonnegative",
+        ),
+    )
+
+
+class TreasuryPublicEvent(Base):
+    """Public, append-only projection of independently verified treasury receipts.
+
+    A payment can have a finalized and a reconciled event. No credentials,
+    GM account identifiers, private billing rows, or free-form payloads belong
+    in this table. Producers must verify the chain receipt before insertion.
+    """
+
+    __tablename__ = "treasury_public_events"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    payment_id: Mapped[str] = mapped_column(Text, nullable=False)
+    bucket_id: Mapped[str | None] = mapped_column(Text)
+    policy_digest: Mapped[str | None] = mapped_column(Text)
+    epoch_index: Mapped[int | None] = mapped_column(BigInteger)
+    event_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    finalized_event_id: Mapped[int | None] = mapped_column(BigInteger)
+    event_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    burn_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    burn_share_micros: Mapped[int] = mapped_column(Integer, nullable=False)
+    denominator: Mapped[str] = mapped_column(Text, nullable=False)
+    maintenance_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    gm_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocation_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocated_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    route: Mapped[str] = mapped_column(Text, nullable=False)
+    deposit_asset: Mapped[str] = mapped_column(Text, nullable=False)
+    deposit_amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    credited_usd_nano: Mapped[int | None] = mapped_column(BigInteger)
+    bounty_award_id: Mapped[str | None] = mapped_column(Text)
+    accepted_work_ref: Mapped[str | None] = mapped_column(Text)
+    public_sender: Mapped[str] = mapped_column(Text, nullable=False)
+    public_recipient: Mapped[str] = mapped_column(Text, nullable=False)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor_provenance: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_public_id: Mapped[str] = mapped_column(Text, nullable=False)
+    verification_source: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(["finalized_event_id"], ["treasury_public_events.id"]),
+        UniqueConstraint("payment_id", "state", name="treasury_public_payment_state"),
+        UniqueConstraint(
+            "block_hash",
+            "extrinsic_index",
+            "event_index",
+            "state",
+            name="treasury_public_chain_event_state",
+        ),
+        CheckConstraint(
+            "(event_kind IN ('service_distribution', 'vendor_payment') "
+            "AND state = 'chain_finalized' AND finalized_event_id IS "
+            "NULL AND credited_usd_nano IS NULL AND bounty_award_id IS "
+            "NULL AND accepted_work_ref IS NULL) OR (event_kind = "
+            "'gm_token_deposit' AND state = 'chain_finalized' AND "
+            "finalized_event_id IS NULL AND credited_usd_nano IS NULL "
+            "AND bounty_award_id IS NULL AND accepted_work_ref IS NULL) "
+            "OR (event_kind = 'gm_credit_purchase' AND state = "
+            "'reconciled' AND finalized_event_id IS NOT NULL AND "
+            "credited_usd_nano IS NOT NULL AND credited_usd_nano > 0 AND "
+            "bounty_award_id IS NULL AND accepted_work_ref IS NULL) OR "
+            "(event_kind = 'maintenance_bounty' AND state = "
+            "'chain_finalized' AND finalized_event_id IS NULL AND "
+            "credited_usd_nano IS NULL AND bounty_award_id IS NOT NULL "
+            "AND accepted_work_ref IS NOT NULL AND "
+            "length(bounty_award_id) BETWEEN 8 AND 120 AND "
+            "length(accepted_work_ref) BETWEEN 8 AND 240)",
+            name="treasury_public_kind",
+        ),
+        CheckConstraint(
+            "state IN ('chain_finalized', 'reconciled')", name="treasury_public_state"
+        ),
+        CheckConstraint(
+            (
+                "denominator IN ('miner_emission', "
+                "'released_miner_emission', 'collector_liquid_emission', "
+                "'not_attributed')"
+            ),
+            name="treasury_public_denominator",
+        ),
+        CheckConstraint(
+            "maintenance_bps BETWEEN 0 AND 10000 AND gm_bps BETWEEN 0 "
+            "AND 10000 AND allocation_bps BETWEEN 0 AND 10000 AND "
+            "allocated_alpha_rao >= 0 AND ((source_alpha_rao > 0 AND "
+            "denominator <> 'not_attributed') OR (event_kind = "
+            "'vendor_payment' AND denominator = 'not_attributed' AND "
+            "source_alpha_rao = 0 AND allocated_alpha_rao = 0)) AND "
+            "burn_revision >= 0 AND burn_share_micros BETWEEN 0 AND "
+            "1000000",
+            name="treasury_public_allocation",
+        ),
+        CheckConstraint(
+            "event_kind IN ('service_distribution', 'vendor_payment') OR "
+            "(event_kind = 'maintenance_bounty' AND allocation_bps = maintenance_bps) "
+            "OR (event_kind NOT IN ('service_distribution', "
+            "'vendor_payment', 'maintenance_bounty') AND allocation_bps = gm_bps)",
+            name="treasury_public_purpose_allocation",
+        ),
+        CheckConstraint(
+            "deposit_amount_atomic > 0 AND "
+            "deposit_asset IN ('TAO', 'SN28_ALPHA', 'SN118_ALPHA')",
+            name="treasury_public_amounts",
+        ),
+        CheckConstraint(
+            "route IN ('alpha_to_tao', 'alpha_to_gm_alpha', "
+            "'alpha_transfer', 'alpha_to_tao_bounty', 'tao_transfer')",
+            name="treasury_public_route",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0 AND event_index >= 0", name="treasury_public_indexes"
+        ),
+        CheckConstraint(
+            "actor_provenance IN ('treasury_signer', 'gm_reconciler', "
+            "'bounty_executor', 'treasury_observer')",
+            name="treasury_public_actor_provenance",
+        ),
+        CheckConstraint(
+            "length(actor_public_id) BETWEEN 3 AND 120",
+            name="treasury_public_actor_id",
+        ),
+        CheckConstraint(
+            "verification_source IN "
+            "('finalized_chain_rpc', 'chain_and_provider_reconciliation')",
+            name="treasury_public_verification_source",
+        ),
+        Index("treasury_public_event_at_idx", "event_at", "id"),
     )

@@ -1,0 +1,12 @@
+[Unit]
+Description=Bounded SN118 %i collector tick (never enabled by release)
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+RandomizedDelaySec=10s
+Persistent=true
+Unit=sn118-collector@%i.service
+
+[Install]
+WantedBy=timers.target

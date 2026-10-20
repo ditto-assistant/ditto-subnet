@@ -1,0 +1,135 @@
+---
+# Write only the two SN-49 reader entries. The application deploy/reload is a
+# separate action; unrelated environment values and services stay untouched.
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_platform_app
+
+- name: Install only the production backup metadata reader configuration
+  hosts: role_platform_app
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../roles/platform_app/defaults/main.yml
+    - ../host_vars/ditto-platform-prod.yml
+  tasks:
+    - name: Require the exact production reader target
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'ditto-platform-prod'
+          - platform_database_backup_reader_enabled | bool
+          - platform_database_backup_secret_project == 'ditto-subnet'
+          - secret_database_backup_reader_access_key_id == 'platform-pg-backup-reader-access-key-id'
+          - secret_database_backup_reader_secret_access_key == 'platform-pg-backup-reader-secret-access-key'
+        quiet: true
+
+    - name: Inspect the existing application environment
+      ansible.builtin.stat:
+        path: "{{ platform_root }}/.env"
+      register: backup_reader_env_stat
+
+    - name: Require an existing regular environment file
+      ansible.builtin.assert:
+        that:
+          - backup_reader_env_stat.stat.exists
+          - backup_reader_env_stat.stat.isreg
+          - not backup_reader_env_stat.stat.islnk
+        quiet: true
+
+    - name: Read the existing environment without returning its contents
+      ansible.builtin.slurp:
+        src: "{{ platform_root }}/.env"
+      register: backup_reader_original
+      no_log: true
+
+    - name: Fetch only the dedicated reader pair using the app host identity
+      ansible.builtin.command:
+        argv: [gcloud, secrets, versions, access, latest, "--project={{ platform_database_backup_secret_project }}", "--secret={{ item }}"]
+      loop:
+        - "{{ secret_database_backup_reader_access_key_id }}"
+        - "{{ secret_database_backup_reader_secret_access_key }}"
+      register: backup_reader_pair
+      changed_when: false
+      no_log: true
+
+    - name: Validate the pair and reject reuse of avatar or trace credentials
+      ansible.builtin.assert:
+        that:
+          - backup_reader_pair.results | length == 2
+          - backup_reader_pair.results[0].stdout | trim is match('^hip_[A-Za-z0-9_-]+$')
+          - backup_reader_pair.results[1].stdout | trim is match('^[A-Za-z0-9_+/=-]+$')
+          - backup_reader_pair.results[1].stdout | trim | length >= 20
+          - backup_reader_pair.results[0].stdout | trim != backup_reader_pair.results[1].stdout | trim
+          - backup_reader_pair.results[0].stdout | trim not in incumbent_values
+          - backup_reader_pair.results[1].stdout | trim not in incumbent_values
+          - (backup_reader_original.content | b64decode | regex_findall('(?m)^DATABASE_BACKUP_READER_ACCESS_KEY_ID=')) | length <= 1
+          - (backup_reader_original.content | b64decode | regex_findall('(?m)^DATABASE_BACKUP_READER_SECRET_ACCESS_KEY=')) | length <= 1
+        quiet: true
+      vars:
+        incumbent_values: "{{ backup_reader_original.content | b64decode | regex_findall('(?m)^(?:HIPPIUS|INFERENCE_TRACE_SINK_HIPPIUS)_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)=(.*)$') }}"
+      no_log: true
+
+    - name: Allocate an exclusive temporary environment rollback file
+      ansible.builtin.tempfile:
+        state: file
+        path: "{{ platform_root }}"
+        prefix: ".env.sn49-{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ') }}-"
+      register: backup_reader_rollback
+      no_log: true
+
+    - name: Preserve a protected environment rollback copy
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ platform_root }}/.env"
+        dest: "{{ backup_reader_rollback.path }}"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Update and verify only the two reader entries
+      block:
+        - name: Install the reader entries without logging values
+          ansible.builtin.lineinfile:
+            path: "{{ platform_root }}/.env"
+            regexp: "^{{ item.name }}="
+            line: "{{ item.name }}={{ item.value | trim }}"
+            create: false
+          loop:
+            - name: DATABASE_BACKUP_READER_ACCESS_KEY_ID
+              value: "{{ backup_reader_pair.results[0].stdout }}"
+            - name: DATABASE_BACKUP_READER_SECRET_ACCESS_KEY
+              value: "{{ backup_reader_pair.results[1].stdout }}"
+          no_log: true
+
+        - name: Read the resulting environment privately
+          ansible.builtin.slurp:
+            src: "{{ platform_root }}/.env"
+          register: backup_reader_updated
+          no_log: true
+
+        - name: Prove every unrelated environment line was preserved
+          ansible.builtin.assert:
+            that:
+              - (backup_reader_original.content | b64decode).splitlines() | reject('match', '^DATABASE_BACKUP_READER_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)=') | list == (backup_reader_updated.content | b64decode).splitlines() | reject('match', '^DATABASE_BACKUP_READER_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)=') | list
+            quiet: true
+          no_log: true
+      rescue:
+        - name: Restore the original environment after a failed reader update
+          ansible.builtin.copy:
+            remote_src: true
+            src: "{{ backup_reader_rollback.path }}"
+            dest: "{{ platform_root }}/.env"
+            owner: "{{ backup_reader_env_stat.stat.uid }}"
+            group: "{{ backup_reader_env_stat.stat.gid }}"
+            mode: "{{ backup_reader_env_stat.stat.mode }}"
+          no_log: true
+        - name: Fail rather than leave partial reader configuration
+          ansible.builtin.fail:
+            msg: Backup reader configuration failed; original environment restored.
+
+    - name: Remove the temporary rollback copy after a verified update
+      ansible.builtin.file:
+        path: "{{ backup_reader_rollback.path }}"
+        state: absent
+      no_log: true

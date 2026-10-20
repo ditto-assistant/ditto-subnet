@@ -1,0 +1,6 @@
+[Unit]
+Description=Report failed Platform database backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -p daemon.err -- "ditto-pg-backup: FAILED"

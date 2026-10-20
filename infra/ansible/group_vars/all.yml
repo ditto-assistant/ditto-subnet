@@ -47,6 +47,7 @@ team_ssh_keys:
   peyton:
     - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPYZJllfLZ4wsb7boMu2HQvedMcfqv4Uj0mEA5Nd7LEU peyton@Peyton-MBP.local"
     - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILnWOx1b9p7pifTNSOjeHU0EYRXhIgnLweQ3v0YgQniT peyton@Peytons-Mac-mini.local"
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID89KEB5y/i5fxXWiYOS53Ng5Y/1zRcn5G4YBkOeUs5c cmux-tidy-beige-cobra (claude agent)"
   omar:
     - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID4+E4YEmXZjdppyJAVkNgq0AgBM6Vo1W513HkGmFEYh omarbarazanji@Omars-MacBook-Pro.local"
   nick:

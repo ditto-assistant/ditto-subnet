@@ -124,6 +124,8 @@ export async function platformAdminRequest(
     method?: string
     body?: unknown
     actor?: string
+    /** Bind a fixture mutation to this authenticated Backroom session. */
+    operatorProof?: boolean
     timeoutMs?: number
     /**
      * Extra attempts after a timeout or a 5xx. GET only, and asserted so: a
@@ -145,6 +147,25 @@ export async function platformAdminRequest(
   }
 
   const method = options.method ?? 'GET'
+  const actor = options.operatorProof ? options.actor?.trim().toLowerCase() : options.actor
+  const body = options.body === undefined ? undefined : JSON.stringify(options.body)
+  let operatorProof: string | undefined
+  if (options.operatorProof) {
+    const secret = process.env.BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET
+    if (!secret || secret.length < 32 || !actor || !body) {
+      throw new Error('Backroom fixture operator proof is not configured')
+    }
+    const timestamp = Math.floor(Date.now() / 1000)
+    const bytes = new TextEncoder()
+    const digest = await crypto.subtle.digest('SHA-256', bytes.encode(body))
+    const hex = (value: ArrayBuffer) =>
+      Array.from(new Uint8Array(value), (byte) => byte.toString(16).padStart(2, '0')).join('')
+    const message = `${timestamp}\n${actor}\n${method}\n${path}\n${hex(digest)}`
+    const key = await crypto.subtle.importKey(
+      'raw', bytes.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+    )
+    operatorProof = `${timestamp}:${hex(await crypto.subtle.sign('HMAC', key, bytes.encode(message)))}`
+  }
   const timeoutMs = options.timeoutMs ?? 20_000
   const retries = options.retries ?? 0
   if (retries > 0 && method !== 'GET') {
@@ -160,12 +181,13 @@ export async function platformAdminRequest(
         headers: {
           Accept: 'application/json',
           Authorization: `Bearer ${token}`,
-          ...(options.actor ? { 'X-Admin-Actor': options.actor } : {}),
+          ...(actor ? { 'X-Admin-Actor': actor } : {}),
+          ...(operatorProof ? { 'X-Backroom-Operator-Proof': operatorProof } : {}),
           ...(options.body === undefined
             ? {}
             : { 'Content-Type': 'application/json' }),
         },
-        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        body,
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {

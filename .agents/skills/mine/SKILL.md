@@ -17,6 +17,10 @@ This is the miner-facing skill. Load it before editing the starter kit,
 scoring, or uploading. A local score is not a production clearance: walk the
 served path against `$backroom-review` before `full`, packaging, or upload.
 
+The numbers below drift. For the live scoring bench, emission split, payout
+curve, champion, next epoch, and your own agents' status, run `$subnet-status`
+(`python3 .agents/skills/subnet-status/scripts/subnet_status.py --hotkey <ss58>`).
+
 Live scoring is **bench 12**, `run_size=full`, observed tools, locked
 `openai/gpt-oss-20b`. Update `LIVE_SCORING_BENCH_VERSION` in
 `miners/dittobench-starter-kit/scripts/local-rehearsal.py` when Platform
@@ -28,6 +32,12 @@ generated and scored locally ahead of activation (`--bench-version 13`) as soon
 as the local scorer build advertises it; its gates are shadow and replayed
 locally with `--gates` (below). The wire `bench_version` a harness receives
 stays 9 in every contract.
+
+Bench 14 is also accepted for explicit preactivation rehearsal
+(`--bench-version 14 --gates`) when the local scorer advertises it. It carries
+the v13 surface and gates with action-scoped declarative over-call scoring.
+Adding this support does not change the live rehearsal default. See
+[`benchmark-v14-rollout.md`](../../../docs/benchmark-v14-rollout.md).
 
 ## Practice loops (do not collapse these)
 
@@ -192,8 +202,9 @@ python3 miners/dittobench-starter-kit/scripts/rehearsal_gates.py \
 
 The notes are shadow in v13.0: nothing moves the local score. Treat a would-zero
 note as the same served-path finding the operator review bar reads; fix the
-path, do not tune the note away. The stock kit passes every rule by
-construction (`src/v13.rs`).
+path, do not tune the note away. The stock kit passes the wire system prompt
+through unchanged by default and retains model-authored output; it still needs
+a served-path review before anyone treats it as safe.
 
 ## Package and upload
 

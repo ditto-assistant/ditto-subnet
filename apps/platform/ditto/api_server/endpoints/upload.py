@@ -7,9 +7,12 @@ proof on chain, stores the tarball in S3, and writes the matching
 ``agents`` + ``evaluation_payments`` rows in a single transaction.
 
 Deferred validations (added when their dependencies land):
-- tar manifest structure (needs Go-harness interface signatures)
-- Go-import allowlist scan (needs the allowlist file)
+- declared file/entrypoint manifest (needs the harness-interface spec)
+- import / dependency allowlist (needs the allowlist file)
 - schema diff against ``schema/initial_harness.sql`` (needs the file)
+
+Gzip magic, tar member safety, and a root ``Dockerfile`` are enforced on
+``/upload/agent`` before payment verification or object storage.
 """
 
 from __future__ import annotations
@@ -19,12 +22,14 @@ import hashlib
 import inspect
 import logging
 import os
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
 
 import bittensor
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import UUID4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
@@ -59,7 +64,12 @@ from ditto.api_server.payment_verifier import (
     PaymentReplayedError,
     PaymentVerifier,
 )
+from ditto.api_server.source_inspect import (
+    SourceInspectError,
+    validate_upload_archive,
+)
 from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.upload_feedback import submission_cooldown_message
 from ditto.chain import ChainError
 from ditto.db.models import AgentStatus
 from ditto.db.queries.agents import (
@@ -73,7 +83,6 @@ from ditto.db.queries.payments import (
     consume_evaluation_credit,
     get_agent_for_payment_proof,
     get_evaluation_payment_for_proof,
-    get_same_hotkey_agent_by_sha,
     get_same_owner_agent_by_sha,
     insert_evaluation_payment,
 )
@@ -92,7 +101,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_UPLOAD_ARCHIVE_DETAILS = {
+    "archive-not-gzip": "archive is not a gzip-compressed tar",
+    "archive-unreadable": "archive is not a readable gzip-compressed tar",
+    "artifact-too-many-members": "archive contains too many members",
+    "artifact-too-large": "archive expands beyond the safety limit",
+    "archive-unsafe-path": "archive contains an unsafe path",
+    "archive-duplicate-path": "archive contains a duplicate path",
+    "archive-special-file": "archive contains a link or special file",
+    "archive-missing-dockerfile": "Dockerfile is missing from the archive root",
+    "archive-dockerfile-unreadable": "Dockerfile is not valid UTF-8 text",
+}
+
 router = APIRouter(prefix="/upload", tags=["upload"])
+
+UPLOAD_SIGNATURE_MAX_SKEW_SECONDS = 300
 
 # `/upload/check` + `/upload/agent` failure codes live in the 1xxx
 # agent-side range per CODE-REVIEW-CHECKLIST.md. New codes added here
@@ -197,9 +220,14 @@ async def check(
     codes: list[int] = []
     messages: list[str] = []
 
-    # 1. Signature over UTF-8 bytes of "{hotkey}:{sha256}".
-    payload = f"{body.hotkey}:{body.sha256}".encode()
-    signature_valid = _verify_signature(body.hotkey, payload, body.signature)
+    # 1. Verify the short-lived, request-specific hotkey signature.
+    signature_valid = _verify_upload_signature(
+        body.hotkey,
+        body.sha256,
+        body.signature,
+        body.signature_timestamp,
+        body.signature_nonce,
+    )
     if not signature_valid:
         codes.append(ERROR_CODE_BAD_SIGNATURE)
         messages.append("signature did not verify against the hotkey")
@@ -235,19 +263,19 @@ async def check(
     duplicate = None
     if (
         signature_valid
-        and registered
+        and owner_coldkey is not None
         and not banned
         and not body.allow_identical_rescore
         and body.payment_block_hash is None
     ):
-        duplicate = await get_same_hotkey_agent_by_sha(
-            session, miner_hotkey=body.hotkey, sha256=body.sha256
+        duplicate = await get_same_owner_agent_by_sha(
+            session, miner_coldkey=owner_coldkey, sha256=body.sha256
         )
         if duplicate:
             codes.append(ERROR_CODE_IDENTICAL_SUBMISSION)
             messages.append(
-                "identical artifact already submitted; no payment is required. "
-                "Set allow_identical_rescore=true only to purchase another seed."
+                "The previous submission cannot be resubmitted. "
+                "Please try again after updating."
             )
 
     settings = await effective_submission_settings(
@@ -356,7 +384,7 @@ async def check(
         )
         if retry_at is not None:
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
-            messages.append(f"owner coldkey may submit again at {retry_at.isoformat()}")
+            messages.append(submission_cooldown_message(retry_at))
 
     admission = None
     if not codes and body.reserve_submission_slot:
@@ -382,7 +410,7 @@ async def check(
         except SubmissionCooldownError as exc:
             retry_at = exc.retry_at
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
-            messages.append(f"owner coldkey may submit again at {retry_at.isoformat()}")
+            messages.append(submission_cooldown_message(retry_at))
 
     payment_required = not codes and not recovery_payment_verified
     return UploadCheckResponse(
@@ -431,6 +459,8 @@ async def upload_agent(
     # defense against pathological values polluting logs / dashboards.
     name: Annotated[str, Form(min_length=1, max_length=64)],
     signature: Annotated[str, Form(pattern=_SIGNATURE_HEX_PATTERN)],
+    signature_timestamp: Annotated[int, Form(ge=1, le=2**63 - 1)],
+    signature_nonce: Annotated[UUID4, Form()],
     payment_block_hash: Annotated[str, Form(pattern=_BLOCK_HASH_PATTERN)],
     payment_block_number: Annotated[int, Form(ge=1)],
     payment_extrinsic_index: Annotated[int, Form(ge=0)],
@@ -450,7 +480,7 @@ async def upload_agent(
 
     1. Form fields auto-validated by FastAPI regex (already done by
        the time this body runs; malformed input returns 422).
-    2. Signature over ``f"{hotkey}:{sha256}"`` (CPU only, no I/O; 400).
+    2. Fresh domain-separated upload signature (CPU only, no I/O; 400).
     3. Hotkey registered on the configured netuid (1 Pylon call;
        400 if absent, 503 if chain unreachable).
     4. Stream tar bytes: size cap (413) + sha256 re-verify (400).
@@ -472,9 +502,10 @@ async def upload_agent(
     """
     netuid = request.app.state.config.chain.netuid
 
-    # 2. Signature verify against the claimed hotkey + sha.
-    payload = f"{hotkey}:{sha256}".encode()
-    if not _verify_signature(hotkey, payload, signature):
+    # 2. Signature verify against the claimed hotkey, sha, time, and nonce.
+    if not _verify_upload_signature(
+        hotkey, sha256, signature, signature_timestamp, signature_nonce
+    ):
         raise HTTPException(
             status_code=400, detail="signature did not verify against the hotkey"
         )
@@ -605,6 +636,21 @@ async def upload_agent(
         rollback_result = session.rollback()
         if inspect.isawaitable(rollback_result):
             await rollback_result
+
+    # Structural checks run before chain payment verification and storage, so a
+    # junk or hostile archive never occupies a screener slot or an object.
+    # Exact retries of an already accepted upload returned above.
+    try:
+        await asyncio.to_thread(validate_upload_archive, tar_bytes)
+    except SourceInspectError as exc:
+        # A per-file limit names the miner's own file and the fix; every other
+        # archive code keeps its fixed public sentence.
+        detail = (
+            str(exc)
+            if exc.code == "source-file-limit"
+            else _UPLOAD_ARCHIVE_DETAILS.get(exc.code, exc.code)
+        )
+        raise HTTPException(status_code=400, detail=detail) from exc
 
     # 6. Chain-side verification. Typed PaymentVerifierError subclasses
     # are mapped to 3201-3206 by the envelope handler; we re-raise them
@@ -822,6 +868,25 @@ async def upload_agent(
         status=AgentStatus.UPLOADED,
         payment_disposition="credit_consumed" if using_credit else "consumed",
     )
+
+
+def _verify_upload_signature(
+    hotkey: str,
+    sha256: str,
+    signature_hex: str,
+    signature_timestamp: int,
+    signature_nonce: uuid.UUID,
+) -> bool:
+    """Reject stale or future upload proofs before verifying their signature."""
+    if (
+        signature_nonce.version != 4
+        or abs(time.time() - signature_timestamp) > UPLOAD_SIGNATURE_MAX_SKEW_SECONDS
+    ):
+        return False
+    payload = (
+        f"ditto-upload-v2:{hotkey}:{sha256}:{signature_timestamp}:{signature_nonce}"
+    ).encode("ascii")
+    return _verify_signature(hotkey, payload, signature_hex)
 
 
 def _verify_signature(hotkey: str, payload: bytes, signature_hex: str) -> bool:

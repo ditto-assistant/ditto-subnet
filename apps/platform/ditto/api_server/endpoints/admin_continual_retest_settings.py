@@ -28,6 +28,7 @@ from ditto.api_server.continual_retest_settings import (
     crown_incumbent_is_active,
     rollout_standdown_reason,
     settings_from_row,
+    statistical_band_cap_is_active,
     tie_weighting_is_active,
 )
 from ditto.api_server.dependencies import get_session
@@ -40,7 +41,10 @@ from ditto.db.queries.continual_retest_settings import (
     latest_continual_retest_settings_revision,
     list_continual_retest_settings_revisions,
 )
-from ditto.db.queries.heartbeats import live_validator_fleet_supports_protocol
+from ditto.db.queries.heartbeats import (
+    live_validator_fleet_supports_protocol,
+    live_weight_setter_fleet_supports_protocol,
+)
 from ditto.db.queries.ledger_epochs import latest_pin
 from ditto.db.queries.scores import list_eligible_ledger
 
@@ -193,6 +197,9 @@ async def get_settings(
     settings = settings_from_row(latest)
     fleet_ready = await _fleet_ready(session)
     tie_fleet_ready = await _tie_weighting_fleet_ready(session)
+    statistical_fleet_ready = await live_weight_setter_fleet_supports_protocol(
+        session, minimum_protocol=29, now=datetime.now(UTC), freshness=_FRESHNESS
+    )
     crown_fleet_ready = await _crown_incumbent_fleet_ready(session)
     rollout = await open_rollout(session)
     desired_version = rollout.desired_version if rollout is not None else None
@@ -227,6 +234,10 @@ async def get_settings(
             tie_weighting_fleet_ready=tie_fleet_ready,
             tie_weighting_active=tie_weighting_is_active(
                 settings, fleet_protocol_ready=tie_fleet_ready
+            ),
+            statistical_band_fleet_ready=statistical_fleet_ready,
+            statistical_band_active=statistical_band_cap_is_active(
+                settings, fleet_protocol_ready=statistical_fleet_ready
             ),
             crown_incumbent_fleet_ready=crown_fleet_ready,
             crown_incumbent_active=crown_incumbent_is_active(

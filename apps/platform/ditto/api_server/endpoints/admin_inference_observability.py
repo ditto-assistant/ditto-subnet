@@ -19,6 +19,8 @@ from ditto.api_models.inference_failure_taxonomy import (
     InferenceFailureLaneWindow,
     InferenceFailureTaxonomy,
     InferenceGateway,
+    InferenceRateLimitBurst,
+    InferenceRateLimitedTicket,
     InferenceRouteBasis,
 )
 from ditto.api_models.inference_observability import (
@@ -47,7 +49,10 @@ from ditto.db.queries.inference_concurrency_settings import (
 from ditto.db.queries.inference_failure_taxonomy import (
     FAILURE_GROUP_LIMIT,
     FAILURE_WINDOWS_SECONDS,
+    RATE_LIMIT_BURST_THRESHOLD,
+    RATE_LIMIT_BURST_WINDOW_SECONDS,
     load_inference_failure_taxonomy_rows,
+    load_rate_limit_burst_rows,
 )
 from ditto.db.queries.inference_observability import load_inference_runtime_rows
 
@@ -239,7 +244,9 @@ async def get_inference_failure_taxonomy(
 
     ``/admin/inference-runtime-metrics`` already reports failures per lane per
     window; this splits the same bounded windows by the dimensions an upstream
-    rate-limit burst actually moves. Counts and identifiers only.
+    rate-limit burst actually moves, and flags a report-only five-minute
+    ``upstream_http_429`` burst per lane with the tickets it touched. Counts
+    and identifiers only.
     """
     lane_rows, group_rows = await load_inference_failure_taxonomy_rows(session)
     settled_by_lane = {
@@ -307,7 +314,63 @@ async def get_inference_failure_taxonomy(
         group_limit=FAILURE_GROUP_LIMIT,
         lanes=lanes,
         groups=groups,
+        rate_limit_bursts=await _rate_limit_bursts(session, lanes),
     )
+
+
+async def _rate_limit_bursts(
+    session: AsyncSession, lanes: list[InferenceFailureLaneWindow]
+) -> list[InferenceRateLimitBurst]:
+    """Five-minute 429 counts against local headroom, with affected tickets."""
+    settings = settings_from_row(
+        await latest_inference_concurrency_settings_revision(session)
+    )
+    limits = {
+        "chat": settings.chat_global_concurrency,
+        "embedding": settings.embedding_global_concurrency,
+    }
+    rate_limited = {
+        lane.request_kind: lane.rate_limited_failures
+        for lane in lanes
+        if lane.window_seconds == RATE_LIMIT_BURST_WINDOW_SECONDS
+    }
+    peak_rows, ticket_rows = await load_rate_limit_burst_rows(session)
+    tickets: dict[str, list[InferenceRateLimitedTicket]] = {}
+    tickets_total: dict[str, int] = {}
+    for row in ticket_rows:
+        kind = str(row["request_kind"])
+        tickets_total[kind] = int(row["tickets_total"])
+        tickets.setdefault(kind, []).append(
+            InferenceRateLimitedTicket(
+                agent_id=row["agent_id"],
+                bench_version=int(row["bench_version"]),
+                validator_hotkey=str(row["validator_hotkey"]),
+                slot_id=str(row["slot_id"]),
+                ticket_deadline=row["ticket_deadline"],
+                rate_limited_failures=int(row["rate_limited_failures"]),
+            )
+        )
+    bursts: list[InferenceRateLimitBurst] = []
+    for row in peak_rows:
+        kind = cast(Literal["chat", "embedding"], str(row["request_kind"]))
+        count = rate_limited.get(kind, 0)
+        peak = int(row["peak_global_concurrency"])
+        returned = tickets.get(kind, [])
+        bursts.append(
+            InferenceRateLimitBurst(
+                request_kind=kind,
+                window_seconds=RATE_LIMIT_BURST_WINDOW_SECONDS,
+                rate_limited_failures=count,
+                threshold=RATE_LIMIT_BURST_THRESHOLD,
+                peak_global_concurrency=peak,
+                global_concurrency_limit=limits[kind],
+                active=count >= RATE_LIMIT_BURST_THRESHOLD and peak < limits[kind],
+                tickets_total=tickets_total.get(kind, 0),
+                tickets_truncated=tickets_total.get(kind, 0) > len(returned),
+                tickets=returned,
+            )
+        )
+    return bursts
 
 
 @router.post(

@@ -1,3 +1,4 @@
+import type { getRouter } from './router'
 import { createMiddleware, createStart } from '@tanstack/react-start'
 import { getRequest, setResponseHeader } from '@tanstack/react-start/server'
 
@@ -40,3 +41,12 @@ const csrfMiddleware = createMiddleware().server(async ({ next }) => {
 export const startInstance = createStart(() => ({
   requestMiddleware: [csrfMiddleware],
 }))
+
+// Keep Start registration stable when the route CLI regenerates its tree.
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: ReturnType<typeof getRouter>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}
