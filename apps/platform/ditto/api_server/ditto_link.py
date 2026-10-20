@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 ATTEMPT_TTL_SECONDS: Final = 10 * 60
 JWKS_CACHE_SECONDS: Final = 10 * 60
-DEFAULT_SCOPES: Final = "openid email"
+DEFAULT_SCOPES: Final = "openid email connection:github:read"
 CLOCK_SKEW_SECONDS: Final = 60
 
 
@@ -72,6 +72,8 @@ class DittoIdentity:
     user_id: str
     email: str | None
     email_verified: bool
+    github_user_id: int | None = None
+    github_login: str | None = None
 
 
 def new_state() -> str:
@@ -325,7 +327,7 @@ class DittoLinkClient:
             raise DittoLinkRejected("token response has no id_token")
         keys = await self.jwks()
         try:
-            return verify_id_token(
+            identity = verify_id_token(
                 token,
                 jwks=keys,
                 issuer=self.config.issuer,
@@ -336,13 +338,50 @@ class DittoLinkClient:
             # A key rotation between fetch and verify is the one legitimate
             # reason a fresh token fails; retry once with fresh keys.
             keys = await self.jwks(force=True)
-            return verify_id_token(
+            identity = verify_id_token(
                 token,
                 jwks=keys,
                 issuer=self.config.issuer,
                 client_id=self.config.client_id,
                 nonce=nonce,
             )
+
+        if "connection:github:read" not in self.config.scopes.split():
+            return identity
+        access_token = body.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise DittoLinkRejected("Ditto did not grant connection access")
+        try:
+            checked = await self._client.get(
+                f"{self.config.issuer.rstrip('/')}/oauth/connections",
+                headers={"authorization": f"Bearer {access_token}"},
+            )
+            checked.raise_for_status()
+            result = checked.json()
+            if result.get("sub") != identity.user_id or result.get("ready") is not True:
+                raise ValueError("connection account mismatch or missing connection")
+            github = next(r for r in result["requirements"] if r["app"] == "github")
+            provider_id = github["identity"]["id"]
+            login = github["identity"]["login"]
+            if (
+                github["status"] != "connected"
+                or not isinstance(provider_id, str)
+                or not provider_id.isascii()
+                or not provider_id.isdecimal()
+                or not isinstance(login, str)
+                or not login
+            ):
+                raise ValueError("invalid GitHub connection identity")
+            github_id = int(provider_id)
+            if github_id <= 0:
+                raise ValueError("invalid GitHub account id")
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, StopIteration) as exc:
+            raise DittoLinkRejected(
+                "Connect GitHub in your Ditto account before continuing"
+            ) from exc
+        return DittoIdentity(
+            identity.user_id, identity.email, identity.email_verified, github_id, login
+        )
 
 
 def _token_error(response: httpx.Response) -> str:

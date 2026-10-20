@@ -69,3 +69,4 @@ class MinerDittoLinkAttemptResponse(BaseModel):
     ditto_email: str | None = None
     miner_hotkey: str | None = None
     link: MinerDittoLinkView | None = None
+    github_proof_attempt_id: UUID | None = None
