@@ -248,7 +248,8 @@ def run(args: argparse.Namespace) -> int:
                             ).link
                             if assigned is not None and assigned.hotkey != hotkey:
                                 print(
-                                    "Ditto is linked for Router attribution. Your GitHub "
+                                    "Ditto is linked for Router attribution. "
+                                    "Your GitHub "
                                     f"bounty identity remains on {assigned.hotkey}; "
                                     "its existing proof is retained.",
                                     file=sys.stderr,
