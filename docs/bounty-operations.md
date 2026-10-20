@@ -123,14 +123,20 @@ claims and investigate before dispatching anything.
 
 ## Rehearse
 
-Rehearse the whole flow without funds before a funded pilot (#2944):
-publication, three claims, a timely submission, a missed deadline, a rejection,
-a shared award, the winners' fee refunds, a cancellation refund, an appeal, and
-transfer reconciliation, including a failed and an unknown outcome. Then read
-the report and confirm every check passes.
+Rehearse the whole flow without funds before a funded pilot (#2944), in two
+rounds. The first covers publication, three claims, a timely submission, a
+missed deadline, a rejection, a shared award, the winners' fee refunds, a
+system-fault cancellation refund, appeals upheld and denied, and transfer
+reconciliation, including a failed and an unknown outcome. The second covers a
+team cancellation of a paid slot, a withdrawal whose fee is retained when the
+slot is reopened, a fee paid after its hold lapsed, a duplicate payment, an
+award above the payout policy's limit until a new revision raises it, an
+award's payout held while its hotkey has another owner, a transfer that
+expires and one reconciled as failed, each paid in a fresh approval round.
+Then read each report and confirm every check passes.
 
-Platform's test suite runs exactly this rehearsal on every change, through the
-real API with real signatures:
+Platform's test suite runs exactly these rehearsals on every change, through
+the real API with real signatures:
 
 ```bash
 cd apps/platform
@@ -140,7 +146,9 @@ uv run pytest ditto/tests/api_server/endpoints/test_bounty_rehearsal.py
 To rehearse on a staging Platform, follow the same steps with test contributors
 (each with a linked GitHub account and a signed CLA) and the Backroom tools
 above. Rehearsal bounties ask the simulated executor for each transfer outcome
-with `rehearsalOutcome`.
+with `rehearsalOutcome`. The simulated fee verifier accepts one receipt per
+claim, so a duplicate payment is rehearsed only in the test suite, which
+swaps in a verifier that accepts a second.
 
 ## Funded pilot (not authorized)
 
