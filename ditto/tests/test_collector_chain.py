@@ -1288,3 +1288,135 @@ def test_v481_is_the_exact_current_published_artifact():
     )
     c, _ = runtime_adapter(AUDITED_CODE_HASH)
     assert c.guard_runtime(policy(), "current") == AUDITED_CODE_HASH
+
+
+def upgrade_consensus_adapter(*, decoded="Yuma", raw="0x00"):
+    from async_substrate_interface.errors import StorageFunctionNotFound
+
+    from ditto_screening_protocol.collector_receipts import (
+        V473_COLLECTOR_CODE_HASH,
+        V475_COLLECTOR_CODE_HASH,
+    )
+
+    c, filters = runtime_adapter(V475_COLLECTOR_CODE_HASH)
+    codes = {
+        "b99": V473_COLLECTOR_CODE_HASH,
+        "b100": V475_COLLECTOR_CODE_HASH,
+        "b101": V475_COLLECTOR_CODE_HASH,
+    }
+    calls = []
+    result = {"result": raw}
+
+    def missing(*_):
+        raise StorageFunctionNotFound("SubnetEpochConsensus")
+
+    def rpc(method, params):
+        calls.append((method, params))
+        return (
+            {"result": codes[params[1]]} if method == "state_getStorageHash" else result
+        )
+
+    def storage_key(module, name, params, *, block_hash):
+        calls.append(("metadata", (module, name, params, block_hash)))
+        return SimpleNamespace(
+            to_hex=lambda: "0xconsensus",
+            decode_scale_value=lambda data: (
+                calls.append(("decode", None if data is None else bytes(data.data)))
+                or SimpleNamespace(value=decoded)
+            ),
+        )
+
+    c.query = missing
+    c.substrate.get_block_hash = lambda n: FINNEY_GENESIS if n == 0 else f"b{n}"
+    c.substrate.get_block_number = lambda h: int(h[1:])
+    c.substrate.get_chain_finalised_head = lambda: "b200"
+    c.substrate.get_parent_block_hash = lambda h: f"b{int(h[1:]) - 1}"
+    c.substrate.rpc_request = rpc
+    c.substrate.create_storage_key = storage_key
+    return c, codes, calls, result, filters
+
+
+@pytest.mark.parametrize("raw", ["0x00", None])
+def test_v475_upgrade_uses_child_metadata_but_exact_upgrade_storage(raw):
+    from ditto_screening_protocol.collector_receipts import V475_COLLECTOR_CODE_HASH
+
+    c, _, calls, _, _ = upgrade_consensus_adapter(raw=raw)
+    assert (
+        c.guard_runtime(policy(), "b100", historical=True) == V475_COLLECTOR_CODE_HASH
+    )
+    assert (
+        "metadata",
+        ("SubtensorModule", "SubnetEpochConsensus", [118], "b101"),
+    ) in calls
+    assert ("state_getStorageAt", ["0xconsensus", "b100"]) in calls
+    assert ("decode", b"\x00" if raw is not None else None) in calls
+    assert not any(
+        method == "state_getStorageAt" and params[-1] == "b101"
+        for method, params in calls
+    )
+
+
+@pytest.mark.parametrize("decoded", ["Null", None, "Unknown"])
+def test_upgrade_metadata_does_not_replace_non_yuma_or_missing_value(decoded):
+    c, *_ = upgrade_consensus_adapter(decoded=decoded)
+    with pytest.raises(ValueError, match="Yuma"):
+        c.guard_runtime(policy(), "b100", historical=True)
+
+
+def test_current_signing_observation_never_uses_upgrade_metadata_fallback():
+    from async_substrate_interface.errors import StorageFunctionNotFound
+
+    c, codes, calls, _, _ = upgrade_consensus_adapter()
+    codes["b100"] = AUDITED_CODE_HASH
+    with pytest.raises(StorageFunctionNotFound):
+        c.guard_runtime(policy(), "b100")
+    assert not any(method == "metadata" for method, _ in calls)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "unknown_parent",
+        "same_parent",
+        "unfinalized_child",
+        "wrong_child_parent",
+        "changed_child_code",
+        "rpc_error",
+        "missing_result",
+        "invalid_hex",
+        "oversize_hex",
+    ],
+)
+def test_upgrade_metadata_fails_closed_on_incomplete_boundary_evidence(case):
+    from ditto_screening_protocol.collector_receipts import V475_COLLECTOR_CODE_HASH
+
+    c, codes, _, result, _ = upgrade_consensus_adapter()
+    if case == "unknown_parent":
+        codes["b99"] = "0x" + "aa" * 32
+    elif case == "same_parent":
+        codes["b99"] = V475_COLLECTOR_CODE_HASH
+    elif case == "unfinalized_child":
+        c.substrate.get_chain_finalised_head = lambda: "b100"
+    elif case == "wrong_child_parent":
+        c.substrate.get_parent_block_hash = lambda _: "other"
+    elif case == "changed_child_code":
+        codes["b101"] = AUDITED_CODE_HASH
+    elif case == "rpc_error":
+        result["error"] = {"code": -1}
+    elif case == "missing_result":
+        result.clear()
+    elif case == "invalid_hex":
+        result["result"] = "not-scale"
+    elif case == "oversize_hex":
+        result["result"] = "0x" + "00" * 33
+    with pytest.raises(ValueError):
+        c.guard_runtime(policy(), "b100", historical=True)
+
+
+def test_upgrade_consensus_still_validates_exact_native_filter_inventory():
+    c, _, _, _, filters = upgrade_consensus_adapter()
+    filters[0]["filter_mode"]["Allow"].append(
+        {"pallet_name": "Utility", "call_name": "batch", "constraint": None}
+    )
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(policy(), "b100", historical=True)

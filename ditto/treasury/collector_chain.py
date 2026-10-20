@@ -28,6 +28,8 @@ from ditto_screening_protocol.collector_receipts import (
     COLLECTOR_POW_REGISTRATION_HASHES,
     COLLECTOR_READABLE_RUNTIME_HASHES,
     FINNEY_GENESIS,
+    V473_COLLECTOR_CODE_HASH,
+    V475_COLLECTOR_CODE_HASH,
     collector_gross_incentive,
     collector_receipt_runtime,
     collector_transfer_effect,
@@ -160,12 +162,19 @@ class PublicCollectorChain:
                 policy.runtime_code_hash,
                 code_hash,
             )
-        if (
-            code_hash in COLLECTOR_POW_REGISTRATION_HASHES
-            and self.query("SubtensorModule", "SubnetEpochConsensus", [118], block_hash)
-            != "Yuma"
-        ):
-            raise ValueError("collector requires audited Yuma consensus")
+        if code_hash in COLLECTOR_POW_REGISTRATION_HASHES:
+            from async_substrate_interface.errors import StorageFunctionNotFound
+
+            try:
+                consensus = self.query(
+                    "SubtensorModule", "SubnetEpochConsensus", [118], block_hash
+                )
+            except StorageFunctionNotFound:
+                if not historical:
+                    raise
+                consensus = self._v475_upgrade_consensus(block_hash, code_hash)
+            if consensus != "Yuma":
+                raise ValueError("collector requires audited Yuma consensus")
         # SDK 10.5.0's singular helper does not match the audited plural API.
         filters = unwrap(
             s.runtime_call(
@@ -206,6 +215,62 @@ class PublicCollectorChain:
             } != allowed or len(calls) != len(allowed):
                 raise ValueError("proxy scope differs from audited allowlist")
         return code_hash
+
+    def _v475_upgrade_consensus(self, block_hash, code_hash):
+        """Decode exact post-state with post-state metadata, never skip Yuma.
+
+        SDK 10.5.0 intentionally selects parent/execution metadata. At the
+        reviewed v473 -> v475 upgrade block that metadata has no consensus map.
+        The finalized child selects this block's metadata, but the raw storage
+        read remains at this exact upgrade hash. Event decoding is untouched.
+        """
+        from scalecodec import ScaleBytes
+
+        s = self.substrate
+        if code_hash != V475_COLLECTOR_CODE_HASH:
+            raise ValueError("unsupported historical consensus metadata boundary")
+        block = s.get_block_number(block_hash)
+        if not 0 < block < s.get_block_number(s.get_chain_finalised_head()):
+            raise ValueError("finalized metadata child unavailable")
+        parent = s.get_block_hash(block - 1)
+        if (
+            s.rpc_request("state_getStorageHash", ["0x3a636f6465", parent]).get(
+                "result"
+            )
+            != V473_COLLECTOR_CODE_HASH
+        ):
+            raise ValueError("unsupported historical consensus parent")
+        child = s.get_block_hash(block + 1)
+        if (
+            s.get_parent_block_hash(child) != block_hash
+            or s.rpc_request("state_getStorageHash", ["0x3a636f6465", child]).get(
+                "result"
+            )
+            != code_hash
+        ):
+            raise ValueError("historical consensus metadata child changed")
+        key = s.create_storage_key(
+            "SubtensorModule", "SubnetEpochConsensus", [118], block_hash=child
+        )
+        result = s.rpc_request("state_getStorageAt", [key.to_hex(), block_hash])
+        raw = result.get("result")
+        if (
+            result.get("error")
+            or "result" not in result
+            or (
+                raw is not None
+                and (
+                    not isinstance(raw, str)
+                    or not re.fullmatch(r"0x(?:[0-9a-fA-F]{2}){0,32}", raw)
+                )
+            )
+        ):
+            raise ValueError("historical consensus storage unavailable")
+        # Use the real metadata modifier/default for absence, exactly as the
+        # normal SDK query does; never manufacture Yuma for missing evidence.
+        return unwrap(
+            key.decode_scale_value(ScaleBytes(raw) if raw is not None else None)
+        )
 
     def identity(self, policy, block_hash, *, allow_unowned=False):
         owner = self.query(
