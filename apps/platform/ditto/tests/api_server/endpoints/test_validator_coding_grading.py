@@ -42,7 +42,10 @@ from ditto.db.queries.coding_task_leases import (
     CodingShadowTaskLeaseCore,
     CodingTaskLeaseIntegrityError,
 )
-from ditto.db.queries.validator_auth import ValidatorRequestReplayError
+from ditto.db.queries.validator_auth import (
+    VALIDATOR_NONCE_EXPIRY_MARGIN,
+    ValidatorRequestReplayError,
+)
 
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _VALIDATOR = _KEYPAIR.ss58_address
@@ -262,7 +265,9 @@ async def test_grading_lease_retains_future_nonce_for_full_freshness_window(
     )
     assert response.status_code == 200, response.text
     consumed = mocks.consume_nonce.await_args.kwargs
-    assert consumed["expires_at"] == requested_at + timedelta(minutes=5)
+    assert consumed["expires_at"] == (
+        requested_at + timedelta(minutes=5) + VALIDATOR_NONCE_EXPIRY_MARGIN
+    )
     assert consumed["expires_at"] - consumed["now"] > timedelta(minutes=5)
 
 
