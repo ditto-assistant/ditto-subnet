@@ -1661,7 +1661,7 @@ CREATE TABLE public.bounty_appeals (
     signer text NOT NULL,
     signature text NOT NULL,
     filed_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_bounty_appeals_appeal CHECK (((length(reason_digest) = 64) AND (key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text]))))
+    CONSTRAINT ck_bounty_appeals_appeal CHECK (((reason_digest ~ '^[0-9a-f]{64}$'::text) AND (key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text]))))
 );
 
 
@@ -1724,7 +1724,7 @@ CREATE TABLE public.bounty_claims (
     fee_escrow_hotkey text NOT NULL,
     held_at timestamp with time zone NOT NULL,
     hold_expires_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_bounty_claims_claim CHECK (((key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text])) AND (fee_alpha_rao > 0) AND (hold_expires_at > held_at) AND (github_user_id > 0) AND (funding_mode = ANY (ARRAY['rehearsal'::text, 'live'::text])) AND ((key_kind = 'coldkey'::text) OR (signer = hotkey)) AND ((key_kind = 'hotkey'::text) OR (signer = payee_coldkey))))
+    CONSTRAINT ck_bounty_claims_claim CHECK (((key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text])) AND (fee_alpha_rao > 0) AND (hold_expires_at > held_at) AND (github_user_id > 0) AND (funding_mode = ANY (ARRAY['rehearsal'::text, 'live'::text])) AND ((key_kind = 'coldkey'::text) OR (signer = hotkey)) AND ((key_kind = 'hotkey'::text) OR (signer = payee_coldkey)) AND (spec_digest ~ '^[0-9a-f]{64}$'::text) AND (team_digest ~ '^[0-9a-f]{64}$'::text)))
 );
 
 
@@ -1940,7 +1940,7 @@ CREATE TABLE public.bounty_revisions (
     actor text NOT NULL,
     reason text NOT NULL,
     published_at timestamp with time zone NOT NULL,
-    CONSTRAINT ck_bounty_revisions_terms CHECK (((revision > 0) AND (length(spec_digest) = 64) AND (entry_fee_alpha_rao >= 0) AND (reward_pool_alpha_rao >= 0) AND ((attempts_per_round >= 1) AND (attempts_per_round <= 10)) AND ((delivery_days >= 1) AND (delivery_days <= 60)) AND ((review_days >= 1) AND (review_days <= 60)) AND ((hold_minutes >= 1) AND (hold_minutes <= 1440)) AND (funding_mode = ANY (ARRAY['rehearsal'::text, 'live'::text]))))
+    CONSTRAINT ck_bounty_revisions_terms CHECK (((revision > 0) AND (spec_digest ~ '^[0-9a-f]{64}$'::text) AND (entry_fee_alpha_rao >= 0) AND (reward_pool_alpha_rao >= 0) AND ((attempts_per_round >= 1) AND (attempts_per_round <= 10)) AND ((delivery_days >= 1) AND (delivery_days <= 60)) AND ((review_days >= 1) AND (review_days <= 60)) AND ((hold_minutes >= 1) AND (hold_minutes <= 1440)) AND (funding_mode = ANY (ARRAY['rehearsal'::text, 'live'::text]))))
 );
 
 
@@ -2183,7 +2183,8 @@ CREATE TABLE public.cla_signatures (
     issued_at timestamp with time zone NOT NULL,
     signed_at timestamp with time zone NOT NULL,
     owner_block bigint NOT NULL,
-    owner_block_hash text NOT NULL
+    owner_block_hash text NOT NULL,
+    CONSTRAINT ck_cla_signatures_digest CHECK ((cla_sha256 ~ '^[0-9a-f]{64}$'::text))
 );
 
 
@@ -2199,7 +2200,7 @@ CREATE TABLE public.cla_versions (
     effective_at timestamp with time zone NOT NULL,
     actor text NOT NULL,
     reason text NOT NULL,
-    CONSTRAINT ck_cla_versions_identity CHECK (((version > 0) AND (length(sha256) = 64)))
+    CONSTRAINT ck_cla_versions_identity CHECK (((version > 0) AND (sha256 ~ '^[0-9a-f]{64}$'::text)))
 );
 
 

@@ -1141,6 +1141,38 @@ async def test_a_slot_action_names_only_the_claim_of_its_slot(world):
         )
 
 
+async def test_every_recorded_digest_is_lowercase_hex(world):
+    await world.start(ALICE)
+    claim = (await submit(world, ALICE, await claimed(world, ALICE))).json()
+    await review(world, claim, "reject")
+    rejection = next(e for e in await events(world) if e["kind"] == "rejected")
+    filed = await appeal(world, ALICE, claim, rejection["event_id"], "Fixture appeal.")
+    assert filed.status_code == 200, filed.text
+    # A recorded row again with one digest replaced. Its check refuses it before
+    # any key can.
+    copy = (
+        "INSERT INTO {table} SELECT (jsonb_populate_record(NULL::{table},"
+        " to_jsonb(r) || jsonb_build_object('{column}', CAST(:digest AS text)))).*"
+        " FROM {table} r LIMIT 1"
+    )
+    for table, column, check in (
+        ("bounty_revisions", "spec_digest", "terms"),
+        ("bounty_claims", "spec_digest", "claim"),
+        ("bounty_claims", "team_digest", "claim"),
+        ("bounty_appeals", "reason_digest", "appeal"),
+        ("cla_versions", "sha256", "identity"),
+        ("cla_signatures", "cla_sha256", "digest"),
+    ):
+        for digest in ("z" * 64, "AB" * 32):
+            async with world.maker() as session:
+                with pytest.raises(DBAPIError, match=f"ck_{table}_{check}"):
+                    await session.execute(
+                        text(copy.format(table=table, column=column)),
+                        {"digest": digest},
+                    )
+                await session.rollback()
+
+
 async def test_review_routes_declare_their_errors(app):
     paths = app.openapi()["paths"]
     for route in ("submissions", "withdraw", "appeals"):

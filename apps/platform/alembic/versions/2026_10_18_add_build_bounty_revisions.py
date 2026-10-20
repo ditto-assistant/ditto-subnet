@@ -75,7 +75,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("bounty_id", "revision"),
         sa.ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         sa.CheckConstraint(
-            "revision > 0 AND length(spec_digest) = 64"
+            "revision > 0 AND spec_digest ~ '^[0-9a-f]{64}$'"
             " AND entry_fee_alpha_rao >= 0 AND reward_pool_alpha_rao >= 0"
             " AND attempts_per_round BETWEEN 1 AND 10"
             " AND delivery_days BETWEEN 1 AND 60 AND review_days BETWEEN 1 AND 60"

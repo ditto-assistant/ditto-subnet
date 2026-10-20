@@ -11863,7 +11863,7 @@ class ClaVersion(Base):
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     __table_args__ = (
-        CheckConstraint("version > 0 AND length(sha256) = 64", name="identity"),
+        CheckConstraint("version > 0 AND sha256 ~ '^[0-9a-f]{64}$'", name="identity"),
     )
 
 
@@ -11912,6 +11912,7 @@ class ClaSignature(Base):
             "cla_version",
             name="uq_cla_signatures_hotkey_version",
         ),
+        CheckConstraint("cla_sha256 ~ '^[0-9a-f]{64}$'", name="digest"),
     )
 
 
@@ -12106,7 +12107,7 @@ class BountyRevision(Base):
         PrimaryKeyConstraint("bounty_id", "revision"),
         ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
         CheckConstraint(
-            "revision > 0 AND length(spec_digest) = 64"
+            "revision > 0 AND spec_digest ~ '^[0-9a-f]{64}$'"
             " AND entry_fee_alpha_rao >= 0 AND reward_pool_alpha_rao >= 0"
             " AND attempts_per_round BETWEEN 1 AND 10"
             " AND delivery_days BETWEEN 1 AND 60 AND review_days BETWEEN 1 AND 60"
@@ -12386,7 +12387,8 @@ class BountyClaim(Base):
             " AND hold_expires_at > held_at AND github_user_id > 0"
             " AND funding_mode IN ('rehearsal','live')"
             " AND (key_kind = 'coldkey' OR signer = hotkey)"
-            " AND (key_kind = 'hotkey' OR signer = payee_coldkey)",
+            " AND (key_kind = 'hotkey' OR signer = payee_coldkey)"
+            " AND spec_digest ~ '^[0-9a-f]{64}$' AND team_digest ~ '^[0-9a-f]{64}$'",
             name="claim",
         ),
         Index("bounty_claims_bounty_idx", "bounty_id"),
@@ -12649,7 +12651,7 @@ class BountyAppeal(Base):
         ),
         ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
         CheckConstraint(
-            "length(reason_digest) = 64 AND key_kind IN ('hotkey','coldkey')",
+            "reason_digest ~ '^[0-9a-f]{64}$' AND key_kind IN ('hotkey','coldkey')",
             name="appeal",
         ),
     )

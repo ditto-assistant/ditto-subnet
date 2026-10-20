@@ -145,7 +145,8 @@ def upgrade() -> None:
             " AND hold_expires_at > held_at AND github_user_id > 0"
             " AND funding_mode IN ('rehearsal','live')"
             " AND (key_kind = 'coldkey' OR signer = hotkey)"
-            " AND (key_kind = 'hotkey' OR signer = payee_coldkey)",
+            " AND (key_kind = 'hotkey' OR signer = payee_coldkey)"
+            " AND spec_digest ~ '^[0-9a-f]{64}$' AND team_digest ~ '^[0-9a-f]{64}$'",
             name="claim",
         ),
     )

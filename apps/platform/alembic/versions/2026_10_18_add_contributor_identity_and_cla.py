@@ -135,7 +135,9 @@ def upgrade() -> None:
         sa.Column("effective_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("actor", sa.Text(), nullable=False),
         sa.Column("reason", sa.Text(), nullable=False),
-        sa.CheckConstraint("version > 0 AND length(sha256) = 64", name="identity"),
+        sa.CheckConstraint(
+            "version > 0 AND sha256 ~ '^[0-9a-f]{64}$'", name="identity"
+        ),
     )
     op.create_table(
         "cla_signatures",
@@ -160,6 +162,7 @@ def upgrade() -> None:
             "cla_version",
             name=op.f("uq_cla_signatures_hotkey_version"),
         ),
+        sa.CheckConstraint("cla_sha256 ~ '^[0-9a-f]{64}$'", name="digest"),
     )
     op.create_table(
         "cla_settings_revisions",

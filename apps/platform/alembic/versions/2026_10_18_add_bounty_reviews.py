@@ -256,7 +256,7 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
         sa.CheckConstraint(
-            "length(reason_digest) = 64 AND key_kind IN ('hotkey','coldkey')",
+            "reason_digest ~ '^[0-9a-f]{64}$' AND key_kind IN ('hotkey','coldkey')",
             name="appeal",
         ),
     )
