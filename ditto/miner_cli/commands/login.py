@@ -106,7 +106,10 @@ def _wallet_flags(parser: argparse.ArgumentParser) -> None:
         "--netuid",
         dest="netuid",
         type=int,
-        default=int(os.environ.get("NETUID", str(DEFAULT_NETUID))),
+        # A string default goes through type=int only when this command is
+        # parsed, so a bad NETUID cannot crash --help or other commands;
+        # an empty one means the default.
+        default=os.environ.get("NETUID") or str(DEFAULT_NETUID),
         help="Subnet the login is minted for. Default 118.",
     )
     parser.add_argument(

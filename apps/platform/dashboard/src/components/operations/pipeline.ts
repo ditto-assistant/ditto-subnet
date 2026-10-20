@@ -139,6 +139,21 @@ const HOLD_CAUSES: Record<string, string> = {
     "An inference budget record was missing inside Ditto, not anything in this submission.",
 };
 
+/** Codes that name the stage that stopped a run without blaming either side.
+ *
+ * A missed /seed deadline looks the same from an overloaded validator host and
+ * from a slow harness, so the copy names what happened and stays neutral on
+ * whose failure it was. */
+const UNATTRIBUTED_HOLD_STAGES: Record<string, { label: string; title: string }> = {
+  seed_deadline_exceeded: {
+    label: "On hold · seed deadline",
+    title:
+      "A validator stopped the run because the harness did not finish loading its memory " +
+      "before the scorer's deadline. A busy validator and a slow harness both cause this, " +
+      "so the platform has not attributed it to either side.",
+  },
+};
+
 /** How to present a parked submission, or null while it is still advancing.
  *
  * The verdict comes from the API's retry_disposition. The dashboard never
@@ -169,6 +184,14 @@ export function parkedReading(entry: PipelineEntryExt): ParkedReading | null {
       return {
         label: "On hold · Ditto-side failure",
         title: cause + " It is waiting for an operator to authorize the next attempt.",
+        tone: "hold",
+      };
+    }
+    const stage = UNATTRIBUTED_HOLD_STAGES[String(entry.hold_failure_code || "")];
+    if (stage) {
+      return {
+        label: stage.label,
+        title: stage.title + " An operator has to review it before it can continue.",
         tone: "hold",
       };
     }
@@ -430,7 +453,7 @@ export function pipelineAgentVersionLabel(version: number | string | null | unde
   return version == null ? "Legacy" : "v" + version;
 }
 
-// ── Deferred source review branch (weekend drift: #623/#635) ───────────────
+// ── Under-review branch (weekend drift: #623/#635) ──────────────────────────
 
 export interface IntegrityReviewView {
   /** Authoritative status_counts.under_review, falling back to the rows the
@@ -445,7 +468,7 @@ export interface IntegrityReviewView {
 /** Reason line for a held submission; the fallback names the branch's two
  * admission criteria rather than pretending to know which one fired. */
 export function integrityReviewReason(entry: PipelineEntryExt): string {
-  return entry.review_reason || entry.screening_reason || "Qualification or anomaly review";
+  return entry.review_reason || entry.screening_reason || "Held for review";
 }
 
 export function integrityReviewView(

@@ -31,11 +31,27 @@ For the confirmed combined service pool (`S = 0.10`):
 These percentages are of the full miner emission vector. They are forecasts,
 not current routing: the active validator still sends all emission to burn.
 
-The confirmed service pool is **1,000 bps total**, split between GM, Bitsec,
-Bitcast and later buckets. The exact initial split and public wallet addresses
-await Peyton's inputs. The schema permits a smaller pool for a guarded first
-activation, but never more than 1,000 bps combined. No service bucket may borrow
+The configurable service pool is **0–10,000 bps total**, split between GM, Bitsec,
+Bitcast and later buckets. The earlier 1,000 bps pool is retained as an example,
+not a ceiling. Backroom accepts percentages with 0.01% precision and displays
+the proposed Gamma share and miner remainder. No service bucket may borrow
 another bucket's allocation. The collector cannot also compete for miner payout.
+
+For 75% Gamma and 25% eligible miners, set `gm.allocation_bps = 7500`, other
+service buckets to zero, and `burn_share = 0`. A 25% burn with the same Gamma
+allocation instead yields 75% Gamma, 18.75% miners and 6.25% burn. A 100% Gamma
+allocation leaves no miner or burn remainder, including with an empty miner pool.
+
+Saving a shadow proposal changes no live weights, except that an in-range Gamma %
+under an enforcing coldkey-signed range applies from the next epoch
+([sn118-gamma-signed-range.md](sn118-gamma-signed-range.md)). The new emission policy needs
+its own coldkey approval and matching immutable digests on Platform and managed
+validator/Pylon guards before a future epoch can activate it. Deploy consumers
+that accept the wider range first; old consumers refuse the new policy. Historical
+10% signatures and epoch pins remain unchanged. Collector distribution policy,
+journal transition and transfers remain separately controlled; do not reset a
+signer journal or enable recurrence to change emissions. The existing journal
+migrator supports custody/runtime transitions only, not allocation changes.
 
 ## Wallet identity and custody
 
@@ -142,9 +158,46 @@ for later manually signed purchases. Legacy v1 payment prerequisites remain.
 
 `GET /api/v1/public/treasury-allocation` and the dashboard **Gamma · Beta** page
 show configured service allocations, a service-first forecast, collector and
-holding addresses, and payment rules. They explicitly show effective service
-funding, distribution and observation as inactive. The Beta page makes no
-token issuance, redemption, or token-economic promise.
+holding addresses, and payment rules. `routing_status` is `active`, with
+`effective_service_share` equal to the pinned service share and
+`routing_epoch` naming the epoch, only when the newest served ledger pin
+carries a verified enforcing treasury pin, the exact input every validator
+folds, and only while that pin covers the current epoch. An enforcing pin
+past its own epoch end (361 blocks from its first block, plus a 2-minute
+grace for the next pin to materialize) reports `stale` with an effective
+share of 0, because validators refuse a stale enforcing fold. A recorded
+`enforce` runtime without such a pin reports `scheduled`,
+`pause` reports `paused`, and an unreadable pin never reports routing as
+active. Distribution and the payment observer still report inactive. The
+Beta page makes no token issuance, redemption, or token-economic promise.
+
+### Gamma ledger
+
+Platform records one reading of the collector per epoch from finalized public
+chain state (`treasury_ledger_samples`, sampler flag
+`DITTO_TREASURY_LEDGER_SAMPLER_ENABLED`, default on). Each reading stores, at
+one block hash: the collector UID's incentive share and last-epoch emission;
+the collector coldkey's total, conviction-locked and unlocked alpha
+(`get_stake_availability_for_coldkeys`); whether the lock is perpetual
+(`DecayingLock`); the owner hotkey's conviction and the most-convicted hotkey;
+and each holding wallet's alpha and free TAO.
+
+`GET /api/v1/public/treasury-ledger` (and the Backroom `get_treasury_ledger`
+read) compares consecutive readings. An interval's outflow is what the
+collector earned minus how much its balance grew. Gross `Emission[uid]` is
+exactly the credit that lands: across epoch boundary 9,280,429 the collector
+total grew by `Emission[21]` to the rao.
+
+Verified SN118-alpha `service_distribution` receipts sent by the collector
+attribute that outflow. They are matched by transfer block and capped at the
+measured outflow. Receipts for buckets that do not publish payments attribute
+by amount only, without exposing their ids. The remainder is reported as
+unattributed until Backroom records the receipt with `record_treasury_receipt`.
+
+A skipped epoch is extrapolated and flagged `estimated`, and a collector
+rotation is never counted as an outflow. Rao amounts are decimal strings. The
+dashboard Gamma page shows the balance, lock, conviction, window totals and
+every interval with an outflow, and warns when the sampler is not running.
 
 A rule matches the holding coldkey plus exact payee, asset and, for stake,
 recipient hotkey. Disabled/ambiguous rules must not classify a payment. A

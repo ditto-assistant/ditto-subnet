@@ -1208,6 +1208,67 @@ async def test_upload_initiation_retries_502_with_one_idempotency_id(
     assert requested_ids[0] == requested_ids[1] == str(result)
 
 
+async def test_upload_completion_replays_after_gateway_502(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Production 2026-10-02/03: Platform verified the image but the gateway
+    # answered 502, failing the screen as image-upload-failed.
+    monkeypatch.setattr(platform_module, "_IMAGE_COMPLETE_RETRY_DELAYS", (0.0, 0.0))
+    archive = tmp_path / "image.tar"
+    archive.write_bytes(b"docker-image")
+    completions = 0
+    aborted = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal completions, aborted
+        if request.url.path.endswith("/screened-image-upload"):
+            return httpx.Response(
+                200,
+                json={
+                    "image_upload_id": json.loads(request.content)["image_upload_id"],
+                    "storage_upload_id": "storage-upload",
+                    "part_size_bytes": 5 * 1024**2,
+                    "expires_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        if request.url.path.endswith("/part"):
+            return httpx.Response(
+                200,
+                json={
+                    "upload_url": "https://storage.test/image.part",
+                    "expires_at": datetime.now(UTC).isoformat(),
+                    "required_headers": {},
+                },
+            )
+        if request.method == "PUT":
+            return httpx.Response(200, headers={"ETag": '"part-etag"'})
+        if request.url.path.endswith("/complete"):
+            completions += 1
+            if completions == 1:
+                return httpx.Response(502, text="")
+            return httpx.Response(200, json={"verified": True})
+        if request.url.path.endswith("/abort"):
+            aborted = True
+            return httpx.Response(200, json={"aborted": True})
+        raise AssertionError(request.url)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        await client.upload_screened_image(
+            _AGENT,
+            attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+            path=str(archive),
+            sha256="12" * 32,
+            size_bytes=archive.stat().st_size,
+            image_id="sha256:" + "34" * 32,
+            image_ref=f"ditto-screen/{_AGENT}:latest",
+        )
+    assert completions == 2
+    assert not aborted
+
+
 async def test_upload_initiation_rejects_platform_that_ignores_idempotency_id(
     make_config: Callable[..., ScreenerConfig], tmp_path: Path
 ) -> None:

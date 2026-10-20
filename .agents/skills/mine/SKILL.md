@@ -17,6 +17,10 @@ This is the miner-facing skill. Load it before editing the starter kit,
 scoring, or uploading. A local score is not a production clearance: walk the
 served path against `$backroom-review` before `full`, packaging, or upload.
 
+The numbers below drift. For the live scoring bench, emission split, payout
+curve, champion, next epoch, and your own agents' status, run `$subnet-status`
+(`python3 .agents/skills/subnet-status/scripts/subnet_status.py --hotkey <ss58>`).
+
 Live scoring is **bench 12**, `run_size=full`, observed tools, locked
 `openai/gpt-oss-20b`. Update `LIVE_SCORING_BENCH_VERSION` in
 `miners/dittobench-starter-kit/scripts/local-rehearsal.py` when Platform

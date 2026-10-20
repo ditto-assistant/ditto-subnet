@@ -34,6 +34,13 @@ const (
 	defaultEmbeddingPerValidatorConcurrency = 48
 	defaultEmbeddingGlobalConcurrency       = 96
 	maxEmbeddingConcurrency                 = 512
+	defaultChatPerTicketRPM                 = 1920
+	defaultChatPerValidatorRPM              = 7680
+	defaultChatGlobalRPM                    = 23040
+	defaultEmbeddingPerTicketRPM            = 10_000
+	defaultEmbeddingPerValidatorRPM         = 40_000
+	defaultEmbeddingGlobalRPM               = 100_000
+	maxRequestsPerMinute                    = 100_000
 	settingsRefreshInterval                 = 5 * time.Second
 )
 
@@ -48,6 +55,12 @@ type concurrencySettings struct {
 	EmbeddingPerTicketConcurrency    int
 	EmbeddingPerValidatorConcurrency int
 	EmbeddingGlobalConcurrency       int
+	ChatPerTicketRPM                 int
+	ChatPerValidatorRPM              int
+	ChatGlobalRPM                    int
+	EmbeddingPerTicketRPM            int
+	EmbeddingPerValidatorRPM         int
+	EmbeddingGlobalRPM               int
 }
 
 func defaultConcurrencySettings() concurrencySettings {
@@ -60,6 +73,12 @@ func defaultConcurrencySettings() concurrencySettings {
 		EmbeddingPerTicketConcurrency:    defaultEmbeddingPerTicketConcurrency,
 		EmbeddingPerValidatorConcurrency: defaultEmbeddingPerValidatorConcurrency,
 		EmbeddingGlobalConcurrency:       defaultEmbeddingGlobalConcurrency,
+		ChatPerTicketRPM:                 defaultChatPerTicketRPM,
+		ChatPerValidatorRPM:              defaultChatPerValidatorRPM,
+		ChatGlobalRPM:                    defaultChatGlobalRPM,
+		EmbeddingPerTicketRPM:            defaultEmbeddingPerTicketRPM,
+		EmbeddingPerValidatorRPM:         defaultEmbeddingPerValidatorRPM,
+		EmbeddingGlobalRPM:               defaultEmbeddingGlobalRPM,
 	}
 }
 
@@ -126,6 +145,31 @@ func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 	if err := intField("embedding_global_concurrency", &embeddingGlobal, 1, maxEmbeddingConcurrency); err != nil {
 		return defaultConcurrencySettings(), err
 	}
+	chatTicketRPM, chatValidatorRPM, chatGlobalRPM := int64(out.ChatPerTicketRPM),
+		int64(out.ChatPerValidatorRPM), int64(out.ChatGlobalRPM)
+	embeddingTicketRPM, embeddingValidatorRPM, embeddingGlobalRPM := int64(out.EmbeddingPerTicketRPM),
+		int64(out.EmbeddingPerValidatorRPM), int64(out.EmbeddingGlobalRPM)
+	for _, field := range []struct {
+		key string
+		dst *int64
+	}{
+		{"chat_per_ticket_requests_per_minute", &chatTicketRPM},
+		{"chat_per_validator_requests_per_minute", &chatValidatorRPM},
+		{"chat_global_requests_per_minute", &chatGlobalRPM},
+		{"embedding_per_ticket_requests_per_minute", &embeddingTicketRPM},
+		{"embedding_per_validator_requests_per_minute", &embeddingValidatorRPM},
+		{"embedding_global_requests_per_minute", &embeddingGlobalRPM},
+	} {
+		if err := intField(field.key, field.dst, 1, maxRequestsPerMinute); err != nil {
+			return defaultConcurrencySettings(), err
+		}
+	}
+	if chatTicketRPM > chatValidatorRPM || chatValidatorRPM > chatGlobalRPM {
+		return defaultConcurrencySettings(), errors.New("chat requests-per-minute hierarchy violated")
+	}
+	if embeddingTicketRPM > embeddingValidatorRPM || embeddingValidatorRPM > embeddingGlobalRPM {
+		return defaultConcurrencySettings(), errors.New("embedding requests-per-minute hierarchy violated")
+	}
 	if chatPerTicket > chatPerValidator || chatPerValidator > chatGlobal {
 		return defaultConcurrencySettings(), errors.New("chat concurrency hierarchy violated")
 	}
@@ -138,6 +182,12 @@ func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 	out.EmbeddingPerTicketConcurrency = int(embeddingPerTicket)
 	out.EmbeddingPerValidatorConcurrency = int(embeddingPerValidator)
 	out.EmbeddingGlobalConcurrency = int(embeddingGlobal)
+	out.ChatPerTicketRPM = int(chatTicketRPM)
+	out.ChatPerValidatorRPM = int(chatValidatorRPM)
+	out.ChatGlobalRPM = int(chatGlobalRPM)
+	out.EmbeddingPerTicketRPM = int(embeddingTicketRPM)
+	out.EmbeddingPerValidatorRPM = int(embeddingValidatorRPM)
+	out.EmbeddingGlobalRPM = int(embeddingGlobalRPM)
 	return out, nil
 }
 
@@ -218,8 +268,8 @@ func (r *SettingsResolver) startRefresh(ctx context.Context, interval time.Durat
 
 // applySettings overlays the resolved policy onto a fallback config copy
 // (apply_settings). The overlaid chat budgets are inert at admission because
-// grants compare their stamped columns; both chat and embedding concurrency
-// limits are live fields.
+// grants compare their stamped columns; chat and embedding concurrency and
+// requests-per-minute limits are live fields, as on the Platform side.
 func applySettings(cfg config.InferenceProxyConfig, s concurrencySettings) config.InferenceProxyConfig {
 	cfg.RequestBudget = int(s.ChatRequestBudget)
 	cfg.TokenBudget = s.ChatTokenBudget
@@ -229,5 +279,11 @@ func applySettings(cfg config.InferenceProxyConfig, s concurrencySettings) confi
 	cfg.EmbeddingTicketConcurrency = s.EmbeddingPerTicketConcurrency
 	cfg.EmbeddingValidatorConcurrency = s.EmbeddingPerValidatorConcurrency
 	cfg.EmbeddingGlobalConcurrency = s.EmbeddingGlobalConcurrency
+	cfg.TicketRPM = s.ChatPerTicketRPM
+	cfg.ValidatorRPM = s.ChatPerValidatorRPM
+	cfg.GlobalRPM = s.ChatGlobalRPM
+	cfg.EmbeddingTicketRPM = s.EmbeddingPerTicketRPM
+	cfg.EmbeddingValidatorRPM = s.EmbeddingPerValidatorRPM
+	cfg.EmbeddingGlobalRPM = s.EmbeddingGlobalRPM
 	return cfg
 }

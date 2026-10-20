@@ -90,3 +90,18 @@ def test_snapshot_omits_nested_caches_and_rejects_env_files(tmp_path: Path) -> N
     (source / ".env").write_text("OPENROUTER_API_KEY=secret\n", encoding="utf-8")
     with pytest.raises(CorpusError, match="credential file"):
         export_sanitized_snapshot(source, tmp_path / "env")
+
+
+@pytest.mark.parametrize(
+    "credential", [".env/production", ".env.d/production", "src/.env.local/key"]
+)
+def test_snapshot_rejects_credential_directories(
+    tmp_path: Path, credential: str
+) -> None:
+    source = _source(tmp_path)
+    target = source / credential
+    target.parent.mkdir(parents=True)
+    target.write_text("OPENROUTER_API_KEY=secret\n", encoding="utf-8")
+    with pytest.raises(CorpusError, match="credential path"):
+        export_sanitized_snapshot(source, tmp_path / "snapshot")
+    assert not (tmp_path / "snapshot" / "workspace" / credential).exists()

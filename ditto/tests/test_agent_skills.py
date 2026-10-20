@@ -69,6 +69,30 @@ def test_discord_sweep_routes_to_browser_triage() -> None:
     assert topic_list(topic, "skills") == ["discord-miner-triage"]
 
 
+def test_miner_parameter_questions_route_to_subnet_status() -> None:
+    for query in (
+        "what are the current parameters and payout curve",
+        "why is my agent not on the board",
+    ):
+        topic = lookup(query)[0]
+        assert topic["id"] == "subnet-status", query
+        assert topic_list(topic, "skills") == ["subnet-status", "mine"]
+
+
+def test_contributor_backlog_routes_to_review_and_delivery() -> None:
+    for query in (
+        "review all PRs from this contrib and merge or close them",
+        "take ownership of a contributor backlog",
+    ):
+        topic = lookup(query)[0]
+        assert topic["id"] == "contributor-pr-review"
+        assert topic_list(topic, "skills") == [
+            "contributor-pr-review",
+            "github",
+            "ditto-subnet-worktree",
+        ]
+
+
 def test_native_reserved_recovery_routes_to_operator_command() -> None:
     topic = lookup("native evidence recovery")[0]
     assert topic["id"] == "coding-evidence-recovery"
@@ -482,6 +506,25 @@ def test_quarantine_and_ath_queries_route_to_backroom_review() -> None:
     ):
         topic_ids = [str(topic["id"]) for topic in lookup(query)]
         assert topic_ids[0] == "backroom-review", query
+
+
+def test_rolling_board_sweep_routes_to_sweep_then_review() -> None:
+    skill = ROOT / ".agents" / "skills" / "backroom-board-sweep"
+    body = (skill / "SKILL.md").read_text()
+    claude_link = ROOT / ".claude" / "skills" / "backroom-board-sweep"
+
+    assert "$backroom-review" in body
+    assert "execute_ath_rulings_batch" in body or "APPLY ATH RULINGS BATCH" in body
+    assert "get_leaderboard" in body
+    assert claude_link.is_symlink()
+    assert (claude_link.parent / claude_link.readlink()).resolve() == skill.resolve()
+    for query in (
+        "rolling top 5 ATH board review",
+        "sweep the board and review every emission recipient",
+    ):
+        topics = lookup(query, maximum=2)
+        assert str(topics[0]["id"]) == "backroom-board-sweep", query
+        assert "backroom-review" in topic_list(topics[0], "skills")
 
 
 def test_mine_skill_applies_operator_review_bar_locally() -> None:

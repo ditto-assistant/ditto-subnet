@@ -68,6 +68,10 @@ ERROR_CODE_HTTP_EXCEPTION = 3002
 # 429 + Retry-After from the opt-in per-client-IP limit on unauthenticated
 # routes (middleware/public_rate_limit.py). Retryable once the wait elapses.
 ERROR_CODE_RATE_LIMITED = 3003
+# 413 from the transport-level body cap (middleware/request_body_limit.py),
+# answered before the endpoint parses or authenticates the request. Endpoint
+# caps tighter than the transport cap keep answering 413 with 3002.
+ERROR_CODE_REQUEST_TOO_LARGE = 3004
 ERROR_CODE_PRICING = 3100
 ERROR_CODE_ORACLE_UNREACHABLE = 3101
 ERROR_CODE_MALFORMED_PRICE = 3102
@@ -516,5 +520,13 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _unhandled_exception_handler(
         _request: Request, _exc: Exception
     ) -> JSONResponse:
-        logger.exception("unhandled exception in request handler")
-        return envelope_response(500, ERROR_CODE_UNHANDLED, "internal server error")
+        # The outer error handler runs after request middleware unwinds. Its
+        # ContextVar has been reset, but the request still owns the validated ID.
+        token = request_id_var.set(
+            getattr(_request.state, "request_id", request_id_var.get())
+        )
+        try:
+            logger.exception("unhandled exception in request handler")
+            return envelope_response(500, ERROR_CODE_UNHANDLED, "internal server error")
+        finally:
+            request_id_var.reset(token)

@@ -105,11 +105,34 @@ class AdminCopySimilarityEvidence(BaseModel):
     decision_role: str
 
 
+class AdminCopyLanguageInventory(BaseModel):
+    """Private per-artifact language mix of the fingerprinted members.
+
+    Counts are keyed by a fixed language label (``rust``, ``python``,
+    ``typescript``, ``go``, ``unknown``, ...) detected from file extension,
+    file name, or a ``#!`` line; never a path or any content. Members dropped
+    as stock starter-kit content or generated lockfiles are counted only in
+    ``excluded_*``. The normalized-source and prompt channels canonicalize
+    Rust/C-style syntax, so an artifact that is mostly another language gets
+    weaker evidence from them: a miss there is not exculpatory. Provenance
+    only; it never changes a decision.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    version: str
+    files: dict[str, int]
+    bytes: dict[str, int]
+    excluded_files: int | None = None
+    excluded_bytes: int | None = None
+
+
 class AdminCopyReviewCurrentComparison(BaseModel):
     availability: Literal["available"]
     bulk_eligible: bool
     algorithm_version: str
     lexical_fingerprint_version: int
+    line_fingerprint_version: str | None = None
     normalized_source_fingerprint_version: str
     prompt_fingerprint_version: str
     canonical_reference_revision: str
@@ -122,11 +145,17 @@ class AdminCopyReviewCurrentComparison(BaseModel):
     exact_byte_match: bool
     normalized_source_match: bool
     lexical: AdminCopySimilarityEvidence
+    line: AdminCopySimilarityEvidence | None = None
+    """Line sub-sketch of the lexical fingerprint; triggers beside ``lexical``."""
     structural: AdminCopySimilarityEvidence
     prompt: AdminCopySimilarityEvidence
     triggered: bool
     triggered_signal: str | None
     current_decision: str
+    candidate_languages: AdminCopyLanguageInventory | None = None
+    """Held agent's language inventory; null when not recorded for the row."""
+    reference_languages: AdminCopyLanguageInventory | None = None
+    """Matched agent's language inventory; null when not recorded for the row."""
 
 
 class AdminCopyReviewComparisonUnavailable(BaseModel):

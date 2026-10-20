@@ -671,8 +671,10 @@ otherwise ineligible newer generation cannot shadow an older eligible winner.
 
 ### Evidence-tied emission shares
 
-Protocol 20 adds an operator-gated alternative to the fixed
-`65% / 14% / 10% / 7% / 4%` KOTH shares. When the ledger carries
+Protocol 20 adds an operator-gated alternative to the configured KOTH shares
+(frozen default `65% / 14% / 10% / 7% / 4%`; from protocol 31 the ledger may
+serve an operator curve as `rank_shares`, withheld until every recently-live
+weight setter reports v31). When the ledger carries
 `tie_weighting_mode: pool`, validators group contiguous recipients that are
 evidence-tied, pool only the rank shares those recipients occupy, and divide
 that pool equally. Four tied tail recipients therefore receive `8.75%` each;

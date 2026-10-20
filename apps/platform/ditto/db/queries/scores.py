@@ -21,15 +21,22 @@ from uuid import UUID
 
 from sqlalchemy import (
     ColumnElement,
+    Float,
+    Text,
     and_,
     case,
+    column,
     func,
     literal,
     null,
     or_,
     select,
+    true,
+    tuple_,
     union,
 )
+from sqlalchemy import cast as sql_cast
+from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm.util import AliasedClass
 
@@ -87,6 +94,20 @@ MIN_ELIGIBLE_CASES = 100
 # and finalizes an agent (``evaluating -> scored``) once it has this many
 # scores. Keep in sync with the ticket-issue cap and the validator quorum.
 SCORING_QUORUM = 3
+
+# 1.7976931348623157e308 — the float8 maximum, as PostgreSQL renders its 309-digit
+# plain decimal (str(float8 max) rounds to 1.7976931348623157e+308, but JSONB
+# normalizes stored JSON numbers to the full digit string, so the range guard
+# compares text against this exact boundary). Anything at or below it casts
+# finite; the next integer up overflows.
+_FLOAT8_MAX_TEXT = (
+    "1797693134862315708145274237317043567980705675258449965989174768031"
+    "572607800285387605895586327668781715404589535143824642343213268894"
+    "641827684675467035375169860499105765512820762454900903893289440758"
+    "685084551339423045832369032229481658085593321233482747978262041447"
+    "23168738177180919299881250404026184124858368"
+)
+assert len(_FLOAT8_MAX_TEXT) == 309
 
 
 def _is_ranked() -> ColumnElement[bool]:
@@ -373,7 +394,13 @@ class LedgerRow:
     the score ``details`` JSON.
     """
     stored_composite_stderr: float | None = None
-    """Small ranking scalar projected from score details after winner selection."""
+    """Small ranking scalar projected from score details after winner selection.
+
+    Populated from the fetched details blob, from the ``composite_stderr`` key
+    when a ``details_keys`` projection is requested (include it in the key set
+    or this field reads None), or from a standalone scalar extraction when no
+    details are shipped at all.
+    """
     family_members: tuple[LedgerFamilyMember, ...] = ()
     """Compact owner-family rows, populated only for leaderboard list reads."""
     crown_first_seen: datetime | None = None
@@ -2264,7 +2291,12 @@ async def list_eligible_ledger(
         first_seen=rooted.c.first_seen,
         agent_id=rooted.c.agent_id,
     )
-    # Rank the owner's family once so the ledger can serve one row per owner.
+    # Rank the owner's family once so a deduped read can serve one row per
+    # owner. Weight and emission callers must not use this collapse on a pool
+    # that still contains deregistered hotkeys: ``dedupe_owner_rows`` applies
+    # the registration snapshot first, then picks the representative. Doing
+    # it in the other order lets a deregistered best row win the family and
+    # the later registration filter zeroes the linked owner.
     owner_ranked = select(
         rooted,
         func.row_number()
@@ -2320,20 +2352,159 @@ async def list_eligible_ledger(
         )
     winners = winner_select.cte("ledger_winners")
 
+    details_evidence = None
     if details_keys is not None:
         # Narrow projection: build an object holding ONLY the requested keys, so
         # Postgres never ships (and asyncpg never decodes) the rest of the blob.
         # A key the row does not have arrives as SQL NULL -> Python None, which
         # every reader of these keys already treats as absent.
+        keys = tuple(dict.fromkeys(details_keys))
+        cached_keys = {
+            "composite_stderr",
+            "confirmation_seeds",
+            "confirmation_composites",
+        }
+        cached_details = None
+        if keys and set(keys) <= cached_keys:
+            # The trigger derives exact JSON from this physical score row.
+            # A partial/old projection is not proof of absent fields: fall back
+            # during interrupted backfills and rolling application rollback.
+            cached_details = case(
+                (
+                    and_(
+                        func.jsonb_typeof(Score.stderr_projection) == "object",
+                        *(Score.stderr_projection.bool_op("?")(key) for key in keys),
+                    ),
+                    Score.stderr_projection,
+                ),
+                else_=func.jsonb_path_query_first(
+                    Score.details,
+                    sql_cast(literal('strict $ ? (@.type() == "object")'), JSONPATH),
+                ),
+            )
+        if len(keys) > 1:
+            # Each independent key lookup detoasts the whole audit document.
+            # A strict root-object filter preserves all-null projections for
+            # non-object documents, without detoasting once for a type guard
+            # and again for the record. Never unwrap array/object decoys.
+            details_evidence = (
+                func.jsonb_to_record(
+                    cached_details
+                    if cached_details is not None
+                    else func.jsonb_path_query_first(
+                        Score.details,
+                        sql_cast(
+                            literal('strict $ ? (@.type() == "object")'), JSONPATH
+                        ),
+                    )
+                )
+                .table_valued(*(column(key, JSONB) for key in keys))
+                .render_derived(with_types=True)
+                .lateral("ledger_details")
+            )
         pairs: list[ColumnElement[Any]] = []
-        for key in details_keys:
+        for key in keys:
             pairs.append(literal(key))
-            pairs.append(Score.details[key])
+            pairs.append(
+                details_evidence.c[key]
+                if details_evidence is not None
+                else cached_details[key]
+                if cached_details is not None
+                else Score.details[key]
+            )
         details_column = func.jsonb_build_object(*pairs).label("details")
     elif include_details:
         details_column = Score.details.label("details")
     else:
+        # No details blob is shipped, so the composite stderr cannot be read
+        # back in Python; extract exactly that one key below, after selecting
+        # the physical median row for each winner.
         details_column = null().label("details")
+    stderr_evidence = None
+    if details_keys is None and not include_details:
+        # PostgreSQL otherwise expands every CASE guard reference into another
+        # extraction from the large toasted audit blob. Materialize only this
+        # scalar, once per winning physical row, before validating it.
+        stderr_evidence = (
+            select(
+                winners.c.agent_id,
+                winners.c.bench_version,
+                winners.c.validator_hotkey,
+                func.coalesce(
+                    Score.stderr_projection["composite_stderr"],
+                    Score.details["composite_stderr"],
+                ).label("value"),
+            )
+            .select_from(winners)
+            .join(
+                Score,
+                and_(
+                    Score.agent_id == winners.c.agent_id,
+                    Score.bench_version == winners.c.bench_version,
+                    Score.validator_hotkey == winners.c.validator_hotkey,
+                ),
+            )
+            .cte("ledger_winner_stderr")
+            .prefix_with("MATERIALIZED")
+        )
+        # Mirror _stored_stderr's degrade-to-None contract in SQL: a malformed
+        # value (boolean, nonnumeric string, or an out-of-float8-range number)
+        # must yield NULL rather than abort the whole ledger read at the cast.
+        # JSONB normalizes large numbers to plain decimals, so the range guard
+        # is textual: plain integers carry their full magnitude (309 digits can
+        # still be in range, e.g. 1e308, and only exceed float8 past
+        # 1.797...e308 — compared lexicographically against that exact
+        # boundary); anything with a decimal point or exponent text is in
+        # range up to 310 chars and overflows from 311. Inside CASE arms the
+        # cast is lazy and never runs for rows the guard rejects.
+        stderr_text = sql_cast(stderr_evidence.c.value, Text())
+        is_number = func.jsonb_typeof(stderr_evidence.c.value) == literal("number")
+        digits = func.regexp_replace(stderr_text, literal(r"^-"), literal(""))
+        is_plain_int = stderr_text.op("~")(literal(r"^-?[0-9]+$"))
+        in_float8_range = or_(
+            # Decimal/exponent text: 310 chars with sign stays finite and 311
+            # overflows — except magnitudes below 1 (leading "0." / "-0."),
+            # which JSONB can render arbitrarily long (1e-309 normalizes to a
+            # 311-char decimal) and which always cast finite.
+            and_(
+                ~is_plain_int,
+                or_(
+                    func.length(stderr_text) <= 310,
+                    stderr_text.op("~")(literal(r"^-?0")),
+                ),
+            ),
+            # Plain integers: compare magnitude against the 309-digit float8
+            # max (negatives carry one extra sign character).
+            and_(
+                is_plain_int,
+                stderr_text.op("~")(literal(r"^-")),
+                func.length(stderr_text) <= 310,
+                or_(
+                    func.length(digits) < 309,
+                    and_(func.length(digits) == 309, digits <= _FLOAT8_MAX_TEXT),
+                ),
+            ),
+            and_(
+                is_plain_int,
+                stderr_text.op("!~")(literal(r"^-")),
+                or_(
+                    func.length(stderr_text) < 309,
+                    and_(
+                        func.length(stderr_text) == 309,
+                        stderr_text <= _FLOAT8_MAX_TEXT,
+                    ),
+                ),
+            ),
+        )
+        stderr_column: ColumnElement[Any] = case(
+            (
+                and_(is_number, in_float8_range),
+                sql_cast(stderr_text, Float()),
+            ),
+            else_=None,
+        ).label("stored_composite_stderr")
+    else:
+        stderr_column = null().label("stored_composite_stderr")
     sketch_columns: tuple[ColumnElement[Any], ...]
     if include_fingerprints:
         sketch_columns = (
@@ -2456,16 +2627,15 @@ async def list_eligible_ledger(
             Score.median_ms,
             Score.n,
             winners.c.eligible,
-            Score.details["composite_stderr"]
-            .as_float()
-            .label("stored_composite_stderr"),
             details_column,
+            stderr_column,
             Score.validator_hotkey,
             Score.signature,
             Score.bench_version,
             winners.c.crown_first_seen,
             *receipt_columns,
         )
+        .select_from(winners)
         .join(Agent, Agent.agent_id == winners.c.agent_id)
         .join(
             Score,
@@ -2477,6 +2647,17 @@ async def list_eligible_ledger(
         )
         .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
     )
+    if details_evidence is not None:
+        stmt = stmt.join(details_evidence, true())
+    if stderr_evidence is not None:
+        stmt = stmt.join(
+            stderr_evidence,
+            and_(
+                stderr_evidence.c.agent_id == winners.c.agent_id,
+                stderr_evidence.c.bench_version == winners.c.bench_version,
+                stderr_evidence.c.validator_hotkey == winners.c.validator_hotkey,
+            ),
+        )
     if v9_enforce:
         stmt = (
             stmt.outerjoin(
@@ -2540,6 +2721,27 @@ async def list_eligible_ledger(
         if row.agent_id not in grouped:
             winner_ids.append(row.agent_id)
         grouped[row.agent_id].append(row)
+
+    # The composite stderr was previously a second ``details`` JSON
+    # extraction in SQL beside a shipped details column, forcing PostgreSQL to
+    # detoast the per-case audit blob a second time per winner (41-45% of
+    # measured database statement time on repeated ledger reads). When the
+    # blob itself is fetched (``details_keys``/``include_details``), it is
+    # derived here in Python — zero additional detoasting. When the blob is
+    # not shipped, the scalar extraction above remains the only SQL read.
+    def _stored_stderr(row: Any) -> float | None:
+        value = row.stored_composite_stderr
+        if value is not None:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            return float(value)
+        details = row.details
+        if not isinstance(details, dict):
+            return None
+        raw = details.get("composite_stderr")
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        return float(raw)
 
     ledger: list[LedgerRow] = []
     for winner_id in winner_ids:
@@ -2614,7 +2816,7 @@ async def list_eligible_ledger(
                 eligible=bool(row.eligible),
                 details=row.details,
                 official_composite=float(row.official_score),
-                stored_composite_stderr=row.stored_composite_stderr,
+                stored_composite_stderr=_stored_stderr(row),
                 family_members=family_members,
                 crown_first_seen=row.crown_first_seen,
                 v9_confirmation=v9_confirmation,
@@ -2658,27 +2860,99 @@ async def quorum_composites(
     return out
 
 
+@dataclass(frozen=True)
+class QuorumScoreRow:
+    """The bounded scalar + evidence projection :func:`quorum_score_rows` returns.
+
+    Carries only the fields the downstream consumers read (efficiency's token
+    accounting and the confirmation candidate fallback's median selection).
+    Replacing a full ``Score`` ORM load keeps the per-case audit blob — the
+    dominant TOAST cost in the ledger path — from also dragging every
+    unused column of the row across the wire.
+    """
+
+    agent_id: UUID
+    bench_version: int
+    validator_hotkey: str
+    composite: float
+    n: int
+    details: dict[str, Any] | None
+
+
 async def quorum_score_rows(
     session: AsyncSession,
     agent_ids: Sequence[UUID],
     *,
     bench_versions: dict[UUID, int],
-) -> dict[UUID, list[Score]]:
-    """Return every accepted score row backing each authoritative ledger row."""
+    details_keys: Sequence[str] | None = None,
+) -> dict[UUID, list[QuorumScoreRow]]:
+    """Return every accepted score row backing each authoritative ledger row.
+
+    Returns the bounded :class:`QuorumScoreRow` projection rather than ORM
+    ``Score`` entities: no ``signature``, ``seed``, ``run_id``, timestamps or
+    per-column re-hydration, and the ``details`` JSONB is fetched once as the
+    only remaining payload column. Pass ``details_keys`` to project the blob
+    down to exactly the keys the consumer reads (e.g. the efficiency curves'
+    ``token_usage``/``v9_base``/``base_evidence_sha256``); the full blob ships
+    only when the consumer genuinely needs every key.
+    """
     if not agent_ids:
         return {}
+    if details_keys is None:
+        details_column = Score.details.label("details")
+    else:
+        pairs: list[ColumnElement[Any]] = []
+        for key in details_keys:
+            pairs.append(literal(key))
+            pairs.append(Score.details[key])
+        # Absent details must stay None. Note Score.details uses _JSON_VARIANT
+        # without none_as_null, so upserting Python None stores a JSON null —
+        # test for both SQL NULL and JSON null, or jsonb_build_object will
+        # materialize them into an object of JSON nulls, breaking the declared
+        # dict | None contract the unprojected branch keeps.
+        details_is_absent = or_(
+            Score.details.is_(None),
+            func.jsonb_typeof(Score.details) == literal("null"),
+        )
+        details_column = case(
+            (details_is_absent, null()),
+            else_=func.jsonb_build_object(*pairs),
+        ).label("details")
     result = await session.execute(
-        select(Score)
+        select(
+            Score.agent_id,
+            Score.bench_version,
+            Score.validator_hotkey,
+            Score.composite,
+            Score.n,
+            details_column,
+        )
         .where(
             Score.agent_id.in_(agent_ids),
             Score.bench_version.in_(set(bench_versions.values())),
         )
         .order_by(Score.agent_id, Score.composite, Score.validator_hotkey)
     )
-    out: dict[UUID, list[Score]] = {}
-    for score in result.scalars():
-        if bench_versions.get(score.agent_id) == score.bench_version:
-            out.setdefault(score.agent_id, []).append(score)
+    out: dict[UUID, list[QuorumScoreRow]] = {}
+    for (
+        agent_id,
+        score_version,
+        validator_hotkey,
+        composite,
+        n,
+        details,
+    ) in result:
+        if bench_versions.get(agent_id) == score_version:
+            out.setdefault(agent_id, []).append(
+                QuorumScoreRow(
+                    agent_id=agent_id,
+                    bench_version=score_version,
+                    validator_hotkey=validator_hotkey,
+                    composite=composite,
+                    n=n,
+                    details=details,
+                )
+            )
     return out
 
 
@@ -2703,10 +2977,34 @@ async def quorum_ledger_proof_rows(
         "base_evidence_sha256",
         "v9_base",
     )
+    # Every independent JSONB key lookup detoasts the whole per-case document.
+    # Expand the four evidence fields together so authority reads do not pay
+    # that cost four times per score. Non-object details retain the previous
+    # all-null evidence projection rather than making jsonb_to_record raise.
+    evidence = (
+        func.jsonb_to_record(
+            case(
+                (func.jsonb_typeof(Score.details) == "object", Score.details),
+                else_=literal({}, type_=JSONB),
+            )
+        )
+        .table_valued(*(column(key, JSONB) for key in details_keys))
+        .render_derived(with_types=True)
+        .lateral("evidence")
+    )
     pairs: list[ColumnElement[Any]] = []
     for key in details_keys:
-        pairs.extend((literal(key), Score.details[key]))
+        pairs.extend((literal(key), evidence.c[key]))
     projected_details = func.jsonb_build_object(*pairs).label("details")
+    # Filter exact agent/version pairs before touching the large document;
+    # the former cross-product predicate discarded mismatches only in Python.
+    requested = [
+        (agent_id, bench_versions[agent_id])
+        for agent_id in dict.fromkeys(agent_ids)
+        if agent_id in bench_versions
+    ]
+    if not requested:
+        return {}
     result = await session.execute(
         select(
             Score.agent_id,
@@ -2718,10 +3016,9 @@ async def quorum_ledger_proof_rows(
             Score.signature,
             projected_details,
         )
-        .where(
-            Score.agent_id.in_(agent_ids),
-            Score.bench_version.in_(set(bench_versions.values())),
-        )
+        .select_from(Score)
+        .join(evidence, true())
+        .where(tuple_(Score.agent_id, Score.bench_version).in_(requested))
         .order_by(Score.agent_id, Score.composite, Score.validator_hotkey)
     )
     out: dict[UUID, list[LedgerScoreProofRow]] = {}
@@ -2741,6 +3038,45 @@ async def quorum_ledger_proof_rows(
             )
         )
     return out
+
+
+class _ProvisionalScoreView:
+    """The scalar Score fields :func:`list_provisional_ledger` consumes.
+
+    Stands in for an ORM ``Score`` row so the provisional read can stay a
+    scalar projection (the full entity would detoast the per-case audit blob
+    only to discard it) while the median/representative selection code keeps
+    its attribute access.
+    """
+
+    __slots__ = (
+        "composite",
+        "tool_mean",
+        "memory_mean",
+        "median_ms",
+        "n",
+        "run_id",
+        "seed",
+        "validator_hotkey",
+        "signature",
+        "bench_version",
+    )
+
+    def __init__(self, row: Any) -> None:
+        self.composite = row.score_composite
+        self.tool_mean = row.score_tool_mean
+        self.memory_mean = row.score_memory_mean
+        self.median_ms = row.score_median_ms
+        self.n = row.score_n
+        self.run_id = row.score_run_id
+        self.seed = row.score_seed
+        self.validator_hotkey = row.score_validator_hotkey
+        self.signature = row.score_signature
+        self.bench_version = row.score_bench_version
+
+
+def row_score_view(row: Any) -> _ProvisionalScoreView:
+    return _ProvisionalScoreView(row)
 
 
 async def list_provisional_ledger(
@@ -2764,9 +3100,27 @@ async def list_provisional_ledger(
     from ditto.db.queries.benchmark_rollout import active_bench_version
 
     canonical_version = bench_version or await active_bench_version(session)
+    # Scalar projection, not select(Score): the returned LedgerRow carries
+    # details=None (opaque run details are deliberately omitted pre-quorum),
+    # so loading full ORM entities would detoast the large per-case audit
+    # blob for every accepted score and throw it away.
     rows = (
         await session.execute(
-            select(Agent, Score, EvaluationPayment.miner_coldkey)
+            select(
+                Agent,
+                Score.composite.label("score_composite"),
+                Score.tool_mean.label("score_tool_mean"),
+                Score.memory_mean.label("score_memory_mean"),
+                Score.median_ms.label("score_median_ms"),
+                Score.n.label("score_n"),
+                Score.run_id.label("score_run_id"),
+                Score.seed.label("score_seed"),
+                Score.validator_hotkey.label("score_validator_hotkey"),
+                Score.signature.label("score_signature"),
+                Score.bench_version.label("score_bench_version"),
+                Score.generated_at.label("score_generated_at"),
+                EvaluationPayment.miner_coldkey,
+            )
             .join(Score, Score.agent_id == Agent.agent_id)
             .outerjoin(
                 EvaluationPayment,
@@ -2785,11 +3139,12 @@ async def list_provisional_ledger(
         )
     ).all()
 
-    by_agent: dict[UUID, tuple[Agent, str | None, list[Score]]] = {}
-    for agent, score, miner_coldkey in rows:
+    by_agent: dict[UUID, tuple[Agent, str | None, list[Any]]] = {}
+    for row in rows:
+        agent = row[0]
         if agent.agent_id not in by_agent:
-            by_agent[agent.agent_id] = (agent, miner_coldkey, [])
-        by_agent[agent.agent_id][2].append(score)
+            by_agent[agent.agent_id] = (agent, row.miner_coldkey, [])
+        by_agent[agent.agent_id][2].append(row_score_view(row))
 
     candidates: list[tuple[LedgerRow, int]] = []
     for agent, miner_coldkey, scores in by_agent.values():

@@ -9,7 +9,7 @@ payments, provider credits, an OAuth grant or a production observer.
 Backroom `record_treasury_receipt` tool, accepts bounded chain selectors. It
 independently verifies the immutable enclosing epoch ledger digest, V2 offline
 policy signature, exact historical settings checksum and destinations, finalized
-Finney block hashes and the reviewed v470 runtime. It then verifies actual
+Finney block hashes and the reviewed v472 runtime. It then verifies actual
 extrinsic bytes and scoped successful chain effects. Caller finality, actors,
 balances, journal assertions and provider-credit fields are not authority.
 

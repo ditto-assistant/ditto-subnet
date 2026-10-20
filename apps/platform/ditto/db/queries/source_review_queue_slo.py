@@ -32,9 +32,9 @@ completely different ``AgentStatus`` value reached from a completely
 different code path, it can never appear in the query below: no filtering
 against "top_five"/"copy"/"ath" trigger metadata is needed to keep this slice
 "ordinary", because those other classes structurally cannot produce a row in
-``ORDINARY_REVIEW_ACTIONABLE_STATUSES``. ATH review needs its own
-review-state predicate over ``ath_reviews`` in a follow-up PR; this module
-does not attempt one.
+``ORDINARY_REVIEW_ACTIONABLE_STATUSES``. ATH review, including copy review
+and the top-five integrity double-check, has its own review-state predicate
+over ``ath_reviews`` in :mod:`ditto.db.queries.ath_review_queue_slo`.
 
 Current-attempt selection reuses the exact "latest, non-superseded attempt"
 ordering as

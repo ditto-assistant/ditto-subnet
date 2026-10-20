@@ -121,19 +121,18 @@ class FinalizedWeightReceipt(BaseModel):
             self.treasury_pin.epoch_index != self.provenance.epoch_index
             or self.treasury_pin.policy.netuid != self.netuid
             or self.attempt.commit_block <= self.treasury_pin.pinned_block
-            or not any(
-                m.validator_hotkey == self.validator_hotkey
-                for m in self.treasury_pin.fleet
-            )
         ):
             raise ValueError("enforcing receipt differs from pinned treasury authority")
+        # The fleet records managed activation evidence. Signed-policy followers
+        # need not be fleet members, just as in Pylon's configured_request. The
+        # receiver authenticates the validator and binds the exact stored pin.
         if self.treasury_pin is not None and (
             not math.isclose(
                 math.fsum(self.weights.values()), 1, abs_tol=1e-12, rel_tol=0
             )
             or not math.isclose(
                 self.weights.get(self.treasury_pin.policy.collector_hotkey, 0),
-                self.treasury_pin.policy.service_bps / 10_000,
+                self.treasury_pin.service_bps / 10_000,
                 abs_tol=1e-12,
                 rel_tol=0,
             )

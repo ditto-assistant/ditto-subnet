@@ -53,6 +53,259 @@ def fixture() -> dict:
 
 
 class PrivatePlanScope(unittest.TestCase):
+    @staticmethod
+    def mailbox_topic_fixture():
+        plan = fixture()
+        plan["variables"].update(
+            {
+                "project": {"value": "sn118-gamma-custody"},
+                "enable_manual_mailbox": {"value": True},
+                "collector_custody_phases": {
+                    "value": {"registration": "sealed", "transfer": "sealed"}
+                },
+                "manual_mailbox_platform_service_account": {
+                    "value": "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com"
+                },
+            }
+        )
+        plan["resource_changes"] = [
+            {
+                "address": 'google_pubsub_topic.manual["requests"]',
+                "mode": "managed",
+                "change": {
+                    "actions": ["create"],
+                    "after": {
+                        "project": "sn118-gamma-custody",
+                        "name": "sn118-manual-requests",
+                        "message_storage_policy": [
+                            {
+                                "allowed_persistence_regions": ["us-central1"],
+                                "enforce_in_transit": None,
+                            }
+                        ],
+                    },
+                    "after_unknown": {
+                        "message_storage_policy": [
+                            {"allowed_persistence_regions": [False]}
+                        ]
+                    },
+                },
+            }
+        ]
+        plan["planned_values"]["root_module"]["resources"] = [
+            {"address": address} for address in sorted(scope.MAILBOX)
+        ]
+        return plan
+
+    def test_accepts_provider_unset_mailbox_transit_default(self):
+        for representation in (
+            {},
+            {"enforce_in_transit": None},
+            {"enforce_in_transit": False},
+        ):
+            with self.subTest(representation=representation):
+                plan = self.mailbox_topic_fixture()
+                plan["resource_changes"][0]["change"]["after"][
+                    "message_storage_policy"
+                ] = [{"allowed_persistence_regions": ["us-central1"], **representation}]
+                self.assertEqual(scope.validate(plan, project="sn118-gamma-custody"), 1)
+
+    def test_refuses_changed_or_unknown_mailbox_persistence(self):
+        for policy in (
+            [],
+            [{"allowed_persistence_regions": ["us-east1"]}],
+            [{"allowed_persistence_regions": ["us-central1", "us-east1"]}],
+            [
+                {
+                    "allowed_persistence_regions": ["us-central1"],
+                    "enforce_in_transit": True,
+                }
+            ],
+            [{"allowed_persistence_regions": ["us-central1"], "enforce_in_transit": 0}],
+            [
+                {
+                    "allowed_persistence_regions": ["us-central1"],
+                    "unreviewed_field": None,
+                }
+            ],
+        ):
+            with self.subTest(policy=policy):
+                plan = self.mailbox_topic_fixture()
+                plan["resource_changes"][0]["change"]["after"][
+                    "message_storage_policy"
+                ] = policy
+                with self.assertRaisesRegex(ValueError, "mailbox persistence differs"):
+                    scope.validate(plan, project="sn118-gamma-custody")
+        for unknown in (
+            True,
+            [{"allowed_persistence_regions": [True]}],
+            [{"enforce_in_transit": True}],
+        ):
+            with self.subTest(unknown=unknown):
+                plan = self.mailbox_topic_fixture()
+                plan["resource_changes"][0]["change"]["after_unknown"][
+                    "message_storage_policy"
+                ] = unknown
+                with self.assertRaisesRegex(ValueError, "mailbox persistence differs"):
+                    scope.validate(plan, project="sn118-gamma-custody")
+
+    @staticmethod
+    def rpc_fixture():
+        plan = fixture()
+        plan["variables"].update(
+            {
+                "collector_runtime_rpc_egress": {"value": True},
+                "enable_collector_custody": {"value": True},
+                "collector_custody_phases": {
+                    "value": {"registration": "sealed", "transfer": "sealed"}
+                },
+            }
+        )
+        plan["planned_values"]["root_module"]["resources"] = [
+            {
+                "address": "google_compute_firewall.collector_runtime_rpc[0]",
+                "values": {
+                    "project": "ditto-app-dev",
+                    "name": "sn118-collector-finney-rpc",
+                    "network": (
+                        "projects/ditto-app-dev/global/networks/sn118-collector-custody"
+                    ),
+                    "direction": "EGRESS",
+                    "priority": 750,
+                    "target_tags": [
+                        "collector-registration-sealed",
+                        "collector-transfer-sealed",
+                    ],
+                    "destination_ranges": ["65.109.251.221/32", "65.109.254.0/32"],
+                    "allow": [{"protocol": "tcp", "ports": ["443"]}],
+                    "deny": [],
+                    "disabled": False,
+                },
+            }
+        ]
+        return plan
+
+    def test_manual_mailbox_scope_requires_exact_direction_and_explicit_enablement(
+        self,
+    ):
+        plan = fixture()
+        plan["variables"].update(
+            {
+                "project": {"value": "sn118-gamma-custody"},
+                "enable_manual_mailbox": {"value": True},
+                "collector_custody_phases": {
+                    "value": {"registration": "sealed", "transfer": "sealed"}
+                },
+                "manual_mailbox_platform_service_account": {
+                    "value": "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com"
+                },
+            }
+        )
+        after = {
+            "project": "sn118-gamma-custody",
+            "topic": "sn118-manual-requests",
+            "role": "roles/pubsub.publisher",
+            "member": (
+                "serviceAccount:ditto-platform-api@"
+                "ditto-app-dev.iam.gserviceaccount.com"
+            ),
+        }
+        plan["resource_changes"] = [
+            {
+                "address": "google_pubsub_topic_iam_member.manual_requests[0]",
+                "mode": "managed",
+                "change": {"actions": ["create"], "after": after},
+            }
+        ]
+        plan["planned_values"]["root_module"]["resources"] = [
+            {"address": address} for address in sorted(scope.MAILBOX)
+        ]
+        self.assertEqual(scope.validate(plan, project="sn118-gamma-custody"), 1)
+        for key, bad in (
+            ("topic", "unrelated"),
+            ("role", "roles/pubsub.admin"),
+            ("member", "allUsers"),
+        ):
+            old = after[key]
+            after[key] = bad
+            with self.assertRaises(ValueError):
+                scope.validate(plan, project="sn118-gamma-custody")
+            after[key] = old
+        plan["variables"]["enable_manual_mailbox"]["value"] = False
+        with self.assertRaises(ValueError):
+            scope.validate(plan, project="sn118-gamma-custody")
+
+    def test_mailbox_enabled_intent_requires_complete_planned_graph(self):
+        plan = fixture()
+        plan["variables"].update(
+            {
+                "project": {"value": "sn118-gamma-custody"},
+                "enable_manual_mailbox": {"value": True},
+                "collector_custody_phases": {
+                    "value": {"registration": "sealed", "transfer": "sealed"}
+                },
+                "manual_mailbox_platform_service_account": {
+                    "value": "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com"
+                },
+            }
+        )
+        for addresses in ([], list(scope.MAILBOX)[:7], [next(iter(scope.MAILBOX))] * 8):
+            plan["planned_values"]["root_module"]["resources"] = [
+                {"address": address} for address in addresses
+            ]
+            with self.assertRaisesRegex(ValueError, "mailbox intent and plan differ"):
+                scope.validate(plan, project="sn118-gamma-custody")
+
+    def test_accepts_exact_sealed_finney_tls_rule(self):
+        self.assertEqual(scope.validate(self.rpc_fixture()), 2)
+
+    def test_refuses_rpc_intent_or_sealing_mismatch(self):
+        for name, value in (
+            ("collector_runtime_rpc_egress", False),
+            ("collector_runtime_rpc_egress", "true"),
+            ("enable_collector_custody", False),
+            (
+                "collector_custody_phases",
+                {"registration": "bootstrap", "transfer": "sealed"},
+            ),
+        ):
+            with self.subTest(name=name, value=value):
+                plan = self.rpc_fixture()
+                plan["variables"][name]["value"] = value
+                with self.assertRaises(ValueError):
+                    scope.validate(plan)
+        plan = self.rpc_fixture()
+        plan["planned_values"]["root_module"]["resources"] = []
+        with self.assertRaises(ValueError):
+            scope.validate(plan)
+
+    def test_refuses_broadened_rpc_rule(self):
+        for name, value in (
+            ("destination_ranges", ["0.0.0.0/0"]),
+            ("destination_ranges", ["65.109.251.221/32"]),
+            ("destination_ranges", ["65.109.254.0/32"]),
+            (
+                "destination_ranges",
+                ["65.109.251.221/32", "65.109.254.0/32", "1.1.1.1/32"],
+            ),
+            ("target_tags", ["collector-custody"]),
+            ("allow", [{"protocol": "all", "ports": []}]),
+            ("allow", [{"protocol": "tcp", "ports": ["443", "22"]}]),
+            ("priority", 500),
+            ("disabled", True),
+            ("project", "other"),
+            ("network", "projects/ditto-app-dev/global/networks/other"),
+            ("network", "projects/other/global/networks/sn118-collector-custody"),
+            ("network", ""),
+        ):
+            with self.subTest(name=name):
+                plan = self.rpc_fixture()
+                plan["planned_values"]["root_module"]["resources"][0]["values"][
+                    name
+                ] = value
+                with self.assertRaises(ValueError):
+                    scope.validate(plan)
+
     def test_accepts_only_custody_resources(self):
         self.assertEqual(scope.validate(fixture()), 2)
 
@@ -214,6 +467,37 @@ class ProtectedWorkflow(unittest.TestCase):
                     result = subprocess.run(["bash", "-e", "-c", script], env=env)
                     self.assertEqual(result.returncode == 0, accepted)
 
+    def test_both_selectors_reject_mailbox_flag_for_other_roots(self):
+        selectors = re.findall(
+            r"      - name: Select exact root\n.*?        run: \|\n(.*?)(?=\n      - )",
+            self.text,
+            re.S,
+        )
+        self.assertEqual(len(selectors), 2)
+        for selector in selectors:
+            for root in ("gcp-gamma-custody", "gcp-collector-custody", "gcp-platform"):
+                for flag in ("true", "false"):
+                    script = "\n".join(line[10:] for line in selector.splitlines())
+                    script = script.replace("${{ inputs.root }}", root)
+                    with tempfile.TemporaryDirectory() as tmp:
+                        env = {
+                            "PATH": os.environ["PATH"],
+                            "GITHUB_OUTPUT": str(Path(tmp) / "output"),
+                            "GITHUB_ENV": str(Path(tmp) / "env"),
+                            "TF_TARGETS": "",
+                            "HOTKEY_ADMIN_PHASE": "absent",
+                            "HOTKEY_ADMIN_REVISION": "",
+                            "SCREENER_DEV_HOST_ENABLED": "false",
+                            "GAMMA_MANUAL_MAILBOX_ENABLED": flag,
+                        }
+                        result = subprocess.run(
+                            ["bash", "-e", "-c", script], env=env, capture_output=True
+                        )
+                        self.assertEqual(
+                            result.returncode == 0,
+                            flag == "false" or root == "gcp-gamma-custody",
+                        )
+
     def test_custody_steps_never_receive_platform_secret_env(self):
         for name in (
             "Create full isolated custody plan",
@@ -233,12 +517,13 @@ class ProtectedWorkflow(unittest.TestCase):
             self.assertIn("inputs.root != 'gcp-collector-custody'", step)
 
     def test_same_sealed_binary_is_scoped_before_plan_handoff_and_apply(self):
-        self.assertEqual(
-            self.text.count(
-                'python3 scripts/check-collector-custody-plan.py "$plan_json"'
-            ),
-            2,
+        command = " ".join(
+            (
+                "python3 scripts/check-collector-custody-plan.py",
+                '"${scope[@]}" "$plan_json"',
+            )
         )
+        self.assertEqual(self.text.count(command), 2)
         self.assertEqual(self.text.count("--backend-bootstrap"), 2)
         self.assertLess(
             self.text.index("Verify isolated custody plan scope"),

@@ -670,8 +670,12 @@ func validateBindingShape(binding Binding) error {
 	return nil
 }
 
+// maximumBindingLifetime bounds how far a Platform ticket deadline may sit
+// beyond the moment its binding is reserved.
+const maximumBindingLifetime = 2 * time.Hour
+
 func validateBindingFresh(binding Binding, now time.Time) error {
-	if !binding.Deadline.After(now) || binding.Deadline.After(now.Add(2*time.Hour)) {
+	if !binding.Deadline.After(now) || binding.Deadline.After(now.Add(maximumBindingLifetime)) {
 		return fmt.Errorf("%w: evidence binding lifetime is invalid", ErrInvalid)
 	}
 	if binding.Purpose == PurposeShadowAttempt &&

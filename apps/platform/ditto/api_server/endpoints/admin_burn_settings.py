@@ -16,15 +16,18 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.burn_settings import (
+    RANK_SHARES_PROTOCOL,
     AdminBurnSettingsRequest,
     AdminBurnSettingsResponse,
     BurnSettings,
     BurnSettingsRevision,
     EffectiveBurnSettings,
+    curve_increases,
 )
 from ditto.api_server.burn_settings import (
     DEFAULT_SETTINGS,
@@ -40,7 +43,10 @@ from ditto.db.queries.burn_settings import (
     latest_burn_settings_revision,
     list_burn_settings_revisions,
 )
-from ditto.db.queries.heartbeats import count_live_validators
+from ditto.db.queries.heartbeats import (
+    count_live_validators,
+    live_weight_setter_fleet_supports_protocol,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/burn-settings", tags=["admin"])
@@ -85,12 +91,28 @@ async def _live_validators(session: AsyncSession) -> int | None:
         return None
 
 
+async def _rank_shares_served(
+    session: AsyncSession, settings: BurnSettings
+) -> bool | None:
+    """Advisory: whether the configured curve passes the protocol-31 fleet gate."""
+    if settings.rank_shares is None:
+        return False
+    try:
+        return await live_weight_setter_fleet_supports_protocol(
+            session, minimum_protocol=RANK_SHARES_PROTOCOL, now=datetime.now(UTC)
+        )
+    except SQLAlchemyError:
+        logger.warning("could not read rank-share fleet readiness", exc_info=True)
+        return None
+
+
 def _effective(
     latest: RevisionRow | None,
     settings: BurnSettings,
     *,
     ttl_seconds: float,
     live_validators: int | None,
+    rank_shares_served: bool | None = None,
 ) -> EffectiveBurnSettings:
     return EffectiveBurnSettings(
         revision=latest.revision if latest is not None else 0,
@@ -101,6 +123,7 @@ def _effective(
         max_age_seconds=ttl_seconds,
         miner_emission_share=1.0 - settings.burn_share,
         live_validator_count=live_validators,
+        rank_shares_served=rank_shares_served,
     )
 
 
@@ -121,6 +144,7 @@ async def get_settings(
             settings,
             ttl_seconds=resolver.ttl_seconds,
             live_validators=await _live_validators(session),
+            rank_shares_served=await _rank_shares_served(session, settings),
         ),
     )
 
@@ -149,13 +173,43 @@ async def create_settings_revision(
                 f"(expected {payload.expected_revision}, current {actual_revision})"
             ),
         )
+    settings = payload.settings
+    if "rank_shares" not in settings.model_fields_set:
+        # A burn-only write (the console dial) must not silently reset the
+        # payout curve; only an explicit null clears it.
+        # Validate the stored row itself: settings_from_row would turn an
+        # unreadable revision into the default and so silently clear the curve.
+        try:
+            carried = (
+                BurnSettings.model_validate(latest.settings).rank_shares
+                if latest is not None
+                else None
+            )
+        except ValidationError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "current burn settings revision is unreadable; send "
+                    "rank_shares explicitly (null to clear)"
+                ),
+            ) from error
+        if curve_increases(carried):
+            # The write-only ordering rule binds a carried curve too.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "current burn settings revision carries an increasing "
+                    "rank_shares curve; send rank_shares explicitly (null to clear)"
+                ),
+            )
+        settings = settings.model_copy(update={"rank_shares": carried})
     try:
         row = await insert_burn_settings_revision(
             session,
             parent_revision=actual_revision,
             scope=payload.scope,
-            settings=payload.settings.model_dump(mode="json"),
-            checksum=_checksum(payload.settings),
+            settings=settings.model_dump(mode="json"),
+            checksum=_checksum(settings),
             reason=payload.reason.strip(),
             actor=payload.actor.strip(),
         )
@@ -170,7 +224,7 @@ async def create_settings_revision(
     _resolver(request).invalidate()
     logger.warning(
         "burn share set to %.4f by %s (revision %d): %s",
-        payload.settings.burn_share,
+        settings.burn_share,
         row.actor,
         row.revision,
         row.reason,

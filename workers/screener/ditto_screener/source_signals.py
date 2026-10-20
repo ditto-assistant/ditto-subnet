@@ -9,6 +9,7 @@ never leave the archive through this module.
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import cast
@@ -26,6 +27,7 @@ _MAX_LEADS = 32
 _MAX_LEADS_PER_RULE_FILE = 4
 _WINDOW_LINES = 18
 _MAX_STATIC_FINDINGS = 16
+_MAX_REVIEW_FINDINGS_PER_KIND = 6
 _COMMAND_EXECUTION_EFFECT = re.compile(
     r"\b(?:Command::new|subprocess\.|os\.system|child_process\.|execFile|spawn|"
     r"ProcessBuilder|Process\.(?:run|start|Start)|Runtime(?:\.getRuntime\(\))?\.exec)\b"
@@ -1727,20 +1729,225 @@ _EMULATION_FINGERPRINTS = (
         scan="code",
         skip_test_items=True,
     ),
+    # Policy-v13 I7 executor and router shapes (ATH sweep 2026-10-02). Every one
+    # of these passed automated screening and was rejected by an operator. They
+    # are leads: the reviewer must still name a reachable request, the valid
+    # blocked call and its consequence before promoting one.
+    _Fingerprint(
+        # tool-name-execution-cap (dittoreader v7/v9): a counter keyed on the
+        # tool name alone refuses a further call before execution, so a fourth
+        # distinct-argument effect never runs. An exact-repeat stop keyed on
+        # name plus canonical arguments has no name-keyed counter.
+        kind="tool-name-execution-cap",
+        severity="high",
+        roles=(
+            _Role(
+                "name-keyed-counter",
+                re.compile(
+                    r"\b\w*counts?\s*(?:\.get\(\s*&?|\[\s*&?)"
+                    r"(?:name|tool_name|call\.name|call\.function\.name|tool\.name)\b"
+                    r"[^\n]{0,40}(?:>=|>)"
+                    r"|\bMAX_SAME_TOOL\b|\bmax_same_tool\b|\bper_tool_(?:limit|cap)\b"
+                ),
+            ),
+            _Role(
+                "pre-execution-refusal",
+                re.compile(
+                    r"will not run again|not run again|(?:tool )?(?:cap|limit) reached"
+                    r"|answer from the results",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=8,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # successful-duplicate-suppression (Artemis v8, delta v5): a memo of
+        # successful calls returns a cached or synthetic result before the
+        # endpoint, so a separately requested identical effect ("send it twice")
+        # never executes. A model repeat authorizer in the guard is the honest
+        # look-alike (lets_636/637) and drops the lead.
+        kind="successful-duplicate-suppression",
+        severity="medium",
+        roles=(
+            _Role(
+                "success-memo-lookup",
+                re.compile(
+                    r"\b(?:successful|memo|completed_calls|done_calls|success_cache|"
+                    r"seen_calls)\s*(?:\.get\(|\.contains(?:_key)?\(|\[)"
+                    r"|\bin\s+(?:self\.)?(?:done_calls|successful|completed_calls|"
+                    r"seen_calls|memo)\b"
+                    r"|\bprior_success\b"
+                ),
+            ),
+            _Role(
+                "pre-execution-duplicate-refusal",
+                re.compile(
+                    r"not sent again|duplicate suppressed|exact successful duplicate"
+                    r"|not executed again|identical to an earlier successful",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        suppressors=(
+            _Role(
+                "model-repeat-authorizer",
+                re.compile(r"repeat_authori[sz]|authori[sz]e_repeat", re.IGNORECASE),
+            ),
+        ),
+        window=24,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # catalog-retired-after-step (crown-v166): a request-text lifecycle flag
+        # clears the tool definitions after one read and tells the model no
+        # further capability exists, so a second requested read cannot run.
+        kind="catalog-retired-after-step",
+        severity="high",
+        roles=(
+            _Role(
+                "tool-retire",
+                re.compile(
+                    r"\b_?(?:disable|retire|drop|clear|close)_(?:tools|catalog)\s*\("
+                    r"|\b(?:defs|tool_defs|tools_by_name|tool_definitions)\s*\.clear\(\)"
+                ),
+            ),
+            _Role(
+                "single-step-completion",
+                re.compile(
+                    r"\bretire_after_\w+|\bsingle[-_ ]lookup\b"
+                    r"|no further (?:capability|tool)|phase is complete",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=24,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # sticky-capability-veto (Sky v3): one host veto sets a flag that stays
+        # set for the rest of the request and blocks later, unrelated calls.
+        kind="sticky-capability-veto",
+        severity="medium",
+        roles=(
+            _Role(
+                "sticky-decline-flag",
+                re.compile(
+                    r"\b\w+_(?:declined|vetoed|refused|suppressed)\s*=\s*(?:True|true)\b"
+                ),
+            ),
+            _Role(
+                "request-wide-scope",
+                re.compile(
+                    r"rest of the request|remainder of the (?:request|turn)"
+                    r"|records or nowhere|stays? (?:true|set) for",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=90,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # uncertainty-narrows-route (Pentagon45 v1): a classifier prompt resolves
+        # doubt toward a route whose host catalog drops the external tools.
+        kind="uncertainty-narrows-route",
+        severity="medium",
+        roles=(
+            _Role(
+                "uncertain-default-label",
+                re.compile(
+                    r"\bif (?:you are |you're )?"
+                    r"(?:unsure|uncertain|in doubt|not sure)\b"
+                    r"[^\n]{0,40}?\b(?:write|output|return|answer|choose|pick|label|"
+                    r"classify(?: it)? as)\b[^\n]{0,6}?[\"'{]?\s*"
+                    r"(?:records?|read_only|memory|recall|none|no_tools?|lookup)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
+    _Fingerprint(
+        # tool-argument-grammar-sheet (clear v42): host text appended to a live
+        # tool description prescribes the argument wording the grader matches.
+        kind="tool-argument-grammar-sheet",
+        severity="medium",
+        roles=(
+            _Role(
+                "tool-description-constant",
+                re.compile(
+                    r"\b_?[A-Z0-9_]*(?:TOOL|PARAM|PAIR_ID|CONTENT|ARG)[A-Z0-9_]*"
+                    r"_DESCRIPTION\s*="
+                ),
+            ),
+            _Role(
+                "argument-grammar",
+                re.compile(
+                    r"\bwire grammar\b|\bOUTPUT SHAPE\b|\bnever omit the\b"
+                    r"|must be rewritten|<[a-z ]{2,30}>\s+is(?:/are)?\s+<[a-z ]{2,30}>",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=40,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # review-turn-argument-template (lets_635): a host-scheduled per-tool
+        # review turn whose pass test is an exact argument template.
+        kind="review-turn-argument-template",
+        severity="medium",
+        roles=(
+            _Role(
+                "per-tool-review-turn",
+                re.compile(r"\bREVIEW_TURNS\b|\breview_turns?\b"),
+            ),
+            _Role(
+                "argument-template",
+                re.compile(
+                    r"<[^<>\n]{2,40}>\s+is(?:/are)?\s+<[^<>\n]{2,30}>"
+                    r"|\bword for word\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=40,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # self-reported-benchmark-fitting (lets_635): a comment admitting the
+        # wording was selected by probing benchmark outcomes.
+        kind="self-reported-benchmark-fitting",
+        severity="medium",
+        roles=(
+            _Role(
+                "fitting-admission",
+                re.compile(
+                    r"probe[- ]selected|experiments/[A-Za-z0-9_-]+_\d{8}"
+                    r"|over \d+ recorded (?:first )?turns"
+                    r"|\d+(?:\.\d+)?%\s+(?:correct|accuracy|pass(?:ed)?)\s+vs\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
 )
 
 
 def find_source_review_leads(
     files: Iterable[tuple[str, str]],
+    *,
+    selection_report: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """Return bounded location-only review leads from readable source files."""
     leads: list[dict[str, object]] = []
-    # The lead cap is spent on executable and build files first. Docs and data
-    # fixtures keep their leads (a fixture can still be compiled in or read as
-    # an answer table), but only in the capacity the executable surface
-    # leaves, so they cannot starve a miner source file that sorts after them.
-    # Test-named modules count as executable: whether they are served cannot
-    # be proved from source text.
+    # Within each kind, executable and build files get the first examples.
+    # Docs and data fixtures keep their leads (they can be compiled in or read
+    # as answer tables). Test-named modules count as executable: whether they
+    # are served cannot be proved from source text. Select only after scanning.
     for path, text in sorted(files, key=lambda item: _lead_path_priority(item[0])):
         lines = text.splitlines()
         if not lines:
@@ -1803,11 +2010,54 @@ def find_source_review_leads(
                         continue
                     seen.add(normalized)
                     leads.append({"kind": rule.kind, "locations": locations})
-                    if len(leads) >= _MAX_LEADS:
-                        return leads
                     if len(seen) >= _MAX_LEADS_PER_RULE_FILE:
                         break
-    return leads
+    return _select_review_findings(leads, _MAX_LEADS, selection_report)
+
+
+def _select_review_findings(
+    findings: list[dict[str, object]],
+    limit: int,
+    report: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    """Spend the output budget only after scanning, by severity and kind.
+
+    Preserve input path priority within each kind, but take one of every kind
+    before a second example. A flooded kind cannot consume another kind's slots.
+    Counts describe candidates after the existing per-rule/file safety bounds.
+    """
+    groups: dict[tuple[int, str], list[dict[str, object]]] = defaultdict(list)
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    for finding in findings:
+        severity = severity_order.get(str(finding.get("severity", "medium")), 1)
+        groups[severity, str(finding["kind"])].append(finding)
+    selected: list[dict[str, object]] = []
+    selected_by_kind: Counter[str] = Counter()
+    for severity in sorted({key[0] for key in groups}):
+        kinds = sorted(kind for level, kind in groups if level == severity)
+        for index in range(_MAX_REVIEW_FINDINGS_PER_KIND):
+            for kind in kinds:
+                candidates = groups[severity, kind]
+                if (
+                    index < len(candidates)
+                    and selected_by_kind[kind] < _MAX_REVIEW_FINDINGS_PER_KIND
+                    and len(selected) < limit
+                ):
+                    selected.append(candidates[index])
+                    selected_by_kind[kind] += 1
+    if report is not None:
+        counts = Counter(str(finding["kind"]) for finding in findings)
+        omitted = counts - selected_by_kind
+        report.update(
+            truncated=bool(omitted),
+            candidate_count=len(findings),
+            selected_count=len(selected),
+            omitted_count=sum(omitted.values()),
+            omitted_by_kind=dict(sorted(omitted.items())),
+            per_kind_limit=_MAX_REVIEW_FINDINGS_PER_KIND,
+            counts_after_per_rule_file_bounds=True,
+        )
+    return selected
 
 
 def find_decisive_malicious_source(
@@ -1949,6 +2199,8 @@ def _fingerprint_language(path: str) -> str | None:
 
 def find_benchmark_emulation_fingerprints(
     files: Iterable[tuple[str, str]],
+    *,
+    selection_report: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """Return bench-v12 anti-emulation fingerprints as location-only review leads.
 
@@ -1996,9 +2248,29 @@ def find_benchmark_emulation_fingerprints(
                         fingerprint, path, scan_lines, fingerprint_raw_lines
                     )
                 )
-            if len(findings) >= _MAX_FINGERPRINT_FINDINGS:
-                return findings[:_MAX_FINGERPRINT_FINDINGS]
-    return findings
+    selected = _select_review_findings(
+        findings, _MAX_FINGERPRINT_FINDINGS, selection_report
+    )
+    if selection_report is not None:
+        raw_kinds = {
+            item.kind for item in _EMULATION_FINGERPRINTS if item.scan == "raw"
+        }
+        counts = Counter(str(item["kind"]) for item in findings)
+        # One location-only routing lead per saturated raw-scan kind. Comments
+        # and strings can create these matches: saturation is never a verdict.
+        selection_report["saturation_leads"] = [
+            {
+                "kind": "raw-fingerprint-kind-saturation",
+                "saturated_kind": kind,
+                "candidate_count": counts[kind],
+                "locations": next(
+                    item["locations"] for item in findings if item["kind"] == kind
+                ),
+            }
+            for kind in sorted(raw_kinds)
+            if counts[kind] > _MAX_REVIEW_FINDINGS_PER_KIND
+        ]
+    return selected
 
 
 def _rust_test_item_lines(code_lines: list[str]) -> frozenset[int]:

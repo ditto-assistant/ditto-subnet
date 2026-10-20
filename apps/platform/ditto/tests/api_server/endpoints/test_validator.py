@@ -74,7 +74,9 @@ from ditto.api_models.stack_health import (
     validator_stack_health_signing_token,
 )
 from ditto.api_models.system_health import (
+    HostSpecs,
     SystemMetrics,
+    host_specs_signing_token,
     system_metrics_signing_token,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -630,6 +632,7 @@ def _heartbeat_payload(
     confirmation_progress: list[dict[str, object]] | None = None,
     updater_status: dict[str, object] | None = None,
     weights_fold: dict[str, object] | None = None,
+    host_specs: dict[str, object] | None = None,
 ) -> dict[str, object]:
     ts = timestamp if timestamp is not None else int(datetime.now(UTC).timestamp())
     hotkey = keypair.ss58_address
@@ -673,6 +676,18 @@ def _heartbeat_payload(
                         if weights_fold is not None
                         else ""
                     )
+                    if host_specs is not None:
+                        typed_fold = (
+                            WeightsFold.model_validate(weights_fold)
+                            if weights_fold is not None
+                            else None
+                        )
+                        typed_specs = HostSpecs.model_validate(host_specs)
+                        domain = "v32"
+                        fold_token = (
+                            f"{weights_fold_signing_token(typed_fold)}:"
+                            f"{host_specs_signing_token(typed_specs)}:"
+                        )
                     message = (
                         f"ditto-validator-heartbeat:{domain}:{hotkey}:0.1.0:"
                         f"{protocol_version}:{code_digest}:{state}:"
@@ -797,6 +812,8 @@ def _heartbeat_payload(
         payload["confirmation_progress"] = confirmation_progress
     if weights_fold is not None:
         payload["weights_fold"] = weights_fold
+    if host_specs is not None:
+        payload["host_specs"] = host_specs
     if updater_status is not None:
         payload["updater_status"] = updater_status
     return payload
@@ -1971,6 +1988,108 @@ class TestHeartbeat:
             row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
             assert row is not None
             assert row.updater_status == updater
+
+    async def test_v32_persists_and_publishes_host_specs(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        timestamp = int(datetime.now(UTC).timestamp())
+        specs = {
+            "cpu_count": 16,
+            "cpu_physical_cores": 8,
+            "memory_total_mib": 65_536,
+            "disk_total_gib": 500,
+            "architecture": "x86_64",
+        }
+        common: dict[str, Any] = {
+            "timestamp": timestamp,
+            "protocol_version": 32,
+            "capabilities": _quorum_capabilities(),
+            "stack": _V7_STACK,
+            "stack_health": _V9_STACK_HEALTH,
+            "benchmark_capacity": _IDLE_CAPACITY,
+            "confirmation_progress": [],
+            "updater_status": {
+                "enabled": True,
+                "channel": "compat-2",
+                "state": "idle",
+                "current_descriptor": (
+                    "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "a" * 64
+                ),
+                "current_version": "0.370.0",
+                "candidate_descriptor": None,
+                "candidate_version": None,
+                "failed_candidate_count": 0,
+                "retry_after": None,
+                "suppressed": False,
+                "last_failure_at": None,
+                "last_failure_reason": None,
+                "observed_at": timestamp,
+                "self_refresh_installed": False,
+            },
+        }
+        # A failed probe omits the block and signs the v23 domain.
+        without = await client.post(
+            "/api/v1/validator/heartbeat",
+            headers=_AUTH_HEADER,
+            json=_heartbeat_payload(**common),
+        )
+        assert without.status_code == 200, without.text
+
+        announced = await client.post(
+            "/api/v1/validator/heartbeat",
+            headers=_AUTH_HEADER,
+            json=_heartbeat_payload(
+                **{**common, "timestamp": timestamp + 1}, host_specs=specs
+            ),
+        )
+        assert announced.status_code == 200, announced.text
+        async with session_maker() as session:
+            row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert row is not None
+            assert row.host_specs == specs
+
+        fleet = (await client.get("/api/v1/public/validators")).json()
+        member = next(
+            item
+            for item in fleet["validators"]
+            if item["validator_hotkey"] == _VALIDATOR_HOTKEY
+        )
+        assert member["host_specs"] == specs
+
+        # A later failed probe keeps the last announced hardware.
+        omitted = await client.post(
+            "/api/v1/validator/heartbeat",
+            headers=_AUTH_HEADER,
+            json=_heartbeat_payload(**{**common, "timestamp": timestamp + 2}),
+        )
+        assert omitted.status_code == 200, omitted.text
+        async with session_maker() as session:
+            row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert row is not None
+            assert row.host_specs == specs
+
+        # The specs are signed: an inflated RAM figure fails verification.
+        tampered = _heartbeat_payload(
+            **{**common, "timestamp": timestamp + 3}, host_specs=specs
+        )
+        tampered["host_specs"] = {**specs, "memory_total_mib": 262_144}
+        rejected = await client.post(
+            "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=tampered
+        )
+        assert rejected.status_code == 401, rejected.text
+
+        # Below v32 the block is refused outright.
+        legacy = _heartbeat_payload(**{**common, "protocol_version": 31})
+        legacy["host_specs"] = specs
+        refused = await client.post(
+            "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=legacy
+        )
+        assert refused.status_code == 422, refused.text
 
     async def test_v27_persists_and_publishes_the_weights_fold(
         self,

@@ -57,9 +57,20 @@ variable "collector_custody_image" {
   }
 }
 
+variable "collector_runtime_rpc_egress" {
+  type        = bool
+  default     = false
+  description = "Explicit sealed-host rollout: allow TLS to the two reviewed Finney full/archive IPv4 addresses only, with private Cloud NAT. Does not install or activate collector timers."
+  validation {
+    condition     = !var.collector_runtime_rpc_egress || (var.enable_collector_custody && alltrue([for phase in values(var.collector_custody_phases) : phase == "sealed"]))
+    error_message = "Finney RPC egress requires both separately sealed delegate hosts."
+  }
+}
+
 locals {
   collector_roles     = var.enable_collector_custody ? var.collector_custody_phases : {}
   collector_bootstrap = anytrue([for phase in values(local.collector_roles) : phase == "bootstrap"])
+  collector_needs_nat = var.enable_collector_custody && (local.collector_bootstrap || var.collector_runtime_rpc_egress)
 }
 
 check "collector_custody_explicit_inputs" {
@@ -101,7 +112,7 @@ resource "google_compute_subnetwork" "collector_custody" {
 }
 
 resource "google_compute_router" "collector_custody" {
-  count   = local.collector_bootstrap ? 1 : 0
+  count   = local.collector_needs_nat ? 1 : 0
   project = var.project
   name    = "sn118-collector-bootstrap"
   region  = var.region
@@ -109,7 +120,7 @@ resource "google_compute_router" "collector_custody" {
 }
 
 resource "google_compute_router_nat" "collector_custody" {
-  count                              = local.collector_bootstrap ? 1 : 0
+  count                              = local.collector_needs_nat ? 1 : 0
   project                            = var.project
   name                               = "sn118-collector-bootstrap"
   region                             = var.region
@@ -158,6 +169,33 @@ resource "google_compute_firewall" "collector_bootstrap" {
   target_tags        = ["collector-${each.key}-bootstrap"]
   destination_ranges = ["0.0.0.0/0"]
   allow { protocol = "all" }
+}
+
+# Finney full/archive A records independently resolved 2026-10-05:
+# entrypoint-finney.opentensor.ai=65.109.251.221,
+# archive.chain.opentensor.ai=65.109.254.0 (SDK 10.5.0 archive network).
+# No floating CIDR input: DNS changes need another source/plan review. TLS hostname,
+# chain genesis, exact runtime and native proxy filters remain application gates.
+resource "google_compute_firewall" "collector_runtime_rpc" {
+  count              = var.enable_collector_custody && var.collector_runtime_rpc_egress ? 1 : 0
+  project            = var.project
+  name               = "sn118-collector-finney-rpc"
+  network            = google_compute_network.collector_custody[0].id
+  direction          = "EGRESS"
+  priority           = 750
+  disabled           = false
+  target_tags        = ["collector-registration-sealed", "collector-transfer-sealed"]
+  destination_ranges = ["65.109.251.221/32", "65.109.254.0/32"]
+  allow {
+    protocol = "tcp"
+    ports    = ["443"]
+  }
+  lifecycle {
+    precondition {
+      condition     = alltrue([for phase in values(var.collector_custody_phases) : phase == "sealed"])
+      error_message = "Finney RPC egress requires both separately sealed delegate hosts."
+    }
+  }
 }
 
 resource "google_compute_firewall" "collector_googleapis" {

@@ -155,7 +155,8 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   public-safe, read-only projection of the validator's frozen first-seen KOTH
   fold over finalized authoritative entries: the fixed 0.007 composite-point
   incumbent hysteresis, the
-  statistical band, and the 65% / 14% / 10% / 7% / 4% ranked distribution.
+  statistical band, and the ranked distribution in `rank_shares` (frozen default
+  65% / 14% / 10% / 7% / 4%, or the operator curve once the fleet folds it).
   When `tie_weighting_active` is true, contiguous evidence-tied recipients pool
   only the shares of the ranks they occupy and split that pool equally. Exact
   effective-composite ties qualify directly; non-exact ties require paired
@@ -419,6 +420,13 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   is “not reported,” never an outage. A missing hotkey means it has not proved
   heartbeat-capable software; this endpoint does not pretend to enumerate every
   on-chain permit holder.
+
+  From protocol v32 each row also carries signed `host_specs` — logical and
+  physical CPUs, total RAM (MiB), total root disk (GiB), and architecture,
+  probed once per boot — so "is this host smaller than its peers?" is
+  answerable without asking the operator. The coarse percentages above say how
+  busy a host is; `host_specs` says how big it is. Older validators and a failed
+  probe publish `host_specs: null`.
 
   Slot capacity is published as two distinct numbers, because they answer two
   different questions. `configured_slots` (with `healthy_slots`) is what the

@@ -3760,6 +3760,22 @@
       },
       "EnforcingTreasuryPin": {
         "properties": {
+          "allocations": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/TreasuryBucketAllocation"
+                },
+                "maxItems": 20,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "approval": {
             "$ref": "#/$defs/TreasuryPolicyApproval"
           },
@@ -4426,6 +4442,24 @@
         ],
         "type": "object"
       },
+      "TreasuryBucketAllocation": {
+        "properties": {
+          "allocation_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bucket_id": {
+            "pattern": "^[a-z][a-z0-9_]{1,47}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bucket_id",
+          "allocation_bps"
+        ],
+        "type": "object"
+      },
       "TreasuryCollectorIdentity": {
         "properties": {
           "finalized_block": {
@@ -4482,7 +4516,7 @@
       "TreasuryEmissionBucket": {
         "properties": {
           "allocation_bps": {
-            "maximum": 1000,
+            "maximum": 10000,
             "minimum": 0,
             "type": "integer"
           },
@@ -4493,6 +4527,32 @@
           "holding_coldkey": {
             "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
             "type": "string"
+          },
+          "max_allocation_bps": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "min_allocation_bps": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -5817,6 +5877,20 @@
         "anyOf": [
           {
             "$ref": "#/$defs/LedgerEntry"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "rank_shares": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
           },
           {
             "type": "null"
@@ -7629,6 +7703,49 @@
         ],
         "type": "object"
       },
+      "HostSpecs": {
+        "properties": {
+          "architecture": {
+            "pattern": "^[a-zA-Z0-9_.-]{1,32}$",
+            "type": "string"
+          },
+          "cpu_count": {
+            "maximum": 1024,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "cpu_physical_cores": {
+            "anyOf": [
+              {
+                "maximum": 1024,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "disk_total_gib": {
+            "maximum": 1048576,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "memory_total_mib": {
+            "maximum": 16777216,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpu_count",
+          "memory_total_mib",
+          "disk_total_gib",
+          "architecture"
+        ],
+        "type": "object"
+      },
       "InferenceCalibrationRoute": {
         "properties": {
           "model": {
@@ -8678,6 +8795,17 @@
             },
             "maxItems": 4,
             "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "host_specs": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/HostSpecs"
           },
           {
             "type": "null"

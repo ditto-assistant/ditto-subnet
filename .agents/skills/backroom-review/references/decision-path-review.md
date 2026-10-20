@@ -55,6 +55,17 @@ blocked/delivery-unknown/executed reporting. Map any finding to a proven I/S
 breach or Q1 with its published materiality proof; a W11 defect alone does not
 automatically establish Q1.
 
+I7 executor and router: a guard between the model's selected call and the
+endpoint must key on full tool identity plus canonical arguments. A cap keyed
+on the tool name alone, a success memo that refuses a requested repeat (blanket
+or gated on request phrasing), retiring the catalog after one read, a veto flag
+that stays set for the rest of the request, and a router that narrows the
+catalog when it is unsure each remove a call the model planned. Prove the
+reachable request, the valid selected call and the refusal point. Preserve an
+exact-repeat stop on name plus canonical arguments when the request does not
+ask for the effect again, a model-authorized repeat, and an unsure route that
+keeps the complete catalog.
+
 For every finding cite the current reachable caller-to-consequence chain and
 defeat applicable safe harbors. Distinguish static proof from observed runtime
 events. Prior clears and same-byte helpers require current caller/configuration

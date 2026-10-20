@@ -102,7 +102,9 @@ from ditto.api_models.stack_health import (
     validator_stack_health_signing_token,
 )
 from ditto.api_models.system_health import (
+    HostSpecs,
     SystemMetrics,
+    host_specs_signing_token,
     system_metrics_signing_token,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -157,7 +159,7 @@ from ditto.api_server.crn import (
     bounded_continual_seed_set,
     fold_seed_bound,
 )
-from ditto.api_server.datapipeline import DatasetGenerator
+from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
 from ditto.api_server.deferred_source_review import (
     DEFERRED_MECHANICAL_REASON,
     DEFERRED_REVIEW_KIND,
@@ -198,14 +200,17 @@ from ditto.api_server.koth import (
     top5_round_is_due,
 )
 from ditto.api_server.model_use import evaluate_model_use, model_use_policy
-from ditto.api_server.onchain_seed import derive_validator_seed
+from ditto.api_server.onchain_seed import derive_seed, derive_validator_seed
 from ditto.api_server.outlier_escalation import (
     OUTLIER_ALGORITHM_VERSION,
+    OUTLIER_AXIS_EVIDENCE_KIND,
     OUTLIER_REVIEW_KIND,
+    AxisObservation,
     OutlierEscalationSettings,
     OutlierEscalationSettingsLoad,
     evaluate_score_outlier,
     load_outlier_escalation_settings,
+    public_audit_evidence,
 )
 from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
 from ditto.api_server.queue_policy_settings import (
@@ -367,6 +372,7 @@ from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enable
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+    nonce_expires_at,
 )
 from ditto.db.queries.weight_receipts import (
     WeightReceiptConflict,
@@ -1127,6 +1133,7 @@ async def _evaluate_and_record_outlier_escalation(
     cohort: Sequence[float],
     settings: OutlierEscalationSettings,
     now: datetime,
+    axes: Mapping[str, AxisObservation] | None = None,
 ) -> None:
     """Escalate an out-of-band composite to ATH review (issue #476).
 
@@ -1144,6 +1151,22 @@ async def _evaluate_and_record_outlier_escalation(
     opens the hold. Bench-version scoped so v8-v11 are untouched, and gated on
     ``SCORED`` so a copy / transform-audit hold that already fired this
     transition wins outright (this path never re-holds an already-held agent).
+
+    ``axes`` adds per-axis robust-z evidence to every recorded entry. A
+    per-axis outlier that does not hold under the policy (per-axis
+    enforcement off, or the composite below the floor) is appended as
+    ``OUTLIER_AXIS_EVIDENCE_KIND`` evidence only -- never a hold, never a
+    would-be hold -- in both ``observe`` and ``enforce`` mode.
+
+    The audit chain is public, so its entries carry only the neutral per-axis
+    projection (:func:`public_audit_evidence`: axis name + outlier flag). The
+    full per-axis statistics (value, cohort median/MAD, modified z) are kept
+    only on the private ``ath_reviews`` snapshot, which exists only when an
+    ``enforce`` hold opens. An ``observe`` would-be hold and every
+    ``OUTLIER_AXIS_EVIDENCE_KIND`` entry persist ``{axis, outlier}`` and
+    nothing more, so observe mode records which axes were out of band, not
+    their per-axis z distribution. To see the statistics before enforcing,
+    replay the ledger with the dry-run endpoint (``per_axis_enforce=true``).
     """
     if settings.mode == "off":
         return
@@ -1155,9 +1178,32 @@ async def _evaluate_and_record_outlier_escalation(
         return
 
     decision = evaluate_score_outlier(
-        composite=composite, cohort=cohort, settings=settings
+        composite=composite, cohort=cohort, settings=settings, axes=axes
     )
     if not decision.held:
+        if decision.axis_outliers:
+            # A single axis far out of band while the policy holds nothing:
+            # observe-only evidence on its own audit kind, so the would-be-hold
+            # and hold counts stay exactly the composite policy's.
+            await append_audit_entry(
+                session,
+                agent_id=agent.agent_id,
+                validator_hotkey=None,
+                event=EVENT_AUDIT,
+                payload={
+                    "audit_kind": OUTLIER_AXIS_EVIDENCE_KIND,
+                    "enforced": False,
+                    "qualified": False,
+                    "bench_version": bench_version,
+                    "evidence": public_audit_evidence(decision.evidence),
+                },
+                recorded_at=now,
+            )
+            logger.info(
+                "agent %s: per-axis out-of-band score recorded as evidence: %s",
+                agent.agent_id,
+                ",".join(decision.axis_outliers),
+            )
         # In-band, below the floor, or an insufficient cohort. Rank normally and
         # leave no hold; the "why not" lives in the decision evidence, which is
         # only persisted when a would-be hold fires (below), matching the other
@@ -1179,7 +1225,7 @@ async def _evaluate_and_record_outlier_escalation(
                 "enforced": False,
                 "qualified": True,
                 "bench_version": bench_version,
-                "evidence": decision.evidence,
+                "evidence": public_audit_evidence(decision.evidence),
             },
             recorded_at=now,
         )
@@ -1230,7 +1276,7 @@ async def _evaluate_and_record_outlier_escalation(
             "enforced": True,
             "qualified": True,
             "bench_version": bench_version,
-            "evidence": decision.evidence,
+            "evidence": public_audit_evidence(decision.evidence),
         },
         recorded_at=now,
     )
@@ -2002,9 +2048,9 @@ _ARTIFACT_URL_TTL = timedelta(minutes=5)
 # rationale in ``ditto.api_models.scoring_lease_settings``) governs until an
 # operator writes one and on any failure to read it.
 
-# Signed job claims outside this window are stale. A consumed nonce remains in
-# the database for the same window, making replay rejection consistent across
-# every API replica without introducing another secret.
+# Signed job claims outside this window are stale. A consumed nonce is kept
+# until that window closes, including when the stamp is in the future, so a
+# replica cannot forget the nonce while the signature is still acceptable.
 _JOB_REQUEST_MAX_AGE = timedelta(minutes=2)
 # A leased seed of ``None`` is meaningful (a legacy bundle lease), so "this
 # validator holds no lease" needs a sentinel distinct from it.
@@ -2023,7 +2069,9 @@ _qualification_refresh_due = 0.0
 # Reject captured heartbeats outside a short clock-skew/retry window. Workers
 # report every two minutes, so five minutes tolerates normal transient outages.
 _HEARTBEAT_MAX_SKEW_SECONDS = 300
-_HEARTBEAT_MAX_BYTES = 16 * 1024
+HEARTBEAT_MAX_BYTES = 16 * 1024
+RECEIPT_DIAGNOSTICS_MAX_BYTES = 8192
+WEIGHT_RECEIPT_MAX_BYTES = 3 * 1024 * 1024
 
 
 # Object-store key the upload pipeline writes the tarball under.
@@ -2483,10 +2531,13 @@ def _heartbeat_signing_message(
     confirmation_progress: list[ConfirmationProgress] | None = None,
     updater_status: ValidatorUpdaterStatus | None = None,
     weights_fold: WeightsFold | None = None,
+    host_specs: HostSpecs | None = None,
 ) -> bytes:
     """Canonical heartbeat payload, mirrored by ``ditto-subnet``."""
     if weights_fold is not None and protocol_version < 27:
         raise ValueError("weights fold requires heartbeat protocol v27")
+    if host_specs is not None and protocol_version < 32:
+        raise ValueError("host specs require heartbeat protocol v32")
     if stack_health is not None and protocol_version < 9:
         raise ValueError("per-component stack health requires heartbeat protocol v9")
     if benchmark_capacity is not None and protocol_version < 10:
@@ -2510,6 +2561,24 @@ def _heartbeat_signing_message(
             active = str(active_agent_id) if active_agent_id is not None else ""
             # Mirrors the validator: the fold report changes the signed bytes
             # only when present, so a fold-less v27 heartbeat stays on v23.
+            # v32 hardware announcement. Like the fold, it changes the signed
+            # bytes only when present, so a probe failure stays on v23/v27.
+            if host_specs is not None:
+                return (
+                    "ditto-validator-heartbeat:v32:"
+                    f"{validator_hotkey}:{software_version}:{protocol_version}:"
+                    f"{code_digest}:{state}:{active}:"
+                    f"{system_metrics_signing_token(system_metrics)}:"
+                    f"{benchmark_progress_signing_token(benchmark_progress)}:"
+                    f"{validator_identity_signing_token(capabilities, stack)}:"
+                    f"{validator_stack_health_signing_token(stack_health)}:"
+                    f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+                    f"{confirmation_progress_signing_token(confirmation_progress)}:"
+                    f"{validator_updater_status_signing_token(updater_status)}:"
+                    f"{weights_fold_signing_token(weights_fold)}:"
+                    f"{host_specs_signing_token(host_specs)}:"
+                    f"{timestamp}"
+                ).encode()
             if weights_fold is not None:
                 return (
                     "ditto-validator-heartbeat:v27:"
@@ -2994,7 +3063,7 @@ async def submit_receipt_diagnostics(
     session: SessionDep,
 ) -> dict[str, bool]:
     """Store latest signed observation; never consumed by emission verification."""
-    if len(await request.body()) > 8192:
+    if len(await request.body()) > RECEIPT_DIAGNOSTICS_MAX_BYTES:
         raise HTTPException(status_code=413, detail="diagnostic payload too large")
     report = request_body.report
     now = datetime.now(UTC)
@@ -3047,7 +3116,7 @@ async def submit_weight_receipt(
     session: SessionDep,
 ) -> SubmitWeightReceiptResponse:
     """Durably acknowledge a signed commit claim without granting source release."""
-    if len(await request.body()) > 3 * 1024 * 1024:
+    if len(await request.body()) > WEIGHT_RECEIPT_MAX_BYTES:
         raise HTTPException(status_code=413, detail="weight receipt payload too large")
     receipt = request_body.receipt
     if receipt.validator_hotkey != validator_hotkey:
@@ -3072,11 +3141,12 @@ async def submit_weight_receipt(
             )
     except WeightReceiptConflict as error:
         logger.warning(
-            "weight receipt conflict code=%s validator=%s request=%s attempt=%s",
+            "weight receipt conflict code=%s validator=%s request=%s attempt=%s %s",
             error.code,
             validator_hotkey,
             receipt.request_id,
             receipt.attempt.attempt_id,
+            error.claimed_provenance,
         )
         raise HTTPException(status_code=409, detail=f"{error.code}: {error}") from error
     return SubmitWeightReceiptResponse(
@@ -3107,8 +3177,8 @@ async def heartbeat(
     except ValueError as error:
         raise HTTPException(status_code=400, detail="invalid Content-Length") from error
     if (
-        claimed_bytes > _HEARTBEAT_MAX_BYTES
-        or len(await request.body()) > _HEARTBEAT_MAX_BYTES
+        claimed_bytes > HEARTBEAT_MAX_BYTES
+        or len(await request.body()) > HEARTBEAT_MAX_BYTES
     ):
         raise HTTPException(status_code=413, detail="heartbeat payload too large")
     if request_body.validator_hotkey != validator_hotkey:
@@ -3197,6 +3267,7 @@ async def heartbeat(
         confirmation_progress=request_body.confirmation_progress,
         updater_status=request_body.updater_status,
         weights_fold=request_body.weights_fold,
+        host_specs=request_body.host_specs,
     )
     if not _verify_signature(validator_hotkey, payload, request_body.signature):
         raise ValidatorAuthError("heartbeat signature verification failed")
@@ -3287,6 +3358,11 @@ async def heartbeat(
                 if request_body.weights_fold is not None
                 else None
             ),
+            host_specs=(
+                request_body.host_specs.model_dump(mode="json")
+                if request_body.host_specs is not None
+                else None
+            ),
             benchmark_capacity=(
                 work.benchmark_capacity.model_dump(mode="json")
                 if work.benchmark_capacity is not None
@@ -3324,6 +3400,65 @@ async def heartbeat(
     if seen_at.tzinfo is None:
         seen_at = seen_at.replace(tzinfo=UTC)
     return ValidatorHeartbeatResponse(accepted=accepted, seen_at=seen_at, leases=leases)
+
+
+async def _bind_unverified_v13_dataset(
+    session: AsyncSession,
+    *,
+    chain: ChainClient,
+    request: Request,
+    generator: DatasetGenerator,
+    agent: Agent,
+    dataset: BenchmarkDataset,
+) -> bool:
+    """Re-pin a block-less V13 dataset to the latest chain block.
+
+    Only a pin no lease has ever derived a seed from is rebound, so no issued
+    or scored ticket can disagree with the new one. The agent's compatibility
+    columns follow when they mirror the same block-less pin. Returns ``False``
+    (leaving the pin untouched) when the chain or generator is unavailable.
+    """
+    leased = await session.scalar(
+        select(ValidatorTicket.agent_id)
+        .where(
+            ValidatorTicket.agent_id == agent.agent_id,
+            ValidatorTicket.bench_version == dataset.bench_version,
+            ValidatorTicket.seed.is_not(None),
+        )
+        .limit(1)
+    )
+    if leased is not None:
+        return False
+    try:
+        block = await chain.get_latest_block()
+        seed = derive_seed(block.hash, agent.agent_id)
+        sha256 = await lease_dataset_sha(
+            request, generator, seed=seed, bench_version=dataset.bench_version
+        )
+    except (ChainError, DataPipelineError) as error:
+        logger.warning(
+            "V%d dataset for agent %s is not chain-bound and could not be rebound: %s",
+            dataset.bench_version,
+            agent.agent_id,
+            error,
+        )
+        return False
+    if agent.dataset_seed == dataset.seed and agent.dataset_seed_block_hash is None:
+        agent.dataset_seed = seed
+        agent.dataset_sha256 = sha256
+        agent.dataset_seed_block = block.number
+        agent.dataset_seed_block_hash = block.hash
+    logger.info(
+        "rebound block-less V%d dataset for agent %s to block %d",
+        dataset.bench_version,
+        agent.agent_id,
+        block.number,
+    )
+    dataset.seed = seed
+    dataset.sha256 = sha256
+    dataset.seed_block = block.number
+    dataset.seed_block_hash = block.hash
+    return True
 
 
 @router.post(
@@ -3449,7 +3584,11 @@ async def request_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -4103,6 +4242,28 @@ async def request_job(
                 if dataset is not None
                 else agent.dataset_seed_block_hash
             )
+            if (
+                ticket.bench_version >= 13
+                and ticket.seed is None
+                and seed_block_hash is None
+                and dataset is not None
+                and generator.run_size is not None
+            ):
+                # A chain blip at screening pins a local CSPRNG seed with no
+                # block. V13 cannot lease that pin, and as the queue head it
+                # 503s (rolling back) every poll on the fleet. Bind it to a
+                # block read now, which is still causally after the commit.
+                bound = await _bind_unverified_v13_dataset(
+                    session,
+                    chain=chain,
+                    request=request,
+                    generator=generator,
+                    agent=agent,
+                    dataset=dataset,
+                )
+                if bound:
+                    seed_block = dataset.seed_block
+                    seed_block_hash = dataset.seed_block_hash
             # Give each of the three quorum validators an independent dataset.
             # The post-commit block hash keeps the seed unpredictable; binding
             # the validator hotkey makes it distinct and publicly reproducible.
@@ -5341,7 +5502,11 @@ async def request_top5_confirmation_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -6236,7 +6401,11 @@ async def fail_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -6567,7 +6736,11 @@ async def agent_artifact(
                 nonce=x_validator_artifact_nonce,
                 validator_hotkey=x_validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=x_validator_artifact_requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -7504,6 +7677,8 @@ async def submit_score(
                 # it on. The cohort is the eligible ledger read above, which is
                 # one row per owner and excludes this still-evaluating
                 # candidate, held agents, and banned agents.
+                # Per-axis evidence: each axis is the median of this agent's
+                # quorum on that axis, against the same eligible ledger's axis.
                 await _evaluate_and_record_outlier_escalation(
                     session,
                     agent=agent,
@@ -7512,6 +7687,18 @@ async def submit_score(
                     cohort=[row.composite for row in eligible],
                     settings=OUTLIER_ESCALATION_SETTINGS,
                     now=audit_now,
+                    axes={
+                        "tool_mean": AxisObservation(
+                            value=statistics.median(s.tool_mean for s in agent_scores),
+                            cohort=[row.tool_mean for row in eligible],
+                        ),
+                        "memory_mean": AxisObservation(
+                            value=statistics.median(
+                                s.memory_mean for s in agent_scores
+                            ),
+                            cohort=[row.memory_mean for row in eligible],
+                        ),
+                    },
                 )
                 deferred_settings = queue_policy.deferred_source_review
                 await _evaluate_and_record_deferred_review(
@@ -7942,7 +8129,7 @@ async def _mirror_quorum_transcripts(
                 continue
             if not await storage.object_exists(key=key):
                 continue
-            body = await storage.get_object(key=key, max_bytes=_TRANSCRIPT_MAX_BYTES)
+            body = await storage.get_object(key=key, max_bytes=TRANSCRIPT_MAX_BYTES)
             await storage.put_object(
                 key=key,
                 body=body,
@@ -8015,7 +8202,7 @@ _TRANSCRIPT_KEY_TEMPLATE = "transcripts/{sha256}.json"
 
 # A transcript carries every graded final_text for a full run; cap well above
 # any legitimate size while bounding a hostile body.
-_TRANSCRIPT_MAX_BYTES = 32 << 20
+TRANSCRIPT_MAX_BYTES = 32 << 20
 
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
@@ -8064,7 +8251,7 @@ async def submit_transcript(
     """
     response.headers["Cache-Control"] = "no-store"
     body = await request.body()
-    if len(body) > _TRANSCRIPT_MAX_BYTES:
+    if len(body) > TRANSCRIPT_MAX_BYTES:
         raise HTTPException(status_code=413, detail="transcript exceeds size cap")
     if not body:
         raise HTTPException(status_code=400, detail="empty transcript body")

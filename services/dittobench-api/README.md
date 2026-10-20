@@ -192,7 +192,10 @@ Before switching a deployment to `enforce`, watch for
 — those are the calls that will start failing. Under `enforce` the process
 refuses to start without a credential rather than 401ing every caller, and the
 published Compose default token is treated as unset, so enforcement requires a
-real per-host secret.
+real per-host secret. The inference-session broker follows the same mode: it
+still admits the published default under `shadow` (logging one would-reject
+line), and refuses it under `enforce`. In ditto-subnet's Compose stack, set
+`DITTOBENCH_CONTROL_AUTH_MODE` in `.env` and recreate `dittobench-api`.
 
 ## Endpoints
 
@@ -497,10 +500,10 @@ caller-supplied harness URLs, so it guards against abuse:
   API refuses to start when both are truthy.
   Imported archive and local runner tags are removed after each run so validator
   disks do not accumulate submission images.
-- Benchmark v7 and v8 require the screener-built, digest- and image-ID-bound
-  archive; the source-build fallback is retired. That contract governs
-  validator-side builds, so it applies to `git_url` and `tarball_url` on every
-  deployment. A `harness_url` practice submission builds nothing — the miner
+- Canonical scoring requires the screener-built, digest- and image-ID-bound
+  archive for every benchmark version. The sandbox also rejects a missing image
+  before fetching source, unless a local development caller explicitly enables
+  source builds in code. A `harness_url` practice submission builds nothing — the miner
   runs their own harness and this engine only drives and scores it — so it is
   outside the contract and remains the supported v8 practice path. The canonical
   validator path (`POST /v2/score`) still requires the screened image for every

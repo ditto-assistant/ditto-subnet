@@ -14,6 +14,7 @@ from ditto.api_server.treasury_weights import (
     require_enforcing_requester,
     treasury_fleet_members,
 )
+from ditto.chain.errors import ChainTreasuryActivationReadError
 from ditto.db.models import ValidatorHeartbeat
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
@@ -124,7 +125,6 @@ async def test_stale_or_absent_chain_permitted_weight_setter_blocks_real_pg_flee
     await session.flush()
     p = pin()
     args = {
-        "now": now,
         "policy_digest": p.policy_digest,
         "collector_digest": p.policy.collector_policy_digest,
     }
@@ -159,6 +159,9 @@ def app_state(p):
     )
     return SimpleNamespace(
         config=SimpleNamespace(
+            treasury_managed_validator_hotkeys=tuple(
+                m.validator_hotkey for m in p.fleet
+            ),
             treasury_shadow_approval=p.approval,
             treasury_approved_policy_digest=p.policy_digest,
             treasury_approved_collector_policy_digest=p.policy.collector_policy_digest,
@@ -192,6 +195,70 @@ async def add_runtime(session, now):
     return dbrow
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [None, "stale", "future", "legacy", "missing", "managed_stale", "epoch", "owner"],
+)
+async def test_independent_requester_reads_same_pin_without_managed_capability(
+    session, fault
+):
+    from bittensor_wallet import Keypair
+
+    p = pin()
+    now = datetime.now(UTC)
+    managed = await add_runtime(session, now)
+    state = app_state(p)
+    hotkey = Keypair.create_from_uri("//Dave").ss58_address
+    row = ValidatorHeartbeat(
+        validator_hotkey=hotkey,
+        protocol_version=30,
+        software_version="0.355.1",
+        seen_at=now,
+        reported_at=now,
+        signature="cd" * 64,
+        capabilities={},
+        state="idle",
+        active_agent_id=None,
+        code_digest="b" * 64,
+    )
+    if fault == "stale":
+        row.seen_at -= timedelta(minutes=16)
+    elif fault == "future":
+        row.seen_at += timedelta(minutes=1)
+    elif fault == "legacy":
+        row.protocol_version = 29
+    elif fault == "managed_stale":
+        managed.seen_at -= timedelta(minutes=16)
+    elif fault in {"epoch", "owner"}:
+        observed = state.chain.get_treasury_dispatch_observation.return_value
+        update = (
+            {"epoch_index": observed.epoch_index + 1}
+            if fault == "epoch"
+            else {
+                "identity": observed.identity.model_copy(
+                    update={"owner_coldkey": hotkey}
+                )
+            }
+        )
+        state.chain.get_treasury_dispatch_observation.return_value = (
+            observed.model_copy(update=update)
+        )
+    if fault != "missing":
+        session.add(row)
+    await session.flush()
+    if fault is None:
+        await require_enforcing_requester(session, p, hotkey, app_state=state)
+        assert tuple(m.validator_hotkey for m in p.fleet) == (managed.validator_hotkey,)
+        state.chain.get_treasury_dispatch_observation.assert_awaited_once()
+    else:
+        rejection = ChainTreasuryActivationReadError if fault == "owner" else ValueError
+        with pytest.raises(rejection) as rejected:
+            await require_enforcing_requester(session, p, hotkey, app_state=state)
+        if fault == "owner":
+            assert rejected.value.read_stage == "identity"
+            assert isinstance(rejected.value.read_error, ValueError)
+
+
 async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
     p = pin()
     now = datetime.now(UTC)
@@ -206,17 +273,87 @@ async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
         block=p.pinned_block,
         block_hash=p.pinned_block_hash,
     )
-    assert (
-        await enforcing_pin_from_observation(state, session, shadow, schedule, now=now)
-        == p
-    )
+    assert await enforcing_pin_from_observation(state, session, shadow, schedule) == p
     state.chain.get_treasury_weight_setters.assert_awaited_once_with(
         p.policy, block_hash=p.identity.finalized_block_hash
     )
-    # A chain-active setter without a signed fresh runtime must halt pinning.
+    # Independent permitted setters do not block our managed activation.
     state.chain.get_treasury_weight_setters.return_value += (p.policy.collector_hotkey,)
+    assert await enforcing_pin_from_observation(state, session, shadow, schedule) == p
+    # A missing managed member still blocks; membership never shrinks on staleness.
+    state.config.treasury_managed_validator_hotkeys += (p.policy.collector_hotkey,)
     with pytest.raises(ValueError, match="no fresh proof"):
-        await enforcing_pin_from_observation(state, session, shadow, schedule, now=now)
+        await enforcing_pin_from_observation(state, session, shadow, schedule)
+
+
+@pytest.mark.parametrize(
+    "fault", ["none", "permission_lost", "wrong_hash", "partial", "wrong_scope"]
+)
+async def test_producer_and_dispatch_use_fresh_exact_managed_permission_scope(
+    session, fault
+):
+    from ditto_screening_protocol.treasury_identity import (
+        TreasuryManagedSetterObservation,
+    )
+
+    p = pin()
+    now = datetime.now(UTC)
+    await add_runtime(session, now)
+    state = app_state(p)
+    proof = TreasuryManagedSetterObservation(
+        block_hash=p.identity.finalized_block_hash,
+        permitted_count=13,
+        hotkeys=(p.fleet[0].validator_hotkey,),
+    )
+    if fault == "wrong_hash":
+        proof = proof.model_copy(update={"block_hash": "0x" + "f" * 64})
+    elif fault == "partial":
+        proof = proof.model_copy(update={"hotkeys": ()})
+    elif fault == "wrong_scope":
+        proof = proof.model_copy(update={"hotkeys": (p.policy.collector_hotkey,)})
+    scoped = AsyncMock(return_value=proof)
+    if fault == "permission_lost":
+        scoped.side_effect = ValueError("managed setter lost current permission")
+    state.chain.get_treasury_managed_weight_setters = scoped
+    shadow = TreasuryLedgerPin(
+        policy=p.policy, policy_digest=p.policy_digest, identity=p.identity
+    )
+    schedule = SimpleNamespace(
+        subnet_epoch_index=p.epoch_index,
+        last_epoch_block=p.first_block,
+        block=p.pinned_block,
+        block_hash=p.pinned_block_hash,
+    )
+
+    async def producer():
+        return await enforcing_pin_from_observation(state, session, shadow, schedule)
+
+    async def dispatch():
+        await require_enforcing_requester(
+            session,
+            p,
+            p.fleet[0].validator_hotkey,
+            app_state=state,
+        )
+
+    for action in (producer, dispatch):
+        if fault == "none":
+            await action()
+        else:
+            wrapped = fault == "partial" and action is dispatch
+            rejection = ChainTreasuryActivationReadError if wrapped else ValueError
+            with pytest.raises(rejection) as rejected:
+                await action()
+            if wrapped:
+                assert rejected.value.read_stage == "setter_roster"
+                assert isinstance(rejected.value.read_error, ValueError)
+    assert scoped.await_count == 2
+    for call in scoped.await_args_list:
+        assert call.kwargs == {
+            "block_hash": p.identity.finalized_block_hash,
+            "managed_hotkeys": (p.fleet[0].validator_hotkey,),
+        }
+    state.chain.get_treasury_weight_setters.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -228,6 +365,8 @@ async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
         "unlisted_requester",
         "new_setter",
         "missing_roster",
+        "managed_permit_lost",
+        "managed_roster_drift",
         "epoch_rollover",
         "owner_drift",
         "uid_reuse",
@@ -256,6 +395,12 @@ async def test_requester_revalidates_current_chain_and_every_pinned_member(
         )
     elif fault == "missing_roster":
         state.chain.get_treasury_weight_setters.return_value = ()
+    elif fault == "managed_permit_lost":
+        state.chain.get_treasury_weight_setters.return_value = (
+            p.policy.collector_hotkey,
+        )
+    elif fault == "managed_roster_drift":
+        state.config.treasury_managed_validator_hotkeys += (p.policy.collector_hotkey,)
     elif fault == "epoch_rollover":
         state.chain.get_treasury_dispatch_observation.return_value = (
             observation.model_copy(update={"epoch_index": observation.epoch_index + 1})
@@ -276,16 +421,84 @@ async def test_requester_revalidates_current_chain_and_every_pinned_member(
     elif fault == "rpc_failure":
         state.chain.get_treasury_dispatch_observation.side_effect = TimeoutError()
     await session.flush()
-    if fault == "none":
-        await require_enforcing_requester(session, p, hotkey, now=now, app_state=state)
+    if fault in {"none", "new_setter"}:
+        await require_enforcing_requester(session, p, hotkey, app_state=state)
         state.chain.get_treasury_weight_setters.assert_awaited_once_with(
             p.policy, block_hash=observation.finalized_block_hash
         )
     else:
-        with pytest.raises((ValueError, TimeoutError)):
+        expected = (
+            ChainTreasuryActivationReadError if fault == "rpc_failure" else ValueError
+        )
+        with pytest.raises(expected) as rejected:
+            await require_enforcing_requester(session, p, hotkey, app_state=state)
+        if fault == "rpc_failure":
+            assert rejected.value.read_stage == "identity"
+            assert isinstance(rejected.value.read_error, TimeoutError)
+
+
+@pytest.mark.parametrize(
+    "fault", ["none", "hash", "permission", "scope", "epoch", "owner", "timeout"]
+)
+async def test_dispatch_combined_reader_is_fresh_and_never_falls_back(session, fault):
+    from ditto.chain.errors import (
+        ChainTreasuryActivationReadError,
+        ChainTreasuryReadTimeoutError,
+    )
+    from ditto_screening_protocol.treasury_identity import (
+        TreasuryManagedSetterObservation,
+    )
+
+    p = pin()
+    now = datetime.now(UTC)
+    row = await add_runtime(session, now)
+    state = app_state(p)
+    observed = state.chain.get_treasury_dispatch_observation.return_value
+    proof = TreasuryManagedSetterObservation(
+        block_hash=observed.finalized_block_hash,
+        hotkeys=tuple(member.validator_hotkey for member in p.fleet),
+        permitted_count=13,
+    )
+    if fault == "hash":
+        proof = proof.model_copy(update={"block_hash": "0x" + "f" * 64})
+    elif fault == "permission":
+        proof = proof.model_copy(update={"hotkeys": ()})
+    elif fault == "scope":
+        proof = proof.model_copy(
+            update={"hotkeys": (*proof.hotkeys, p.policy.collector_hotkey)}
+        )
+    elif fault == "epoch":
+        observed = observed.model_copy(update={"epoch_index": observed.epoch_index + 1})
+    elif fault == "owner":
+        observed = observed.model_copy(
+            update={
+                "identity": observed.identity.model_copy(
+                    update={"owner_coldkey": row.validator_hotkey}
+                )
+            }
+        )
+    combined = AsyncMock(return_value=(observed, proof))
+    if fault == "timeout":
+        combined.side_effect = ChainTreasuryActivationReadError(
+            "setter_roster", ChainTreasuryReadTimeoutError("setter_binding")
+        )
+    state.chain.get_treasury_managed_activation_observation = combined
+    if fault == "none":
+        for _ in range(2):
             await require_enforcing_requester(
-                session, p, hotkey, now=now, app_state=state
+                session, p, row.validator_hotkey, app_state=state
             )
+        assert combined.await_count == 2
+    else:
+        with pytest.raises((ValueError, ChainTreasuryActivationReadError)):
+            await require_enforcing_requester(
+                session, p, row.validator_hotkey, app_state=state
+            )
+    combined.assert_awaited_with(
+        p.policy, managed_hotkeys=state.config.treasury_managed_validator_hotkeys
+    )
+    state.chain.get_treasury_dispatch_observation.assert_not_awaited()
+    state.chain.get_treasury_weight_setters.assert_not_awaited()
 
 
 @pytest.mark.parametrize("empty", [False, True])

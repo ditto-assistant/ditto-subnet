@@ -88,7 +88,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v30-policy-v13"
+        return "source-review-v32-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -1333,6 +1333,14 @@ and the two-location evidence bar before citing anything:
   answers the canary shape, so a fixture keyed to the request user is cleared
   even at high density.
 
+The review_leads inventory reports item_selection and fingerprint_selection:
+truncated, omitted_count and omitted_by_kind describe candidates dropped after
+per-rule/file bounds. scan_truncated separately means the archive scan hit its
+file/byte budget. Selection favors high severity, then kind diversity.
+fingerprint_selection.saturation_leads points to repeated raw-scan kinds that
+can be padded with comments or strings. Inspect these as leads, never proof of
+evasion; use source search to follow omitted kinds when needed.
+
 The inventory also carries "emulation_fingerprints": bench-v12 anti-emulation
 leads over served/executable source, each naming a matched fingerprint kind, a
 severity, and location-only path:line roles. They automate the greppable bypass
@@ -1774,6 +1782,14 @@ and the two-location evidence bar before citing anything:
   answers the canary shape, so a fixture keyed to the request user is cleared
   even at high density.
 
+The review_leads inventory reports item_selection and fingerprint_selection:
+truncated, omitted_count and omitted_by_kind describe candidates dropped after
+per-rule/file bounds. scan_truncated separately means the archive scan hit its
+file/byte budget. Selection favors high severity, then kind diversity.
+fingerprint_selection.saturation_leads points to repeated raw-scan kinds that
+can be padded with comments or strings. Inspect these as leads, never proof of
+evasion; use source search to follow omitted kinds when needed.
+
 The inventory also carries "emulation_fingerprints": bench-v12 anti-emulation
 leads over served/executable source, each naming a matched fingerprint kind, a
 severity, and location-only path:line roles. They automate the greppable bypass
@@ -2001,8 +2017,8 @@ case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
 markers, or `bench_version` from changing substantive retrieval, capability
 ordering, authority, execution, or output beyond the published compatibility
 contract. Complete source proof is enforceable. Behavioral
-degradation alone is a lead until a versioned post-commit, controlled,
-predeclared and replicated test attributes it to evaluation dependence. Use
+degradation alone is a lead, never a breach; screening runs no separate
+behavioral test that could attribute it later. Use
 evaluation_independent_runtime or no_evaluation_identity_branch only after
 tracing the served path; unreachable_nonruntime_code remains available when the
 effective build excludes the path.
@@ -2057,8 +2073,8 @@ source-side allowlist for the validator-supplied field.
 
 Opaque files are not violations by presence. Establish each loaded component's
 actual role and apply the published role-specific verification requirement.
-Private behavioral testing is mandatory only when that role requires it or
-source causality remains unresolved. Tests, diagnostics, and helpers require
+Screening runs no private behavioral test, so settle each role from traced
+source causality. Tests, diagnostics, and helpers require
 effective build/startup/runtime reachability; refuting one dormant lead does
 not clear the rest of the artifact.
 Before labeling an optional environment-gated branch reachable, inspect its
@@ -2835,13 +2851,19 @@ class TarSourceRepository:
                 }
                 for item in static_v2.advisory[:16]
             ]
+        item_selection: dict[str, object] = {}
+        fingerprint_selection: dict[str, object] = {}
+        items = find_source_review_leads(
+            miner_readable, selection_report=item_selection
+        )
+        fingerprints = find_benchmark_emulation_fingerprints(
+            miner_readable, selection_report=fingerprint_selection
+        )
         return {
-            "items": [*find_source_review_leads(miner_readable), *static_advisories][
-                :_MAX_LEAD_SCAN_FILES
-            ],
-            "emulation_fingerprints": find_benchmark_emulation_fingerprints(
-                miner_readable
-            ),
+            "items": [*items, *static_advisories],
+            "item_selection": item_selection,
+            "emulation_fingerprints": fingerprints,
+            "fingerprint_selection": fingerprint_selection,
             "unmatchable_category_guards": guard_report(
                 find_unmatchable_category_guards(
                     (path, mask_lead_comments(text, path)) for path, text in readable
@@ -2856,6 +2878,7 @@ class TarSourceRepository:
             "members_considered": members_considered,
             "bytes_scanned": bytes_scanned,
             "nontext": nontext,
+            "scan_truncated": truncated,
             "truncated": truncated,
         }
 

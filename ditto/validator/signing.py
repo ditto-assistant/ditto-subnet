@@ -70,7 +70,9 @@ from ditto.api_models.stack_health import (
     validator_stack_health_signing_token,
 )
 from ditto.api_models.system_health import (
+    HostSpecs,
     SystemMetrics,
+    host_specs_signing_token,
     system_metrics_signing_token,
 )
 from ditto.api_models.validator_capabilities import (
@@ -1542,11 +1544,14 @@ def heartbeat_signing_message(
     confirmation_progress: list[ConfirmationProgress] | None = None,
     updater_status: ValidatorUpdaterStatus | None = None,
     weights_fold: WeightsFold | None = None,
+    host_specs: HostSpecs | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the canonical versioned software and runtime heartbeat payload."""
     if weights_fold is not None and protocol_version < 27:
         raise ValueError("weights fold requires heartbeat protocol v27")
+    if host_specs is not None and protocol_version < 32:
+        raise ValueError("host specs require heartbeat protocol v32")
     if stack_health is not None and protocol_version < 9:
         raise ValueError("per-component stack health requires heartbeat protocol v9")
     if benchmark_capacity is not None and protocol_version < 10:
@@ -1572,6 +1577,24 @@ def heartbeat_signing_message(
             # The fold report changes the signed bytes only when present, so a
             # v27 validator that has not folded yet (or a v27 Platform verifying
             # a fold-less v27 heartbeat) stays on the v23 domain byte-for-byte.
+            # v32 hardware announcement. Like the fold, it changes the signed
+            # bytes only when present, so a probe failure stays on v23/v27.
+            if host_specs is not None:
+                return (
+                    "ditto-validator-heartbeat:v32:"
+                    f"{validator_hotkey}:{software_version}:{protocol_version}:"
+                    f"{code_digest}:{state}:{active_agent_id or ''}:"
+                    f"{system_metrics_signing_token(system_metrics)}:"
+                    f"{benchmark_progress_signing_token(benchmark_progress)}:"
+                    f"{validator_identity_signing_token(capabilities, stack)}:"
+                    f"{validator_stack_health_signing_token(stack_health)}:"
+                    f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+                    f"{confirmation_progress_signing_token(confirmation_progress)}:"
+                    f"{validator_updater_status_signing_token(updater_status)}:"
+                    f"{weights_fold_signing_token(weights_fold)}:"
+                    f"{host_specs_signing_token(host_specs)}:"
+                    f"{timestamp}"
+                ).encode()
             if weights_fold is not None:
                 return (
                     "ditto-validator-heartbeat:v27:"
@@ -1716,6 +1739,7 @@ def sign_heartbeat(
     confirmation_progress: list[ConfirmationProgress] | None = None,
     updater_status: ValidatorUpdaterStatus | None = None,
     weights_fold: WeightsFold | None = None,
+    host_specs: HostSpecs | None = None,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -1735,6 +1759,7 @@ def sign_heartbeat(
         confirmation_progress=confirmation_progress,
         updater_status=updater_status,
         weights_fold=weights_fold,
+        host_specs=host_specs,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

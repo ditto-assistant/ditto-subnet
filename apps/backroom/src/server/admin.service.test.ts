@@ -1661,15 +1661,19 @@ describe('artifact release administration', () => {
     )
   })
 
-  it('preserves served gate evidence without inventing it for older releases', async () => {
+  it.each([1, 2, 3])('preserves served gate evidence for diagnostic v%s without inventing it', async (schemaVersion) => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const release_gate = {
       version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false,
+      archive_provider: { configured: true, host: 'api.taostats.io', auth_mode: 'query', credential_configured: true },
       receipt_diagnostics: [{ report: {
-        schema_version: 1, validator_hotkey: 'validator', netuid: 118, timestamp: 100,
+        schema_version: schemaVersion, validator_hotkey: 'validator', netuid: 118, timestamp: 100,
         observation: { submission_status: 'accepted', submission_observed_at: 90,
           recovery_status: 'forwarding_platform_failed', recovery_observed_at: 100,
-          page_receipts: 1, page_finalized: 1, page_forwarded: 0, page_deferred: 1 },
+          page_receipts: 1, page_finalized: 1, page_forwarded: 0, page_deferred: 1,
+          ...(schemaVersion >= 2 ? { last_validation: { error_count: 1, fields: ['provenance.champion_artifact_sha256:string_pattern_mismatch'] } } : {}),
+          ...(schemaVersion === 3 ? { failure_context: { claimed_schema_version: 1, task_id: 12, claimed_epoch_index: 25017, claimed_commit_block: 9029300, attempt_id: '11111111-1111-4111-8111-111111111111' } } : {}),
+        },
       }, received_at: '2026-09-18T00:00:00Z', stale: false }],
       receipt_diagnostics_has_more: false,
       pending_kings: 2,
@@ -2043,6 +2047,7 @@ describe('emission burn administration', () => {
       min_burn_share: 0,
       max_burn_share: 1,
       live_validator_count: 3,
+      rank_shares_served: false,
     },
   })
 

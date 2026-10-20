@@ -58,7 +58,7 @@ from ditto.api_models.private_dataset import (
     PrivateDatasetRequest as PrivateDatasetRequest,
 )
 from ditto.api_models.stack_health import ValidatorStackHealth
-from ditto.api_models.system_health import SystemMetrics
+from ditto.api_models.system_health import HostSpecs, SystemMetrics
 from ditto.api_models.upload import (
     _SIGNATURE_HEX_PATTERN,
     _SS58_PATTERN,
@@ -758,6 +758,17 @@ class ValidatorHeartbeatRequest(BaseModel):
             ),
         ),
     ] = None
+    host_specs: Annotated[
+        HostSpecs | None,
+        Field(
+            default=None,
+            description=(
+                "Fixed host hardware (CPUs, RAM, disk, architecture) sampled once "
+                "per boot, under heartbeat protocol v32. Null when the probe failed "
+                "or on older validators."
+            ),
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -779,6 +790,8 @@ class ValidatorHeartbeatRequest(BaseModel):
             raise ValueError("treasury weight guard requires heartbeat protocol v30")
         if self.weights_fold is not None and self.protocol_version < 27:
             raise ValueError("weights fold requires heartbeat protocol v27")
+        if self.host_specs is not None and self.protocol_version < 32:
+            raise ValueError("host specs require heartbeat protocol v32")
         return self
 
     @model_validator(mode="after")
@@ -2064,6 +2077,19 @@ class LedgerResponse(BaseModel):
                 "Protocol-29 consensus marker. When capped, paired tie and "
                 "unpaired dethrone statistics are limited to twice the KOTH "
                 "margin before decay. Absent preserves the legacy fold."
+            ),
+        ),
+    ] = None
+    rank_shares: Annotated[
+        list[float] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-31 operator payout curve: the champion's share, then "
+                "each tail slot's, summing to 1. Served only once every "
+                "recently-live weight setter reports v31. Absent keeps the "
+                "frozen 65/14/10/7/4 curve."
             ),
         ),
     ] = None

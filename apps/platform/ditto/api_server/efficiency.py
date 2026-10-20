@@ -1117,7 +1117,34 @@ async def ensure_current_efficiency_state(
     *,
     now: datetime,
 ) -> None:
-    """Use the app coordinator, with a direct-call fallback for small tests."""
+    """Materialize committed evidence without owning the caller's transaction.
+
+    Request authentication or a composed endpoint may already have autobegun
+    the supplied session. The materializer commits frozen rows, so it needs an
+    independent session rather than a savepoint or rollback on that caller.
+    Direct callers without an app maker still supply a pristine session.
+    """
+
+    if not config.enabled:
+        return
+
+    maker = getattr(app_state, "session_maker", None)
+    if maker is not None:
+        async with maker() as materialization_session:
+            await _ensure_current_efficiency_state(
+                app_state, materialization_session, config, now=now
+            )
+        return
+    await _ensure_current_efficiency_state(app_state, session, config, now=now)
+
+
+async def _ensure_current_efficiency_state(
+    app_state: Any,
+    session: AsyncSession,
+    config: EfficiencyBonusConfig,
+    *,
+    now: datetime,
+) -> None:
 
     materializer = getattr(app_state, "efficiency_materializer", None)
     if materializer is None:
@@ -1311,7 +1338,16 @@ async def _materialize_epoch(
         agent_ids = [row.agent_id for row in rows]
         versions = dict.fromkeys(agent_ids, bench_version)
 
-    score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
+    # Both token-cost curves read only these keys out of each score's details
+    # (legacy: token_usage; factor curves: the signature-bound v9 base root),
+    # so the quorum read projects the blob down to exactly that superset
+    # instead of shipping the full per-case audit document.
+    score_rows = await quorum_score_rows(
+        session,
+        agent_ids,
+        bench_versions=versions,
+        details_keys=("token_usage", "v9_base", "base_evidence_sha256"),
+    )
     if is_factor_curve(curve_version):
         from ditto.db.queries.confirmation_scores import (
             ConfirmationEfficiencyCosts,
@@ -1608,7 +1644,13 @@ async def preview_efficiency_board(
         return None
     agent_ids = [row.agent_id for row in rows]
     versions = dict.fromkeys(agent_ids, bench_version)
-    score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
+    # Both token-cost curves read only these keys (see _materialize_epoch).
+    score_rows = await quorum_score_rows(
+        session,
+        agent_ids,
+        bench_versions=versions,
+        details_keys=("token_usage", "v9_base", "base_evidence_sha256"),
+    )
     curve_version = (
         CURVE_VERSION_UNBOUNDED_FACTOR
         if bench_version >= BOUNDED_FACTOR_BENCH_VERSION

@@ -1742,3 +1742,55 @@ def test_protocol_v27_heartbeat_binds_the_weights_fold_only_when_present() -> No
         heartbeat_signing_message(
             **{**common, "protocol_version": 26}, weights_fold=fold
         )
+
+
+def test_protocol_v32_heartbeat_binds_host_specs_only_when_present() -> None:
+    from ditto.api_models.system_health import HostSpecs
+    from ditto.api_models.validator_weights_fold import WeightsFold
+
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    request["protocol_version"] = 32
+    common = dict(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=BenchmarkCapacity(
+            configured_slots=2, healthy_slots=["slot-0", "slot-1"]
+        ),
+        confirmation_progress=[],
+        updater_status=ValidatorUpdaterStatus(
+            enabled=True, channel="compat-2", state="idle", observed_at=1_784_020_800
+        ),
+    )
+    # A failed probe signs exactly what a v31 validator signs.
+    assert heartbeat_signing_message(**common).startswith(
+        b"ditto-validator-heartbeat:v23:"
+    )
+    specs = HostSpecs(
+        cpu_count=16,
+        cpu_physical_cores=8,
+        memory_total_mib=64_000,
+        disk_total_gib=500,
+        architecture="x86_64",
+    )
+    message = heartbeat_signing_message(**common, host_specs=specs)
+    assert message.startswith(b"ditto-validator-heartbeat:v32:")
+    assert b":16,8,64000,500,x86_64:" in message
+    shrunk = specs.model_copy(update={"memory_total_mib": 128_000})
+    assert message != heartbeat_signing_message(**common, host_specs=shrunk)
+    # The fold token keeps its position; an absent fold signs as empty.
+    fold = WeightsFold(
+        epoch_index=1,
+        ledger_digest="cd" * 32,
+        vector_digest="ab" * 32,
+        folded_at=1_784_020_790,
+    )
+    assert message != heartbeat_signing_message(
+        **common, host_specs=specs, weights_fold=fold
+    )
+    with pytest.raises(ValueError, match="require heartbeat protocol v32"):
+        heartbeat_signing_message(
+            **{**common, "protocol_version": 31}, host_specs=specs
+        )

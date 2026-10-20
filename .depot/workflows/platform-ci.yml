@@ -1,0 +1,22 @@
+# Manual fallback only: current GitHub checks on Depot compute.
+name: Depot Platform CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: depot-platform-ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    uses: ./.depot/workflows/platform-verify.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ github.sha }}
+      security: true
+      backend: true

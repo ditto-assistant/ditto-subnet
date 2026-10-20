@@ -723,3 +723,170 @@ describe("Ditto account link", () => {
     });
   });
 });
+
+describe("submission versions and private downloads (#2867)", () => {
+  const session = {
+    token: "ditto_ms_owner",
+    hotkey: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    scopes: ["download", "read"],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  };
+  const agentId = "5fdadd33-bd0f-492d-ba71-49bef159f069";
+
+  async function openSubmissions(download: () => Promise<Response>, canDownload = true) {
+    const { setMinerSession } = await import("../stores/sessionStore");
+    setMinerSession(session);
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...location, assign });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me"))
+        return json({
+          session: {
+            miner_hotkey: session.hotkey,
+            scopes: canDownload ? ["download", "read"] : ["read"],
+            expires_at: session.expiresAt,
+            expires_in: 3600,
+          },
+          profile: {},
+          profile_url: "/miner/" + session.hotkey,
+          commands: [],
+        });
+      if (url.endsWith("/me/submissions"))
+        return json([
+          {
+            agent_id: agentId,
+            name: "alpha",
+            version: 7,
+            status: "rejected",
+            created_at: "2026-10-13T00:00:00Z",
+          },
+          {
+            agent_id: "00000000-0000-4000-8000-000000000001",
+            name: "legacy",
+            version: null,
+            status: "quarantined",
+            created_at: "2026-07-13T00:00:00Z",
+          },
+          {
+            agent_id: "00000000-0000-4000-8000-000000000002",
+            name: "older API",
+            status: "scored",
+            created_at: "2026-07-12T00:00:00Z",
+          },
+        ]);
+      if (url.endsWith("/me/reviews")) return json({ reviews: [] });
+      if (url.endsWith("/artifact")) return download();
+      return json([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(() => <ReviewsPage />);
+    const tab = await waitFor(() => {
+      const button = Array.from(document.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "submissions",
+      );
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    fireEvent.click(tab);
+    const button = await waitFor(() => {
+      const found = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Download submitted source for alpha"]',
+      );
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    return { button, assign, fetchMock };
+  }
+
+  it("shows submission revisions and a legacy fallback alongside time", async () => {
+    await openSubmissions(async () => json({}));
+    const rows = Array.from(document.querySelectorAll(".account-list > li"));
+    expect(rows[0]?.textContent).toContain("v7 · rejected · 2026-10-13T00:00:00Z");
+    expect(rows[1]?.textContent).toContain("Unversioned · quarantined · 2026-07-13T00:00:00Z");
+    expect(rows[2]?.textContent).toContain("Unversioned · scored");
+    expect(document.querySelectorAll(".account-submission-download button")).toHaveLength(3);
+  });
+
+  it("requests the owner's link with the bearer and starts an attachment download", async () => {
+    const url = "https://storage.example/owner-source?signature=private";
+    const { button, assign, fetchMock } = await openSubmissions(async () =>
+      json({ download_url: url }),
+    );
+    fireEvent.click(button);
+    await waitFor(() => expect(assign).toHaveBeenCalledWith(url));
+    const calls = fetchMock.mock.calls.filter((call) => String(call[0]).endsWith("/artifact"));
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0]?.[0])).toContain("/me/agents/" + agentId + "/artifact");
+    const init = calls[0]?.[1] as RequestInit;
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer ditto_ms_owner");
+    expect(init.cache).toBe("no-store");
+    expect(document.body.textContent).toContain(
+      "Download started. The private link expires in five minutes.",
+    );
+  });
+
+  it("disables only the selected row while preparing a link", async () => {
+    let resolve!: (response: Response) => void;
+    const pending = new Promise<Response>((done) => {
+      resolve = done;
+    });
+    const { button, assign, fetchMock } = await openSubmissions(() => pending);
+    fireEvent.click(button);
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toBe("Preparing download…");
+    const other = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Download submitted source for legacy"]',
+    );
+    expect(other?.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(
+      fetchMock.mock.calls.filter((call) => String(call[0]).endsWith("/artifact")),
+    ).toHaveLength(1);
+    resolve(json({ download_url: "https://storage.example/source" }));
+    await waitFor(() => expect(assign).toHaveBeenCalledOnce());
+    expect(button.disabled).toBe(false);
+  });
+
+  it("shows a failed request and permits a retry without navigating", async () => {
+    let attempt = 0;
+    const { button, assign } = await openSubmissions(async () => {
+      attempt++;
+      return attempt === 1
+        ? new Response(JSON.stringify({ detail: "invalid or expired miner session" }), {
+            status: 401,
+          })
+        : json({ download_url: "https://storage.example/source" });
+    });
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("invalid or expired miner session"),
+    );
+    expect(assign).not.toHaveBeenCalled();
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(assign).toHaveBeenCalledOnce());
+    expect(document.body.textContent).not.toContain("invalid or expired miner session");
+  });
+
+  it("prompts an older read-only session to sign in with Download enabled", async () => {
+    const { button, fetchMock, assign } = await openSubmissions(async () => json({}), false);
+    expect(button.disabled).toBe(true);
+    expect(document.body.textContent).toContain(
+      "Sign in again with Download enabled to get your source.",
+    );
+    fireEvent.click(button);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/artifact"))).toBe(false);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing credential without navigating", async () => {
+    const { button, assign } = await openSubmissions(async () => json({}));
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("The download link is missing. Try again."),
+    );
+    expect(assign).not.toHaveBeenCalled();
+    expect(button.disabled).toBe(false);
+  });
+});

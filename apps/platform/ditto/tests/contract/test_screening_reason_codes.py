@@ -31,6 +31,7 @@ from ditto_screening_protocol.reason_codes import (
     PROVIDER_BACKOFF_REASON_CODES,
     SCREENING_REASON_CODES,
     SEED_PROBE_REASON_CODES,
+    VERIFICATION_INCOMPLETE_UNREVIEWABLE,
     ReasonCodeClass,
     ReasonCodeProducer,
     reason_codes,
@@ -101,6 +102,7 @@ def test_platform_stamped_codes_are_registered_as_platform_codes() -> None:
         screening._ORPHANED_ATTEMPT_REASON_CODE,
         screening.LEASE_EXPIRED_REASON_CODE,
         screening.EXHAUSTED_REASON_CODE,
+        VERIFICATION_INCOMPLETE_UNREVIEWABLE,
     ):
         assert SCREENING_REASON_CODES[code].producer == ReasonCodeProducer.PLATFORM
     assert {
@@ -111,6 +113,8 @@ def test_platform_stamped_codes_are_registered_as_platform_codes() -> None:
         screening._ORPHANED_ATTEMPT_REASON_CODE,
         screening.LEASE_EXPIRED_REASON_CODE,
         screening.EXHAUSTED_REASON_CODE,
+        # Stamped by the result endpoint as policy v13 V2.
+        VERIFICATION_INCOMPLETE_UNREVIEWABLE,
     }
     assert deferred_source_review.INCONCLUSIVE_REASON_CODE in reason_codes(
         ReasonCodeClass.POLICY

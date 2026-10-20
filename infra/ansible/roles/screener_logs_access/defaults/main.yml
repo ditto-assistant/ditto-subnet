@@ -1,0 +1,7 @@
+---
+# Shared read-only log identity: use the same managed team-key source as the
+# production/preview logs account. Never add logs to the privileged team list.
+screener_logs_public_keys: >-
+  {{ team_ssh_keys | default({}) | dict2items
+     | selectattr('key', 'in', team_members | default([]))
+     | map(attribute='value') | flatten | unique | list }}

@@ -53,6 +53,23 @@ Do not delete `/opt/ditto-platform-relay/traces`. A 30G boot disk is too small;
 grow with `gcloud compute disks resize` then `growpart`/`resize2fs` **before**
 Terraform. Protected apply must not replace the VMs.
 
+## Screener fleet release activation
+
+`scripts/screener-fleet-auto-update.sh` activates each signed fleet descriptor on the Hetzner primary only after cosign, exact-revision, and closed-manifest checks pass. By default (`SCREENER_FLEET_ROLLOUT_MODE=rolling`) it does not drain the fleet. It flips `current`, the `:active` analyzer tag, and `release.env`, then sends SIGTERM to each worker's main process only. Idle workers restart on the candidate within about 10 s, and busy ones sign their verdict and then restart, so claim capacity survives a busy release. The updater never stops, restarts, or kills a running worker.
+
+- If any worker fails to settle on the candidate (settle 30 s, start window 300 s), every worker rolls back and the descriptor goes to `failed-candidate`.
+- If no worker reaches the candidate within the 70 min bound, it rolls back without suppressing the descriptor, so the next tick retries.
+
+It falls back to the whole-fleet drain (`stop_fleet` plus the lease-bound hold from #2287) when:
+
+- the operator sets the `drain-all` mode;
+- there is no previous release;
+- a running worker is above the requested count;
+- a live worker's release is unresolvable; or
+- the analyzer build inputs differ from any live worker's release.
+
+The journal says `draining every worker before activation: <reason>`. Inspect `/var/lib/ditto-screener-fleet/updater/drain-status.env` (`PHASE=rolling|active|rolled_back|draining|held|aborted`) and `held-workers` for workers still finishing on the previous release. Mixed worker `release` values in Backroom during a roll are expected; a target-revision field is not yet published. Details: `docs/hetzner-screener-fleet.md` § Rolling activation.
+
 ## Capacity invariants
 
 The enrolled Hetzner worker is primary. GCE normally targets zero and supplies bounded backlog or outage capacity. The controller must be fenced and count pending workers; an independent GCP watchdog may add fallback capacity only when backlog exists, controller authority is missing, expired, or unready, and current Platform policy confirms positive primary admission. Fail closed when provider isolation cannot be proven.

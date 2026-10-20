@@ -50,10 +50,12 @@ logger = logging.getLogger(__name__)
 # only signal that an artifact was served without leaving a record.
 AUDIT_WRITE_FAILED = "artifact fetch audit write failed"
 
-RequesterKind = Literal["validator", "screener", "admin", "public"]
+RequesterKind = Literal["validator", "screener", "admin", "public", "miner"]
 
 # Route names, not request paths. Paths carry ids and get reshaped; the question
 # this identifier answers is "which door did the fetcher come through".
+ENDPOINT_MINER_ARTIFACT = "miner_me.my_artifact"
+ENDPOINT_MINER_MCP_ARTIFACT = "miner_mcp.get_my_submission_artifact"
 ENDPOINT_PUBLIC_ARTIFACT = "public.agent_artifact"
 ENDPOINT_VALIDATOR_ARTIFACT = "validator.agent_artifact"
 ENDPOINT_VALIDATOR_CODING_HARNESS = "validator.coding_harness_launch"
@@ -67,6 +69,8 @@ ENDPOINT_ADMIN_SOURCE_FILE = "admin.read_screening_source_file"
 ENDPOINT_ADMIN_SOURCE_SEARCH = "admin.search_screening_source"
 ENDPOINT_ADMIN_COPY_REVIEW_DIFF = "admin.get_copy_review_source_diff"
 ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE = "admin.get_copy_review_source_diff_file"
+ENDPOINT_ADMIN_LINEAGE_DIFF = "admin.get_lineage_source_diff"
+ENDPOINT_ADMIN_LINEAGE_DIFF_FILE = "admin.get_lineage_source_diff_file"
 
 
 async def record_artifact_fetch(

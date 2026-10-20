@@ -17,6 +17,7 @@
 | Host convergence | `infra/ansible/` |
 | Platform app VM disk | `.agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md`, `app_boot_disk_gb` |
 | Validator updater | `scripts/validator-stack-auto-update.sh` |
+| Screener fleet updater (rolling activation, drain fallback) | `scripts/screener-fleet-auto-update.sh`, `scripts/screener-fleet-drain.py`, `docs/hetzner-screener-fleet.md` |
 
 ## Release graph expectations
 

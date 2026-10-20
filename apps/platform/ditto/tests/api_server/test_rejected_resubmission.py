@@ -315,3 +315,30 @@ def test_naive_timestamps_are_comparable() -> None:
         rejected=[_rejected(first_seen=datetime(2026, 8, 16))],
     )
     assert decision.held is True
+
+
+def test_line_sub_sketch_never_feeds_the_resubmission_rule() -> None:
+    """Identical ``lines`` with distinct windows is a refactor, not a re-upload.
+
+    The copy gate reads the line channel to catch a module-split copy of
+    another owner's agent; the resubmission rule asks a near-identity question
+    of the owner's own rejected artifact, which only the window channel answers.
+    """
+    lines = {"v": "l1", "k": 256, "card": 40, "corpus": _CORPUS}
+    lines["m"] = sorted(f"l{i}" for i in range(40))
+    decision = evaluate_rejected_resubmission(
+        agent_id=_CANDIDATE,
+        submitted_at=_NOW,
+        sha256="different-sha",
+        normalized_source_hash="different-normalized",
+        content_fingerprint={**_fp({f"a{i}" for i in range(40)}), "lines": lines},
+        rejected=[
+            _rejected(
+                content_fingerprint={
+                    **_fp({f"b{i}" for i in range(40)}),
+                    "lines": lines,
+                }
+            )
+        ],
+    )
+    assert decision.held is False

@@ -41,6 +41,7 @@ from ditto.api_models.confirmation_progress import (
 )
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.stack_health import ValidatorStackHealth
+from ditto.api_models.system_health import HostSpecs
 from ditto.api_models.validator import (
     ConfirmationDatasetPin,
     ValidatorHeartbeatRequest,
@@ -142,6 +143,7 @@ from ditto.validator.weights import (
     blend_track_weights,
     contested_confirmation_set,
     filter_weight_confirmed,
+    owner_burn_destination_required,
     reign_seed_planning,
     resolve_miner_emission_share,
     resolve_track_shares,
@@ -156,11 +158,15 @@ from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
 )
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
+from ditto_screening_protocol.treasury_approval import (
+    verify_follower_policy_approval,
+)
 from ditto_screening_protocol.treasury_enforcement import (
     EnforcingTreasuryPin,
     TreasuryFleetMember,
     TreasuryWeightCapability,
     require_treasury_weight_authority,
+    treasury_follower_capability,
 )
 
 if TYPE_CHECKING:
@@ -213,6 +219,30 @@ def _ledger_statistical_band_cap(ledger: LedgerResponse) -> bool:
     return getattr(ledger, "statistical_band_mode", None) == "capped"
 
 
+def _ledger_rank_shares(
+    ledger: LedgerResponse, legacy: tuple[float, ...]
+) -> tuple[float, ...]:
+    """The protocol-31 operator payout curve when the served ledger carries one.
+
+    Platform withholds ``rank_shares`` until every recently-live weight setter
+    reports v31, so the whole fleet switches curves in the same epoch. A curve
+    the fold could not use (wrong length, non-positive, or not summing to one)
+    is ignored rather than raised: every validator ignores it identically and
+    keeps folding ``legacy``.
+    """
+    served = getattr(ledger, "rank_shares", None)
+    if not served:
+        return legacy
+    shares = tuple(float(share) for share in served)
+    if (
+        len(shares) != len(legacy)
+        or any(not math.isfinite(share) or share <= 0.0 for share in shares)
+        or not math.isclose(sum(shares), 1.0, rel_tol=0.0, abs_tol=1e-12)
+    ):
+        return legacy
+    return shares
+
+
 def _ledger_crown_incumbent(ledger: LedgerResponse) -> UUID | None:
     """The served incumbent the fold defends, or ``None`` for the classic walk.
 
@@ -247,6 +277,21 @@ def _ledger_provisional_incumbent(ledger: LedgerResponse) -> LedgerEntry | None:
     ):
         return None
     return provisional
+
+
+def _receipt_provenance_ready(ledger: Any) -> bool:
+    """True when the ledger can take the Pylon receipt path.
+
+    ``submit`` falls back to ordinary ``put_weights`` when any of these is
+    missing, and that path is not deduplicated by request id.
+    """
+    digest = getattr(ledger, "ledger_digest", None)
+    return (
+        getattr(ledger, "ledger_snapshot_id", None) is not None
+        and getattr(ledger, "epoch_index", None) is not None
+        and isinstance(digest, str)
+        and len(digest) == 64
+    )
 
 
 def _ledger_weight_entries(ledger: LedgerResponse) -> list[LedgerEntry]:
@@ -313,6 +358,12 @@ _BOUNDARY_INCLUSION_MARGIN_BLOCKS = 6
 # 100-block rate-limit window for inclusion. Any host-specific value would
 # reintroduce exactly the ledger-read skew this exists to remove.
 _WEIGHT_COMMIT_OFFSET_BLOCKS = 270
+# How long a platform-served last-known-good pin may still be committed.
+# Inside the bound, each chain epoch gets its own weight request so LastUpdate
+# keeps moving through a multi-hour outage. Past it, the snapshot is too old
+# to keep paying from, and weights are left unchanged. ActivityCutoff on SN118
+# is about 16.7h, so this stays inside one activity window.
+MAX_STALE_LEDGER_AGE_SECONDS = 6 * 60 * 60
 
 # Substrings that identify a chain rate-limit rejection across the surfaces we
 # submit through (subtensor's ``SettingWeightsTooFast`` error, SDK / Pylon
@@ -595,7 +646,6 @@ class _WeightOutcome:
     leaderboard: list[tuple[str, float]] = field(default_factory=list)
     weights: dict[str, float] = field(default_factory=dict)
     submitted: bool = False
-    king_fingerprint: tuple[str, UUID, float, int | None] | None = None
     fold: WeightsFold | None = None
     """What this fold consumed and produced, echoed on the heartbeat."""
 
@@ -800,6 +850,10 @@ class ValidatorWorker:
         self._sweep_failures_with_log_tail = 0
         self._resource_blocked_until: dict[str, float] = {}
         self._admission: BenchmarkAdmission = "accepting"
+        # The updater's drain request, remembered so every heartbeat -- not just
+        # the next sweep boundary -- can stop advertising ``accepting`` the
+        # moment a drain is asked for. See ``_note_drain_requested``.
+        self._drain_requested: asyncio.Event | None = None
         # Host-resource self-gate. A ``MagicMock`` config (the unit-test double)
         # would otherwise hand us a mock in place of the ceilings and every
         # comparison below would be meaningless, so accept only the real type
@@ -818,10 +872,6 @@ class ValidatorWorker:
         self._active_heartbeat_lock = asyncio.Lock()
         self._system_metrics = system_metrics
         self._stack_health = stack_health
-        # A locally persisted score can change the king immediately. The weight
-        # loop also polls for receipts from other validators, but this event
-        # removes the local sweep-delay without weakening chain cadence.
-        self._ledger_changed = asyncio.Event()
 
     def _slot_state(self) -> _SlotState:
         return self._slots[_CURRENT_SLOT.get()]
@@ -882,6 +932,18 @@ class ValidatorWorker:
     def _retain_failed_progress_until(self, value: float) -> None:
         self._slot_state().retain_failed_progress_until = value
 
+    def _collect_host_specs(self, protocol_version: int) -> HostSpecs | None:
+        """Return the once-per-boot hardware block for a v32+ heartbeat."""
+        if protocol_version < 32 or self._system_metrics is None:
+            return None
+        try:
+            specs = self._system_metrics.host_specs()
+        except Exception as e:  # noqa: BLE001 - telemetry must never gate work
+            logger.warning("host spec collection failed; omitting them: %s", e)
+            return None
+        # Signed bytes: anything but a validated block announces nothing.
+        return specs if isinstance(specs, HostSpecs) else None
+
     def _collect_system_metrics(self) -> SystemMetrics | None:
         """Return the cached coarse host sample, or ``None`` if unobservable.
 
@@ -929,6 +991,27 @@ class ValidatorWorker:
                 )
             self._constrained_resources = exceeded
         self._admission = "resource_constrained" if exceeded else "accepting"
+
+    def _note_drain_requested(self) -> None:
+        """Advertise ``draining`` as soon as the updater asks for a drain.
+
+        Admission was otherwise re-decided only at a sweep boundary and when the
+        drain was finally acknowledged. A sweep held open by a long run kept
+        heartbeating ``accepting`` while every idle slot had already stopped
+        polling for work, so the fleet view showed capacity that would never
+        claim anything. The flip back to ``accepting`` stays where it was: the
+        next sweep start, or the drain acknowledgement's resume.
+        """
+        drain = self._drain_requested
+        if drain is not None and drain.is_set():
+            if self._admission != "paused":
+                self._admission = "draining"
+        elif self._admission == "draining":
+            # The drain was withdrawn mid-sweep: stop advertising it, and fall
+            # back to whatever the resource gate last decided.
+            self._admission = (
+                "resource_constrained" if self._constrained_resources else "accepting"
+            )
 
     def _capacity_snapshot(self) -> BenchmarkCapacity:
         active = []
@@ -990,6 +1073,14 @@ class ValidatorWorker:
         # counter that accumulated across sweeps would report every failure the
         # process had ever seen against this sweep's failure total.
         self._sweep_failures_with_log_tail = 0
+        # A sweep called without an event still honours the one a previous
+        # sweep (or ``run_forever``) remembered: the heartbeat already reads
+        # ``self._drain_requested``, so the slot loop must gate on the same
+        # event or it would advertise ``draining`` while claiming new work.
+        if drain_requested is None:
+            drain_requested = self._drain_requested
+        else:
+            self._drain_requested = drain_requested
         self._admission = (
             "draining"
             if drain_requested is not None and drain_requested.is_set()
@@ -1181,7 +1272,6 @@ class ValidatorWorker:
                             running += 1
                         try:
                             report = await self._score_job_within_lease(job)
-                            self._ledger_changed.set()
                             details = (
                                 report.details
                                 if isinstance(report.details, dict)
@@ -1482,6 +1572,7 @@ class ValidatorWorker:
     ) -> bool:
         """Best-effort signed build + runtime report; never gate validator work."""
         del active_snapshot  # v10+ always signs one atomic all-slot snapshot.
+        self._note_drain_requested()
         capacity = self._capacity_snapshot()
         primary = sorted(capacity.active, key=lambda slot: slot.slot_id)
         active_agent_id = primary[0].agent_id if primary else None
@@ -1566,6 +1657,7 @@ class ValidatorWorker:
             if stack_health is None:
                 stack_health = fallback_stack_health()
             updater_status = collect_updater_status(observed_at=timestamp)
+            host_specs = self._collect_host_specs(build.protocol_version)
             signature = sign_heartbeat(
                 self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
@@ -1583,6 +1675,7 @@ class ValidatorWorker:
                 confirmation_progress=self._confirmation_progress_snapshot(),
                 updater_status=updater_status,
                 weights_fold=self._last_weights_fold,
+                host_specs=host_specs,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -1601,6 +1694,7 @@ class ValidatorWorker:
                 confirmation_progress=self._confirmation_progress_snapshot(),
                 updater_status=updater_status,
                 weights_fold=self._last_weights_fold,
+                host_specs=host_specs,
                 timestamp=timestamp,
                 signature=signature,
             )
@@ -2080,22 +2174,44 @@ class ValidatorWorker:
                         "enforcing treasury ledger is stale or inconsistent"
                     )
                 approval = configured_treasury_approval(self._config)
-                capability = await self._treasury_weight_capability()
+                if approval is None:
+                    verify_follower_policy_approval(treasury_pin.approval)
+                managed = any(
+                    m.validator_hotkey == self._config.validator_hotkey
+                    for m in treasury_pin.fleet
+                )
+                capability = (
+                    await self._treasury_weight_capability() if managed else None
+                )
                 read = getattr(self._chain, "get_treasury_dispatch_observation", None)
-                if approval is None or capability is None or not callable(read):
+                if (
+                    managed and (approval is None or capability is None)
+                ) or not callable(read):
                     raise ValueError("treasury consumer or transport proof is missing")
                 async with asyncio.timeout(8):
                     observed = await read(treasury_pin.policy)
-                member = TreasuryFleetMember(
-                    **capability.model_dump(),
-                    validator_hotkey=self._config.validator_hotkey,
-                    protocol_version=validator_build_info().protocol_version,
+                member = (
+                    TreasuryFleetMember(
+                        **capability.model_dump(),
+                        validator_hotkey=self._config.validator_hotkey,
+                        protocol_version=validator_build_info().protocol_version,
+                    )
+                    if capability is not None
+                    else treasury_follower_capability(
+                        treasury_pin,
+                        validator_hotkey=self._config.validator_hotkey,
+                        protocol_version=validator_build_info().protocol_version,
+                    )
                 )
                 treasury_authority = {
                     "pin": treasury_pin,
-                    "expected_policy_digest": approval.policy.digest,
+                    "expected_policy_digest": approval.policy.digest
+                    if approval
+                    else treasury_pin.policy_digest,
                     "expected_collector_policy_digest": (
                         approval.policy.collector_policy_digest
+                        if approval
+                        else treasury_pin.policy.collector_policy_digest
                     ),
                     "local_capability": member,
                     "current_identity": observed.identity,
@@ -2112,12 +2228,27 @@ class ValidatorWorker:
 
         # The platform serves a last-known-good ledger (flagged stale) when its own
         # DB read fails; folding it is safe (the pool is durable + slow-moving) but
-        # worth a loud line so an operator sees the platform is degraded.
+        # worth a loud line so an operator sees the platform is degraded. A pin
+        # older than the bound is not folded: recommitting it would keep paying
+        # from scores that are no longer current.
         if getattr(ledger, "stale", False):
+            age = getattr(ledger, "age_seconds", 0)
+            if type(age) is not int or age < 0:
+                age = 0
+            if age > MAX_STALE_LEDGER_AGE_SECONDS:
+                logger.warning(
+                    "scoring ledger is STALE and %ss old, past the %ss bound; "
+                    "weights unchanged this epoch",
+                    age,
+                    MAX_STALE_LEDGER_AGE_SECONDS,
+                )
+                return _WeightOutcome(
+                    leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
+                )
             logger.warning(
                 "scoring ledger is STALE (platform served a %ss-old snapshot); "
                 "folding it but the platform DB read is failing",
-                getattr(ledger, "age_seconds", "?"),
+                age,
             )
 
         leaderboard = [(e.miner_hotkey, e.composite) for e in ledger.entries]
@@ -2164,10 +2295,6 @@ class ValidatorWorker:
             return _WeightOutcome(
                 leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
             )
-        burn_hotkey = await self._resolve_burn_hotkey()
-        if burn_hotkey is None:
-            return _WeightOutcome(leaderboard=leaderboard)
-        self._last_burn_hotkey = burn_hotkey
 
         # Version-rollout re-scores are ordinary platform-leased jobs. The fold
         # reads every cryptographically verified contract it supports and skips
@@ -2192,7 +2319,7 @@ class ValidatorWorker:
             memory_params=MemoryFoldParams(
                 margin=self._config.koth_margin,
                 tail_size=self._config.koth_tail_size,
-                rank_shares=self._config.koth_rank_shares,
+                rank_shares=_ledger_rank_shares(ledger, self._config.koth_rank_shares),
                 dethrone_z=self._config.koth_dethrone_z,
                 tie_pooling=ledger.tie_weighting_mode == "pool",
                 ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
@@ -2264,6 +2391,29 @@ class ValidatorWorker:
                 "eligible tracks with no folded miners; their emission burns: %s",
                 empty_eligible,
             )
+        # Finney leaves the burn hotkey unset and reads SubnetOwnerHotkey from
+        # the public node. That read is required only when the vector will
+        # contain the owner: a positive burn, an unpaid incumbent, an empty
+        # track, or an empty miner pool. A full miner vector does not, so a
+        # failed lookup must not skip the epoch. A previous owner hotkey is
+        # not reused: the key rotates, and a stale target can pay the wrong one.
+        if enforcing:
+            assert isinstance(treasury_pin, EnforcingTreasuryPin)
+            service_bps = treasury_pin.service_bps
+        else:
+            service_bps = 0
+        if self._config.burn_hotkey is not None or owner_burn_destination_required(
+            miner_weights,
+            miner_share=miner_share,
+            paid_miner_fraction=allocated * paid_fraction,
+            service_bps=service_bps,
+        ):
+            burn_hotkey = await self._resolve_burn_hotkey()
+            if burn_hotkey is None:
+                return _WeightOutcome(leaderboard=leaderboard)
+            self._last_burn_hotkey = burn_hotkey
+        else:
+            burn_hotkey = ""
         if enforcing:
             try:
                 assert treasury_authority is not None
@@ -2291,7 +2441,6 @@ class ValidatorWorker:
             statistical_band_cap=_ledger_statistical_band_cap(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
-        king_fingerprint = self._king_fingerprint(champion)
         if not miner_weights:
             logger.info(
                 "ledger has no positive scores; routing 100% of miner emission to burn"
@@ -2303,11 +2452,29 @@ class ValidatorWorker:
             return _WeightOutcome(
                 leaderboard=leaderboard,
                 weights=weights,
-                king_fingerprint=king_fingerprint,
             )
         await self._log_commit_reveal_mode()
         await self._weight_receipt_relay.recover()
-        submitted = await self._weight_receipt_relay.submit(weights, ledger, champion)
+        # A stale pin repeats the previous epoch's provenance, so the receipt
+        # request id would too, and Pylon would acknowledge the duplicate
+        # without a new commit. Bind LastEpochBlock into that id. Without a
+        # readable chain epoch the acknowledgement cannot be told from a
+        # duplicate, so leave the last vector in place.
+        chain_epoch_block = None
+        if getattr(ledger, "stale", False) and _receipt_provenance_ready(ledger):
+            chain_epoch_block = await self._read_chain_blocks("get_last_epoch_block")
+            if chain_epoch_block is None:
+                logger.warning(
+                    "stale scoring ledger has no readable chain epoch; "
+                    "weights unchanged this epoch"
+                )
+                return _WeightOutcome(
+                    leaderboard=leaderboard,
+                    weights=weights,
+                )
+        submitted = await self._weight_receipt_relay.submit(
+            weights, ledger, champion, chain_epoch_block=chain_epoch_block
+        )
         if submitted is None:
             if enforcing:
                 logger.warning("treasury receipt transport refused; no legacy fallback")
@@ -2331,21 +2498,7 @@ class ValidatorWorker:
             leaderboard=leaderboard,
             weights=weights,
             submitted=submitted,
-            king_fingerprint=king_fingerprint,
             fold=fold,
-        )
-
-    @staticmethod
-    def _king_fingerprint(
-        champion: LedgerEntry | None,
-    ) -> tuple[str, UUID, float, int | None] | None:
-        if champion is None:
-            return None
-        return (
-            champion.miner_hotkey,
-            champion.agent_id,
-            champion.composite,
-            champion.bench_version,
         )
 
     async def _get_router_ledger(self) -> RouterLedgerResponse:
@@ -2402,28 +2555,6 @@ class ValidatorWorker:
                     leader[0],
                     leader[1],
                 )
-
-    async def _observe_platform_king(
-        self,
-    ) -> tuple[bool, tuple[str, UUID, float, int | None] | None]:
-        """Return ``(available, fingerprint)`` from the weight-authoritative ledger."""
-        try:
-            ledger = await self._platform.get_ledger()
-            champion = select_champion(
-                _ledger_weight_entries(ledger),
-                margin=self._config.koth_margin,
-                dethrone_z=self._config.koth_dethrone_z,
-                ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
-                statistical_band_cap=_ledger_statistical_band_cap(ledger),
-                incumbent_agent_id=_ledger_crown_incumbent(ledger),
-            )
-        except PlatformError as e:
-            logger.warning("event-driven king check failed: %s", e)
-            return False, None
-        except Exception:  # noqa: BLE001 - an unreadable ledger must not kill weights
-            logger.exception("event-driven king check could not read the ledger")
-            return False, None
-        return True, self._king_fingerprint(champion)
 
     async def _registered_ledger_entries(
         self, entries: Sequence[LedgerEntry]
@@ -2485,6 +2616,7 @@ class ValidatorWorker:
 
         Subtensor withholds incentive for the registered SubnetOwnerHotkey,
         not for UID 0. Preserve existing weights if either read is ambiguous.
+        Callers skip this when the folded vector has no owner residual.
         """
         if self._config.burn_hotkey is not None:
             return self._config.burn_hotkey
@@ -2947,7 +3079,11 @@ class ValidatorWorker:
                         job.agent_id,
                         job.bench_version,
                     )
-            datasets = job.confirmation_datasets
+            slot = self._slot_state()
+            # A revocation belongs to the lease that provoked it. Cleared before
+            # the slot is published as occupied, exactly like the canonical
+            # path, so a roster answer that lands while this run starts sticks.
+            slot.revoked.clear()
             # Set before the claim, not after: ``_begin_active_ticket`` occupies
             # the slot first, so a partial failure must still clear it below.
             ticket_claimed = True
@@ -2956,30 +3092,17 @@ class ValidatorWorker:
                 job.deadline,
                 job.bench_version or DEFAULT_BENCH_VERSION,
             )
-            broker = await self._activate_ticket_inference(job)
-            try:
-                report = await self._evaluate_confirmation_report(
-                    job.agent_id,
-                    job.sha256,
-                    datasets=datasets,
-                    bench_version=job.bench_version,
-                    inference_session_id=(
-                        broker.session_id if broker is not None else None
-                    ),
-                    inference_grant_id=(
-                        job.inference.grant_id
-                        if broker is not None and job.inference is not None
-                        else None
-                    ),
-                    inference_slot_id=(job.slot_id if broker is not None else None),
-                    inference_ticket_deadline=(
-                        job.deadline if broker is not None else None
-                    ),
-                    ticket_deadline=job.deadline,
-                )
-            finally:
-                if broker is not None:
-                    await self._dittobench.cancel_inference_session(broker.session_id)
+            # Bounded by the lease and by the roster, like canonical scoring. An
+            # unwatched retest ignored ``slot.revoked``: an operator reject that
+            # force-expired the lease left the run going until its own poll
+            # budget, holding the sweep's ``asyncio.gather`` -- and with it every
+            # sibling slot's issuance -- for hours.
+            leased = job
+            report = await self._run_within_lease(
+                lambda: self._evaluate_confirmation_lease(leased),
+                job=job,
+                slot=slot,
+            )
             if report is None:
                 await self._report_ticket_failed(
                     job, "scoring_error", "confirmation_run_produced_no_report"
@@ -2991,6 +3114,20 @@ class ValidatorWorker:
                 ticket_deadline=job.deadline,
             )
             self._resolve_ticket_deadline(job.agent_id, job.deadline)
+        except LeaseRevokedError as exc:
+            # Same wire rule as the canonical lane: the platform took this lease
+            # back itself, so nothing is handed back. ``scoring_error`` would
+            # charge an attempt the platform already withdrew and
+            # ``infrastructure`` would mint a no-fault re-lease. The ``finally``
+            # below frees the slot.
+            logger.warning(
+                "top-five confirmation lease for agent %s on %s was revoked by "
+                "the platform; slot freed immediately instead of at the lease "
+                "TTL: %s",
+                job.agent_id if job is not None else None,
+                job.slot_id if job is not None else _slot_id,
+                exc,
+            )
         except LeaseDeadlineError as exc:
             logger.warning(
                 "top-five confirmation reached the lease deadline agent=%s: %s",
@@ -3059,6 +3196,35 @@ class ValidatorWorker:
             if slot_token is not None:
                 _CURRENT_SLOT.reset(slot_token)
         return ticket_claimed
+
+    async def _evaluate_confirmation_lease(
+        self, job: JobResponse
+    ) -> ScoreReport | None:
+        """Activate the lease's inference grant and evaluate its pinned seeds."""
+        broker = await self._activate_ticket_inference(job)
+        try:
+            return await self._evaluate_confirmation_report(
+                job.agent_id,
+                job.sha256,
+                datasets=job.confirmation_datasets,
+                bench_version=job.bench_version,
+                inference_session_id=(
+                    broker.session_id if broker is not None else None
+                ),
+                inference_grant_id=(
+                    job.inference.grant_id
+                    if broker is not None and job.inference is not None
+                    else None
+                ),
+                inference_slot_id=(job.slot_id if broker is not None else None),
+                inference_ticket_deadline=(
+                    job.deadline if broker is not None else None
+                ),
+                ticket_deadline=job.deadline,
+            )
+        finally:
+            if broker is not None:
+                await self._dittobench.cancel_inference_session(broker.session_id)
 
     async def _evaluate_confirmation_report(
         self,
@@ -3803,6 +3969,27 @@ class ValidatorWorker:
         # one this slot picks up. If the new lease is also gone the very next
         # heartbeat says so again.
         slot.revoked.clear()
+        return await self._run_within_lease(
+            lambda: self._score_job(job), job=job, slot=slot
+        )
+
+    async def _run_within_lease[T](
+        self,
+        operation: Callable[[], Awaitable[T]],
+        *,
+        job: JobResponse,
+        slot: _SlotState,
+    ) -> T:
+        """Bound leased work by its own lease and by the platform's roster.
+
+        Every lane that executes a lease on a slot goes through here: the
+        canonical queue and the continual-retest (top-five confirmation) lane.
+        The deadline bound converts an over-long run into
+        :class:`LeaseDeadlineError`; the revocation watchdog converts a lease
+        the platform stopped listing into :class:`LeaseRevokedError`. Callers
+        clear ``slot.revoked`` *before* they publish the slot as occupied, so a
+        roster answer that lands while the run starts is never lost.
+        """
         budget = lease_budget_seconds(job.deadline)
         if budget <= 0:
             raise LeaseDeadlineError(
@@ -3811,7 +3998,7 @@ class ValidatorWorker:
             )
         try:
             async with asyncio.timeout(budget):
-                return await self._score_until_revoked(job, slot)
+                return await self._run_until_revoked(operation, job=job, slot=slot)
         except TimeoutError as error:
             raise LeaseDeadlineError(
                 f"scoring agent {job.agent_id} did not resolve within the "
@@ -3819,10 +4006,20 @@ class ValidatorWorker:
                 f"{job.deadline.isoformat()}"
             ) from error
 
-    async def _score_until_revoked(
-        self, job: JobResponse, slot: _SlotState
-    ) -> ScoreReport:
-        """Score, but stop the moment the platform says the lease is gone.
+    async def _run_until_revoked[T](
+        self,
+        operation: Callable[[], Awaitable[T]],
+        *,
+        job: JobResponse,
+        slot: _SlotState,
+    ) -> T:
+        """Run leased work, but stop the moment the platform says it is gone.
+
+        Shared by every lane that holds a lease on ``slot``: canonical scoring
+        and the continual-retest (top-five confirmation) lane. A lane that runs
+        outside this watchdog ignores ``slot.revoked`` and keeps its slot -- and,
+        through ``asyncio.gather`` in the sweep, the whole host -- until its own
+        poll budget runs out, hours after the platform took the lease back.
 
         Cancellation works exactly the way ``asyncio.timeout`` already makes it
         work here: a watchdog cancels *this* task, so the ``CancelledError``
@@ -3846,7 +4043,7 @@ class ValidatorWorker:
 
         watchdog = asyncio.create_task(watch_for_revocation())
         try:
-            return await self._score_job(job)
+            return await operation()
         except asyncio.CancelledError:
             if not slot.revoked.is_set() or lease_budget_seconds(job.deadline) <= 0:
                 raise
@@ -4383,6 +4580,8 @@ class ValidatorWorker:
         cooperative updater drain stops both loops from starting new work and
         is acknowledged only after their current work has completed.
         """
+        if drain_requested is not None:
+            self._drain_requested = drain_requested
         write_update_state(
             "ready",
             platform_accepted=self._platform_accepted,
@@ -4451,6 +4650,10 @@ class ValidatorWorker:
                 await weight_task
             with contextlib.suppress(asyncio.CancelledError):
                 await longmem_task
+            # The remembered event belongs to this run's lifetime; a later
+            # standalone ``run_once`` must not inherit a drain that ended here.
+            if self._drain_requested is drain_requested:
+                self._drain_requested = None
             write_update_state("stopping")
 
     async def _run_longmem_forever(
@@ -4616,70 +4819,45 @@ class ValidatorWorker:
             chain_floor = await self._chain_min_epoch_seconds()
             epoch_seconds = max(float(self._config.epoch_seconds), chain_floor)
             if outcome.submitted:
-                await self._wait_for_king_or_weight_window(
+                await self._wait_for_weight_window(
                     stop,
                     epoch_seconds=epoch_seconds,
-                    baseline=outcome.king_fingerprint,
                     drain_requested=drain_requested,
                 )
             else:
-                # A rejected platform/chain attempt must not spin, but it also
-                # must not suppress a newly signed king for an entire epoch.
+                # A rejected platform/chain attempt must not spin, and it must
+                # not wait out a full epoch before the next ledger read.
                 await self._sleep_or_stop_or_drain(
                     stop, self._config.sweep_seconds, drain_requested
                 )
 
-    async def _wait_for_king_or_weight_window(
+    async def _wait_for_weight_window(
         self,
         stop: asyncio.Event,
         *,
         epoch_seconds: float,
-        baseline: tuple[str, UUID, float, int | None] | None,
         drain_requested: asyncio.Event | None,
     ) -> None:
-        """Watch signed ledger receipts while respecting commit-reveal cadence.
+        """Hold the next commit for the chain window and the local resubmit floor.
 
-        Local scores wake this loop through ``_ledger_changed``; scores from
-        other validators are observed on the normal sweep poll. A changed king
-        is remembered immediately, but submission remains gated by the chain's
-        LastUpdate/tempo window. This gives the new king the earliest legal
-        commit without generating ``SettingWeightsTooFast`` churn.
+        A newly signed king cannot move this earlier. The next epoch reads the
+        ledger once, when it folds. Polling it during this wait verified every
+        receipt and compared that pool with the king just submitted, then still
+        waited out this same delay.
         """
-        observed = baseline
         # A successful local submission is authoritative even if the RPC has
         # not indexed LastUpdate yet. Never let a temporarily stale chain read
         # collapse this guard to zero and create SettingWeightsTooFast churn.
         local_not_before = time.monotonic() + await self._local_resubmit_guard_seconds(
             epoch_seconds
         )
-        while not stop.is_set():
-            if drain_requested is not None and drain_requested.is_set():
-                return
-            chain_delay = await self._seconds_until_weight_window(epoch_seconds)
-            delay = max(chain_delay, local_not_before - time.monotonic())
-            if delay <= 0:
-                return
-            wait_seconds = min(
-                delay,
-                max(1.0, float(self._config.sweep_seconds)),
-            )
-            if self._ledger_changed.is_set():
-                self._ledger_changed.clear()
-            else:
-                await self._sleep_or_stop_or_drain(stop, wait_seconds, drain_requested)
-                if stop.is_set() or (
-                    drain_requested is not None and drain_requested.is_set()
-                ):
-                    return
-            available, current = await self._observe_platform_king()
-            if available and current != observed:
-                logger.info(
-                    "signed king changed from %s to %s; scheduling weights for "
-                    "the earliest legal commit-reveal window",
-                    observed,
-                    current,
-                )
-                observed = current
+        chain_delay = await self._seconds_until_weight_window(epoch_seconds)
+        delay = max(0.0, chain_delay, local_not_before - time.monotonic())
+        if delay <= 0 or stop.is_set():
+            return
+        if drain_requested is not None and drain_requested.is_set():
+            return
+        await self._sleep_or_stop_or_drain(stop, delay, drain_requested)
 
     async def _acknowledge_drain(
         self,

@@ -56,6 +56,7 @@ async def test_empty_then_exact_public_receipt_and_cursor(app, client, session_m
     assert response.headers["Cache-Control"] == "public, max-age=5"
     page = response.json()
     assert page["items"][0]["payment_id"] == "payment-2"
+    assert page["items"][0]["extrinsic_hash"] is None
     assert page["items"][0]["block_hash"] == "0xpayment-2"
     assert page["items"][0]["allocation_bps"] == 25
     assert page["items"][0]["allocated_alpha_rao"] == "9007199254740993"

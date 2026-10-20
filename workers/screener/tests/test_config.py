@@ -22,6 +22,8 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_WALLET_NAME",
         "SCREENER_WALLET_HOTKEY",
         "SCREENER_GH_TOKEN_FILE",
+        "SCREENER_DOCKER_HOST",
+        "SCREENER_REQUIRE_ROOTLESS_DOCKER",
         "SCREENER_BUILD_TIMEOUT_SECONDS",
         "SCREENER_REMOTE_BUILD_MODE",
         "SCREENER_BUILD_MEMORY",
@@ -43,7 +45,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.netuid == 118
     assert cfg.docker_bin == "docker"
     assert cfg.docker_host is None
-    assert not cfg.require_rootless_docker
+    assert cfg.require_rootless_docker
     assert cfg.container_port == 8080
     assert cfg.image_build_memory == "8g"
     assert cfg.v13_runtime_receipts_mode == "off"
@@ -189,10 +191,12 @@ def test_smoke_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_rootless_executor_config(monkeypatch: pytest.MonkeyPatch) -> None:
     _base_env(monkeypatch)
     monkeypatch.setenv("SCREENER_DOCKER_HOST", "unix:///run/user/1001/docker.sock")
-    monkeypatch.setenv("SCREENER_REQUIRE_ROOTLESS_DOCKER", "true")
     cfg = parse_screener_config_from_env()
     assert cfg.docker_host == "unix:///run/user/1001/docker.sock"
     assert cfg.require_rootless_docker
+
+    monkeypatch.setenv("SCREENER_REQUIRE_ROOTLESS_DOCKER", "false")
+    assert not parse_screener_config_from_env().require_rootless_docker
 
 
 def test_rootless_analyzer_workspace_must_be_shared_at_an_absolute_path(

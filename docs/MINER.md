@@ -206,6 +206,20 @@ The archive must be a gzip-compressed tarball no larger than 20 MiB, with its
 or special files. Cargo metadata is part of the Rust reference implementation,
 not a submission requirement.
 
+Each source file (`.py`, `.rs`, `.go`, `.c`/`.cpp`/`.h`, `.ts`/`.js` and
+similar) must stay within **10,000 lines**, **1 MiB**, and **4,000 characters
+on any one line**. A reviewer reads source 400 lines at a time, so larger files
+cannot be reviewed and leave screening unable to clear the submission. Split
+large files. The one exception is an **unmodified** upstream release file whose
+SHA-256 is on the vendored allowlist
+(`packages/ditto-screening-protocol/ditto_screening_protocol/data/vendored_upstream_allowlist.json`,
+currently QuickJS-ng 0.16.2 `quickjs.c`, SQLite 3.46.1 amalgamation files and
+cpp-httplib 0.18.3 `httplib.h`). Any edit to such a file makes it your own
+source again. Data files (`.json`, `.txt`, model weights) are not counted.
+Platform rejects uploads that break these limits from **2026-10-25 00:00 UTC**,
+and `ditto verify` warns until then. Submissions uploaded earlier are not
+affected.
+
 Submit to Finney:
 
 ```sh
@@ -371,8 +385,10 @@ result.
   only ever lowers the bar, never raises it, and the leaderboard's "beat this
   to contend" figure already includes it. A near-miss is settled by re-scoring
   both agents on shared seeds rather than dataset luck.
-- Competitive weight is distributed 65% / 14% / 10% / 7% / 4% to the champion
-  and next four distinct miners, respectively. Evidence-tied occupied positions
+- Competitive weight is distributed to the champion and next four distinct
+  miners by the payout curve the public leaderboard reports as `rank_shares`
+  (default 65% / 14% / 10% / 7% / 4%; operators can set another curve, which
+  validators fold once the whole fleet runs protocol 31). Evidence-tied occupied positions
   pool their shares. If at least two highest-scoring miners are evidence-tied and
   the dethrone threshold cannot be exceeded within the score range, they form an
   uncapped joint crown and split the full competitive pool equally, including
@@ -601,10 +617,15 @@ the two directly linked hotkeys.
   hotkey's work only**, including byte-identical and repacked generations.
   Screening against every other miner is
   unchanged.
-- It does **not** grant an additional emission slot. Emission positions are one
-  per distinct agent no matter how many keys you hold, and this link is not an
-  input to that calculation. Rotating keys and attesting the link does not put
-  two of your agents in the weight vector.
+- It does **not** grant a second emission slot. The weight fold pays one
+  position per owner family: a payment coldkey, or hotkeys joined by an
+  owner-link attestation. The link is an input to that collapse. Rotating
+  keys and attesting the link keeps both hotkeys in one slot; it does not
+  put two of your agents in the weight vector.
+- That slot is paid to the best family member whose hotkey is registered
+  now. A deregistered hotkey cannot hold it. After a rotation, register the
+  new hotkey or the family earns nothing until you do. The copy-review
+  exemption above does not require the old hotkey to stay registered.
 - Links are recorded and auditable. If a key is sold or compromised, contact
   an operator and quote the attestation ID so the link can be revoked. The
   current miner CLI creates links; it does not provide self-service revocation.
@@ -780,6 +801,21 @@ one-shot signed actions still happen in the CLI. The hosted MCP at
 `https://dittobench.ai/mcp` returns those `ditto` commands instead of
 signing remotely.
 
+The **Submissions** tab shows each upload's submission version (`v1`, `v2`,
+and so on), status, and time. Older submissions without a stored version show
+**Unversioned**. With the `download` scope, use **Download** to recover the
+original submitted archive, including rejected or held submissions. The link
+expires after five minutes and only your hotkey's submissions are accessible.
+Existing sessions without `download` must sign in again with Download enabled.
+New dashboard sign-ins and MCP authorizations request that permission by default.
+For read-only access, disable Download in a new dashboard sign-in or have the
+MCP client request only the `read` scope.
+
+The miner MCP exposes the same download as `get_my_submission_artifact` with
+an `agent_id`, and `list_my_submissions` includes each submission's version.
+The authenticated HTTP route is `GET /api/v1/me/agents/{agent_id}/artifact`.
+These owner downloads do not change the public source release policy.
+
 Public miner profiles are `/miner/<hotkey>` and `/h/<handle>`. X, GitHub,
 and Discord are optional.
 
@@ -888,4 +924,5 @@ scores, and payment record are kept, but a hotkey absent from the SN118
 metagraph cannot receive weight and is excluded from the weight fold.
 Registering the same hotkey again restores eligibility automatically. A
 different hotkey is a separate miner identity and requires a new signed, paid
-upload.
+upload, unless you attest an owner link to the previous hotkey. The link
+shares one slot, and the best registered hotkey in that family holds it.

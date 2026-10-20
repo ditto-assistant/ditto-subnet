@@ -64,6 +64,7 @@ from ditto.api_server.embedding import create_embedder
 from ditto.api_server.emission_eligibility import EmissionEligibilityResolver
 from ditto.api_server.endpoints import (
     admin_artifact_release_settings_router,
+    admin_ath_review_queue_slo_router,
     admin_ath_rulings_router,
     admin_attestation_router,
     admin_benchmark_rollout_router,
@@ -82,6 +83,7 @@ from ditto.api_server.endpoints import (
     admin_copy_court_router,
     admin_copy_review_router,
     admin_core_qualification_router,
+    admin_database_backup_router,
     admin_efficiency_bonus_settings_router,
     admin_emission_eligibility_router,
     admin_hotkey_bans_router,
@@ -150,6 +152,9 @@ from ditto.api_server.endpoints import (
     validator_private_dataset,
     validator_router,
 )
+from ditto.api_server.endpoints import screener as screener_endpoints
+from ditto.api_server.endpoints import upload as upload_endpoints
+from ditto.api_server.endpoints import validator as validator_endpoints
 from ditto.api_server.endpoints.admin_benchmark_canary import (
     router as admin_benchmark_canary_router,
 )
@@ -181,11 +186,13 @@ from ditto.api_server.ledger_pin import LedgerPinLoop, LedgerPinMaterializer
 from ditto.api_server.middleware import (
     PublicCacheMiddleware,
     PublicRateLimitMiddleware,
+    RequestBodyLimitMiddleware,
     RequestIDMiddleware,
     SizedGZipMiddleware,
     register_exception_handlers,
 )
 from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
+from ditto.api_server.miner_avatar import MAX_AVATAR_BYTES
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
@@ -247,6 +254,44 @@ def _process_role() -> str:
             f"DITTO_ROLE must be {PLATFORM_ROLE!r} or {RELAY_ROLE!r}, got {role!r}"
         )
     return role
+
+
+# Multipart framing around a file part: boundaries, part headers, and the small
+# signed form fields that travel beside the tarball or avatar.
+_UPLOAD_FORM_OVERHEAD_BYTES = 1 << 20
+_AVATAR_FORM_OVERHEAD_BYTES = 64 << 10
+
+
+def _request_body_route_limits() -> tuple[tuple[str, int], ...]:
+    """Per-route body caps, each derived from the endpoint's own check.
+
+    Every other route gets ``config.request_body_max_bytes``. A route listed
+    here reads no more before it authenticates than its contract allows; the
+    multipart routes leave room for framing so the endpoint's exact file-size
+    check still answers a file just over its cap.
+    """
+    return (
+        (
+            r"/api/v1/upload/agent",
+            upload_endpoints.MAX_TARBALL_SIZE_BYTES + _UPLOAD_FORM_OVERHEAD_BYTES,
+        ),
+        (r"/api/v1/miner-avatars", MAX_AVATAR_BYTES + _AVATAR_FORM_OVERHEAD_BYTES),
+        (r"/api/v1/me/avatar", MAX_AVATAR_BYTES + _AVATAR_FORM_OVERHEAD_BYTES),
+        (
+            r"/api/v1/validator/agent/[^/]+/transcript/[^/]+",
+            validator_endpoints.TRANSCRIPT_MAX_BYTES,
+        ),
+        (r"/api/v1/validator/heartbeat", validator_endpoints.HEARTBEAT_MAX_BYTES),
+        (
+            r"/api/v1/validator/receipt-diagnostics",
+            validator_endpoints.RECEIPT_DIAGNOSTICS_MAX_BYTES,
+        ),
+        (
+            r"/api/v1/validator/weight-submission-receipt",
+            validator_endpoints.WEIGHT_RECEIPT_MAX_BYTES,
+        ),
+        (r"/api/v1/screener/heartbeat", screener_endpoints.HEARTBEAT_MAX_BYTES),
+    )
 
 
 def _efficiency_settings_ttl_seconds() -> float:
@@ -489,6 +534,25 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await emission_collector.start()
             app.state.source_emission_collector = emission_collector
 
+            from ditto.api_server.treasury_ledger import TreasuryLedgerSampler
+
+            treasury_ledger_sampler = TreasuryLedgerSampler(
+                app_state=app.state,
+                session_maker=app.state.session_maker,
+                enabled=app.state.config.treasury_ledger_sampler_enabled,
+            )
+            stack.push_async_callback(treasury_ledger_sampler.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await treasury_ledger_sampler.start()
+            app.state.treasury_ledger_sampler = treasury_ledger_sampler
+
+            from ditto.api_server.treasury_manual_loop import TreasuryManualLoop
+
+            app.state.treasury_manual_loop = TreasuryManualLoop(app.state)
+            stack.push_async_callback(app.state.treasury_manual_loop.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await app.state.treasury_manual_loop.start()
+
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
             if _process_role() == PLATFORM_ROLE:
@@ -610,6 +674,14 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     from ditto.api_server.admin_activity import AdminActivityMiddleware
 
     app.add_middleware(AdminActivityMiddleware)
+    # Bodies are bounded before anything reads them -- the admin audit, the
+    # multipart spool, an endpoint's own check -- and just inside the request
+    # id so a 413 still carries its correlation id (ditto-subnet#2770).
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        default_max_bytes=config.request_body_max_bytes,
+        route_max_bytes=_request_body_route_limits(),
+    )
     app.add_middleware(RequestIDMiddleware)
 
     register_exception_handlers(app)
@@ -638,6 +710,15 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     )
 
     app.include_router(treasury_allocation_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.public_treasury_ledger import (
+        admin_router as admin_treasury_ledger_router,
+    )
+    from ditto.api_server.endpoints.public_treasury_ledger import (
+        router as treasury_ledger_router,
+    )
+
+    app.include_router(treasury_ledger_router, prefix="/api/v1")
+    app.include_router(admin_treasury_ledger_router, prefix="/api/v1")
     app.include_router(attestation_router, prefix="/api/v1")
     app.include_router(name_claims_router, prefix="/api/v1")
     app.include_router(miner_avatars_router, prefix="/api/v1")
@@ -699,8 +780,10 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_screener_fanout_shadow_router, prefix="/api/v1")
     app.include_router(admin_l2_report_canary_router, prefix="/api/v1")
     app.include_router(admin_screener_capacity_router, prefix="/api/v1")
+    app.include_router(admin_database_backup_router, prefix="/api/v1")
     app.include_router(admin_screening_infra_retry_router, prefix="/api/v1")
     app.include_router(admin_source_review_queue_slo_router, prefix="/api/v1")
+    app.include_router(admin_ath_review_queue_slo_router, prefix="/api/v1")
     app.include_router(admin_outlier_escalation_router, prefix="/api/v1")
     app.include_router(admin_submission_settings_router, prefix="/api/v1")
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")
@@ -722,8 +805,21 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
     app.include_router(admin_emission_eligibility_router, prefix="/api/v1")
     app.include_router(admin_treasury_settings_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.admin_treasury_runtime import (
+        router as treasury_runtime_router,
+    )
+
+    app.include_router(treasury_runtime_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.admin_runtime_interface import (
+        router as runtime_interface_router,
+    )
+
+    app.include_router(runtime_interface_router, prefix="/api/v1")
     app.include_router(admin_treasury_receipts_router, prefix="/api/v1")
     app.include_router(admin_treasury_quote_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.admin_treasury_manual import router as manual_router
+
+    app.include_router(manual_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
     app.include_router(admin_conversation_router, prefix="/api/v1")
     app.include_router(screener_conversation_router, prefix="/api/v1")

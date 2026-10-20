@@ -171,3 +171,31 @@ def test_liquid_unproved_credit_refuses(mutation):
         value["event"]["attributes"][key] = replacement
     with pytest.raises(ValueError):
         credit(events)
+
+
+@pytest.mark.parametrize("unit", [None, [], ()])
+def test_transfer_accepts_only_empty_scale_unit_encodings(unit):
+    events = transfer_events()
+    events[1]["event"]["attributes"] = {"result": {"Ok": unit}}
+    assert decode(events).amount_rao == 40
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"Ok": [1]},
+        {"Ok": (1,)},
+        {"Ok": {}},
+        {"Ok": ""},
+        {"Ok": 0},
+        {"Ok": False},
+        {"Ok": b""},
+        {"Ok": (), "Err": "NoPermission"},
+        {},
+    ],
+)
+def test_transfer_refuses_nonunit_proxy_success(result):
+    events = transfer_events()
+    events[1]["event"]["attributes"] = {"result": result}
+    with pytest.raises(ValueError, match="inner proxy"):
+        decode(events)

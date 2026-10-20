@@ -271,7 +271,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v11-policy-v13"
+        return "adjudicator-v13-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
 
@@ -583,9 +583,8 @@ I8 is evaluation independence. Reject a complete source-proven branch where
 case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
 markers, or `bench_version` alter substantive retrieval, capability ordering,
 authority, execution, or output beyond the published compatibility contract.
-Behavioral degradation alone cannot reject until the published
-post-commit controlled and replicated procedure attributes it to evaluation
-dependence.
+Behavioral degradation alone cannot reject; screening runs no separate
+behavioral test that could attribute it to evaluation dependence.
 
 Opaque-file presence and feature-gated dead code are leads only. Establish the
 loaded role and effective lifecycle reachability. Build/security findings may
@@ -608,6 +607,23 @@ CLEAR/REJECT decision.
 def _policy_v13_base_prompt() -> str:
     """Remove legacy directives that contradict v13's incomplete-review hold."""
     replacements = (
+        (
+            "- single_success_duplicate_suppression: suppressing a repeat of a\n"
+            "  side-effecting tool after a genuine first success is production "
+            "idempotency.",
+            "- single_success_duplicate_suppression: stopping an exact repeat "
+            "(same tool name and canonical arguments) of a side-effecting call "
+            "that already executed successfully is production idempotency when "
+            "the request does not ask for that effect more than once, or when "
+            "the deciding model can still authorize the repeat. It is NOT a "
+            "harbor for a cap keyed on the tool name alone, a memo that refuses "
+            "a requested repeat (blanket or phrase-gated), a catalog retired "
+            "after one read, a sticky veto flag that strips a capability for "
+            "the rest of the request, or a router that narrows the catalog "
+            "when it is unsure. Those remove a call the model planned and are "
+            "I7 breaches (Artemis v4/v6/v8/v9, tauwolf v22, dan0l v2, delta v5, "
+            "dittoreader v7, Pentagon45).",
+        ),
         (
             "- local_practice_harness_stub: a stub that only fires when no "
             "tool_endpoint is\n  supplied is unreachable on the scored path.",

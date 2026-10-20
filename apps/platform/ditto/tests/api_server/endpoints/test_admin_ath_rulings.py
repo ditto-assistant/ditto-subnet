@@ -36,8 +36,11 @@ from ditto.db.models import (
     AthReview,
     AthReviewAction,
     BenchmarkRollout,
+    EvaluationPayment,
     Score,
+    TicketStatus,
     ValidatorHeartbeat,
+    ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 
@@ -1143,3 +1146,429 @@ async def test_execute_reports_applied_when_only_the_annotation_fails(
     review, actions = await _review(maker, agent[0])
     assert review is not None and review.resolution == "reject"
     assert "batch_ruling" not in actions[-1].evidence
+
+
+async def _seed_evaluating(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    score_count: int,
+    live_ticket: bool,
+) -> tuple[UUID, str]:
+    """An agent below scoring quorum, optionally with one validator run in flight."""
+    agent_id = uuid4()
+    sha256 = agent_id.hex * 2
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        session.add(
+            Agent(
+                agent_id=agent_id,
+                miner_hotkey="5Evaluating",
+                name="evaluating",
+                sha256=sha256,
+                status=AgentStatus.EVALUATING,
+                screening_policy_version=13,
+                created_at=_T0,
+            )
+        )
+        session.add_all(_scores(agent_id, 0.77, score_count))
+        if live_ticket:
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    bench_version=MIN_SCOREABLE_BENCH_VERSION,
+                    validator_hotkey="validator-live",
+                    slot_id="slot-1",
+                    status=TicketStatus.ISSUED,
+                    issued_at=now - timedelta(minutes=5),
+                    deadline=now + timedelta(minutes=60),
+                    attempt_count=1,
+                )
+            )
+    return agent_id, sha256
+
+
+async def _ticket_statuses(
+    maker: async_sessionmaker[AsyncSession], agent_id: UUID
+) -> list[TicketStatus]:
+    async with maker() as session:
+        return list(
+            (
+                await session.scalars(
+                    select(ValidatorTicket.status).where(
+                        ValidatorTicket.agent_id == agent_id
+                    )
+                )
+            ).all()
+        )
+
+
+async def _preview_and_execute(
+    client: httpx.AsyncClient, rulings: list[dict[str, object]]
+) -> tuple[dict, dict]:
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    execute = await client.post(
+        _EXECUTE,
+        json={
+            "preview_token": preview.json()["preview_token"],
+            "confirmation": ATH_RULINGS_CONFIRMATION,
+            "rulings": rulings,
+        },
+        headers=_HEADERS,
+    )
+    assert execute.status_code == 200, execute.text
+    return preview.json(), execute.json()
+
+
+@pytest.mark.parametrize("score_count", [0, 2])
+async def test_reject_below_quorum_bans_and_stops_the_remaining_runs(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    score_count: int,
+) -> None:
+    """A proven violation is rejected without waiting for, or paying for, quorum."""
+    await _activate(maker)
+    agent_id, sha256 = await _seed_evaluating(
+        maker, score_count=score_count, live_ticket=True
+    )
+    _install(app, maker)
+
+    preview, execute = await _preview_and_execute(
+        client, [_ruling("reject", agent_id, sha256, score_count=score_count)]
+    )
+
+    [item] = preview["items"]
+    assert item["disposition"] == "ready"
+    assert item["agent_status"] == "evaluating"
+    assert item["steps"] == ["open", "reject"]
+    # Not on the board yet, so it cannot move the crown.
+    assert item["would_change_crown"] is False
+    [applied] = execute["items"]
+    assert applied["status"] == "applied", applied
+    assert applied["steps_applied"] == ["open", "reject"]
+    assert await _status(maker, agent_id) == "banned"
+    # The in-flight validator run is ended, not left to finish and bill.
+    assert await _ticket_statuses(maker, agent_id) == [TicketStatus.EXPIRED]
+    review, actions = await _review(maker, agent_id)
+    assert review is not None and review.resolution == "reject"
+    assert review.original_evidence["previous_status"] == "evaluating"
+    assert review.original_evidence["score_count"] == score_count
+    assert [action.action for action in actions] == ["reject"]
+
+
+async def test_below_quorum_guards_and_hold_stay_strict(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A score landing after review is a stale guard; a bare hold still needs quorum."""
+    await _activate(maker)
+    agent_id, sha256 = await _seed_evaluating(maker, score_count=2, live_ticket=False)
+    _install(app, maker)
+
+    items = []
+    for ruling in (
+        _ruling("reject", agent_id, sha256, score_count=1),
+        _ruling("open", agent_id, sha256, score_count=2, refs=()),
+    ):
+        response = await client.post(
+            _PREVIEW, json={"rulings": [ruling]}, headers=_HEADERS
+        )
+        assert response.status_code == 200, response.text
+        items.extend(response.json()["items"])
+    stale, hold = items
+    assert stale["disposition"] == "stale_guard"
+    assert stale["conflict_reason"] == "score count changed"
+    assert hold["disposition"] == "conflict"
+    assert hold["conflict_reason"] == "agent is evaluating, not scored or live"
+    # The standalone open endpoint keeps its scored/live contract too.
+    opened = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/open",
+        json={
+            "expected_sha256": sha256,
+            "expected_score_count": 2,
+            "reason": "Manual benchmark-overfit review",
+        },
+        headers=_HEADERS,
+    )
+    assert opened.status_code == 409, opened.text
+    assert await _status(maker, agent_id) == "evaluating"
+
+
+async def test_reconsidered_below_quorum_reject_returns_to_the_queue(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Clearing a reconsidered below-quorum reject never invents a scored status."""
+    await _activate(maker)
+    agent_id, sha256 = await _seed_evaluating(maker, score_count=2, live_ticket=False)
+    _install(app, maker)
+    await _preview_and_execute(
+        client, [_ruling("reject", agent_id, sha256, score_count=2)]
+    )
+    assert await _status(maker, agent_id) == "banned"
+
+    reopened = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/open",
+        json={
+            "expected_sha256": sha256,
+            "expected_score_count": 2,
+            "reason": "Reconsider: the cited mechanism is not served",
+        },
+        headers=_HEADERS,
+    )
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["reopened"] is True
+    clear = _ruling(
+        "clear",
+        agent_id,
+        sha256,
+        score_count=2,
+        reason="Reconsidered: no violation",
+        refs=(),
+    )
+    _preview, cleared = await _preview_and_execute(client, [clear])
+    assert cleared["items"][0]["status"] == "applied", cleared
+    assert await _status(maker, agent_id) == "evaluating"
+    # Replaying the same clear is idempotent, not a conflict.
+    replay = await client.post(_PREVIEW, json={"rulings": [clear]}, headers=_HEADERS)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["items"][0]["disposition"] == "already_applied"
+
+
+async def _seed_live(
+    maker: async_sessionmaker[AsyncSession], *, hotkey: str, composite: float
+) -> tuple[UUID, str]:
+    agent_id, sha256 = await _seed_scored(
+        maker, hotkey=hotkey, composite=composite, created_at=_T0, name="live"
+    )
+    async with maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = AgentStatus.LIVE
+    return agent_id, sha256
+
+
+async def test_clear_on_the_unheld_champion_attests_without_moving_the_crown(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A board-review clear on a paid row never takes it off the board."""
+    board = await _seed_board(maker)
+    _install(app, maker)
+    champion_id, champion_sha = board["champion"]
+    clear = _ruling(
+        "clear",
+        champion_id,
+        champion_sha,
+        reason="Policy v13 CLEAR: served path intact; no I1-I8 or S1-S3 ground",
+        refs=("app/agent.py:150",),
+    )
+
+    preview, execute = await _preview_and_execute(client, [clear])
+
+    [item] = preview["items"]
+    assert item["disposition"] == "ready"
+    assert item["steps"] == ["attest"]
+    assert item["would_change_crown"] is False
+    assert preview["crown_moving_count"] == 0
+    [applied] = execute["items"]
+    assert applied["status"] == "applied", applied
+    assert applied["steps_applied"] == ["attest"]
+    assert applied["agent_status"] == "scored"
+    assert applied["annotated"] is True
+    # The champion never left the board: same crown and fold before and after.
+    assert execute["board_before"]["champion_agent_id"] == str(champion_id)
+    assert execute["board_after"]["champion_agent_id"] == str(champion_id)
+    assert (
+        execute["board_after"]["fingerprint"] == execute["board_before"]["fingerprint"]
+    )
+    assert await _status(maker, champion_id) == "scored"
+
+    review, actions = await _review(maker, champion_id)
+    assert review is not None
+    assert review.status == "resolved"
+    assert review.resolution == "clear"
+    assert review.resolution_reason == clear["reason"]
+    assert review.resolved_by == _ACTOR
+    assert review.original_evidence["sha256"] == champion_sha
+    assert review.original_evidence["score_count"] == 3
+    assert review.original_evidence["previous_status"] == "scored"
+    assert review.algorithm_provenance["hold_free"] is True
+    assert review.algorithm_provenance["review_kind"] == "benchmark_overfit"
+    assert [action.action for action in actions] == ["clear"]
+    assert actions[0].evidence["hold_free"] is True
+    assert actions[0].evidence["batch_ruling"]["evidence_references"] == [
+        "app/agent.py:150"
+    ]
+
+    # Replaying the same clear is idempotent.
+    replay = await client.post(_PREVIEW, json={"rulings": [clear]}, headers=_HEADERS)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["items"][0]["disposition"] == "already_applied"
+    # The attestation is case law and readable like any resolved review.
+    audit = await client.get(
+        f"/api/v1/admin/copy-reviews/{champion_id}", headers=_HEADERS
+    )
+    assert audit.status_code == 200, audit.text
+    assert audit.json()["status"] == "resolved"
+    assert audit.json()["resolution"] == "clear"
+
+
+async def test_a_later_reject_supersedes_an_attested_clear(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Attesting never blocks a later hold or reject of the same exact agent."""
+    board = await _seed_board(maker)
+    _install(app, maker)
+    runner_id, runner_sha = board["runner"]
+    await _preview_and_execute(
+        client,
+        [_ruling("clear", runner_id, runner_sha, reason="Reviewed: clean", refs=())],
+    )
+
+    preview, execute = await _preview_and_execute(
+        client, [_ruling("reject", runner_id, runner_sha)]
+    )
+
+    [item] = preview["items"]
+    assert item["steps"] == ["open", "reject"]
+    assert execute["items"][0]["status"] == "applied", execute
+    assert await _status(maker, runner_id) == "banned"
+    review, actions = await _review(maker, runner_id)
+    assert review is not None and review.resolution == "reject"
+    assert [action.action for action in actions] == ["clear", "reopen", "reject"]
+
+
+async def test_attest_keeps_a_live_agent_live(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    await _activate(maker)
+    agent_id, sha256 = await _seed_live(maker, hotkey="5Live", composite=0.7)
+    _install(app, maker)
+
+    preview, execute = await _preview_and_execute(
+        client, [_ruling("clear", agent_id, sha256, reason="Reviewed: clean", refs=())]
+    )
+
+    assert preview["items"][0]["steps"] == ["attest"]
+    assert execute["items"][0]["agent_status"] == "live"
+    assert await _status(maker, agent_id) == "live"
+    review, _actions = await _review(maker, agent_id)
+    assert review is not None
+    assert review.original_evidence["previous_status"] == "live"
+
+
+async def test_attest_refuses_what_it_must_not_resolve(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Below quorum, banned, a moved guard: a hold-free clear stays a conflict."""
+    board = await _seed_board(maker)
+    evaluating = await _seed_evaluating(maker, score_count=2, live_ticket=False)
+    _install(app, maker)
+    runner_id, runner_sha = board["runner"]
+    await _preview_and_execute(client, [_ruling("reject", runner_id, runner_sha)])
+    stale_id, stale_sha = board["stale"]
+
+    response = await client.post(
+        _PREVIEW,
+        json={
+            "rulings": [
+                _ruling(
+                    "clear",
+                    evaluating[0],
+                    evaluating[1],
+                    score_count=2,
+                    reason="Reviewed: clean",
+                    refs=(),
+                ),
+                _ruling("clear", runner_id, runner_sha, reason="Reviewed", refs=()),
+                _ruling(
+                    "clear",
+                    stale_id,
+                    stale_sha,
+                    score_count=2,
+                    reason="Reviewed: clean",
+                    refs=(),
+                ),
+            ]
+        },
+        headers=_HEADERS,
+    )
+
+    assert response.status_code == 200, response.text
+    below_quorum, banned, stale = response.json()["items"]
+    assert below_quorum["disposition"] == "conflict"
+    assert below_quorum["conflict_reason"] == "agent is evaluating, not held"
+    assert banned["disposition"] == "conflict"
+    assert banned["conflict_reason"] == "agent is banned, not held"
+    assert stale["disposition"] == "stale_guard"
+    assert stale["conflict_reason"] == "score count changed"
+    assert await _status(maker, evaluating[0]) == "evaluating"
+    assert (await _review(maker, evaluating[0]))[0] is None
+    assert (await _review(maker, stale_id))[0] is None
+
+
+async def test_single_row_attest_route_is_guarded_and_idempotent(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    board = await _seed_board(maker)
+    _install(app, maker)
+    champion_id, champion_sha = board["champion"]
+    held_id, held_sha = board["held"]
+    url = "/api/v1/admin/copy-reviews/{}/attest"
+    payload = {
+        "expected_sha256": champion_sha,
+        "expected_score_count": 3,
+        "reason": "Reviewed: clean",
+    }
+
+    moved = await client.post(
+        url.format(champion_id),
+        json={**payload, "expected_score_count": 2},
+        headers=_HEADERS,
+    )
+    assert moved.status_code == 409, moved.text
+    assert "score count changed" in moved.text
+    no_actor = await client.post(
+        url.format(champion_id),
+        json=payload,
+        headers={"Authorization": _HEADERS["Authorization"]},
+    )
+    assert no_actor.status_code == 422, no_actor.text
+    assert (await _review(maker, champion_id))[0] is None
+    payer = "5ChampionOwner"
+    async with maker() as session, session.begin():
+        session.add(
+            EvaluationPayment(
+                block_hash=f"0x{1:064x}",
+                extrinsic_index=0,
+                agent_id=champion_id,
+                miner_hotkey="5Champion",
+                miner_coldkey=payer,
+                amount_rao=1,
+                dest_address="5Treasury",
+                timestamp=_T0,
+            )
+        )
+
+    first = await client.post(url.format(champion_id), json=payload, headers=_HEADERS)
+    assert first.status_code == 200, first.text
+    assert first.json()["idempotent"] is False
+    assert first.json()["agent_status"] == "scored"
+    assert first.json()["review"]["resolution"] == "clear"
+    assert first.json()["review"]["miner_coldkey"] == payer
+    again = await client.post(url.format(champion_id), json=payload, headers=_HEADERS)
+    assert again.status_code == 200, again.text
+    assert again.json()["idempotent"] is True
+    # A replay answers what the first write answered, coldkey included.
+    assert again.json()["review"] == first.json()["review"]
+    _review_row, actions = await _review(maker, champion_id)
+    assert [action.action for action in actions] == ["clear"]
+
+    # A pending hold is resolved through resolve, never attested over.
+    pending = await client.post(
+        url.format(held_id),
+        json={**payload, "expected_sha256": held_sha},
+        headers=_HEADERS,
+    )
+    assert pending.status_code == 409, pending.text
+    assert "ATH review is pending; resolve the hold instead" in pending.text
+    assert await _status(maker, held_id) == "ath_pending_review"

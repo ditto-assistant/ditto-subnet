@@ -1,0 +1,4 @@
+---
+- name: reload systemd (postgres backup)
+  ansible.builtin.systemd:
+    daemon_reload: true

@@ -19,9 +19,10 @@ from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
 
 
 async def observe_shadow_treasury(
-    app_state: Any, schedule: EpochSchedule
+    app_state: Any, schedule: EpochSchedule, *, runtime: Any = None
 ) -> TreasuryLedgerPin | None:
-    policy = getattr(app_state.config, "treasury_shadow_policy", None)
+    config = runtime if runtime is not None else app_state.config
+    policy = getattr(config, "treasury_shadow_policy", None)
     if policy is None:
         app_state.treasury_shadow_observer_status = "disabled"
         return None
@@ -52,22 +53,25 @@ async def observe_shadow_treasury(
     return pin
 
 
-def shadow_readiness(app_state: Any, ledger_pin: Any | None) -> TreasuryLedgerReadiness:
+def shadow_readiness(
+    app_state: Any, ledger_pin: Any | None, *, runtime: Any = None
+) -> TreasuryLedgerReadiness:
     """Separate configured intent, stored evidence and process-local observation."""
     from ditto.api_server.ledger_pin import LedgerPin, treasury_pin_from_context
 
-    policy = getattr(app_state.config, "treasury_shadow_policy", None)
+    config = runtime if runtime is not None else app_state.config
+    policy = getattr(config, "treasury_shadow_policy", None)
     raw_status = getattr(app_state, "treasury_shadow_observer_status", "not_observed")
-    approval = getattr(app_state.config, "treasury_shadow_approval", None)
+    approval = getattr(config, "treasury_shadow_approval", None)
     approval_status: Literal["not_configured", "verified", "invalid"] = "not_configured"
     approved_digest = None
     if approval is not None:
         try:
             approved_policy = verify_policy_approval(
                 approval,
-                expected_policy_digest=app_state.config.treasury_approved_policy_digest,
+                expected_policy_digest=config.treasury_approved_policy_digest,
                 expected_collector_policy_digest=(
-                    app_state.config.treasury_approved_collector_policy_digest
+                    config.treasury_approved_collector_policy_digest
                 ),
                 verify_signature=verify_public_signature,
             )
@@ -89,7 +93,7 @@ def shadow_readiness(app_state: Any, ledger_pin: Any | None) -> TreasuryLedgerRe
         if isinstance(raw_status, str)
         else "unavailable"
     )
-    enforcing = getattr(app_state.config, "treasury_weight_enforcement", False)
+    enforcing = getattr(config, "treasury_weight_enforcement", False)
     reasons: list[TreasuryBlockReason] = ["current_epoch_not_checked"]
     if not enforcing:
         reasons.extend(

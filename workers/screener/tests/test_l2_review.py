@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from ditto_screener.l2_review import (
     _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK,
     _SAFETY_ADJUDICATOR_TASK,
     _TOOLS,
+    _V13_VIOLATION_FINALITY_TASK,
     _VIOLATION_CAUSE_DISAGREEMENT_TASK,
     _VIOLATION_CAUSE_TASK,
     L2_DOSSIER_REVISION,
@@ -61,6 +63,7 @@ from ditto_screener.l2_review import (
     _parse_l2_review,
     _qualifies_for_direct_clear,
     _require_complete_analysis,
+    _response_fault_subcode,
     _response_output_and_usage,
     _review_adaptation_hold,
     _routes_inconclusive_to_l3,
@@ -365,6 +368,39 @@ def test_l1_mechanism_narrowed_away_by_kimi_still_requires_sol() -> None:
     assert _needs_violation_adjudication(analyst, l1)
 
 
+def test_every_v13_violation_goes_to_the_l3_adjudicator_that_can_refute_it() -> None:
+    # A single-family violation skipped L3 before v13. At v13 an L3-confirmed
+    # breach rejects, so L2 alone must never be the last word.
+    analyst = L2RunResult(
+        observation=SourceReviewObservation(
+            ok=True,
+            risk_level="high",
+            finding_digest="b" * 64,
+            categories=("cross_user_access",),
+        ),
+        analyzed_files=(),
+        causal_path=(),
+        tools=(),
+        usage=L2Usage(),
+        cache_hit=False,
+        resolution_basis="cross_user_data_flow",
+    )
+    l1 = SourceReviewObservation(
+        ok=True,
+        risk_level="high",
+        finding_digest="a" * 64,
+        categories=("cross_user_access",),
+    )
+
+    assert not _has_mixed_causal_families(analyst, l1)
+    assert not _needs_violation_adjudication(analyst, l1, policy_version=12)
+    assert _needs_violation_adjudication(analyst, l1, policy_version=13)
+    assert "Your confirmation is final under policy v13." in (
+        _V13_VIOLATION_FINALITY_TASK
+    )
+    assert "submitting risk_level low" in _V13_VIOLATION_FINALITY_TASK
+
+
 def test_request_local_identical_tool_memoization_is_not_fabrication() -> None:
     assert l2_critic_prompt_revision(11) == "l3-sol-adversarial-critic-v21-policy-v11"
     assert l2_safety_prompt_revision(11) == "l3-sol-safety-adjudicator-v24-policy-v11"
@@ -422,9 +458,9 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "blocks the call before endpoint dispatch" in v13
     assert "external tool's actual name and argument schema" in v13
     assert "hypothetically use the same field name" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v50-policy-v13"
-    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v23-policy-v13"
-    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v26-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v53-policy-v13"
+    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v25-policy-v13"
+    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v28-policy-v13"
     assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
     assert "Use at most four targeted analyzer" not in (
         l2_review._V13_SAFETY_ADJUDICATOR_TASK
@@ -509,7 +545,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "validator mints `inference_base_url`" in v13
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v50-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v53-policy-v13"
     assert "v13" not in _benchmark_contract_capsule(12)
     assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
     assert (
@@ -1016,6 +1052,39 @@ async def test_future_policy_l3_off_does_not_certify_without_runtime_contract() 
     )
     assert result.error_code == "l2-runtime-evidence-unavailable"
     assert l1.calls == l2.calls == 0
+
+
+async def test_layered_review_carries_the_l3_failure_subcode() -> None:
+    failed = L2RunResult(
+        SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l3-adjudicator-model-provider-fault",
+            failure_disposition="retryable_infra",
+        ),
+        (),
+        (),
+        (),
+        L2Usage(),
+        False,
+        failure_subcode="context_length_exceeded",
+    )
+    l1 = _FakeL1(_l1("medium"))
+    l2 = _FakeL2(failed)
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        policy_version=12,
+    )
+
+    assert l2.calls == 1
+    assert result.error_code == "l3-adjudicator-model-provider-fault"
+    assert result.failure_subcode == "context_length_exceeded"
 
 
 async def test_v13_disabled_review_reports_preflight_cause() -> None:
@@ -3876,11 +3945,13 @@ async def test_partial_dossier_can_prove_violation_but_never_clear(
         deadline=None,
     )
 
-    assert requests == 1
+    # A partial dossier can still prove a violation: the L3 adjudicator
+    # (policy v13 sends every violation there) confirms it on the same evidence.
+    assert requests == 2
     assert result.observation.ok
     assert result.observation.risk_level == "high"
     assert not result.dossier_complete
-    assert result.clearance_path == "l2_violation"
+    assert result.clearance_path == "l3_adjudicated_violation_cause"
 
 
 @pytest.mark.parametrize("inventory_gap", [None, "failed", "omitted"])
@@ -3932,9 +4003,19 @@ async def test_partial_dossier_safe_consensus_cannot_clear(
 
     assert requests == 3
     assert not result.observation.ok
-    assert result.observation.failure_disposition == "retryable_infra"
+    # A truncated dossier recurs on every retry of the same bytes: it is an
+    # inconclusive hold naming the partial components, never an infra retry.
+    assert result.observation.failure_disposition == "inconclusive"
     assert result.observation.error_code == "l3-adjudicator-incomplete"
     assert not result.dossier_complete
+    assert result.dossier_incomplete_components
+    assert result.failure_subcode == "+".join(result.dossier_incomplete_components)
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.reason_code == "l3-adjudicator-incomplete"
+    assert audit.final_stage == "adjudicator"
+    assert audit.dossier_incomplete_components == list(
+        result.dossier_incomplete_components
+    )
 
 
 @pytest.mark.parametrize("deep_nesting", [False, True])
@@ -4072,7 +4153,9 @@ async def test_l3_no_tool_failure_reports_bounded_subcode(
     if recovers:
         assert requests == 4
         assert result.observation.error_code == "l3-adjudicator-incomplete"
-        assert result.failure_subcode is None
+        # The recovered tool-contract slug does not leak; only the partial
+        # dossier components name the hold.
+        assert result.failure_subcode == "+".join(result.dossier_incomplete_components)
         return
     assert requests == 5
     assert result.observation.error_code == "l3-adjudicator-model-tool-contract"
@@ -4693,7 +4776,9 @@ async def test_parallel_model_tool_calls_cannot_exceed_trajectory_cap(
     assert result.response_models == ("openai/gpt-5.6-terra-20260709",)
 
 
-async def test_analyst_violation_stops_before_critic(tmp_path: Path) -> None:
+async def test_analyst_violation_goes_to_the_l3_adjudicator_not_the_critic(
+    tmp_path: Path,
+) -> None:
     source = "fn main() { bypass(); }\nfn bypass() {}"
     archive, artifact_sha = _tar(tmp_path, source)
     digest = hashlib.sha256(source.encode()).hexdigest()
@@ -4734,9 +4819,13 @@ async def test_analyst_violation_stops_before_critic(tmp_path: Path) -> None:
         deadline=None,
     )
 
-    assert requests == 1
+    # Policy v13: the independent L3 adjudicator re-decides every L2
+    # violation (it could refute it); the safe-result critic never runs.
+    assert requests == 2
     assert result.observation.risk_level == "medium"
-    assert result.critic_disposition is None
+    assert result.critic_disposition == "not_required"
+    assert result.adjudicator_disposition == "confirm_violation_cause"
+    assert result.clearance_path == "l3_adjudicated_violation_cause"
 
 
 async def test_mixed_benchmark_violation_gets_sol_cause_adjudication(
@@ -5078,9 +5167,10 @@ async def test_incomplete_inventory_allows_violation_but_never_clear(
         deadline=None,
     )
     assert not safe_result.observation.ok
-    assert safe_result.observation.failure_disposition == "retryable_infra"
+    assert safe_result.observation.failure_disposition == "inconclusive"
     assert safe_result.observation.error_code == "l3-adjudicator-incomplete"
     assert safe_result.clearance_path == "l3_adjudicator_incomplete"
+    assert safe_result.failure_subcode == "workspace_index"
     assert safe_requests == 6
 
 
@@ -5257,7 +5347,8 @@ async def test_trajectory_recovers_after_bounded_shell_error(tmp_path: Path) -> 
         deadline=None,
     )
 
-    assert len(request_payloads) == 4
+    # +1: the policy-v13 L3 adjudicator confirms the final violation.
+    assert len(request_payloads) == 5
     assert harness.calls.count("shell") == 2
     assert result.observation.risk_level == "medium"
     assert result.observation.error_code is None
@@ -7079,7 +7170,7 @@ async def test_report_only_rejected_violation_cannot_become_safe(
     assert "report_only_unresolved_violation" in audit_path.read_text()
 
 
-async def test_report_only_provider_body_fault_retries_exact_turn_once(
+async def test_report_only_provider_body_fault_retries_exact_turn(
     tmp_path: Path,
 ) -> None:
     requests: list[bytes] = []
@@ -7121,6 +7212,7 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
         l3_enabled=False,
         terminal_verdict_required=True,
         retry_provider_body_fault_once=True,
+        provider_fault_retry_delays=(0.0,),
         transport=httpx.MockTransport(handler),
     )
     async with httpx.AsyncClient(transport=agent._transport) as client:
@@ -7133,7 +7225,7 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
             model="openai/gpt-6-sol",
             fallback_models=(),
             provider=None,
-            deadline=asyncio.get_running_loop().time() + 1,
+            deadline=asyncio.get_running_loop().time() + 60,
         )
     assert response.json()["status"] == "completed"
     assert len(requests) == 2
@@ -7147,6 +7239,133 @@ async def test_report_only_provider_body_fault_retries_exact_turn_once(
         "x-ratelimit-remaining": "0",
     }
     assert requests[0] == requests[1]
+
+
+def _server_error_body() -> dict[str, object]:
+    return {
+        "id": "gen-fault",
+        "object": "response",
+        "model": "openai/gpt-6-sol",
+        "output": [],
+        "usage": {},
+        "error": {"code": "server_error", "message": "Internal Server Error"},
+    }
+
+
+def _provider_fault_agent(
+    tmp_path: Path,
+    handler: Callable[[httpx.Request], httpx.Response],
+    delays: tuple[float, ...],
+) -> SolL2SourceReviewAgent:
+    return SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(None, retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        retry_provider_body_fault_once=True,
+        provider_fault_retry_delays=delays,
+        transport=httpx.MockTransport(handler),
+    )
+
+
+async def test_provider_body_fault_burst_backs_off_until_the_turn_lands(
+    tmp_path: Path,
+) -> None:
+    requests: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.content)
+        if len(requests) <= 3:
+            return httpx.Response(200, json=_server_error_body())
+        return httpx.Response(200, json={"status": "completed", "output": []})
+
+    agent = _provider_fault_agent(tmp_path, handler, (0.0, 0.0, 0.0))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        response = await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=(),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 600,
+        )
+    assert response.json()["status"] == "completed"
+    assert len(requests) == 4
+    assert len(set(requests)) == 1
+
+
+async def test_provider_body_fault_parks_after_bounded_backoff(
+    tmp_path: Path,
+) -> None:
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200, json=_server_error_body())
+
+    agent = _provider_fault_agent(tmp_path, handler, (0.0, 0.0, 0.0))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        response = await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=(),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 600,
+        )
+    assert response.json()["error"]["code"] == "server_error"
+    assert requests == 4
+
+
+async def test_provider_body_fault_never_sleeps_past_the_lease(
+    tmp_path: Path,
+) -> None:
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200, json=_server_error_body())
+
+    # 75s of lease fits a 15s wait plus a 45s turn but not a 45s wait: retry once.
+    agent = _provider_fault_agent(tmp_path, handler, (15.0, 45.0, 90.0))
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(l2_review.asyncio, "sleep", fake_sleep)
+        async with httpx.AsyncClient(transport=agent._transport) as client:
+            response = await agent._post(
+                client,
+                "test-key",
+                [],
+                artifact_sha256="d" * 64,
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider=None,
+                deadline=asyncio.get_running_loop().time() + 75,
+            )
+    assert response.json()["error"]["code"] == "server_error"
+    assert sleeps == [15.0]
+    assert requests == 2
 
 
 async def test_model_turn_has_an_aggregate_wall_clock_deadline(
@@ -7542,6 +7761,58 @@ async def test_integrity_scan_keeps_nul_bearing_large_source_incomplete(
     assert result["nontext_count"] == 0
 
 
+@pytest.mark.parametrize("edited", [False, True])
+async def test_integrity_scan_accounts_allowlisted_vendored_file_by_digest(
+    tmp_path: Path, edited: bool
+) -> None:
+    upstream = b"int model_answer;\n" + b"x" * (2 * 1024 * 1024)
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "vendored-upstream-allowlist.json").write_text(
+        json.dumps({"files": [{"sha256": hashlib.sha256(upstream).hexdigest()}]})
+    )
+    workspace = tmp_path / "src"
+    vendored = workspace / "third_party" / "quickjs" / "quickjs.c"
+    vendored.parent.mkdir(parents=True)
+    vendored.write_bytes(upstream + (b"//\n" if edited else b""))
+    harness = InProcessAnalyzerHarness()
+    harness._manifests = manifests
+    result = json.loads(await harness.run(workspace, "integrity_surfaces", {}))
+    if edited:
+        # Any edit makes it first-party source the analyzer cannot read.
+        assert result["truncated"] is True
+        assert result["omitted"] == [
+            {"path": "third_party/quickjs/quickjs.c", "reason": "read_cap"}
+        ]
+        return
+    assert result["truncated"] is False
+    assert result["nontext"] == [
+        {
+            "path": "third_party/quickjs/quickjs.c",
+            "bytes": len(upstream),
+            "sha256": hashlib.sha256(upstream).hexdigest(),
+            "provenance": "vendored_upstream_digest",
+        }
+    ]
+
+
+def test_vendored_allowlist_matches_the_shared_protocol_copy() -> None:
+    import ditto_screening_protocol
+
+    shared = (
+        Path(ditto_screening_protocol.__file__).parent
+        / "data"
+        / "vendored_upstream_allowlist.json"
+    )
+    screener = (
+        Path(__file__).resolve().parents[1]
+        / "ditto_screener"
+        / "data"
+        / "vendored-upstream-allowlist.json"
+    )
+    assert screener.read_bytes() == shared.read_bytes()
+
+
 async def test_integrity_scan_keeps_large_text_incomplete(tmp_path: Path) -> None:
     (tmp_path / "agent.py").write_text("model_answer\n" + "x" * (2 * 1024 * 1024))
     result = json.loads(
@@ -7558,6 +7829,32 @@ async def test_stock_kit_dossier_analyzers_are_complete() -> None:
     for command in l2_review._DOSSIER_ANALYZERS:
         output = await harness.run(starter, command, {})
         assert not l2_review._contains_truncation(json.loads(output)), command
+
+
+@pytest.mark.parametrize(
+    ("report", "requires_correction"),
+    [
+        ({"truncated": True, "counts_after_per_rule_file_bounds": True}, False),
+        ({"truncated": True}, True),
+        (
+            {
+                "truncated": True,
+                "counts_after_per_rule_file_bounds": True,
+                "analysis_failed": True,
+            },
+            True,
+        ),
+    ],
+)
+def test_lead_selection_omissions_are_not_retryable_scan_gaps(
+    report: dict[str, object], requires_correction: bool
+) -> None:
+    inventory = {"review_leads": {"fingerprint_selection": report}}
+    assert l2_review._analysis_requires_correction(json.dumps(inventory)) is (
+        requires_correction
+    )
+    inventory["review_leads"]["scan_truncated"] = True
+    assert l2_review._analysis_requires_correction(json.dumps(inventory)) is True
 
 
 async def test_stock_kit_dossier_is_complete_in_every_section(tmp_path: Path) -> None:
@@ -7784,7 +8081,7 @@ async def test_relayed_rate_limit_parks_after_one_post(tmp_path: Path) -> None:
         deadline=None,
     )
 
-    assert result.observation.error_code == "l2-model-response-contract"
+    assert result.observation.error_code == "l2-model-provider-fault"
     assert result.observation.failure_disposition == "retryable_infra"
     assert len(requests) == 1
 
@@ -7815,8 +8112,110 @@ async def test_persistent_relayed_rate_limit_still_posts_once(tmp_path: Path) ->
 
     assert not result.observation.ok
     assert result.observation.failure_disposition == "retryable_infra"
-    assert result.observation.error_code == "l2-model-response-contract"
+    assert result.observation.error_code == "l2-model-provider-fault"
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize("error_type", ["server_error", "provider_unavailable"])
+async def test_relayed_provider_outage_is_named_a_provider_fault(
+    tmp_path: Path, error_type: str
+) -> None:
+    """OpenRouter relays an upstream outage as a failed 200 body, not a bad answer."""
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error_type": error_type,
+                "error": "server_error",
+                "output": [],
+                "usage": {},
+            },
+        )
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.error_code == "l2-model-provider-fault"
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert result.failure_subcode == "server_error"
+
+
+async def test_deterministic_provider_rejection_names_its_code(tmp_path: Path) -> None:
+    """A rejection that recurs on every retry must be told apart from an outage.
+
+    2026-10-13: crown-v175 parked as l3-adjudicator-model-provider-fault on four
+    of four attempts while the stored detail said only "audit inconclusive".
+    """
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": {
+                    "code": "context_length_exceeded",
+                    "message": "maximum context length is 400000 tokens",
+                },
+                "output": [],
+                "usage": {},
+            },
+        )
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.error_code == "l2-model-provider-fault"
+    assert result.failure_subcode == "context_length_exceeded"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"error": {"code": 429, "message": "slow down"}}, "429"),
+        ({"status": "failed", "error_type": "Server_Error"}, "server_error"),
+        ({"incomplete_details": {"reason": "content_filter"}}, "content_filter"),
+        ({"error": "Provider returned error: see https://x.y/z"}, "unrecognized"),
+        ({"output": []}, None),
+        ("not a body", None),
+    ],
+)
+def test_response_fault_subcode_keeps_only_a_bounded_slug(
+    payload: object, expected: str | None
+) -> None:
+    assert _response_fault_subcode(payload) == expected
+
+
+async def test_malformed_body_without_a_provider_error_stays_a_contract_fault(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "completed", "output": "nope"})
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.error_code == "l2-model-response-contract"
 
 
 async def test_exhausted_l2_does_not_claim_coverage_it_lacks() -> None:
@@ -8755,7 +9154,8 @@ async def test_no_call_correction_budget_resets_after_a_tool_call(
         deadline=None,
     )
 
-    assert requests == 6
+    # +1: the policy-v13 L3 adjudicator confirms the final violation.
+    assert requests == 7
     assert result.observation.ok
     assert result.observation.risk_level == "high"
 

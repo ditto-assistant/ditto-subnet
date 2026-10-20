@@ -177,7 +177,10 @@ def add_subparser(
     parser.add_argument(
         "--netuid",
         type=int,
-        default=int(os.environ.get("NETUID", str(DEFAULT_NETUID))),
+        # A string default goes through type=int only when this command is
+        # parsed, so a bad NETUID cannot crash --help or other commands;
+        # an empty one means the default.
+        default=os.environ.get("NETUID") or str(DEFAULT_NETUID),
         help=(
             "Subnet the attestation is minted for. Signed into both payloads, "
             "so an attestation minted for one subnet cannot be replayed onto "

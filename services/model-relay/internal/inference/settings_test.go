@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ditto-assistant/model-relay/internal/config"
 	"github.com/ditto-assistant/model-relay/internal/postgres"
 )
 
@@ -216,5 +217,61 @@ func TestSettingsResolverTaskerRefreshesInBackground(t *testing.T) {
 	}
 	if got := resolver.Resolve().ChatGlobalConcurrency; got != 112 {
 		t.Fatalf("background refresh did not publish latest policy: got %d", got)
+	}
+}
+
+func TestBoardRequestsPerMinuteReachAdmission(t *testing.T) {
+	settings, err := parseConcurrencySettings([]byte(`{
+		"chat_per_ticket_requests_per_minute":5,
+		"chat_per_validator_requests_per_minute":50,
+		"chat_global_requests_per_minute":500,
+		"embedding_per_ticket_requests_per_minute":6,
+		"embedding_per_validator_requests_per_minute":60,
+		"embedding_global_requests_per_minute":600
+	}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// Boot-time env values must not win over the live Backroom board.
+	boot := config.InferenceProxyConfig{
+		TicketRPM: 1920, ValidatorRPM: 7680, GlobalRPM: 23040,
+		EmbeddingTicketRPM: 10_000, EmbeddingValidatorRPM: 40_000, EmbeddingGlobalRPM: 100_000,
+	}
+	chat := limitsForKind(applySettings(boot, settings), kindChat)
+	if chat.perTicketRPM != 5 || chat.perValidatorRPM != 50 || chat.globalRPM != 500 {
+		t.Fatalf("chat admission RPM = %+v, want board 5/50/500", chat)
+	}
+	embedding := limitsForKind(applySettings(boot, settings), kindEmbedding)
+	if embedding.perTicketRPM != 6 || embedding.perValidatorRPM != 60 || embedding.globalRPM != 600 {
+		t.Fatalf("embedding admission RPM = %+v, want board 6/60/600", embedding)
+	}
+}
+
+func TestOlderBoardRevisionUsesShippedRequestsPerMinuteDefaults(t *testing.T) {
+	settings, err := parseConcurrencySettings([]byte(`{"chat_per_ticket_concurrency":16}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	chat := limitsForKind(applySettings(config.InferenceProxyConfig{}, settings), kindChat)
+	if chat.perTicketRPM != 1920 || chat.perValidatorRPM != 7680 || chat.globalRPM != 23040 {
+		t.Fatalf("chat RPM defaults = %+v, want 1920/7680/23040", chat)
+	}
+	embedding := limitsForKind(applySettings(config.InferenceProxyConfig{}, settings), kindEmbedding)
+	if embedding.perTicketRPM != 10_000 || embedding.perValidatorRPM != 40_000 || embedding.globalRPM != 100_000 {
+		t.Fatalf("embedding RPM defaults = %+v, want 10000/40000/100000", embedding)
+	}
+}
+
+func TestParseConcurrencySettingsRejectsInvalidRequestsPerMinute(t *testing.T) {
+	for name, payload := range map[string]string{
+		"zero":                `{"chat_per_ticket_requests_per_minute":0}`,
+		"over ceiling":        `{"embedding_global_requests_per_minute":100001}`,
+		"chat hierarchy":      `{"chat_per_ticket_requests_per_minute":8000,"chat_per_validator_requests_per_minute":7680}`,
+		"embedding hierarchy": `{"embedding_per_validator_requests_per_minute":100000,"embedding_global_requests_per_minute":50000}`,
+		"fractional":          `{"chat_global_requests_per_minute":23040.5}`,
+	} {
+		if _, err := parseConcurrencySettings([]byte(payload)); err == nil {
+			t.Fatalf("%s: invalid requests-per-minute board must be rejected", name)
+		}
 	}
 }

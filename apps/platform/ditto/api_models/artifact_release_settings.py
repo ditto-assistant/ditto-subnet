@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticReport
 from ditto.api_models.source_disclosure import SourceDisclosure
+from ditto.chain.models import ArchiveRpcAuthMode
 
 
 class ArtifactReleaseSettingsRevision(BaseModel):
@@ -51,15 +52,65 @@ class ReceiptDiagnosticRow(BaseModel):
     stale: bool
 
 
+class SourceArchiveProviderStatus(BaseModel):
+    """Served configuration only; never a URL, credential, or health claim."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    configured: bool
+    host: str | None
+    auth_mode: ArchiveRpcAuthMode
+    credential_configured: bool
+
+
+class RevealPlanShadowMiss(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    first_block: int
+    last_block: int
+    blocks: list[int] = Field(default_factory=list, max_length=720)
+
+
+class RevealPlanShadowStatus(BaseModel):
+    """Running check of the reveal-anchored range planner, before it is trusted.
+
+    ``agreed`` ranges planned every block the full reader acted on; ``missed``
+    ranges did not (a correctness failure: do not promote); ``fallback``
+    ranges asked for the full scan; ``error`` ranges could not be planned.
+    ``calls`` / ``blocks`` is its chain cost per block; the event planner makes
+    at least one call per block.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    mode: str
+    ranges: int = 0
+    agreed: int = 0
+    missed: int = 0
+    fallback: int = 0
+    error: int = 0
+    blocks: int = 0
+    calls: int = 0
+    last_range: list[int] | None = None
+    last_outcome: str | None = None
+    last_error: str | None = None
+    recent_misses: list[RevealPlanShadowMiss] = Field(
+        default_factory=list, max_length=5
+    )
+    updated_at: datetime | None = None
+
+
 class SourceReleaseGateStatus(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     version: str
     automatic_confirmation_enabled: bool = False
+    archive_provider: SourceArchiveProviderStatus | None = None
     collector_cursor_block: int | None = None
     collector_cursor_hash: str | None = None
     collector_runtime_code_hash: str | None = None
     collector_blocked_reason: str | None = None
+    reveal_plan_shadow: RevealPlanShadowStatus | None = None
     last_payout_block: int | None = None
     last_payout_blocked_reason: str | None = None
     last_payout_attributed: bool = False

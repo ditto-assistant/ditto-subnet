@@ -66,6 +66,8 @@ from ditto.db.models import (
 from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_ADMIN_COPY_REVIEW_DIFF,
     ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE,
+    ENDPOINT_ADMIN_LINEAGE_DIFF,
+    ENDPOINT_ADMIN_LINEAGE_DIFF_FILE,
     record_artifact_fetch,
 )
 from ditto.db.queries.benchmark_rollout import (
@@ -827,9 +829,34 @@ async def open_copy_review(
     review. Scores remain durable; changing the agent status removes it from
     the emission-eligible ledger until an operator resolves the review.
     """
+    return await open_review(agent_id, payload, session, x_admin_actor=x_admin_actor)
+
+
+def _openable_statuses(*, allow_evaluating: bool) -> tuple[AgentStatus, ...]:
+    if allow_evaluating:
+        return (AgentStatus.SCORED, AgentStatus.LIVE, AgentStatus.EVALUATING)
+    return (AgentStatus.SCORED, AgentStatus.LIVE)
+
+
+async def open_review(
+    agent_id: UUID,
+    payload: AdminCopyReviewOpenRequest,
+    session: AsyncSession,
+    *,
+    x_admin_actor: str | None,
+    allow_evaluating: bool = False,
+) -> AdminCopyReviewOpenResponse:
+    """Open (or reopen) the ATH review behind :func:`open_copy_review`.
+
+    ``allow_evaluating`` admits an agent still below scoring quorum. Only the
+    batch rulings court passes it, and only for a reject that resolves in the
+    same item, so a proven violation stops the remaining validator runs
+    instead of waiting for them. A standalone hold stays scored/live only.
+    """
     actor = x_admin_actor.strip() if x_admin_actor is not None else ""
     if not 1 <= len(actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    openable = _openable_statuses(allow_evaluating=allow_evaluating)
 
     async with session.begin():
         agent = await session.scalar(
@@ -903,9 +930,7 @@ async def open_copy_review(
             reconsidering_rejection = (
                 existing.resolution == "reject" and agent.status == AgentStatus.BANNED
             )
-            if agent.status not in (AgentStatus.SCORED, AgentStatus.LIVE) and not (
-                reconsidering_rejection
-            ):
+            if agent.status not in openable and not reconsidering_rejection:
                 raise HTTPException(
                     status_code=409,
                     detail=f"agent is {agent.status.value}, not scored or live",
@@ -927,6 +952,7 @@ async def open_copy_review(
                 if previous_status not in {
                     AgentStatus.SCORED.value,
                     AgentStatus.LIVE.value,
+                    AgentStatus.EVALUATING.value,
                 }:
                     # Score-finalization copy holds never recorded
                     # previous_status: they fire instead of evaluating→scored.
@@ -969,7 +995,7 @@ async def open_copy_review(
                 reopened=True,
             )
 
-        if agent.status not in (AgentStatus.SCORED, AgentStatus.LIVE):
+        if agent.status not in openable:
             raise HTTPException(
                 status_code=409,
                 detail=f"agent is {agent.status.value}, not scored or live",
@@ -1100,13 +1126,16 @@ async def resolve_copy_review(
         if canonical != "clear":
             await preserve_desired_authority(session, now=datetime.now(UTC))
         now = datetime.now(UTC)
-        agent.status = (
-            AgentStatus.LIVE
-            if canonical == "clear" and previous_status == AgentStatus.LIVE.value
-            else AgentStatus.SCORED
-            if canonical == "clear"
-            else AgentStatus.BANNED
-        )
+        if canonical != "clear":
+            agent.status = AgentStatus.BANNED
+        elif previous_status == AgentStatus.LIVE.value:
+            agent.status = AgentStatus.LIVE
+        elif previous_status == AgentStatus.EVALUATING.value:
+            # Rejected below quorum, then cleared: back to the validator queue,
+            # never to a scored status its score set has not earned.
+            agent.status = AgentStatus.EVALUATING
+        else:
+            agent.status = AgentStatus.SCORED
         if canonical == "reject":
             live_tickets = list(
                 (
@@ -1191,6 +1220,174 @@ async def resolve_copy_review(
     )
 
 
+@router.post(
+    "/copy-reviews/{agent_id}/attest",
+    response_model=AdminCopyReviewResolveResponse,
+)
+async def attest_copy_review(
+    agent_id: UUID,
+    payload: AdminCopyReviewOpenRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminCopyReviewResolveResponse:
+    """Record a board-review CLEAR on an unheld scored or live agent.
+
+    A board review that finds no violation used to have no write path short
+    of holding the agent first (``open``) and clearing it afterwards, which
+    takes a paid row -- and for the champion, the crown -- off the board
+    between the two calls. This records the same terminal ``clear`` directly.
+    """
+    return await attest_review(agent_id, payload, session, x_admin_actor=x_admin_actor)
+
+
+async def attest_review(
+    agent_id: UUID,
+    payload: AdminCopyReviewOpenRequest,
+    session: AsyncSession,
+    *,
+    x_admin_actor: str | None,
+) -> AdminCopyReviewResolveResponse:
+    """Write a resolved-``clear`` review for an exact scored/live artifact.
+
+    The agent's status, score set and board position are untouched, so the
+    crown cannot move. Only an agent with no ATH review row is attested: an
+    existing clear answers idempotently, and a pending or rejected review is
+    refused so this never resolves a hold (use ``resolve``) or overrides a
+    ban. A later ``open`` reopens this row like any other resolved clear, so a
+    subsequent hold or reject still lands and supersedes the attestation.
+    """
+    actor = x_admin_actor.strip() if x_admin_actor is not None else ""
+    if not 1 <= len(actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+
+    async with session.begin():
+        agent = await session.scalar(
+            select(Agent)
+            .options(undefer_group("anticopy"))
+            .where(Agent.agent_id == agent_id)
+            .with_for_update()
+        )
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        score_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(Score)
+                .where(Score.agent_id == agent_id)
+            )
+            or 0
+        )
+        if agent.sha256 != payload.expected_sha256:
+            raise HTTPException(status_code=409, detail="artifact sha256 changed")
+        if score_count != payload.expected_score_count:
+            raise HTTPException(status_code=409, detail="score count changed")
+
+        existing = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == agent_id).with_for_update()
+        )
+        scored_or_live = agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+        if existing is not None:
+            if (
+                existing.status == "resolved"
+                and existing.resolution == "clear"
+                and scored_or_live
+            ):
+                # A replay answers exactly what the first write answered,
+                # including the payment-time coldkey.
+                candidate_coldkey, _reference_coldkey = await _review_coldkeys(
+                    session, agent, None
+                )
+                return AdminCopyReviewResolveResponse(
+                    review=_item(
+                        existing,
+                        agent,
+                        actions=await _review_actions(session, existing.review_id),
+                        miner_coldkey=candidate_coldkey,
+                    ),
+                    agent_status=agent.status.value,
+                    idempotent=True,
+                )
+            if existing.status == "pending":
+                raise HTTPException(
+                    status_code=409,
+                    detail="ATH review is pending; resolve the hold instead",
+                )
+            raise HTTPException(
+                status_code=409,
+                detail=f"review already resolved {existing.resolution}",
+            )
+        if not scored_or_live:
+            raise HTTPException(
+                status_code=409,
+                detail=f"agent is {agent.status.value}, not scored or live",
+            )
+
+        now = datetime.now(UTC)
+        evidence = {
+            "sha256": agent.sha256,
+            "score_count": score_count,
+            "previous_status": agent.status.value,
+            "hold_free": True,
+        }
+        review = AthReview(
+            review_id=uuid4(),
+            agent_id=agent.agent_id,
+            status="resolved",
+            opened_at=now,
+            resolved_at=now,
+            resolved_by=actor,
+            resolution="clear",
+            resolution_reason=payload.reason,
+            original_duplicate_of=None,
+            original_reason=payload.reason,
+            original_policy_version=agent.screening_policy_version,
+            original_evidence={
+                **evidence,
+                "content_fingerprint_version": (agent.content_fingerprint or {}).get(
+                    "v"
+                ),
+                "structural_fingerprint_version": (
+                    agent.structural_fingerprint or {}
+                ).get("v"),
+                "prompt_fingerprint_version": (agent.prompt_fingerprint or {}).get("v"),
+            },
+            algorithm_provenance={
+                "snapshot": "board-review-attestation",
+                "review_kind": "benchmark_overfit",
+                "algorithm_version": "board-attestation-v1",
+                "opened_by": actor,
+                "backfilled": False,
+                "opened_at_source": "admin-request",
+                "hold_free": True,
+            },
+        )
+        session.add(review)
+        # Flush the review before its action: the action's review_id foreign
+        # key needs the parent row, and both share this one transaction.
+        await session.flush()
+        session.add(
+            AthReviewAction(
+                action_id=uuid4(),
+                review_id=review.review_id,
+                action="clear",
+                reason=payload.reason,
+                actor=actor,
+                evidence=evidence,
+                created_at=now,
+            )
+        )
+        await session.flush()
+        actions = await _review_actions(session, review.review_id)
+
+    candidate_coldkey, _reference_coldkey = await _review_coldkeys(session, agent, None)
+    return AdminCopyReviewResolveResponse(
+        review=_item(review, agent, actions=actions, miner_coldkey=candidate_coldkey),
+        agent_status=agent.status.value,
+        idempotent=False,
+    )
+
+
 async def _open_inspector(agent: Agent, storage: S3StorageClient) -> TarSourceInspector:
     """Fetch one agent's stored tarball, verify its digest, open a bounded reader."""
     try:
@@ -1241,15 +1438,35 @@ async def _read_skipped(inspector: TarSourceInspector, path: str) -> str:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
-async def _diff_pair(
-    agent_id: UUID, session: AsyncSession, storage: S3StorageClient
+async def _load_diff_pair(
+    candidate: Agent, reference: Agent, storage: S3StorageClient
 ) -> _DiffPair:
-    """Load the held agent, its matched reference, and both text snapshots.
+    """Fetch, digest-verify, and snapshot both artifacts of one diff pair.
 
     Both tarballs are fetched, digest-verified, and read in one pass each; the
     per-file text maps feed either the manifest or a single-file unified diff,
     and each snapshot names the files its bounded read skipped.
     """
+    candidate_inspector = await _open_inspector(candidate, storage)
+    reference_inspector = await _open_inspector(reference, storage)
+    candidate_snapshot, reference_snapshot = await asyncio.gather(
+        asyncio.to_thread(candidate_inspector.read_text_snapshot),
+        asyncio.to_thread(reference_inspector.read_text_snapshot),
+    )
+    return _DiffPair(
+        candidate=candidate,
+        reference=reference,
+        candidate_inspector=candidate_inspector,
+        reference_inspector=reference_inspector,
+        candidate_snapshot=candidate_snapshot,
+        reference_snapshot=reference_snapshot,
+    )
+
+
+async def _diff_pair(
+    agent_id: UUID, session: AsyncSession, storage: S3StorageClient
+) -> _DiffPair:
+    """Load the held agent, its matched reference, and both text snapshots."""
     row = await _get_review(session, agent_id)
     if row is None:
         raise HTTPException(status_code=404, detail="copy review not found")
@@ -1263,20 +1480,33 @@ async def _diff_pair(
         raise HTTPException(
             status_code=409, detail="matched reference agent no longer exists"
         )
-    candidate_inspector = await _open_inspector(candidate_agent, storage)
-    reference_inspector = await _open_inspector(reference_agent, storage)
-    candidate_snapshot, reference_snapshot = await asyncio.gather(
-        asyncio.to_thread(candidate_inspector.read_text_snapshot),
-        asyncio.to_thread(reference_inspector.read_text_snapshot),
-    )
-    return _DiffPair(
-        candidate=candidate_agent,
-        reference=reference_agent,
-        candidate_inspector=candidate_inspector,
-        reference_inspector=reference_inspector,
-        candidate_snapshot=candidate_snapshot,
-        reference_snapshot=reference_snapshot,
-    )
+    return await _load_diff_pair(candidate_agent, reference_agent, storage)
+
+
+async def _lineage_diff_pair(
+    agent_id: UUID,
+    reference_agent_id: UUID,
+    session: AsyncSession,
+    storage: S3StorageClient,
+) -> _DiffPair:
+    """Load any two distinct agents and both text snapshots, no review needed.
+
+    Artifact scope: the pair is exactly the two stored submissions named by id,
+    whatever their status or review history. A missing agent row is a 404; a
+    stored artifact that cannot be fetched or verified keeps the copy-review
+    diff's 502/422 semantics from :func:`_open_inspector`.
+    """
+    if agent_id == reference_agent_id:
+        raise HTTPException(
+            status_code=400, detail="reference_agent_id must differ from agent_id"
+        )
+    candidate_agent = await session.get(Agent, agent_id)
+    if candidate_agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    reference_agent = await session.get(Agent, reference_agent_id)
+    if reference_agent is None:
+        raise HTTPException(status_code=404, detail="reference agent not found")
+    return await _load_diff_pair(candidate_agent, reference_agent, storage)
 
 
 async def _audit_diff_pair(
@@ -1291,7 +1521,7 @@ async def _audit_diff_pair(
 ) -> None:
     """Record one audit row per agent whose source this diff exposed.
 
-    Both sides of a copy-review diff are real miner source. Writing a row for
+    Both sides of a source diff are real miner source. Writing a row for
     each -- tagged with the role it played -- is what lets the agent-scoped
     index answer "who read this submission's source" for the *reference* agent,
     who never asked to be part of anyone else's review.
@@ -1317,82 +1547,33 @@ async def _audit_diff_pair(
         )
 
 
-@router.get(
-    "/copy-reviews/{agent_id}/source-diff",
-    response_model=AdminSourceDiffManifest,
-)
-async def get_copy_review_source_diff(
-    agent_id: UUID,
-    request: Request,
-    _admin: AdminDep,
-    session: SessionDep,
-    storage: StorageDep,
-    x_admin_actor: Annotated[str | None, Header()] = None,
-) -> AdminSourceDiffManifest:
-    """Per-file diff manifest between a held agent and the agent it copied.
-
-    Classifies every path as added / removed / modified / identical / renamed
-    with change stats so an operator can see at a glance which files were copied
-    verbatim, which were altered, and which were only moved. Unified-diff
-    bodies come from the per-file endpoint. Readable files the bounded source
-    read skipped in either artifact are listed in ``omitted_paths``, never
-    classified as added or removed.
-    """
+def _require_actor(x_admin_actor: str | None) -> str:
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
-    pair = await _diff_pair(agent_id, session, storage)
-    candidate, reference = pair.candidate, pair.reference
+    return x_admin_actor
+
+
+async def _source_diff_manifest(pair: _DiffPair) -> AdminSourceDiffManifest:
+    """Classify every compared path in the pair (reference -> candidate)."""
     manifest = await asyncio.to_thread(
         build_source_diff_manifest,
         pair.candidate_snapshot.texts,
         pair.reference_snapshot.texts,
         omitted=sorted(pair.omitted),
     )
-    logger.info(
-        "admin_actor=%s viewed copy-review source diff agent_id=%s reference_id=%s",
-        x_admin_actor,
-        agent_id,
-        reference.agent_id,
-    )
-    # This route reads BOTH artifacts, so it writes one row per agent. A later
-    # "who read this agent's source" query must find the fetch whether the agent
-    # was the held candidate or the reference it was diffed against.
-    await _audit_diff_pair(
-        session,
-        request=request,
-        actor=x_admin_actor,
-        endpoint=ENDPOINT_ADMIN_COPY_REVIEW_DIFF,
-        candidate=candidate,
-        reference=reference,
-    )
     return AdminSourceDiffManifest(
-        agent_id=agent_id,
-        reference_agent_id=reference.agent_id,
-        candidate_sha256=candidate.sha256,
-        reference_sha256=reference.sha256,
+        agent_id=pair.candidate.agent_id,
+        reference_agent_id=pair.reference.agent_id,
+        candidate_sha256=pair.candidate.sha256,
+        reference_sha256=pair.reference.sha256,
         **manifest,  # type: ignore[arg-type]
     )
 
 
-@router.get(
-    "/copy-reviews/{agent_id}/source-diff/file",
-    response_model=AdminSourceDiffFileDetail,
-)
-async def get_copy_review_source_diff_file(
-    agent_id: UUID,
-    request: Request,
-    _admin: AdminDep,
-    session: SessionDep,
-    storage: StorageDep,
-    path: Annotated[str, Query(min_length=1, max_length=240)],
-    x_admin_actor: Annotated[str | None, Header()] = None,
+async def _source_diff_file_detail(
+    pair: _DiffPair, normalized: str
 ) -> AdminSourceDiffFileDetail:
-    """Bounded unified diff (reference -> candidate) for one file in the pair."""
-    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
-        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
-    normalized = path.removeprefix("./")
-    pair = await _diff_pair(agent_id, session, storage)
-    candidate, reference = pair.candidate, pair.reference
+    """Bounded unified diff (reference -> candidate) for one normalized path."""
     # Match the manifest: files skipped on either side are out of the pairing.
     candidate_text, reference_text, _ = without_omitted(
         pair.candidate_snapshot.texts, pair.reference_snapshot.texts, pair.omitted
@@ -1417,23 +1598,168 @@ async def get_copy_review_source_diff_file(
         raise HTTPException(
             status_code=404, detail=f"no file at {normalized!r} in either artifact"
         ) from error
+    return AdminSourceDiffFileDetail(
+        agent_id=pair.candidate.agent_id,
+        reference_agent_id=pair.reference.agent_id,
+        **detail,  # type: ignore[arg-type]
+    )
+
+
+@router.get(
+    "/copy-reviews/{agent_id}/source-diff",
+    response_model=AdminSourceDiffManifest,
+)
+async def get_copy_review_source_diff(
+    agent_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: StorageDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminSourceDiffManifest:
+    """Per-file diff manifest between a held agent and the agent it copied.
+
+    Classifies every path as added / removed / modified / identical / renamed
+    with change stats so an operator can see at a glance which files were copied
+    verbatim, which were altered, and which were only moved. Unified-diff
+    bodies come from the per-file endpoint. Readable files the bounded source
+    read skipped in either artifact are listed in ``omitted_paths``, never
+    classified as added or removed.
+    """
+    actor = _require_actor(x_admin_actor)
+    pair = await _diff_pair(agent_id, session, storage)
+    response = await _source_diff_manifest(pair)
+    logger.info(
+        "admin_actor=%s viewed copy-review source diff agent_id=%s reference_id=%s",
+        actor,
+        agent_id,
+        pair.reference.agent_id,
+    )
+    # This route reads BOTH artifacts, so it writes one row per agent. A later
+    # "who read this agent's source" query must find the fetch whether the agent
+    # was the held candidate or the reference it was diffed against.
+    await _audit_diff_pair(
+        session,
+        request=request,
+        actor=actor,
+        endpoint=ENDPOINT_ADMIN_COPY_REVIEW_DIFF,
+        candidate=pair.candidate,
+        reference=pair.reference,
+    )
+    return response
+
+
+@router.get(
+    "/copy-reviews/{agent_id}/source-diff/file",
+    response_model=AdminSourceDiffFileDetail,
+)
+async def get_copy_review_source_diff_file(
+    agent_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: StorageDep,
+    path: Annotated[str, Query(min_length=1, max_length=240)],
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminSourceDiffFileDetail:
+    """Bounded unified diff (reference -> candidate) for one file in the pair."""
+    actor = _require_actor(x_admin_actor)
+    normalized = path.removeprefix("./")
+    pair = await _diff_pair(agent_id, session, storage)
+    response = await _source_diff_file_detail(pair, normalized)
     logger.info(
         "admin_actor=%s viewed copy-review file diff agent_id=%s path=%s",
-        x_admin_actor,
+        actor,
         agent_id,
         normalized,
     )
     await _audit_diff_pair(
         session,
         request=request,
-        actor=x_admin_actor,
+        actor=actor,
         endpoint=ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE,
-        candidate=candidate,
-        reference=reference,
+        candidate=pair.candidate,
+        reference=pair.reference,
         path=normalized,
     )
-    return AdminSourceDiffFileDetail(
-        agent_id=agent_id,
-        reference_agent_id=reference.agent_id,
-        **detail,  # type: ignore[arg-type]
+    return response
+
+
+@router.get(
+    "/agents/{agent_id}/lineage-source-diff",
+    response_model=AdminSourceDiffManifest,
+)
+async def get_lineage_source_diff(
+    agent_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: StorageDep,
+    reference_agent_id: Annotated[UUID, Query()],
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminSourceDiffManifest:
+    """Per-file diff manifest between any two stored agents (reference -> agent).
+
+    The copy-review diff only pairs a held agent with its matched reference.
+    Lineage review needs any pair -- typically a resubmission against the
+    rejected ancestor it claims to have fixed -- so this route takes both ids
+    explicitly and needs no review row. Same manifest shape, rename handling,
+    size bounds, and omitted-path reporting as the copy-review diff, and the
+    same two-row artifact-fetch audit under its own endpoint name.
+    """
+    actor = _require_actor(x_admin_actor)
+    pair = await _lineage_diff_pair(agent_id, reference_agent_id, session, storage)
+    response = await _source_diff_manifest(pair)
+    logger.info(
+        "admin_actor=%s viewed lineage source diff agent_id=%s reference_id=%s",
+        actor,
+        agent_id,
+        reference_agent_id,
     )
+    await _audit_diff_pair(
+        session,
+        request=request,
+        actor=actor,
+        endpoint=ENDPOINT_ADMIN_LINEAGE_DIFF,
+        candidate=pair.candidate,
+        reference=pair.reference,
+    )
+    return response
+
+
+@router.get(
+    "/agents/{agent_id}/lineage-source-diff/file",
+    response_model=AdminSourceDiffFileDetail,
+)
+async def get_lineage_source_diff_file(
+    agent_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: StorageDep,
+    reference_agent_id: Annotated[UUID, Query()],
+    path: Annotated[str, Query(min_length=1, max_length=240)],
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminSourceDiffFileDetail:
+    """Bounded unified diff (reference -> agent) for one file of any agent pair."""
+    actor = _require_actor(x_admin_actor)
+    normalized = path.removeprefix("./")
+    pair = await _lineage_diff_pair(agent_id, reference_agent_id, session, storage)
+    response = await _source_diff_file_detail(pair, normalized)
+    logger.info(
+        "admin_actor=%s viewed lineage file diff agent_id=%s reference_id=%s path=%s",
+        actor,
+        agent_id,
+        reference_agent_id,
+        normalized,
+    )
+    await _audit_diff_pair(
+        session,
+        request=request,
+        actor=actor,
+        endpoint=ENDPOINT_ADMIN_LINEAGE_DIFF_FILE,
+        candidate=pair.candidate,
+        reference=pair.reference,
+        path=normalized,
+    )
+    return response

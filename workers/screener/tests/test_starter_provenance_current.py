@@ -213,10 +213,14 @@ def test_no_runtime_loader_or_image_sees_a_staged_manifest(tmp_path: Path) -> No
         (
             path
             for path in RUNTIME_MANIFESTS.iterdir()
-            if path.suffix == ".json" and _copied(path, analyzer)
+            if path.name.startswith("starter-kit-provenance-")
+            and path.suffix == ".json"
+            and _copied(path, analyzer)
         ),
         runtime,
     )
+    # The vendored-upstream allowlist rides in the same manifest directory.
+    assert _copied(RUNTIME_MANIFESTS / "vendored-upstream-allowlist.json", analyzer)
     # A two-digit activated version is baked too; a staged one never is.
     assert _copied(RUNTIME_MANIFESTS / "starter-kit-provenance-v10.json", analyzer)
     for path in (*staged, STAGED_MANIFESTS / "starter-kit-provenance-v10.json"):

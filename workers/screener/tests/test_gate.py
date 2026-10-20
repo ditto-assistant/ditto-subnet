@@ -4011,3 +4011,10 @@ def test_gate_threads_l2_turn_timeout_to_the_reviewer(make_config) -> None:  # t
         tarball=_valid_tar(),
     )
     assert explicit._source_reviewer._l2._max_completion_request_seconds == 300.0
+
+
+def test_gate_retries_a_relayed_provider_body_fault_once(make_config) -> None:  # type: ignore[no-untyped-def]
+    # 2026-10-02/03: four L3 adjudications lost every completed turn to one
+    # relayed provider fault and parked as l3-adjudicator-model-provider-fault.
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    assert gate._source_reviewer._l2._retry_provider_body_fault_once is True

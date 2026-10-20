@@ -1,7 +1,8 @@
-"""Bounded per-file source diffing between a held agent and its match.
+"""Bounded per-file source diffing between two agent artifacts.
 
-Feeds the operator copy-review console: given the candidate (held) tarball and
-the reference it was matched against, produce (1) a compact per-file manifest
+Feeds the operator copy-review console and the any-pair lineage diff: given the
+candidate tarball and the reference it is compared against (a copy hold's match,
+or any ancestor an operator names), produce (1) a compact per-file manifest
 classifying every path as added / removed / modified / identical / renamed with
 change stats, and (2) an on-demand bounded unified diff for a single file. The
 manifest is small enough to render inline; unified-diff bodies are fetched one

@@ -1702,6 +1702,100 @@ func TestInferenceControlPlaneRequiresLoopbackOrBearer(t *testing.T) {
 	}
 }
 
+// The published Compose default is a literal in a public repository. Under
+// enforce the broker must treat it as "no token configured" and refuse every
+// non-loopback control call, matching controlTokenFromEnv on the control plane.
+func TestInferenceControlPlaneEnforceRejectsPublicDefaultToken(t *testing.T) {
+	t.Setenv("DITTOBENCH_BROKER_CONTROL_TOKEN", insecureDefaultControlToken)
+	t.Setenv("DITTOBENCH_CONTROL_AUTH_MODE", "enforce")
+	broker := newInferenceBroker(1)
+	if broker.controlAuthMode != controlAuthEnforce {
+		t.Fatalf("broker mode = %q, want enforce from DITTOBENCH_CONTROL_AUTH_MODE", broker.controlAuthMode)
+	}
+
+	for _, header := range []string{"Bearer " + insecureDefaultControlToken, "", "Bearer "} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+		request.RemoteAddr = "172.18.0.4:4321"
+		if header != "" {
+			request.Header.Set("Authorization", header)
+		}
+		recorder := httptest.NewRecorder()
+		broker.prepare(recorder, request)
+		if recorder.Code != http.StatusUnauthorized || len(broker.sessions) != 0 {
+			t.Fatalf("enforce with public default, Authorization=%q: status=%d sessions=%d",
+				header, recorder.Code, len(broker.sessions))
+		}
+	}
+
+	// cancel and activate share the same gate.
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodDelete, "/v1/inference/session/id", nil),
+		httptest.NewRequest(http.MethodPost, "/v1/inference/session/id/activate", nil),
+	} {
+		request.RemoteAddr = "172.18.0.4:4321"
+		request.Header.Set("Authorization", "Bearer "+insecureDefaultControlToken)
+		if broker.controlAuthorized(request) {
+			t.Fatalf("enforce admitted the public default on %s %s", request.Method, request.URL.Path)
+		}
+	}
+}
+
+// Shadow is stage 1 and the default: every validator that never set a per-host
+// token presents the published default, so the broker keeps admitting it there
+// rather than failing every ticket at prepare.
+func TestInferenceControlPlaneShadowStillAdmitsPublicDefaultToken(t *testing.T) {
+	t.Setenv("DITTOBENCH_BROKER_CONTROL_TOKEN", insecureDefaultControlToken)
+	t.Setenv("DITTOBENCH_CONTROL_AUTH_MODE", "")
+	broker := newInferenceBroker(1)
+	if broker.controlAuthMode != controlAuthShadow {
+		t.Fatalf("broker mode = %q, want shadow by default", broker.controlAuthMode)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+	request.RemoteAddr = "172.18.0.4:4321"
+	request.Header.Set("Authorization", "Bearer "+insecureDefaultControlToken)
+	recorder := httptest.NewRecorder()
+	broker.prepare(recorder, request)
+	if recorder.Code != http.StatusCreated || len(broker.sessions) != 1 {
+		t.Fatalf("shadow prepare status=%d sessions=%d", recorder.Code, len(broker.sessions))
+	}
+
+	// Shadow is not a bypass: a wrong or missing bearer is still refused.
+	for _, header := range []string{"Bearer wrong", ""} {
+		request = httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+		request.RemoteAddr = "172.18.0.4:4321"
+		if header != "" {
+			request.Header.Set("Authorization", header)
+		}
+		if broker.controlAuthorized(request) {
+			t.Fatalf("shadow admitted Authorization=%q", header)
+		}
+	}
+}
+
+// A real per-host secret behaves identically in both modes.
+func TestInferenceControlPlaneEnforceAdmitsPerHostToken(t *testing.T) {
+	t.Setenv("DITTOBENCH_BROKER_CONTROL_TOKEN", "per-host-control-secret")
+	t.Setenv("DITTOBENCH_CONTROL_AUTH_MODE", "enforce")
+	broker := newInferenceBroker(1)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+	request.RemoteAddr = "172.18.0.4:4321"
+	request.Header.Set("Authorization", "Bearer per-host-control-secret")
+	recorder := httptest.NewRecorder()
+	broker.prepare(recorder, request)
+	if recorder.Code != http.StatusCreated || len(broker.sessions) != 1 {
+		t.Fatalf("per-host prepare status=%d sessions=%d", recorder.Code, len(broker.sessions))
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+	request.RemoteAddr = "172.18.0.4:4321"
+	request.Header.Set("Authorization", "Bearer "+insecureDefaultControlToken)
+	if broker.controlAuthorized(request) {
+		t.Fatal("a broker configured with a per-host secret admitted the public default")
+	}
+}
+
 func TestInferenceActivationRequiresConfiguredExactProxyAndBoundedExpiry(t *testing.T) {
 	broker := newInferenceBroker(1)
 	broker.platformProxyURL = "https://platform.example" + platformInferenceAPIPath

@@ -14,6 +14,12 @@ variable "enabled" {
   default     = false
 }
 
+variable "deletion_protection" {
+  description = "Keep true except for the explicitly approved, recovery-verified retirement preparation phase."
+  type        = bool
+  default     = true
+}
+
 variable "project" {
   description = "Owning GCP project."
   type        = string

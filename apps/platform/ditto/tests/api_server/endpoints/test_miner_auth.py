@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import bittensor
 import httpx
+import pytest
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -104,6 +105,7 @@ async def test_device_login_sets_profile_and_session(
     assert mcp.status_code == 200
     names = [tool["name"] for tool in mcp.json()["result"]["tools"]]
     assert "whoami" in names
+    assert "get_my_submission_artifact" in names
     assert "get_my_harness_logs" in names
     assert "get_my_screening_feedback" in names
     assert "prepare_signed_action" in names
@@ -137,10 +139,12 @@ async def test_device_login_sets_profile_and_session(
     assert polled.json()["access_token"]
 
 
+@pytest.mark.parametrize("requested_scope", [None, "read"])
 async def test_oauth_complete_requires_complete_token(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
+    requested_scope: str | None,
 ) -> None:
     _install(app, session_maker)
     verifier = "a" * 43
@@ -165,6 +169,7 @@ async def test_oauth_complete_requires_complete_token(
             "redirect_uri": "http://127.0.0.1:8757/cb",
             "code_challenge": challenge,
             "code_challenge_method": "S256",
+            **({"scope": requested_scope} if requested_scope else {}),
         },
         follow_redirects=False,
     )
@@ -179,7 +184,8 @@ async def test_oauth_complete_requires_complete_token(
     complete_token = query["complete"][0]
     public = await client.get(f"/api/v1/miner-auth/device/{user_code}")
     assert public.status_code == 200
-    assert public.json()["scopes"] == ["read"]
+    expected_scopes = ["read"] if requested_scope else ["read", "download"]
+    assert public.json()["scopes"] == expected_scopes
     grant_id = public.json()["grant_id"]
     alice = _kp()
     nonce = uuid4()
@@ -237,4 +243,4 @@ async def test_oauth_complete_requires_complete_token(
         },
     )
     assert tokened.status_code == 200, tokened.text
-    assert tokened.json()["scope"] == "read"
+    assert tokened.json()["scope"] == " ".join(expected_scopes)

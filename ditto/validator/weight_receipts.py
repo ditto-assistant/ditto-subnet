@@ -6,13 +6,21 @@ import asyncio
 import hashlib
 import json
 import logging
+from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from time import monotonic, time
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
-from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticObservation
+from pydantic import ValidationError
+
+from ditto.api_models.receipt_diagnostics import (
+    ReceiptDiagnosticObservation,
+    ReceiptFailureContext,
+    ReceiptValidationDiagnostic,
+)
 from ditto.api_models.weight_receipt import (
+    FinalizedWeightAttempt,
     FinalizedWeightReceipt,
     WeightProvenance,
     weight_receipt_digest,
@@ -23,6 +31,115 @@ from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
 
 logger = logging.getLogger(__name__)
+
+RECEIPT_CONFLICT_DROP_THRESHOLD = 5
+"""Consecutive platform conflicts before an envelope is acked-and-dropped.
+
+A receipt that conflicts with an immutable pin fails deterministically: the
+same signed body re-validates to the same provenance every time. Retrying it
+forever floods the platform with 409s (issue #2712) and rides in front of
+genuine late-arriving receipts. The dropped count rides the relay diagnostics
+so the drop is observable without retaining any receipt content.
+"""
+
+_RECEIPT_DIAGNOSTIC_FIELDS = frozenset(
+    FinalizedWeightReceipt.model_fields
+    | FinalizedWeightAttempt.model_fields
+    | WeightProvenance.model_fields
+    | EnforcingTreasuryPin.model_fields
+)
+_RECEIPT_VALIDATION_RULES = {
+    "Value error, champion identity and artifact must be paired": "champion_pair",
+    "Value error, normalized weights contain duplicate UIDs": "duplicate_uids",
+    "Value error, normalized weights have no positive value": "empty_weights",
+    "Value error, ciphertext hash does not match ciphertext": "ciphertext_digest",
+    (
+        "Value error, legacy receipt requires champion and no enforcing pin"
+    ): "legacy_authority",
+    (
+        "Value error, enforcing receipt differs from pinned treasury authority"
+    ): "pinned_authority",
+    (
+        "Value error, enforcing receipt does not conserve service allocation"
+    ): "service_allocation",
+    "Value error, weight vector digest does not match request weights": "vector_digest",
+    (
+        "Value error, Pylon request digest does not match immutable request"
+    ): "request_digest",
+}
+
+
+def _receipt_failure_context(
+    envelope: dict[str, Any], attempt: dict[str, Any]
+) -> ReceiptFailureContext:
+    """Pick known claim coordinates only; malformed values become unknown."""
+
+    def integer(value: object, low: int, high: int) -> int | None:
+        return value if type(value) is int and low <= value <= high else None
+
+    provenance = envelope.get("provenance")
+    epoch = provenance.get("epoch_index") if isinstance(provenance, dict) else None
+    attempt_id = attempt.get("attempt_id")
+    parsed_id = None
+    if isinstance(attempt_id, str) and len(attempt_id) == 36:
+        with suppress(ValueError):
+            parsed_id = UUID(attempt_id)
+    return ReceiptFailureContext(
+        claimed_schema_version=integer(envelope.get("schema_version"), 1, 2),
+        task_id=integer(envelope.get("task_id"), 1, 2147483647),
+        claimed_epoch_index=integer(epoch, 0, 2147483647),
+        claimed_commit_block=integer(attempt.get("commit_block"), 1, 4294967295),
+        attempt_id=parsed_id,
+    )
+
+
+def _receipt_validation_fields(exc: ValidationError) -> str:
+    """Only schema-owned names; dict keys, values and messages stay private."""
+    fields = []
+    for error in exc.errors(
+        include_url=False, include_context=False, include_input=False
+    )[:5]:
+        location = (
+            ".".join(
+                part
+                if isinstance(part, str) and part in _RECEIPT_DIAGNOSTIC_FIELDS
+                else "*"
+                for part in error["loc"][:8]
+            )
+            or "root"
+        )
+        # Pydantic's built-in validation types are fixed by the receipt model.
+        # Unknown/custom types must not become a channel for arbitrary text.
+        kind = error["type"]
+        if kind not in {
+            "missing",
+            "int_type",
+            "int_parsing",
+            "float_type",
+            "float_parsing",
+            "finite_number",
+            "greater_than",
+            "greater_than_equal",
+            "less_than_equal",
+            "string_type",
+            "string_too_short",
+            "string_too_long",
+            "string_pattern_mismatch",
+            "uuid_parsing",
+            "uuid_type",
+            "list_type",
+            "tuple_type",
+            "dict_type",
+            "model_type",
+            "literal_error",
+            "too_short",
+            "too_long",
+            "value_error",
+        }:
+            kind = "other"
+        rule = _RECEIPT_VALIDATION_RULES.get(error["msg"])
+        fields.append(f"{location}:{kind}" + (f":{rule}" if rule else ""))
+    return ",".join(fields)
 
 
 @dataclass(frozen=True)
@@ -42,6 +159,9 @@ class ReceiptRelayDiagnostics:
     page_finalized: int = 0
     page_forwarded: int = 0
     page_deferred: int = 0
+    conflicts_dropped: int = 0
+    last_validation: ReceiptValidationDiagnostic | None = None
+    failure_context: ReceiptFailureContext | None = None
 
 
 class WeightReceiptRelay:
@@ -55,6 +175,7 @@ class WeightReceiptRelay:
         self._recovery_lock = asyncio.Lock()
         self._recovery_task: asyncio.Task[None] | None = None
         self._last_scheduled_recovery: float | None = None
+        self._conflict_counts: dict[tuple[str, str], int] = {}
 
     def _submission_observed(self, status: str) -> None:
         self.diagnostics = replace(
@@ -76,6 +197,9 @@ class WeightReceiptRelay:
                 "page_forwarded", self.diagnostics.page_forwarded
             ),
             page_deferred=counts.get("page_deferred", self.diagnostics.page_deferred),
+            conflicts_dropped=counts.get(
+                "conflicts_dropped", self.diagnostics.conflicts_dropped
+            ),
         )
 
     def schedule_recovery(self) -> None:
@@ -109,6 +233,9 @@ class WeightReceiptRelay:
 
     async def _recover(self) -> None:
         """Bounded recovery includes old jobs after a stateless worker restart."""
+        self.diagnostics = replace(
+            self.diagnostics, last_validation=None, failure_context=None
+        )
         read = getattr(self.setter, "list_weight_receipts", None)
         report = getattr(self.platform, "submit_weight_receipt", None)
         acknowledge = getattr(self.setter, "acknowledge_weight_receipt", None)
@@ -183,6 +310,10 @@ class WeightReceiptRelay:
                                 "forwarded",
                                 page_forwarded=self.diagnostics.page_forwarded + 1,
                             )
+                            self._conflict_counts.pop(
+                                (str(claim.request_id), str(claim.attempt.attempt_id)),
+                                None,
+                            )
                     except Exception as exc:  # noqa: BLE001 - keep other receipts moving
                         deferred_stage = stage + "_failed"
                         self._recovery_observed(
@@ -192,7 +323,71 @@ class WeightReceiptRelay:
                         reason = type(exc).__name__
                         if isinstance(exc, WeightReceiptConflictError):
                             reason += f"({exc.code})"
-                        logger.warning("individual weight receipt deferred: %s", reason)
+                        if stage == "validating_claim" and isinstance(
+                            exc, ValidationError
+                        ):
+                            self.diagnostics = replace(
+                                self.diagnostics,
+                                last_validation=ReceiptValidationDiagnostic(
+                                    error_count=exc.error_count(),
+                                    fields=_receipt_validation_fields(exc).split(","),
+                                ),
+                                failure_context=_receipt_failure_context(
+                                    envelope, attempt
+                                ),
+                            )
+                        logger.warning(
+                            "individual weight receipt deferred: %s stage=%s "
+                            "validation_fields=%s validation_error_count=%d",
+                            reason,
+                            stage,
+                            _receipt_validation_fields(exc)
+                            if isinstance(exc, ValidationError)
+                            else "none",
+                            exc.error_count()
+                            if isinstance(exc, ValidationError)
+                            else 0,
+                        )
+                        if stage == "forwarding_platform" and isinstance(
+                            exc, WeightReceiptConflictError
+                        ):
+                            # A conflict is deterministic: the same signed body
+                            # re-validates to the same mismatched provenance on
+                            # every retry. Ack-and-drop after a bounded streak
+                            # so the envelope cannot 409 forever (#2712).
+                            key = (str(claim.request_id), str(claim.attempt.attempt_id))
+                            count = self._conflict_counts.get(key, 0) + 1
+                            self._conflict_counts[key] = count
+                            if count >= RECEIPT_CONFLICT_DROP_THRESHOLD:
+                                self._conflict_counts.pop(key, None)
+                                logger.warning(
+                                    "weight receipt dropped after %d consecutive "
+                                    "conflicts: dropping poisoned envelope",
+                                    count,
+                                )
+                                try:
+                                    stage = "acknowledging_pylon"
+                                    await acknowledge(
+                                        str(claim.request_id),
+                                        {
+                                            "request_digest": claim.request_digest,
+                                            "attempt_id": str(claim.attempt.attempt_id),
+                                            "receipt_digest": weight_receipt_digest(
+                                                claim
+                                            ),
+                                        },
+                                    )
+                                    self._recovery_observed(
+                                        "conflict_dropped",
+                                        conflicts_dropped=self.diagnostics.conflicts_dropped
+                                        + 1,
+                                    )
+                                    stage = "validating_claim"
+                                except Exception as ack_exc:  # noqa: BLE001 - drop retry waits for the next sweep
+                                    logger.warning(
+                                        "conflict-drop acknowledgement deferred: %s",
+                                        type(ack_exc).__name__,
+                                    )
                 stage = "validating_page"
                 next_cursor = page.get("next_after_task_id")
                 if next_cursor is not None and (
@@ -206,15 +401,30 @@ class WeightReceiptRelay:
             logger.warning("weight receipt recovery deferred: %s", type(exc).__name__)
 
     async def submit(
-        self, weights: dict[str, float], ledger: Any, champion: Any
+        self,
+        weights: dict[str, float],
+        ledger: Any,
+        champion: Any,
+        chain_epoch_block: int | None = None,
     ) -> bool | None:
         """None permits legacy submission only before any receipt acceptance.
 
         Timeout, malformed acknowledgement, and other uncertain outcomes return
         False: retry the deterministic request next time, never duplicate it via
         legacy submission. A new epoch is a distinct request and may proceed.
+
+        ``chain_epoch_block`` is the chain's ``LastEpochBlock``. A stale pin
+        repeats the previous epoch's provenance, so without this the request id
+        is reused and Pylon acknowledges the duplicate without committing.
+        It is part of the request id only, not the receipt body: the body stays
+        the pin that was folded.
         """
         submit = getattr(self.setter, "put_weights_with_receipt", None)
+        if chain_epoch_block is not None and (
+            type(chain_epoch_block) is not int or chain_epoch_block < 0
+        ):
+            self._submission_observed("invalid_provenance")
+            return False
         treasury_pin = getattr(ledger, "treasury_pin", None)
         # Unknown/malformed pins never downgrade to ordinary submission. V1
         # must revalidate as the historical shadow contract before fallback.
@@ -279,12 +489,13 @@ class WeightReceiptRelay:
                     body, sort_keys=True, separators=(",", ":"), allow_nan=False
                 ).encode()
             ).hexdigest()
-            request_id = str(
-                uuid5(
-                    NAMESPACE_URL,
-                    f"ditto-weight-receipt:v{body['schema_version']}:{self.hotkey}:{self.netuid}:{request_digest}",
-                )
+            identity = (
+                f"ditto-weight-receipt:v{body['schema_version']}:"
+                f"{self.hotkey}:{self.netuid}:{request_digest}"
             )
+            if chain_epoch_block is not None:
+                identity = f"{identity}:chain-epoch:{chain_epoch_block}"
+            request_id = str(uuid5(NAMESPACE_URL, identity))
         except (AttributeError, ValueError, TypeError, OverflowError):
             self._submission_observed("invalid_provenance")
             # No request was sent. Old/incomplete ledgers retain ordinary

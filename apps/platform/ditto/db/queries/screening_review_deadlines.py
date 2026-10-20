@@ -31,7 +31,7 @@ from ditto.db.models import (
 # pins it to the source document; an operator cannot schedule an arbitrary
 # normative document under the current worker binary.
 POLICY_V13_DOCUMENT_DIGEST = (
-    "02b78e6cc392b49e619d03d1223555c951dfcc9fe26570c985208c123b3bd8c9"
+    "5501626117508e33a9872efe2056c52a336772e03f8e3a13f759a0eb3cb5dd44"
 )
 FIRST_V13_CLAIM_EVENT: Literal["first-v13-screening-claim"] = (
     "first-v13-screening-claim"

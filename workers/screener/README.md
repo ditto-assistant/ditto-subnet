@@ -40,10 +40,11 @@ private IPC, bounded local logs, and a locked
 are rejected. An image is never exported if
 it only boots as root or depends on writing elsewhere in its root filesystem.
 
-Production builds use a dedicated rootless Docker daemon. The worker verifies
-Docker's advertised `rootless` security option before accepting work when
-`SCREENER_REQUIRE_ROOTLESS_DOCKER=1`; a missing or rootful endpoint becomes a
-retryable infrastructure result, never a miner failure. The build receives no
+Production builds use a dedicated rootless Docker daemon. Rootless verification
+is enabled by default, including for standalone workers. The worker checks
+Docker's advertised `rootless` security option before accepting work; a missing
+or rootful endpoint becomes a retryable infrastructure result, never a miner
+failure. The build receives no
 credentials, cannot request host networking or insecure BuildKit entitlements,
 and non-root host traffic is denied access to cloud metadata except DNS.
 

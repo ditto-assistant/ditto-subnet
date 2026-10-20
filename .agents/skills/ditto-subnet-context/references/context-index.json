@@ -28,6 +28,19 @@
       "related": ["overview", "agent-skills"]
     },
     {
+      "id": "contributor-pr-review",
+      "title": "Contributor pull request review and completion",
+      "keywords": ["contributor", "contrib", "contributor PR", "contributor backlog", "batch PR review", "review all PRs", "contributor-pr-review"],
+      "summary": "Resolve a contributor's open backlog by validating real issues, repairing worthwhile patches, and merging or closing each PR within the user's authorization.",
+      "skills": ["contributor-pr-review", "github", "ditto-subnet-worktree"],
+      "owns": [".agents/skills/contributor-pr-review"],
+      "read": [".agents/skills/contributor-pr-review/SKILL.md", ".agents/skills/github/SKILL.md", ".agents/skills/ditto-subnet-worktree/SKILL.md"],
+      "search": ["gh pr list --repo ditto-assistant/ditto-subnet --author <login> --state open --limit 100 --json number,title,headRefOid,url", "git status --short --branch"],
+      "validate": ["uv run pytest ditto/tests/test_agent_skills.py -q", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "git diff --check"],
+      "invariants": ["Each PR needs evidence that it solves a current problem, not only passing checks.", "Repair worthwhile original PRs when permitted; close unsuitable approaches without closing genuine unresolved issues.", "Verify final heads and completed merge or closure state; merge authority does not authorize production activation."],
+      "related": ["worktrees", "agent-skills", "contracts", "release-delivery"]
+    },
+    {
       "id": "agent-skills",
       "title": "Agent skill trees and context routing",
       "keywords": ["agent skills", "agent skill", "context index", "lookup-context", "skill routing", "claude skills", "claude skill", "agents skills", "skill symlink", "context lookup", "ditto-subnet"],
@@ -91,6 +104,19 @@
       "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/mine", "python3 miners/dittobench-starter-kit/scripts/test_local_rehearsal.py", "uv run pytest ditto/tests/miner_cli/commands/test_practice.py -q", "python3 .agents/skills/backroom-review/scripts/search-precedents.py family-compiler"],
       "invariants": ["Do not treat cargo evaluate or hosted rehearsal as on-chain certification.", "Local ditto practice --run-size full matches the on-chain dataset envelope and observed-tool scorer, not the locked model or screened image.", "Do not package or upload a harness that fails the operator two-limb or production-engine bar.", "Every miners/dittobench-starter-kit change ships the next starter provenance manifest in workers/screener/staged-starter-provenance; the screener drift guard prints the generate_starter_provenance.py command."],
       "related": ["validator-miner", "dittobench-scoring", "backroom-review", "miner-comms"]
+    },
+    {
+      "id": "subnet-status",
+      "title": "Miner view of SN118's live parameters and competitions",
+      "keywords": ["subnet status", "current parameters", "current competition", "payout curve", "rank_shares", "emission split", "gamma share", "burn share", "miner share", "champion", "paid slots", "dethrone margin", "next epoch", "my agent status", "why is my agent not on the board", "what does rank pay"],
+      "summary": "Read-only, public-endpoint snapshot for miners: scoring bench_version and harness, the miner-pool split (Gamma, burn, miners), the KOTH payout curve and paid recipients, the next weight epoch, and the status, scores and review reasons of a hotkey's agents. Pair with mine for building and uploading.",
+      "skills": ["subnet-status", "mine"],
+      "owns": [".agents/skills/subnet-status"],
+      "read": [".agents/skills/subnet-status/SKILL.md", "docs/MINER.md", "apps/platform/docs/public-telemetry.md"],
+      "search": ["rg -n 'treasury-allocation|rank_shares|champion_share' apps/platform/ditto/api_server/endpoints/public.py", "rg -n '@router.get' apps/platform/ditto/api_server/endpoints/public.py"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/subnet-status", "python3 .agents/skills/subnet-status/scripts/subnet_status.py --json"],
+      "invariants": ["Public endpoints only: no wallet, Backroom token or operator credential.", "The public treasury page is a forecast; the on-chain Incentive vector is ground truth for what each UID earns.", "The payout curve and split are operator settings and change between epochs; never hard-code them in miner docs."],
+      "related": ["mine", "validator-miner", "miner-comms"]
     },
     {
       "id": "wandb-operations",
@@ -195,6 +221,19 @@
       "validate": ["python3 .agents/skills/backroom-review/scripts/search-precedents.py family-compiler", "cd apps/platform && uv run pytest ditto/tests/api_server/endpoints/test_admin_copy_review.py -q -k precedents", "cd apps/backroom && pnpm exec vitest run src/server/mcp.server.test.ts src/server/admin.service.test.ts"],
       "invariants": ["Cite a live or local precedent before resolving an ATH hold.", "Ban is per agent UUID; same SHA or hotkey is a different row.", "Do not open ATH on evaluating agents."],
       "related": ["backroom", "platform-api", "mine", "miner-comms"]
+    },
+    {
+      "id": "backroom-board-sweep",
+      "title": "Rolling top-5 board sweep with sibling re-entry",
+      "keywords": ["rolling top 5", "rolling top-5", "board sweep", "top-5 sweep", "sweep the board", "emission recipients", "paid slots", "sibling re-entry", "execute_ath_rulings_batch", "preview_ath_rulings_batch"],
+      "summary": "Loop the backroom-review ATH bar over the live top five and every emission recipient: rule, re-read the leaderboard, review siblings that roll up, repeat until the top five and paid slots are decided.",
+      "skills": ["backroom-board-sweep", "backroom-review"],
+      "owns": [".agents/skills/backroom-board-sweep"],
+      "read": [".agents/skills/backroom-board-sweep/SKILL.md", ".agents/skills/backroom-review/SKILL.md", ".agents/skills/backroom-review/references/review-bar.md", ".agents/skills/backroom-review/references/decision-path-review.md", "workers/screener/docs/policy-v13.md"],
+      "search": ["python3 .agents/skills/backroom-review/scripts/search-precedents.py --list", "rg -n 'preview_ath_rulings_batch|execute_ath_rulings_batch' apps/backroom/src/server"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/backroom-board-sweep", "uv run pytest ditto/tests/test_agent_skills.py -q"],
+      "invariants": ["Re-read get_leaderboard after every executed batch; a reject can promote a same-hotkey sibling into a paid slot.", "Rule each sibling on its own downloaded bytes; never transfer a ruling by lineage.", "A clear on an unheld scored or live row attests without holding; do not open paid rows just to record a clear."],
+      "related": ["backroom-review"]
     },
     {
       "id": "miner-comms",

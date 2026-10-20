@@ -4641,6 +4641,16 @@ class Score(Base):
     details: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Optional per-case breakdown ``{"per_case": [...]}`` for audit."""
 
+    stderr_projection: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Database-derived JSON fold fields, preserving original types and nulls.
+
+    A trigger derives this from details on inserts and relevant updates,
+    including old application writers. SQL NULL means not yet backfilled;
+    the ledger falls back to details only for those rows. Never wire authority.
+    """
+
     gate_evidence: Mapped[dict | None] = mapped_column(
         _NULLABLE_JSON_VARIANT, nullable=True
     )
@@ -5579,6 +5589,7 @@ class ValidatorHeartbeat(Base):
     stack_health: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     updater_status: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     weights_fold: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    host_specs: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Which pinned ledger the validator last folded (heartbeat protocol v27)."""
     benchmark_capacity: Mapped[dict | None] = mapped_column(
         _JSON_VARIANT, nullable=True
@@ -6811,6 +6822,11 @@ class SourceEmissionCollectorCursor(Base):
     )
     runtime_code_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Running comparison of the reveal-anchored planner against the event
+    # planner; see source_emission_collector._shadow_reveal_plan.
+    reveal_plan_shadow: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
 
 
 class SourceEmissionVectorBinding(Base):
@@ -7188,7 +7204,12 @@ class ScreenerL2ReportCanary(Base):
 
 
 class V13ScorerCohortPin(Base):
-    """Immutable, operator-audited V13 scorer and runtime packet admission."""
+    """Immutable, operator-audited V13 scorer and runtime packet admission.
+
+    ``hotkeys`` names three to sixteen members; the per-agent quorum stays three
+    distinct validators. The constraint keeps its historical ``three_hotkeys``
+    name so the deployed constraint is replaced in place.
+    """
 
     __tablename__ = "v13_scorer_cohort_pins"
 
@@ -7206,7 +7227,8 @@ class V13ScorerCohortPin(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_pin_version_check"),
         CheckConstraint(
-            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            "jsonb_typeof(hotkeys) = 'array' "
+            "AND jsonb_array_length(hotkeys) BETWEEN 3 AND 16",
             name="v13_scorer_pin_three_hotkeys_check",
         ),
         CheckConstraint(
@@ -7237,7 +7259,8 @@ class V13ScorerCohortRotation(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_rotation_version_check"),
         CheckConstraint(
-            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            "jsonb_typeof(hotkeys) = 'array' "
+            "AND jsonb_array_length(hotkeys) BETWEEN 3 AND 16",
             name="v13_scorer_rotation_three_hotkeys_check",
         ),
         CheckConstraint(
@@ -8699,6 +8722,9 @@ class ScoreAuditEntry(Base):
     __table_args__ = (
         UniqueConstraint("entry_hash", name="score_audit_log_entry_hash_key"),
         Index("score_audit_log_agent_id_idx", "agent_id"),
+        # Admission probes filter one exact event string per agent; see the
+        # 2026_10_06 migration of the same name.
+        Index("score_audit_log_event_agent_idx", "event", "agent_id"),
     )
 
 
@@ -8812,6 +8838,75 @@ class ContinualRetestSettingsRevision(Base):
             "parent_revision",
             name="continual_retest_settings_scope_parent_key",
         ),
+    )
+
+
+class TreasuryManualBridgeState(Base):
+    __tablename__ = "treasury_manual_bridge_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+
+class TreasuryManualTransfer(Base):
+    __tablename__ = "treasury_manual_transfers"
+    request_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    envelope: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    report: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    receipt: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    dispatch_attempted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','dispatched','pending','audit_pending',"
+            "'published','failed','refused')",
+            name="treasury_manual_status",
+        ),
+        CheckConstraint(
+            "length(digest)=64 AND length(actor) BETWEEN 1 AND 254",
+            name="treasury_manual_identity",
+        ),
+        Index("treasury_manual_unfinished", "status", "created_at"),
+    )
+
+
+class TreasuryRuntimeRevision(Base):
+    """Append-only public approvals and guarded producer mode; never signer custody."""
+
+    __tablename__ = "treasury_runtime_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint("parent_revision >= 0", name="treasury_runtime_parent_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="treasury_runtime_checksum_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="treasury_runtime_reason_check",
+        ),
+        UniqueConstraint("parent_revision", name="treasury_runtime_parent_key"),
     )
 
 
@@ -9653,10 +9748,10 @@ class ArtifactFetchAudit(Base):
     the question this column answers is "which door did they come through"."""
 
     requester_kind: Mapped[str] = mapped_column(Text, nullable=False)
-    """``validator`` | ``screener`` | ``admin`` | ``public``."""
+    """``validator`` | ``screener`` | ``admin`` | ``public`` | ``miner``."""
 
     requester_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    """Hotkey (validator/screener) or admin actor. NULL only for ``public``."""
+    """Hotkey (validator/screener/miner) or admin actor. NULL only for ``public``."""
 
     requester_instance_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Screener worker instance within the shared-hotkey fleet, when known.
@@ -9691,7 +9786,7 @@ class ArtifactFetchAudit(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "requester_kind IN ('validator', 'screener', 'admin', 'public')",
+            "requester_kind IN ('validator', 'screener', 'admin', 'public', 'miner')",
             name="artifact_fetch_audit_requester_kind_check",
         ),
         CheckConstraint(
@@ -11444,12 +11539,57 @@ class TreasuryVerifiedReceipt(Base):
             name="treasury_verified_parent",
         ),
         Index(
-            "treasury_verified_distribution_once",
+            "treasury_verified_distribution_source",
             "epoch_index",
             "source_block",
             "bucket_id",
-            unique=True,
             postgresql_where=text("stage = 'service_distribution'"),
+        ),
+    )
+
+
+class TreasuryLedgerSample(Base):
+    """One per-epoch reading of the Gamma collector from finalized chain state.
+
+    Append-only and public: every column is a public chain value read at
+    ``block_hash``, so any sample can be re-derived from an archive node. The
+    gap between what the collector earned and how its balance moved is what a
+    verified treasury receipt must explain.
+    """
+
+    __tablename__ = "treasury_ledger_samples"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    block_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    sampled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    collector_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    collector_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    collector_uid: Mapped[int | None] = mapped_column(Integer)
+    collector_incentive: Mapped[float | None] = mapped_column(Float)
+    collector_emission_rao: Mapped[int | None] = mapped_column(BigInteger)
+    collector_total_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_locked_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_available_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_lock_perpetual: Mapped[bool | None] = mapped_column(Boolean)
+    owner_hotkey: Mapped[str | None] = mapped_column(Text)
+    owner_conviction_rao: Mapped[int | None] = mapped_column(BigInteger)
+    most_convicted_hotkey: Mapped[str | None] = mapped_column(Text)
+    holdings: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "netuid", "epoch_index", name="treasury_ledger_samples_netuid_epoch"
+        ),
+        CheckConstraint(
+            "collector_total_rao >= 0 AND collector_locked_rao >= 0 "
+            "AND collector_available_rao >= 0",
+            name="treasury_ledger_samples_nonnegative",
         ),
     )
 

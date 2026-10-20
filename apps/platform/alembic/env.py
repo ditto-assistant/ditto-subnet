@@ -44,6 +44,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
 from ditto.db import Base
+from ditto.db.audit_index_recovery import run_with_audit_index_recovery
 from ditto.db.migration_lock import LOCK_TIMEOUT, backoff_delay, is_retryable, sqlstate
 
 if TYPE_CHECKING:
@@ -169,7 +170,9 @@ async def _run_async_migrations() -> None:
         )
         try:
             async with engine.connect() as connection:
-                await connection.run_sync(_do_run_migrations)
+                await connection.run_sync(
+                    run_with_audit_index_recovery, _do_run_migrations
+                )
             return
         except exc.DBAPIError as error:
             if not is_retryable(error) or attempt == RUN_MAX_ATTEMPTS:

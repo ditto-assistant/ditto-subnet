@@ -26,6 +26,7 @@ from sqlalchemy.orm import undefer_group
 from ditto.api_server.endpoints.upload import DEFAULT_MAX_TARBALL_SIZE_BYTES
 from ditto.api_server.fingerprint import (
     _FP_VERSION,
+    _LINE_VERSION,
     compute_content_fingerprint,
     compute_normalized_source_hash,
     compute_prompt_fingerprint,
@@ -51,10 +52,14 @@ class _FingerprintMetadata(Protocol):
 
 def _is_current(agent: _FingerprintMetadata) -> bool:
     fingerprint = agent.content_fingerprint
+    corpus = reference_corpus_provenance()["corpus_id"]
+    lines = (fingerprint or {}).get("lines") or {}
     return bool(
         fingerprint
         and fingerprint.get("v") == _FP_VERSION
-        and fingerprint.get("corpus") == reference_corpus_provenance()["corpus_id"]
+        and fingerprint.get("corpus") == corpus
+        and lines.get("v") == _LINE_VERSION
+        and lines.get("corpus") == corpus
     )
 
 
@@ -128,9 +133,22 @@ async def _run(*, apply: bool, limit: int | None, batch_size: int) -> int:
                             prompt=prompt,
                         )
                     updated += 1
-                if apply:
-                    await session.commit()
                 last_agent_id = agents[-1].agent_id
+                if apply:
+                    # Committed rows are current, so a rerun after a timeout
+                    # resumes from here.
+                    await session.commit()
+                # One long pass over every artifact: keep the identity map bounded.
+                session.expunge_all()
+                logger.info(
+                    "fingerprint backfill progress apply=%s inspected=%d stale=%d "
+                    "processed=%d failed=%d",
+                    apply,
+                    inspected,
+                    stale,
+                    updated,
+                    failed,
+                )
     finally:
         await engine.dispose()
     logger.info(

@@ -41,3 +41,15 @@ export const treasuryReceiptSchema = z.object({
 })
 
 export const treasuryReceiptPageSchema = z.object({ items: z.array(treasuryReceiptSchema).max(100) })
+
+
+export const treasuryReceiptPreflightInputSchema = treasuryReceiptInputSchema.omit({ confirmation: true })
+export const treasuryReceiptPreflightSchema = z.object({
+  ready: z.boolean(), receipt_id: digest.nullable(), already_recorded: z.boolean(),
+  refusal: z.enum(['unavailable', 'invalid_or_unsupported', 'conflict']).nullable(),
+  read_phase: z.enum(['connection', 'pinned_finality', 'payment_finality', 'pinned_identity',
+    'source_finality', 'receipt_identity', 'source_epoch', 'autostake_route', 'source_events',
+    'payment_extrinsic', 'payment_events', 'timestamp', 'connection_close']).nullable(),
+  attempt_count: uint, timed_out: z.boolean(), publication: z.literal('not_performed'),
+  spending_authority: z.literal('none'), provider_credit_status: z.literal('not_proven'),
+})

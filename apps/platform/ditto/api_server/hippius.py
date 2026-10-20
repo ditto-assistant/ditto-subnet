@@ -15,6 +15,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import unquote
 
 import httpx
 
@@ -268,9 +269,48 @@ class HippiusClient:
             )
         return _parse_list_objects(response.content)
 
-    async def get_object(self, *, key: str) -> bytes:
+    async def get_object(self, *, key: str, max_bytes: int | None = None) -> bytes:
         key = normalize_object_key(key)
         url = await self._presign("get_object", key)
+        if max_bytes is not None:
+            # Metadata reads must remain bounded even if an object is replaced
+            # after its inventory size was checked. Never return a provider URL.
+            # Share the configured retry policy with ordinary reads. Its current
+            # single attempt is intentional; bounded reads do not opt into extra
+            # provider traffic or change latency independently.
+            for attempt in range(_RETRY_ATTEMPTS):
+                try:
+                    async with self._http.stream("GET", url) as response:
+                        if response.status_code == 404:
+                            raise ObjectNotFoundError("Hippius metadata not found")
+                        if response.status_code >= 300:
+                            error_body = bytearray()
+                            async for chunk in response.aiter_bytes(chunk_size=4096):
+                                error_body.extend(chunk[: 4096 - len(error_body)])
+                                if len(error_body) >= 4096:
+                                    break
+                            if not _should_retry(
+                                response.status_code,
+                                error_body.decode("utf-8", errors="replace"),
+                            ):
+                                raise ObjectDownloadFailedError(
+                                    "bounded Hippius read failed"
+                                )
+                        else:
+                            body = bytearray()
+                            async for chunk in response.aiter_bytes(chunk_size=65536):
+                                if len(body) + len(chunk) > max_bytes:
+                                    raise ObjectDownloadFailedError(
+                                        "Hippius metadata exceeded bound"
+                                    )
+                                body.extend(chunk)
+                            return bytes(body)
+                except httpx.HTTPError:
+                    # Do not include the exception's presigned URL in an error.
+                    pass
+                if attempt + 1 < _RETRY_ATTEMPTS:
+                    await asyncio.sleep(min(0.25 * (2**attempt), 2.0))
+            raise ObjectDownloadFailedError("bounded Hippius read failed")
         response = await self._request_with_retry(
             "GET",
             url,
@@ -400,6 +440,10 @@ def _parse_list_objects(body: bytes) -> tuple[list[ObjectSummary], str | None]:
     def local(tag: str) -> str:
         return tag.rsplit("}", 1)[-1]
 
+    url_encoded = any(
+        local(element.tag) == "EncodingType" and element.text == "url"
+        for element in root
+    )
     objects: list[ObjectSummary] = []
     next_token: str | None = None
     truncated = False
@@ -409,7 +453,11 @@ def _parse_list_objects(body: bytes) -> tuple[list[ObjectSummary], str | None]:
             fields = {local(child.tag): (child.text or "") for child in element}
             objects.append(
                 ObjectSummary(
-                    key=fields.get("Key", ""),
+                    key=(
+                        unquote(fields.get("Key", ""))
+                        if url_encoded
+                        else fields.get("Key", "")
+                    ),
                     size=int(fields.get("Size", "0") or 0),
                     last_modified=fields.get("LastModified", ""),
                     etag=fields.get("ETag", "").strip('"'),

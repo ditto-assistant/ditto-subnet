@@ -739,6 +739,81 @@ class TestProvisionalIncumbent:
         await _set_posture(session, enforcement="enforce")
         app.state.emission_eligibility.invalidate()
 
+    async def test_rotated_held_family_keeps_the_same_anchor_on_board_and_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server.endpoints import public as public_endpoint
+        from ditto.tests.api_server.endpoints.test_public import _seed_payment
+
+        await self._arm(app, session, session_maker)
+        retired_at = _NOW - timedelta(days=4)
+        retired = await _seed(
+            session,
+            hotkey=_LEADER_HOTKEY,
+            name="retired generation",
+            composite=0.95,
+            sha256="ab" * 32,
+            created_at=retired_at,
+        )
+        rotated = await _seed(
+            session,
+            hotkey=_RUNNER_UP_HOTKEY,
+            name="registered generation",
+            composite=0.95,
+            sha256="cd" * 32,
+            created_at=_NOW - timedelta(days=3),
+        )
+        for index, (agent_id, hotkey) in enumerate(
+            ((retired, _LEADER_HOTKEY), (rotated, _RUNNER_UP_HOTKEY)), start=41
+        ):
+            await _seed_payment(
+                session_maker,
+                agent_id=str(agent_id),
+                miner_hotkey=hotkey,
+                miner_coldkey="5SharedHeldFamilyColdkey",
+                index=index,
+            )
+        read = self._epochs(app)
+        await self._read(client)
+        await _hold(session, retired, kind="deferred_source_review")
+        await self._hold_and_enforce(app, session, rotated)
+        app.state.chain.get_recent_neurons.return_value = [
+            NeuronInfo(
+                hotkey=_RUNNER_UP_HOTKEY,
+                coldkey="5SharedHeldFamilyColdkey",
+                uid=0,
+                stake=0.0,
+                validator_permit=False,
+            )
+        ]
+        app.state.public_registration_snapshot = None
+        real_projection = public_endpoint._public_koth_emissions
+        projected = []
+
+        def observe(*args: Any, **kwargs: Any):
+            projected.append(kwargs["provisional_incumbent"])
+            return real_projection(*args, **kwargs)
+
+        monkeypatch.setattr(public_endpoint, "_public_koth_emissions", observe)
+        board_response = await client.get("/api/v1/public/leaderboard")
+        assert board_response.status_code == 200, board_response.text
+        assert projected[0].agent_id == rotated
+        assert projected[0].fold_first_seen == retired_at
+        assert board_response.json()["emissions"]["champion_agent_id"] == str(rotated)
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        served = await self._read(client)
+        held = served["provisional_incumbent"]
+        assert held["agent_id"] == str(rotated)
+        assert datetime.fromisoformat(held["first_seen"].replace("Z", "+00:00")) == (
+            projected[0].fold_first_seen
+        )
+
     async def test_active_pin_labels_freeze_while_next_pin_projection_updates(
         self,
         app: FastAPI,
@@ -956,6 +1031,74 @@ class TestProvisionalIncumbent:
         epoch_recipients = {item["agent_id"]: item for item in latest["recipients"]}
         assert epoch_recipients[str(_HELD_ID)]["paid"] is False
         assert "paid" not in epoch_recipients[str(_RUNNER_UP_ID)]
+
+    async def test_promoted_generation_inherits_the_crown_on_the_public_board(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The pinned champion's family promotes a newer upload, nothing is held.
+
+        The next pin carries the crown through the owner family, so the public
+        projection must name the new representative, not a senior rival that
+        the classic first-seen walk would crown once the exact pinned agent has
+        left the pool.
+        """
+        await self._arm(app, session, session_maker)
+        crowned = await _seed(
+            session,
+            hotkey=_LEADER_HOTKEY,
+            name="crowned generation",
+            composite=0.80,
+            sha256="ab" * 32,
+            agent_id=_HELD_ID,
+            created_at=_NOW - timedelta(days=4),
+        )
+        rival = await _seed(
+            session,
+            hotkey=_RUNNER_UP_HOTKEY,
+            name="senior rival",
+            composite=0.80,
+            sha256="cd" * 32,
+            agent_id=_RUNNER_UP_ID,
+            created_at=_NOW - timedelta(days=3),
+        )
+        read = self._epochs(app)
+        await self._read(client)
+        async with session_maker() as pin_session:
+            first_pin = await latest_pin(pin_session, netuid=118)
+        assert first_pin is not None and first_pin.champion_agent_id == crowned
+
+        # Inside the band over the rival, but above its own family's crowned
+        # generation, so it becomes the family representative.
+        promoted = await _seed(
+            session,
+            hotkey=_LEADER_HOTKEY,
+            name="promoted generation",
+            composite=0.805,
+            sha256="ef" * 32,
+            created_at=_NOW - timedelta(days=1),
+        )
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        assert {entry["agent_id"] for entry in board["entries"]} == {
+            str(promoted),
+            str(rival),
+        }
+        emissions = board["emissions"]
+        assert emissions["crown_incumbent_agent_id"] == str(promoted)
+        assert emissions["champion_agent_id"] == str(promoted)
+        projection = emissions["next_pin_projection"]
+        assert projection["champion_agent_id"] == str(promoted)
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        served = await self._read(client)
+        assert served["crown_incumbent_agent_id"] == str(promoted)
+        async with session_maker() as pin_session:
+            pin = await latest_pin(pin_session, netuid=118)
+        assert pin is not None and pin.epoch_index == 25_029
+        assert pin.champion_agent_id == promoted
 
     async def test_a_challenger_that_clears_the_band_takes_the_paid_crown(
         self,

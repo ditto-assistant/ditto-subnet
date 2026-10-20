@@ -33,6 +33,7 @@ from ditto.api_server.outlier_escalation import (
     OUTLIER_ALGORITHM_VERSION,
     OUTLIER_ESCALATION_ENV_VARS,
     OUTLIER_REVIEW_KIND,
+    AxisObservation,
     OutlierEscalationSettings,
     load_outlier_escalation_settings,
 )
@@ -50,6 +51,7 @@ _FIELDS = (
     "min_cohort_size",
     "modified_z_threshold",
     "min_composite_floor",
+    "per_axis_enforce",
 )
 
 
@@ -131,6 +133,7 @@ def test_loader_reports_each_field_from_env() -> None:
             "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE": "12",
             "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD": "4.5",
             "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR": "0.85",
+            "DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE": " True ",
         }
     )
     assert loaded.settings == OutlierEscalationSettings(
@@ -139,6 +142,7 @@ def test_loader_reports_each_field_from_env() -> None:
         min_cohort_size=12,
         modified_z_threshold=4.5,
         min_composite_floor=0.85,
+        per_axis_enforce=True,
     )
     assert all(getattr(loaded.sources, name) == "env" for name in _FIELDS)
 
@@ -151,6 +155,7 @@ def test_loader_reports_rejected_env_and_falls_back() -> None:
             "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE": "",
             "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD": "six",
             "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR": "0,9",
+            "DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE": "enforce",
         }
     )
     assert loaded.settings == OutlierEscalationSettings()
@@ -285,6 +290,7 @@ async def test_default_posture_is_off_with_no_env(
         "min_cohort_size": 8,
         "modified_z_threshold": 6.0,
         "min_composite_floor": 0.9,
+        "per_axis_enforce": False,
     }
     assert body["settings"] == defaults
     assert body["defaults"] == defaults
@@ -322,6 +328,7 @@ async def test_reports_every_field_from_env(
             "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE": "10",
             "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD": "5.5",
             "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR": "0.8",
+            "DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE": "on",
         },
     )
 
@@ -333,6 +340,7 @@ async def test_reports_every_field_from_env(
         "min_cohort_size": 10,
         "modified_z_threshold": 5.5,
         "min_composite_floor": 0.8,
+        "per_axis_enforce": True,
     }
     assert body["sources"] == dict.fromkeys(_FIELDS, "env")
     assert body["invalid_env_fields"] == []
@@ -369,6 +377,7 @@ async def test_rejected_env_is_reported_without_echoing_the_value(
         "min_cohort_size": "env",
         "modified_z_threshold": "default_invalid_env",
         "min_composite_floor": "default",
+        "per_axis_enforce": "default",
     }
     assert body["invalid_env_fields"] == ["mode", "modified_z_threshold"]
     assert sentinel not in response.text
@@ -592,8 +601,11 @@ async def _seed_scored(
     *composites: float,
     status: AgentStatus = AgentStatus.SCORED,
     bench_version: int = 12,
+    memory_mean: float | None = None,
 ) -> Agent:
-    """One agent with one score row per composite (its quorum)."""
+    """One agent with one score row per composite (its quorum).
+
+    Both axes equal the composite unless ``memory_mean`` pins that axis."""
     agent = _agent()
     agent.status = status
     async with session_maker() as session, session.begin():
@@ -609,7 +621,7 @@ async def _seed_scored(
                 seed=7,
                 composite=composite,
                 tool_mean=composite,
-                memory_mean=composite,
+                memory_mean=composite if memory_mean is None else memory_mean,
                 median_ms=100,
                 n=114,
                 details={},
@@ -720,6 +732,16 @@ async def test_dry_run_matches_the_live_decision_on_the_same_cohort(
             cohort=[row.composite for row in eligible],
             settings=OutlierEscalationSettings(mode="observe"),
             now=datetime.now(UTC),
+            axes={
+                "tool_mean": AxisObservation(
+                    value=statistics.median(s.tool_mean for s in agent_scores),
+                    cohort=[row.tool_mean for row in eligible],
+                ),
+                "memory_mean": AxisObservation(
+                    value=statistics.median(s.memory_mean for s in agent_scores),
+                    cohort=[row.memory_mean for row in eligible],
+                ),
+            },
         )
     async with session_maker() as session:
         live = await session.scalar(
@@ -737,9 +759,26 @@ async def test_dry_run_matches_the_live_decision_on_the_same_cohort(
     [entry] = body["would_trigger"]
     assert entry["agent_id"] == str(candidate.agent_id)
     live_evidence = live["evidence"]
-    assert entry["evidence"] == {
-        key: live_evidence.get(key) for key in entry["evidence"]
+    # The composite evidence matches the public entry exactly. The per-axis
+    # statistics are only in the (admin) replay; the public entry recorded
+    # the neutral projection, which the replay's flags reproduce.
+    per_axis_keys = {"per_axis", "per_axis_outlier_axes", "per_axis_enforce"}
+    assert {
+        key: value
+        for key, value in entry["evidence"].items()
+        if key not in per_axis_keys
+    } == {
+        key: live_evidence.get(key)
+        for key in entry["evidence"]
+        if key not in per_axis_keys
     }
+    assert [
+        {"axis": axis["axis"], "outlier": axis["outlier"]}
+        for axis in entry["evidence"]["per_axis"]
+    ] == live_evidence["per_axis"]
+    assert all(
+        axis["cohort_median"] is not None for axis in entry["evidence"]["per_axis"]
+    )
 
 
 @pytest.mark.asyncio
@@ -768,6 +807,7 @@ async def test_dry_run_applies_overrides_over_effective_settings(
         "min_cohort_size": 8,
         "modified_z_threshold": 6.0,
         "min_composite_floor": 0.65,
+        "per_axis_enforce": False,
     }
     assert body["would_trigger_count"] == 2
     assert body["limit"] == 1
@@ -891,3 +931,245 @@ async def test_dry_run_mutates_nothing_even_in_enforce(
         assert held is not None
         assert held.status == AgentStatus.SCORED
         assert held.review_reason is None
+
+
+# ---------------------------------------------------------------------------
+# Per-axis evidence (outlier-escalation-v2)
+# ---------------------------------------------------------------------------
+
+
+async def _record_axis_evidence(
+    session_maker: async_sessionmaker[AsyncSession], *, now: datetime
+) -> Agent:
+    """A composite in band with memory far out of band, through the real helper."""
+    agent = _agent()
+    async with session_maker() as session:
+        async with session.begin():
+            session.add(agent)
+        async with session.begin():
+            await _evaluate_and_record_outlier_escalation(
+                session,
+                agent=agent,
+                bench_version=12,
+                composite=0.615,
+                cohort=_SPREAD_COHORT,
+                settings=OutlierEscalationSettings(mode="observe"),
+                now=now,
+                axes={
+                    "tool_mean": AxisObservation(value=0.61, cohort=_SPREAD_COHORT),
+                    "memory_mean": AxisObservation(value=0.95, cohort=_SPREAD_COHORT),
+                },
+            )
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_axis_evidence_is_counted_and_listed_apart_from_holds(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    _load_env(monkeypatch, {})
+    now = datetime.now(UTC)
+    observed = await _escalate(session_maker, mode="observe", now=now)
+    old_axis = await _record_axis_evidence(session_maker, now=now - timedelta(days=10))
+    axis = await _record_axis_evidence(session_maker, now=now - timedelta(hours=1))
+
+    body = (
+        await client.get(_URL, headers=_HEADERS, params={"window_hours": 24})
+    ).json()
+
+    activity = body["activity"]
+    # Evidence-only entries never inflate the would-be-hold / hold counts.
+    assert activity["observed_total"] == 1
+    assert activity["enforced_total"] == 0
+    assert [row["agent_id"] for row in activity["recent"]] == [str(observed.agent_id)]
+    assert activity["axis_evidence_total"] == 2
+    assert activity["axis_evidence_in_window"] == 1
+    assert activity["recent_axis_evidence_truncated"] is False
+    recent_axis = activity["recent_axis_evidence"]
+    assert [row["agent_id"] for row in recent_axis] == [
+        str(axis.agent_id),
+        str(old_axis.agent_id),
+    ]
+    first = recent_axis[0]
+    assert first["enforced"] is False
+    assert first["algorithm_version"] == OUTLIER_ALGORITHM_VERSION
+    evidence = first["evidence"]
+    assert evidence["trigger"] is None
+    # Read back from the public chain: only axis + flag were recorded, so the
+    # policy flag and every per-axis statistic are null; the outlier axes are
+    # derived from the flags.
+    assert evidence["per_axis_enforce"] is None
+    assert evidence["per_axis_outlier_axes"] == ["memory_mean"]
+    by_axis = {entry["axis"]: entry for entry in evidence["per_axis"]}
+    assert set(by_axis) == {"tool_mean", "memory_mean"}
+    assert by_axis["memory_mean"]["outlier"] is True
+    assert by_axis["tool_mean"]["outlier"] is False
+    for entry in by_axis.values():
+        for key in ("value", "cohort_size", "cohort_median", "cohort_mad"):
+            assert entry[key] is None
+        assert entry["modified_z"] is None
+        assert entry["upward"] is None
+    # The composite hold entry also carries a (null) per-axis projection
+    # because the helper was called without axes.
+    assert activity["recent"][0]["evidence"]["per_axis"] is None
+
+    bounded = (await client.get(_URL, headers=_HEADERS, params={"limit": 1})).json()
+    assert bounded["activity"]["recent_axis_evidence_truncated"] is True
+    assert len(bounded["activity"]["recent_axis_evidence"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_posture_reports_the_per_axis_enforce_setting(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    _load_env(
+        monkeypatch,
+        {
+            "DITTO_OUTLIER_ESCALATION_MODE": "enforce",
+            "DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE": "maybe",
+        },
+    )
+
+    response = await client.get(_URL, headers=_HEADERS)
+
+    body = response.json()
+    assert body["settings"]["per_axis_enforce"] is False
+    assert body["defaults"]["per_axis_enforce"] is False
+    assert body["sources"]["per_axis_enforce"] == "default_invalid_env"
+    assert body["invalid_env_fields"] == ["per_axis_enforce"]
+    assert (
+        body["env_vars"]["per_axis_enforce"]
+        == "DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE"
+    )
+    assert "maybe" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_dry_run_reports_per_axis_evidence(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    _load_env(monkeypatch, {})
+    spike, _high = await _seed_spread_ledger(session_maker)
+    # Composite in band (0.61) with the memory axis far out of band.
+    axis_row = await _seed_scored(session_maker, 0.61, 0.61, 0.61, memory_mean=0.95)
+
+    body = (
+        await client.get(_DRY_RUN_URL, headers=_HEADERS, params={"bench_version": 12})
+    ).json()
+
+    assert body["settings"]["per_axis_enforce"] is False
+    assert body["would_trigger_count"] == 1
+    [held] = body["would_trigger"]
+    assert held["agent_id"] == str(spike.agent_id)
+    assert held["evidence"]["trigger"] == "composite"
+    assert {entry["axis"] for entry in held["evidence"]["per_axis"]} == {
+        "tool_mean",
+        "memory_mean",
+    }
+    # The 0.70 row's axes are out of band too (it is below the composite floor),
+    # alongside the single-axis row. Highest composite first.
+    assert body["axis_evidence_count"] == 2
+    assert body["axis_evidence_truncated"] is False
+    assert [row["agent_id"] for row in body["axis_evidence"]] == [
+        str(_high.agent_id),
+        str(axis_row.agent_id),
+    ]
+    axis_evidence = body["axis_evidence"][1]["evidence"]
+    assert axis_evidence["trigger"] is None
+    assert axis_evidence["per_axis_outlier_axes"] == ["memory_mean"]
+
+    # Opting in (with a floor the in-band row clears) moves the single-axis row
+    # into would_trigger without touching the live settings.
+    opted = (
+        await client.get(
+            _DRY_RUN_URL,
+            headers=_HEADERS,
+            params={
+                "bench_version": 12,
+                "per_axis_enforce": "true",
+                "min_composite_floor": 0.6,
+            },
+        )
+    ).json()
+    assert opted["overridden_fields"] == ["min_composite_floor", "per_axis_enforce"]
+    assert opted["settings"]["per_axis_enforce"] is True
+    triggers = {
+        row["agent_id"]: row["evidence"]["trigger"] for row in opted["would_trigger"]
+    }
+    assert triggers[str(axis_row.agent_id)] == "per_axis"
+    assert triggers[str(spike.agent_id)] == "composite"
+    assert str(axis_row.agent_id) not in {
+        row["agent_id"] for row in opted["axis_evidence"]
+    }
+    assert v.OUTLIER_ESCALATION_SETTINGS.per_axis_enforce is False
+
+
+@pytest.mark.asyncio
+async def test_public_audit_feed_carries_no_per_axis_statistics(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """issue #476: no per-axis threshold, cohort statistic or z-score reaches
+    the public, hash-chained /audit feed, and the chain still verifies."""
+    from ditto.db.queries.audit import list_audit_entries, verify_audit_chain
+
+    _install(app, session_maker)
+    _load_env(monkeypatch, {})
+    await _record_axis_evidence(session_maker, now=datetime.now(UTC))
+    held = _agent()
+    async with session_maker() as session:
+        async with session.begin():
+            session.add(held)
+        async with session.begin():
+            await _evaluate_and_record_outlier_escalation(
+                session,
+                agent=held,
+                bench_version=12,
+                composite=0.99,
+                cohort=_SPREAD_COHORT,
+                settings=OutlierEscalationSettings(mode="enforce"),
+                now=datetime.now(UTC),
+                axes={
+                    "tool_mean": AxisObservation(value=0.99, cohort=_SPREAD_COHORT),
+                    "memory_mean": AxisObservation(value=0.95, cohort=_SPREAD_COHORT),
+                },
+            )
+
+    body = (await client.get("/api/v1/public/audit")).json()
+
+    outlier_entries = [
+        entry
+        for entry in body["entries"]
+        if entry["payload"].get("audit_kind")
+        in {"anomalous_score", "anomalous_score_axis"}
+    ]
+    assert len(outlier_entries) == 2
+    for entry in outlier_entries:
+        evidence = entry["payload"]["evidence"]
+        assert "per_axis_enforce" not in evidence
+        assert "per_axis_outlier_axes" not in evidence
+        for axis in evidence["per_axis"]:
+            assert set(axis) == {"axis", "outlier"}
+    async with session_maker() as session:
+        assert verify_audit_chain(await list_audit_entries(session, limit=1000))
+        review = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == held.agent_id)
+        )
+    # The operator-only snapshot keeps the full per-axis statistics.
+    assert review is not None
+    private_axes = review.original_evidence["per_axis"]
+    assert all(axis["cohort_median"] is not None for axis in private_axes)

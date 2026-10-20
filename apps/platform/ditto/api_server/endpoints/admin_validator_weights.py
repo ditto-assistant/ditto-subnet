@@ -14,7 +14,11 @@ from ditto.api_models.validator_weight_diagnostics import (
     WeightConsensusObservation,
 )
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.api_server.endpoints.public import _public_epoch
+from ditto.api_server.endpoints.public import (
+    _decorate_vectors_with_pins,
+    _pin_decorations,
+    _public_epoch,
+)
 from ditto.api_server.endpoints.validator import ChainDep
 from ditto.chain.errors import ChainError
 from ditto.chain.weight_diagnostics import read_weight_diagnostics
@@ -61,6 +65,36 @@ async def validator_weight_diagnostics(
             status_code=503, detail="chain weight evidence is incomplete"
         )
     hotkeys = {v.validator_hotkey for v in rows}
+    observations = [
+        ValidatorWeightObservation(
+            validator_uid=v.validator_uid,
+            validator_hotkey=v.validator_hotkey,
+            weights=[
+                PublicChainWeight(uid=w.uid, hotkey=w.hotkey, value=w.value)
+                for w in v.weights
+            ],
+            validator_trust_u16=evidence.validator_trust[v.validator_uid],
+            validator_trust=evidence.validator_trust[v.validator_uid] / 65535,
+            last_update_block=evidence.last_updates[v.validator_uid],
+        )
+        for v in rows
+    ]
+    # These decorations compare numbers and report heartbeat provenance; they
+    # do not establish which pin produced a reveal or prove historical clipping.
+    # Bound before LIMIT so a newer database pin cannot displace either
+    # the current or previous pin for this immutable chain snapshot.
+    pins, folds = await _pin_decorations(
+        request, max_epoch_index=evidence.subnet_epoch_index
+    )
+    if pins and pins[0].epoch_index != evidence.subnet_epoch_index:
+        pins = []
+    decorated, _ = _decorate_vectors_with_pins(
+        [*observations],
+        pins=pins,
+        folds=folds,
+        burn_hotkey=snapshot.owner_hotkey,
+        ignore_invalid_pins=True,
+    )
     return ValidatorWeightDiagnosticsResponse(
         netuid=snapshot.netuid,
         block=snapshot.block,
@@ -73,18 +107,7 @@ async def validator_weight_diagnostics(
         next_epoch_block=evidence.next_epoch_block,
         epoch=_public_epoch(snapshot),
         validators=[
-            ValidatorWeightObservation(
-                validator_uid=v.validator_uid,
-                validator_hotkey=v.validator_hotkey,
-                weights=[
-                    PublicChainWeight(uid=w.uid, hotkey=w.hotkey, value=w.value)
-                    for w in v.weights
-                ],
-                validator_trust_u16=evidence.validator_trust[v.validator_uid],
-                validator_trust=evidence.validator_trust[v.validator_uid] / 65535,
-                last_update_block=evidence.last_updates[v.validator_uid],
-            )
-            for v in rows
+            ValidatorWeightObservation.model_validate(vector) for vector in decorated
         ],
         consensus=[
             WeightConsensusObservation(uid=uid, value=value)

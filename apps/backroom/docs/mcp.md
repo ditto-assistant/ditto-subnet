@@ -119,6 +119,15 @@ disputes, validator queue/slot/inference policy, the scoring lease TTL,
 benchmark rollouts, scoring policy, scores and leaderboards, and the emission
 burn.
 
+`get_source_release_policy` reads the public source policy and completed-payout
+gate diagnostics. `release_gate.archive_provider`, when present, reports the
+running Platform's configured archive host, authentication mode (`none`,
+`query`, or `path`), and credential presence. It never returns the
+provider URL or key. This is configuration evidence, not a provider health or
+authentication result; older responses without the field mean unknown. Use
+the durable collector cursor and exact-agent payout receipts to verify source
+release recovery. Requires `backroom:read` and changes nothing.
+
 `get_scoring_lease_settings` / `set_scoring_lease_settings` (#1156) read and
 revise the deadline stamped on new canonical and score-retest replacement
 tickets (default 180 minutes, bounded 60-240 so it stays inside the validator
@@ -133,6 +142,14 @@ enforces both halves of that boundary — the MCP must be wired, those tools mus
 not be.
 
 ## Authorization
+
+`get_treasury_ledger_readiness` includes bounded `chain_reads` diagnostics for
+completed epoch-schedule and requester-activation reads in this Platform
+process. Counts reset on process restart and include background schedule reads;
+they are not an endpoint availability metric. The last failure retains its
+request ID, elapsed time, fixed stage, step and category after a later success.
+Provider messages and URLs are omitted. These observations grant no weight or
+spending authority and do not replace fresh chain permission checks.
 
 `get_coding_private_v2_releases` reads native private-v2 registration digests and
 quarantine/retirement audit state through Platform's existing admin endpoint.
@@ -201,7 +218,7 @@ Three scopes, in ascending sensitivity:
 | Scope | Grants |
 |---|---|
 | `backroom:read` | Every read. Required for any connection. |
-| `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/baseline diffs, and sanitized private screening failure details. |
+| `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/lineage/baseline diffs, and sanitized private screening failure details. |
 | `backroom:write` | Mutations, including `set_burn_settings`, which moves TAO. |
 
 Two independent gates apply to every privileged call. The grant must carry the
@@ -244,9 +261,12 @@ identity itself — when the session ends, the operator authorizes again.
 
 ### Dedicated treasury receipt observer
 
-An observer must request **only** `backroom:treasury:observe`. This scope is
-advertised in OAuth metadata but deliberately excluded from the ordinary 401
-scope bundle: mixing it with read, source or write is refused. The staff member
+An observer must explicitly request **only** `backroom:treasury:observe`. This
+scope is excluded from both OAuth discovery metadata and the ordinary 401
+scope bundle: general MCP clients may request every advertised scope, while
+mixing observer access with read, source or write is refused. All root and
+`/mcp` authorization-server and protected-resource metadata advertise only
+the three ordinary scopes. The staff member
 must explicitly select receipt observation and remain write-level at consent,
 code exchange, refresh and each MCP request. The original seven-day staff
 session and token TTL limits still apply; blocking, removing write entitlement
@@ -311,7 +331,7 @@ a fresh connect, while the server's `tools/list` and `get_backroom_tool_help`
 still show it. Do not use `z.tuple`: it serializes to draft-07 array-form
 `items`, which is what kept `activate_v13_scorer_cohort` and
 `rotate_v13_scorer_cohort` out of refreshed Codex catalogs (#2490, #2559). Use
-a bounded array such as `z.array(z.string()).length(3)` instead. The catalog
+a bounded array such as `z.array(z.string()).min(3).max(16)` instead. The catalog
 test fails on any array-form `items`, `prefixItems`, or `additionalItems`.
 The catalog itself does not depend on scope: a read-only connection lists the
 write tools too, and the scope check refuses the call.
@@ -475,3 +495,29 @@ hitting its own match cap, and the manifest returns whole by default so no path
 hides behind an offset. `opaque_skipped` counts the members no search can
 reach — a `.onnx` or `.bin` weights file is never searched, and a search that
 never opened one cannot clear it.
+
+## Diffing two submissions
+
+`get_copy_review_source_diff` pairs a held agent only with the reference its
+copy review names, and `get_screening_baseline_diff` only with the starter kit.
+To check whether a resubmission really removed a rejected mechanism, diff it
+against the rejected ancestor directly with
+`get_lineage_source_diff(agentId, referenceAgentId, path?)`. It works for any
+two stored agents, reference -> agent, with no hold on either:
+
+- Without `path` it returns the per-file manifest in the copy-review shape:
+  `added` / `removed` / `modified` / `identical` / `renamed` (with `from_path` /
+  `to_path`), line counts, `normalized_identical`, and `omitted_paths` the
+  bounded read skipped (not compared, so never read as a removal).
+- With `path` (taken from that manifest) it returns that one file's bounded
+  unified diff instead.
+
+One tool covers both modes to keep the catalog inside its byte budget. It needs
+`backroom:artifact:read`, and the two ids must differ. Platform writes one
+artifact-fetch audit row per agent read (`admin.get_lineage_source_diff` or
+`admin.get_lineage_source_diff_file`, each tagged candidate or reference), so
+"who read this source" answers for the ancestor too.
+
+The source readers publish their agent ids as plain `format: uuid` rather than
+zod's long uuid regex, also for the byte budget. Each service function still
+parses its input with the strict uuid schema before calling Platform.

@@ -80,14 +80,19 @@ def test_platform_deploy_passes_config_over_ssh_stdin(tmp_path: Path) -> None:
         "import os, sys\n"
         "assert 'DITTO_UPLOAD_PAYMENT_ADDRESS' not in os.environ\n"
         "assert 'DITTO_DASHBOARD_WANDB_URL' not in os.environ\n"
+        "assert 'SUBTENSOR_ARCHIVE_RPC_URL' not in os.environ\n"
+        "assert 'SUBTENSOR_ARCHIVE_RPC_AUTH_MODE' not in os.environ\n"
         "args = ' '.join(sys.argv[1:])\n"
         "assert 'payment-address-sentinel' not in args\n"
         "assert 'wandb-url-sentinel' not in args\n"
         "assert '--ssh-flag=-T' in args\n"
         "assert 'IFS= read -r DITTO_UPLOAD_PAYMENT_ADDRESS' in args\n"
         "assert 'IFS= read -r DITTO_DASHBOARD_WANDB_URL' in args\n"
+        "assert 'IFS= read -r SUBTENSOR_ARCHIVE_RPC_URL' in args\n"
+        "assert 'IFS= read -r SUBTENSOR_ARCHIVE_RPC_AUTH_MODE' in args\n"
         "assert sys.stdin.read() == 'payment-address-sentinel\\n'"
-        " + 'wandb-url-sentinel\\n'\n"
+        " + 'wandb-url-sentinel\\n' + 'wss://archive-sentinel\\n'"
+        " + 'query\\n'\n"
         "print('deployed-commit=' + os.environ['DEPLOY_REVISION'])\n"
     )
     stub.chmod(0o700)
@@ -103,6 +108,8 @@ def test_platform_deploy_passes_config_over_ssh_stdin(tmp_path: Path) -> None:
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "DITTO_UPLOAD_PAYMENT_ADDRESS": "payment-address-sentinel",
         "DITTO_DASHBOARD_WANDB_URL": "wandb-url-sentinel",
+        "SUBTENSOR_ARCHIVE_RPC_URL": "wss://archive-sentinel",
+        "SUBTENSOR_ARCHIVE_RPC_AUTH_MODE": "query",
         "DEPLOY_REVISION": "a" * 40,
         "GCP_ZONE": "test-zone",
         "GITHUB_OUTPUT": str(output),

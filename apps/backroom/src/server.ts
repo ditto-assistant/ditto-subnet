@@ -1,6 +1,5 @@
 import handler from '@tanstack/react-start/server-entry'
 import OAuthProvider from '@cloudflare/workers-oauth-provider'
-import { BACKROOM_TREASURY_OBSERVE_SCOPE } from './server/treasury-observer-access.server'
 import {
   BACKROOM_ARTIFACT_SCOPE,
   BACKROOM_CHALLENGE_SCOPE,
@@ -19,6 +18,10 @@ import {
 } from './server/mcp-oauth.server'
 import { cacheOAuthTokenReads } from './server/oauth-token-cache.server'
 import { SESSION_MAX_AGE_SECONDS } from './lib/auth.policy'
+
+// General clients may request every advertised scope. The exclusive treasury
+// observer stays opt-in; mcp-oauth.server.ts still accepts it explicitly.
+const discoveryScopes = [BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE, BACKROOM_WRITE_SCOPE]
 
 const defaultHandler = {
   async fetch(request: Request, env: BackroomEnv) {
@@ -101,12 +104,7 @@ const defaultHandler = {
           'none',
         ],
         code_challenge_methods_supported: ['S256'],
-        scopes_supported: [
-          BACKROOM_TREASURY_OBSERVE_SCOPE,
-          BACKROOM_READ_SCOPE,
-          BACKROOM_ARTIFACT_SCOPE,
-          BACKROOM_WRITE_SCOPE,
-        ],
+        scopes_supported: discoveryScopes,
         client_id_metadata_document_supported: true,
       })
     }
@@ -136,9 +134,9 @@ function createOAuthProvider(env: BackroomEnv) {
     authorizeEndpoint: '/authorize',
     tokenEndpoint: '/token',
     clientRegistrationEndpoint: '/register',
-    scopesSupported: [BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE, BACKROOM_WRITE_SCOPE, BACKROOM_TREASURY_OBSERVE_SCOPE],
+    scopesSupported: discoveryScopes,
     resourceMetadata: {
-      scopes_supported: [BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE, BACKROOM_WRITE_SCOPE, BACKROOM_TREASURY_OBSERVE_SCOPE],
+      scopes_supported: discoveryScopes,
       bearer_methods_supported: ['header'],
       resource_name: 'SN118 Backroom MCP',
     },

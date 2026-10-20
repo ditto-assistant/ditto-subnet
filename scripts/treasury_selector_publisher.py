@@ -48,7 +48,7 @@ class PublicEpochReader:
 
     def epoch_at(self, block):
         at = chain_read(lambda: self.subtensor.substrate.get_block_hash(block))
-        chain_read(lambda: self.chain.guard_runtime(self.policy, at))
+        chain_read(lambda: self.chain.guard_runtime(self.policy, at, historical=True))
         return chain_uint(
             chain_read(
                 lambda: self.chain.query(

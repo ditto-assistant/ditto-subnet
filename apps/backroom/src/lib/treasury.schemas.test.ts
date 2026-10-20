@@ -45,6 +45,10 @@ const v2 = {
 }
 
 describe('shadow treasury policy versions', () => {
+  it.each([2500, 7500, 10000])('accepts a %s bps service proposal', (allocation_bps) => {
+    expect(treasurySettingsSchema.parse({ ...v2, service_buckets: [{ ...gm, allocation_bps }] })
+      .service_buckets[0].allocation_bps).toBe(allocation_bps)
+  })
   it('requires exact payee identity and rejects ambiguous matches or seed-like wallet input', () => {
     const rule = {
       rule_id: 'gm_treasury',
@@ -99,7 +103,7 @@ describe('shadow treasury policy versions', () => {
       treasurySettingsSchema.safeParse({
         ...v2,
         service_buckets: [
-          gm,
+          { ...gm, allocation_bps: 10000 },
           {
             ...v2.service_buckets[1],
             allocation_bps: 1,

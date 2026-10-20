@@ -1,18 +1,43 @@
 import '@tanstack/react-start/server-only'
+import { manualControlSchema } from '../lib/treasury-manual.schemas'
+
+export async function fetchTreasuryManualTransfers() {
+  return manualControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual'))
+}
 import { z } from 'zod'
-import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema } from '../lib/treasury-receipts.schemas'
+import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema, treasuryReceiptPreflightInputSchema, treasuryReceiptPreflightSchema } from '../lib/treasury-receipts.schemas'
 
 export async function recordTreasuryReceipt(rawInput: unknown, actor: string) {
   const { confirmation: _confirmation, ...body } = treasuryReceiptInputSchema.parse(rawInput)
   return treasuryReceiptSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts', {
-    method: 'POST', actor, body,
+    // Archive verification has bounded provider fallback. Do not abandon the
+    // verified audit write at the ordinary 20s read deadline; no signing occurs.
+    method: 'POST', actor, body, timeoutMs: 120_000,
+  }))
+}
+
+export async function fetchTreasuryReceiptPreflight(rawInput: unknown) {
+  const body = treasuryReceiptPreflightInputSchema.parse(rawInput)
+  return treasuryReceiptPreflightSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts/preflight', {
+    method: 'POST', body, timeoutMs: 120_000,
   }))
 }
 
 export async function fetchTreasuryReceipts() {
   return treasuryReceiptPageSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-receipts?limit=100'))
 }
-import { treasuryLedgerReadinessSchema } from '../lib/treasury-ledger.schemas'
+
+import { treasuryGammaLedgerSchema } from '../lib/treasury-gamma-ledger.schemas'
+
+/** Per-epoch Gamma collector readings, validated at the Platform boundary. */
+export async function fetchTreasuryLedger(limit: number) {
+  return treasuryGammaLedgerSchema.parse(await platformAdminRequest(`/api/v1/admin/treasury-ledger?limit=${limit}`, {
+    retries: 1,
+  }))
+}
+import { publicTreasuryApprovalSchema, treasuryActivationPreflightInputSchema, treasuryActivationPreflightSchema, treasuryLedgerReadinessSchema } from '../lib/treasury-ledger.schemas'
+import { recordTreasuryRuntimeInputSchema, treasuryRuntimeControlSchema, treasuryRuntimeRevisionSchema } from '../lib/treasury-ledger.schemas'
+import { runtimeInterfaceReportInputSchema, runtimeInterfaceReportSchema } from '../lib/runtime-interface.schemas'
 import { recordTreasurySettingsInputSchema, treasuryControlSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema, treasuryQuoteSchema, treasuryRevisionSchema, treasuryRouteImpactBps } from '../lib/treasury.schemas'
 
 export async function previewTreasuryTopup(rawInput: unknown) {
@@ -68,6 +93,63 @@ export async function fetchTreasuryLedgerReadiness() {
   return treasuryLedgerReadinessSchema.parse(
     await platformAdminRequest('/api/v1/admin/treasury-settings/ledger-readiness'),
   )
+}
+
+export async function fetchTreasuryRuntime() {
+  return treasuryRuntimeControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-runtime'))
+}
+
+export async function fetchRuntimeInterfaceReport(rawInput: unknown = {}) {
+  const input = z.object(runtimeInterfaceReportInputSchema).parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.block !== undefined) params.set('block', String(input.block))
+  const query = params.size ? `?${params.toString()}` : ''
+  return runtimeInterfaceReportSchema.parse(
+    await platformAdminRequest(`/api/v1/admin/runtime-interface${query}`),
+  )
+}
+
+export async function recordTreasuryRuntime(rawInput: unknown, actor: string) {
+  const input = z.object(recordTreasuryRuntimeInputSchema).parse(rawInput)
+  if (input.confirmation !== `GAMMA ${input.mode.toUpperCase()} ${input.expectedPolicyDigest}`
+    || (input.mode === 'enforce') !== (input.activationEpoch !== null)) {
+    throw new Error('Exact Gamma mode, policy confirmation and epoch required')
+  }
+  const approval = publicTreasuryApprovalSchema.parse(JSON.parse(input.approvalJson))
+  const settings = { version: 1 as const, mode: input.mode, approval,
+    approved_policy_digest: input.expectedPolicyDigest,
+    collector_policy_digest: input.expectedCollectorPolicyDigest,
+    managed_validator_hotkeys: input.managedValidatorHotkeys,
+    activation_epoch: input.activationEpoch }
+  const result = treasuryRuntimeRevisionSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-runtime', {
+    method: 'POST', actor, timeoutMs: 120_000,
+    body: { expected_revision: input.expectedRevision, settings, reason: input.reason, confirmation: input.confirmation },
+  }))
+  if (JSON.stringify(result.settings) !== JSON.stringify(settings)
+    || result.parent_revision !== input.expectedRevision) throw new Error('Gamma control response mismatch')
+  return result
+}
+
+export async function fetchTreasuryActivationPreflight(rawInput: unknown) {
+  const input = treasuryActivationPreflightInputSchema.parse(rawInput)
+  const approval = publicTreasuryApprovalSchema.parse(JSON.parse(input.approvalJson))
+  const payload = await platformAdminRequest('/api/v1/admin/treasury-settings/activation-preflight', {
+    method: 'POST',
+    body: {
+      approval,
+      expected_policy_digest: input.expectedPolicyDigest,
+      expected_collector_policy_digest: input.expectedCollectorPolicyDigest,
+      managed_validator_hotkeys: input.managedValidatorHotkeys ?? [],
+    },
+  })
+  const result = treasuryActivationPreflightSchema.parse(payload)
+  if (result.proposed_policy_digest !== input.expectedPolicyDigest
+    || result.proposed_collector_policy_digest !== input.expectedCollectorPolicyDigest
+    || (input.managedValidatorHotkeys !== undefined
+      && JSON.stringify([...result.managed_validator_hotkeys].sort()) !== JSON.stringify([...input.managedValidatorHotkeys].sort()))) {
+    throw new Error('Treasury preflight response differs from requested policy')
+  }
+  return result
 }
 
 export async function recordTreasurySettings(rawInput: unknown, actor: string) {
@@ -233,6 +315,8 @@ import {
   sourceDiffFileInputSchema,
   sourceDiffInputSchema,
   sourceDiffManifestSchema,
+  lineageSourceDiffInputSchema,
+  lineageSourceDiffFileInputSchema,
   sourceExcerptInputSchema,
   sourceExcerptSchema,
   sourceListingInputSchema,
@@ -337,6 +421,7 @@ import {
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   sourceReviewQueueSloSchema,
+  athReviewQueueSloSchema,
   validatorCapacitySummarySchema,
   outlierEscalationDryRunInputSchema,
   outlierEscalationDryRunSchema,
@@ -885,6 +970,38 @@ export async function fetchScreenerPolicyManifestControl() {
 export async function fetchScreenerCapacity() {
   const payload = await platformAdminRequest('/api/v1/admin/screener-capacity')
   return screenerCapacityViewSchema.parse(payload)
+}
+
+const databaseBackupObjectSchema = z.object({
+  key: z.string(), size: z.number().int().nonnegative(), last_modified: z.string(),
+})
+export const databaseBackupStatusSchema = z.object({
+  observed_at: z.string(),
+  bucket: z.literal('ditto-platform-pg-backups'),
+  backup_status: z.enum(['disabled', 'unavailable', 'missing', 'stale', 'fresh']),
+  daily: z.array(databaseBackupObjectSchema),
+  monthly: z.array(databaseBackupObjectSchema),
+  hours_since_last_success: z.number().nonnegative().nullable(),
+  manifest: z.object({
+    format_version: z.literal(1), database: z.literal('ditto_platform_prod'),
+    server_version: z.string(), server_version_num: z.number().int(),
+    pg_dump_version: z.string(), database_bytes: z.number().nonnegative(),
+    alembic_version: z.string(), row_counts: z.record(z.string(), z.number().int()),
+    started_at: z.string(), completed_at: z.string(),
+    objects: z.array(z.object({
+      name: z.string(), sha256: z.string(), size: z.number().int().nonnegative(),
+    })),
+  }).nullable(),
+  snapshot_status: z.enum(['unavailable', 'missing', 'present']),
+  newest_snapshot: z.object({
+    name: z.string(), created_at: z.string(), status: z.string(), disk_size_gb: z.number(),
+  }).nullable(),
+})
+
+export async function fetchDatabaseBackupStatus() {
+  return databaseBackupStatusSchema.parse(
+    await platformAdminRequest('/api/v1/admin/database-backup-status', { timeoutMs: 60_000 }),
+  )
 }
 
 export async function fetchScreeningInfraRetries() {
@@ -1636,6 +1753,13 @@ export async function fetchSourceReviewQueueSlo() {
   return sourceReviewQueueSloSchema.parse(payload)
 }
 
+const ATH_REVIEW_QUEUE_SLO_PATH = '/api/v1/admin/ath-review-queue-slo'
+
+export async function fetchAthReviewQueueSlo() {
+  const payload = await platformAdminRequest(ATH_REVIEW_QUEUE_SLO_PATH)
+  return athReviewQueueSloSchema.parse(payload)
+}
+
 export async function fetchOutlierEscalation(rawInput: unknown = {}) {
   const input = outlierEscalationInputSchema.parse(rawInput)
   const params = new URLSearchParams({
@@ -1680,6 +1804,9 @@ export async function fetchOutlierEscalationDryRun(rawInput: unknown = {}) {
   }
   if (input.minCompositeFloor !== undefined) {
     params.set('min_composite_floor', String(input.minCompositeFloor))
+  }
+  if (input.perAxisEnforce !== undefined) {
+    params.set('per_axis_enforce', String(input.perAxisEnforce))
   }
   const payload = await platformAdminRequest(
     `/api/v1/admin/outlier-escalation/dry-run?${params.toString()}`,
@@ -1912,6 +2039,7 @@ export async function rotateV13ScorerCohort(input: {
     injected_keys: string[]
   }
   expectedCurrentRotationId?: number
+  expectedCurrentHotkeys?: string[]
   expectedSlotSettingsRevision: number
   expectedSlotSettingsChecksum: string
   reason: string
@@ -1924,6 +2052,7 @@ export async function rotateV13ScorerCohort(input: {
       packet: input.packet,
       expected_current_packet: input.expectedCurrentPacket,
       expected_current_rotation_id: input.expectedCurrentRotationId ?? null,
+      expected_current_hotkeys: input.expectedCurrentHotkeys ?? null,
       expected_slot_settings_revision: input.expectedSlotSettingsRevision,
       expected_slot_settings_checksum: input.expectedSlotSettingsChecksum,
       reason: input.reason,
@@ -3578,6 +3707,29 @@ export async function fetchCopyReviewSourceDiffFile(rawInput: unknown, actor: st
   const query = new URLSearchParams({ path: input.path })
   const payload = await platformAdminRequest(
     `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/source-diff/file?${query.toString()}`,
+    { actor },
+  )
+  return sourceDiffFileDetailSchema.parse(payload)
+}
+
+export async function fetchLineageSourceDiff(rawInput: unknown, actor: string) {
+  const input = lineageSourceDiffInputSchema.parse(rawInput)
+  const query = new URLSearchParams({ reference_agent_id: input.referenceAgentId })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/lineage-source-diff?${query.toString()}`,
+    { actor },
+  )
+  return sourceDiffManifestSchema.parse(payload)
+}
+
+export async function fetchLineageSourceDiffFile(rawInput: unknown, actor: string) {
+  const input = lineageSourceDiffFileInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    reference_agent_id: input.referenceAgentId,
+    path: input.path,
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/lineage-source-diff/file?${query.toString()}`,
     { actor },
   )
   return sourceDiffFileDetailSchema.parse(payload)

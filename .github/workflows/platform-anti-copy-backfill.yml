@@ -1,0 +1,102 @@
+name: Backfill Platform anti-copy fingerprints
+
+# Recompute stored anti-copy fingerprints after a fingerprint algorithm or
+# reference-corpus change (for example the `lines` sub-sketch, which incumbents
+# lack until this runs). It executes the DEPLOYED checkout's
+# scripts/backfill_reference_fingerprints.py on the prod VM as `deploy`, so the
+# algorithm always matches the serving process. The command is fixed: the only
+# input is the mode, and the script prints aggregate counts only.
+#
+# Rollout contract (see the script docstring): deploy first, run `dry-run` and
+# review the counts, then `apply`, then `apply` again as the catch-up pass for
+# uploads that landed meanwhile. Only fingerprint metadata changes; status,
+# scores, attribution and artifacts are never touched.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: dry-run reports stale counts; apply persists recomputed fingerprints
+        type: choice
+        options: [dry-run, apply]
+        default: dry-run
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-anti-copy-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # A full pass re-fingerprints every stored artifact. apply commits per
+    # batch and skips current rows, so a timed-out run resumes on re-dispatch.
+    timeout-minutes: 300
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_ZONE: us-central1-a
+      VM: ditto-platform-prod
+    steps:
+      - name: Authenticate the existing Platform deployment identity
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_PLATFORM_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Register an expiring SSH key with OS Login
+        # Same pre-registration as platform-deploy.yml: avoids the
+        # key-propagation race and keeps the OS Login profile under its cap.
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -t rsa -b 2048 -N '' -q \
+            -C "gha-anticopy-backfill-${{ github.run_id }}-${{ github.run_attempt }}" \
+            -f ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub --ttl 330m >/dev/null
+
+      - name: Run the backfill on the deployed checkout
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            dry-run) flag="" ;;
+            apply) flag="--apply" ;;
+            *) echo "unknown mode: $MODE" >&2; exit 2 ;;
+          esac
+          for attempt in 1 2 3; do
+            rc=0
+            gcloud compute ssh "$VM" \
+              --zone "$GCP_ZONE" \
+              --tunnel-through-iap \
+              --quiet \
+              --ssh-flag="-T" \
+              --command "sudo -iu deploy bash -lc 'set -euo pipefail; cd /opt/ditto-subnet/apps/platform; echo \"deployed revision: \$(git rev-parse HEAD)\"; set -a; . ./.env; if [ -f .env.deploy ]; then . ./.env.deploy; fi; set +a; uv run --no-sync python scripts/backfill_reference_fingerprints.py $flag'" \
+              2>&1 | tee /tmp/backfill.log || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              break
+            fi
+            # Retry only the runner-side OS Login propagation refusal; any
+            # failure after the command reached the host is reported as is.
+            if ! grep -Eq '@compute\.[0-9]+: Permission denied \(publickey\)' /tmp/backfill.log || [ "$attempt" -eq 3 ]; then
+              exit "$rc"
+            fi
+            sleep 20
+          done
+          grep -E 'fingerprint backfill complete' /tmp/backfill.log >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Remove this run's OS Login key
+        if: always()
+        run: |
+          if [ -f ~/.ssh/google_compute_engine.pub ]; then
+            gcloud compute os-login ssh-keys remove \
+              --key-file ~/.ssh/google_compute_engine.pub >/dev/null 2>&1 || true
+          fi

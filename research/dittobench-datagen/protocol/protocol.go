@@ -1364,6 +1364,15 @@ type RunDetails struct {
 	// as observed trajectories overshot. 1.0 (no effect) when no tool case ran
 	// under observed execution. Advisory: the composite already reflects it.
 	ToolEfficiency float64 `json:"tool_efficiency,omitempty"`
+	// MemoryOverCall is the memory over-call multiplier (0..1) exactly as the
+	// run's composite gate applied it: 1.0 when no observed memory case emitted
+	// a non-memory action, dropping by the contract's bounded max penalty as the
+	// fraction of over-calling memory cases grows. Published so every factor of
+	// the composite gate is reconstructable from the record (issue #533).
+	// Advisory: the composite already reflects it. nil for reports produced
+	// before the field existed and for bench_version < 3, whose composite carries
+	// no gate.
+	MemoryOverCall *float64 `json:"memory_over_call,omitempty"`
 	// Models records the LLM model id that produced this run: only the miner's
 	// harness chat model, and only when the operator forces it. Generation is
 	// non-LLM and scoring is deterministic, so no generator or judge model

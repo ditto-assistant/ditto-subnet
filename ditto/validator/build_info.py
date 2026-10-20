@@ -131,7 +131,16 @@ from ditto import __version__
 # v30 adds signed exact-policy treasury pin/queued-dispatch capability. Only
 # a crypto-approved validator whose actual transport implements both guards
 # advertises it. V1 shadow ledgers retain the historical weight fold.
-HEARTBEAT_PROTOCOL_VERSION = 30
+# v31 consumes ``LedgerResponse.rank_shares``, the operator-set payout curve for
+# the champion and tail (frozen default 65/14/10/7/4). A v30 validator ignores the
+# additive field and folds the frozen curve, so Platform must withhold it until
+# every recently-live weight setter reports v31+. Heartbeat signing bytes are
+# unchanged.
+# v32 announces ``host_specs``: logical/physical CPUs, total RAM, total root
+# disk, and architecture, probed once per boot (the screener v6 block). Like the
+# weights fold, it changes the signed bytes only when present, so a failed probe
+# signs the v23/v27 domain. Platform must accept v32 before validators adopt it.
+HEARTBEAT_PROTOCOL_VERSION = 32
 
 
 @dataclass(frozen=True)

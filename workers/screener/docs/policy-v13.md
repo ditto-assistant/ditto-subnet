@@ -741,6 +741,15 @@ This is a certification failure, not proof of misconduct.
 - The missing verification and failure domain are recorded.
 - Platform failure is not represented as artifact misconduct.
 - Suspicion is not converted into an unpublished requirement.
+- Screening runs no separate private behavioral test. When two complete source
+  reviews of the exact artifact both end without a source-proven decision
+  (`insufficient_static_evidence`), source verification is incomplete and the
+  outcome is V2, reported as `verification-incomplete-unreviewable`. Reviews
+  stopped by a budget, time limit, provider or infrastructure failure do not
+  count toward the two; those follow the re-review treatment for their
+  failure domain.
+- The miner may resubmit. A V2 reject is not a ban and is not a precedent
+  about the artifact's behavior.
 
 ### V3: provider verification not completed
 
