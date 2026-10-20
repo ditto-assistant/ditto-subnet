@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 import pytest
+from fastapi.routing import APIRoute
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from ditto.api_models.bounty import BountyTerms, bounty_spec_digest
 from ditto.api_models.http_errors import HttpErrorEnvelope
+from ditto.api_server import create_api_server
 from ditto.db.models import Bounty, BountyEvent, BountyRevision, BountyRound, BountySlot
+from ditto.tests.api_server.conftest import make_api_server_config
 from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
     _HEADERS as _ADMIN_TOKEN,
 )
@@ -348,6 +352,68 @@ async def test_admin_routes_require_the_token_and_a_named_actor(
     )
     assert inexact.status_code == 422, inexact.text
     assert set((await counts(session_maker)).values()) == {0}
+
+
+_ADMIN_PREFIX = "/api/v1/admin/bounties"
+# Admin POSTs that write nothing: the preview only computes a digest.
+_ADMIN_READS = frozenset({f"{_ADMIN_PREFIX}/preview"})
+# Path parameters take a fixed id: parametrized ids must match across workers.
+_PATH_ID = "00000000-0000-4000-8000-000000000000"
+
+
+def _admin_writes() -> list[tuple[str, str]]:
+    """Every write route under the bounty admin prefix, read from the app."""
+    return sorted(
+        (method, route.path)
+        for route in create_api_server(make_api_server_config()).routes
+        if isinstance(route, APIRoute)
+        and route.path.startswith(_ADMIN_PREFIX)
+        and route.path not in _ADMIN_READS
+        for method in route.methods - {"GET", "HEAD", "OPTIONS"}
+    )
+
+
+ADMIN_WRITES = _admin_writes()
+
+
+async def test_the_admin_writes_are_read_from_the_app():
+    # The enumeration must find the writes, or the test below checks none.
+    assert {
+        ("POST", f"{_ADMIN_PREFIX}/revisions"),
+        ("POST", f"{_ADMIN_PREFIX}/{{bounty_id}}/claims-paused"),
+        ("POST", f"{_ADMIN_PREFIX}/obligations/{{obligation_id}}/dispatch"),
+        ("POST", f"{_ADMIN_PREFIX}/transfers/{{transfer_id}}/reconcile"),
+    } <= set(ADMIN_WRITES)
+    assert ("POST", f"{_ADMIN_PREFIX}/preview") not in ADMIN_WRITES
+
+
+async def bounty_rows(maker) -> dict[str, int]:
+    """Row counts of every bounty table."""
+    async with maker() as session:
+        return {
+            table.name: int(
+                await session.scalar(select(func.count()).select_from(table))
+            )
+            for table in Bounty.metadata.tables.values()
+            if table.name.startswith("bount")
+        }
+
+
+@pytest.mark.parametrize(("method", "path"), ADMIN_WRITES)
+async def test_every_admin_write_needs_the_token_and_a_named_actor(
+    app, client, session_maker, method, path
+):
+    _install(app, session_maker)
+    assert (await publish(client)).status_code == 200
+    before = await bounty_rows(session_maker)
+    url = re.sub(r"\{[a-z_]+\}", _PATH_ID, path)
+    # The token and actor are checked before the body is validated, so an
+    # empty body reaches them, and nothing else may answer first.
+    anonymous = await client.request(method, url, json={})
+    assert anonymous.status_code == 401, anonymous.text
+    unnamed = await client.request(method, url, headers=_ADMIN_TOKEN, json={})
+    assert unnamed.status_code == 422 and "X-Admin-Actor" in unnamed.text
+    assert await bounty_rows(session_maker) == before
 
 
 async def test_one_issue_has_one_bounty_whatever_the_spelling(
