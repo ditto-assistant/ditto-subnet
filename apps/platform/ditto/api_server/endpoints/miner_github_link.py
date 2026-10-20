@@ -713,6 +713,9 @@ async def confirm(
     # Disabling linking stops new links, including already approved attempts.
     # Ditto-derived attempts do not use the legacy direct GitHub OAuth app.
     # The exact attempt and miner signature are still verified in both phases.
+    github = getattr(request.app.state, "github_link", None)
+    if github is None or not github.config.enabled:
+        _client(request)
     ditto = getattr(request.app.state, "ditto_link", None)
     if ditto is None or not ditto.enabled:
         _client(request)
