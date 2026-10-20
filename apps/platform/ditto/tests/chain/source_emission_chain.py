@@ -14,7 +14,12 @@ audited runtime does (and the way the range planners assume it does):
   ``IncentiveAlphaEmittedToMiners``;
 * a registration replaces a UID's hotkey and ``BlockAtRegistration``, drops
   its own weight row and zeroes every weight on it;
-* a hotkey swap replaces the hotkey and nothing else.
+* a hotkey swap replaces the hotkey and records the block under its owner's
+  coldkey in ``LastHotkeySwapOnNetuid``; that coldkey cannot swap again on
+  SN118 until ``HotkeySwapOnSubnetInterval`` has passed, and records older
+  than the interval are pruned on SN118's slot of it;
+* a coldkey swap hands every hotkey to the new coldkey and carries no swap
+  record over, so the new coldkey can swap at once.
 
 Each block keeps the events that produced its state. ``SourceEmissionChain``
 serves that one model to the full per-block reader
@@ -57,6 +62,8 @@ OWNER = "owner"
 TEMPO = 360
 OWNER_HYPERPARAM_RATE_LIMIT = 2
 REVEAL_PERIOD_EPOCHS = 1
+# Finney's HotkeySwapOnSubnetInterval: one day of 12-second blocks.
+HOTKEY_SWAP_INTERVAL = 7200
 
 # The model starts here; everything before it is settled history.
 GENESIS_BLOCK = 600
@@ -92,6 +99,7 @@ _KNOWN_STORAGE = {
             "BlockAtRegistration",
             "CommitRevealWeightsEnabled",
             "Keys",
+            "LastHotkeySwapOnNetuid",
             "LastMechansimStepBlock",
             "MechanismCountCurrent",
             "OwnerHyperparamRateLimit",
@@ -173,6 +181,8 @@ class BlockState:
     step: int
     epoch: int
     events: tuple[dict[str, Any], ...]
+    # Coldkey -> block of its last hotkey swap on SN118.
+    swap_records: dict[str, int]
 
     def map_storage(self) -> dict[str, dict[Any, Any]]:
         """``netuid``-prefixed maps, as ``query_map`` iterates them."""
@@ -186,6 +196,7 @@ class BlockState:
             },
             # The v2 commit store is never used on this chain.
             "WeightCommits": {},
+            "LastHotkeySwapOnNetuid": self.swap_records,
         }
 
     def value_storage(self) -> dict[str, Any]:
@@ -208,9 +219,16 @@ class BlockState:
 class SubtensorTimeline:
     """SN118 chain actions by block; ``build`` replays them into states."""
 
-    def __init__(self, *, payouts: Iterable[int], head: int) -> None:
+    def __init__(
+        self,
+        *,
+        payouts: Iterable[int],
+        head: int,
+        swap_interval: int = HOTKEY_SWAP_INTERVAL,
+    ) -> None:
         self.payouts = frozenset(payouts)
         self.head = head
+        self.swap_interval = swap_interval
         self._actions: dict[int, list[tuple[str, tuple[Any, ...]]]] = {}
 
     def _add(self, block: int, kind: str, *args: Any) -> SubtensorTimeline:
@@ -233,6 +251,9 @@ class SubtensorTimeline:
     def swap(self, block: int, uid: int, hotkey: str) -> SubtensorTimeline:
         return self._add(block, "swap", uid, hotkey)
 
+    def coldkey_swap(self, block: int, old: str, new: str) -> SubtensorTimeline:
+        return self._add(block, "coldkey_swap", old, new)
+
     def noise(self, block: int, *events: dict[str, Any]) -> SubtensorTimeline:
         for event in events:
             self._add(block, "noise", event)
@@ -244,13 +265,23 @@ class SubtensorTimeline:
         weights: dict[int, Vector] = dict(GENESIS_WEIGHTS)
         commits: dict[int, tuple[Commit, ...]] = {}
         step, epoch = GENESIS_STEP, GENESIS_EPOCH
+        owners = {hotkey: f"{hotkey}-coldkey" for hotkey in keys.values()}
+        swap_records: dict[str, int] = {}
+        interval = self.swap_interval
         states = {
             GENESIS_BLOCK: BlockState(
-                dict(keys), dict(registered), dict(weights), {}, step, epoch, ()
+                dict(keys), dict(registered), dict(weights), {}, step, epoch, (), {}
             )
         }
         for block in range(GENESIS_BLOCK + 1, self.head + 1):
             actions = self._actions.get(block, [])
+            # clean_up_hotkey_swap_records: SN118's turn comes once per interval.
+            if block % interval == NETUID % interval:
+                swap_records = {
+                    coldkey: at
+                    for coldkey, at in swap_records.items()
+                    if at + interval >= block
+                }
             initialization: list[dict[str, Any]] = []
             extrinsics: list[dict[str, Any]] = []
             payout = block in self.payouts
@@ -315,6 +346,7 @@ class SubtensorTimeline:
                         raise ValueError(f"{hotkey} is already registered")
                     keys[uid] = hotkey
                     registered[uid] = block
+                    owners.setdefault(hotkey, f"{hotkey}-coldkey")
                     weights.pop(uid, None)
                     weights = {
                         row: tuple((t, 0 if t == uid else w) for t, w in vector)
@@ -331,15 +363,36 @@ class SubtensorTimeline:
                     uid, hotkey = args
                     if hotkey in keys.values():
                         raise ValueError(f"{hotkey} is already registered")
+                    coldkey = owners[keys[uid]]
+                    last = swap_records.get(coldkey)
+                    if last is not None and last + interval >= block:
+                        raise ValueError(f"{coldkey} swapped at {last}, too soon")
                     old, keys[uid] = keys[uid], hotkey
+                    owners[hotkey] = coldkey
+                    swap_records[coldkey] = block
                     extrinsics.append(
                         _event(
                             "HotkeySwapped",
                             {
-                                "coldkey": f"{old}-coldkey",
+                                "coldkey": coldkey,
                                 "old_hotkey": old,
                                 "new_hotkey": hotkey,
                             },
+                            phase="ApplyExtrinsic",
+                        )
+                    )
+                elif kind == "coldkey_swap":
+                    old, new = args
+                    if new in owners.values():
+                        raise ValueError(f"{new} already owns a hotkey")
+                    owners = {
+                        hotkey: new if coldkey == old else coldkey
+                        for hotkey, coldkey in owners.items()
+                    }
+                    extrinsics.append(
+                        _event(
+                            "ColdkeySwapped",
+                            {"old_coldkey": old, "new_coldkey": new},
                             phase="ApplyExtrinsic",
                         )
                     )
@@ -365,8 +418,9 @@ class SubtensorTimeline:
                 step,
                 epoch,
                 (*initialization, *extrinsics),
+                dict(swap_records),
             )
-        return SourceEmissionChain(states, self.head)
+        return SourceEmissionChain(states, self.head, interval)
 
 
 @dataclass(frozen=True)
@@ -401,9 +455,12 @@ def _storage_hash(value: Any) -> str | None:
 class SourceEmissionChain:
     """Answers the substrate calls of every source-emission path from one model."""
 
-    def __init__(self, states: dict[int, BlockState], head: int) -> None:
+    def __init__(
+        self, states: dict[int, BlockState], head: int, swap_interval: int
+    ) -> None:
         self._states = states
         self.head = head
+        self.swap_interval = swap_interval
         self._numbers = {hash_of(block): block for block in states}
 
     def state(self, block: int) -> BlockState:
@@ -445,6 +502,16 @@ class SourceEmissionChain:
 
     async def get_block_metadata(self, **_: Any) -> Any:
         raise AssertionError("an audited artifact is admitted without metadata")
+
+    async def get_constant(
+        self, module_name: str, constant_name: str, block_hash: str, **_: Any
+    ) -> int:
+        assert (module_name, constant_name) == (
+            "SubtensorModule",
+            "HotkeySwapOnSubnetInterval",
+        )
+        self._block(block_hash)
+        return self.swap_interval
 
     async def create_storage_key(
         self, pallet: str, storage_function: str, params: list[Any], **_: Any

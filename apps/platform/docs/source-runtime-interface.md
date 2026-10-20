@@ -37,11 +37,13 @@ interface** matches an audited runtime's:
 Measured on Finney 2026-10-17, the consumed interface is identical for every
 runtime from v448 to v479 except at v475, where `SubnetEpochConsensus` was
 added. That is the only upgrade in that window that needed a human audit.
-On 2026-10-20 the planners' storage (`BlockAtRegistration`, `RevealPeriodEpochs`,
-`Tempo`, `OwnerHyperparamRateLimit`, `WeightCommits`) joined the surface, and
-every runtime from block 9,100,000 to 9,321,735 was still admitted, including
-the three admitted on their interface alone (`0x43bc67be…`, `0x44e952fd…`,
-`0x5fb504c1…`).
+On 2026-10-20 the planners' storage (`BlockAtRegistration`,
+`LastHotkeySwapOnNetuid`, `RevealPeriodEpochs`, `Tempo`,
+`OwnerHyperparamRateLimit`, `WeightCommits`) joined the surface, and every
+runtime from block 9,100,000 to 9,327,306 was still admitted, including the
+three admitted on their interface alone (`0x43bc67be…`, `0x44e952fd…`,
+`0x5fb504c1…`). The planners also read the `HotkeySwapOnSubnetInterval`
+constant, which is not pinned: they check its value against each range.
 
 ## When the collector stops
 

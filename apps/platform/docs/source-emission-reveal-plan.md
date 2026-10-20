@@ -13,19 +13,31 @@ only the blocks that can matter. Two planners exist:
 
 Both share `_range_endpoints`: equal runtime code, mode controls and Yuma
 consensus at the range ends, or the collector falls back to the per-block scan.
-A UID re-registered inside the range no longer forces that fallback. A UID
-counts as changed when its `Keys` or `BlockAtRegistration` differs at the
-ends. Each changed UID's `BlockAtRegistration(118, uid)` and `Keys(118, uid)`
-storage hashes are bisected to the exact blocks, which are read in full (the
-reader resets provenance there). Neither value can repeat inside a range:
-every registration sets `BlockAtRegistration` to the current block, so it only
-increases. That also catches A → B → A, where the same hotkey is back at the
-end (SN118's 300-block immunity period is shorter than a range). A hotkey swap
-registers nothing but is limited to one per UID per
-`HotkeySwapOnSubnetInterval` (7200 blocks). Up to 16 changed UIDs are bisected
-concurrently; more fall back. Before this, any registration in a 720-block
-range sent the whole range to the per-block scan, which was most of the
-backlog on 2026-10-18.
+A change of a UID's hotkey inside the range no longer forces that fallback.
+Each one is found and read in full (the reader resets provenance there):
+
+- **Hotkey swaps.** Every swap on SN118, on its own or on all subnets, sets
+  `LastHotkeySwapOnNetuid(118, coldkey)` to its block. Only a dissolution or
+  the prune of records older than `HotkeySwapOnSubnetInterval` (7200 blocks)
+  removes one (subtensor v448–v481). The cooldown is per coldkey, and a
+  coldkey swap carries none over. So a UID's hotkey *can* go A → B → A inside
+  one range, under two coldkeys, and read the same at both ends. While the
+  interval is longer than the range, a coldkey cannot swap twice in it and
+  none of its records is pruned. The records at the range end therefore name
+  every swap inside it. A shorter interval, or none, falls back.
+- **Registrations.** Every registration sets `BlockAtRegistration` to the
+  current block, so per UID it only increases and never repeats. That catches
+  A → B → A through a registration (SN118's 300-block immunity period is
+  shorter than a range). A UID counts as changed when its `Keys` or
+  `BlockAtRegistration` differs at the ends. Its `BlockAtRegistration(118,
+  uid)` storage hash is bisected to the exact registrations, then `Keys(118,
+  uid)` is bisected in each stretch between them. A registration can restore
+  the hotkey a swap moved away, and a swap can restore the one a
+  registration replaced.
+
+Up to 16 changed UIDs, and 16 swaps, are located per range; more fall back.
+Before this, any registration in a 720-block range sent the whole range to the
+per-block scan, which was most of the backlog on 2026-10-18.
 
 ## Why the reveal planner is enough
 

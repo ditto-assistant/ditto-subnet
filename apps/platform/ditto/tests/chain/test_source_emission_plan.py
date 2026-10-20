@@ -115,8 +115,17 @@ class FakeChain:
             else (commit_reveal)
         )
 
+    async def get_constant(self, module_name: str, constant_name: str, **_: Any):
+        assert (module_name, constant_name) == (
+            "SubtensorModule",
+            "HotkeySwapOnSubnetInterval",
+        )
+        return 7200
+
     async def query_map(self, **kwargs: Any) -> Any:
         rows = self.keys.get(self.block_of(kwargs["block_hash"]), KEYS)
+        if kwargs["storage_function"] == "LastHotkeySwapOnNetuid":
+            rows = []
 
         async def iterate():
             for row in rows:

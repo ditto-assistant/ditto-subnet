@@ -905,10 +905,11 @@ async def _range_endpoints(
     If the runtime code or the mode controls differ between ``first_block - 1``
     and ``last_block``, or any of them (or the ``Keys`` map) is invalid at
     either end, the caller must run the unchanged per-block scan. A runtime
-    upgrade cannot revert inside a range (spec versions only increase). A UID
-    whose hotkey or ``BlockAtRegistration`` differs at the ends is located by
-    bisection and its blocks are returned as ``identity_changes``; see the
-    comment below for why a UID equal on both at the ends was not touched.
+    upgrade cannot revert inside a range (spec versions only increase). Every
+    hotkey swap inside the range is read from ``LastHotkeySwapOnNetuid``, and
+    a UID whose hotkey or ``BlockAtRegistration`` differs at the ends is
+    located by bisection; those blocks are returned as ``identity_changes``.
+    See the comments below for why that finds every identity change.
     """
     if not 0 < first_block <= last_block:
         raise ValueError("invalid source-emission range")
@@ -1001,17 +1002,37 @@ async def _range_endpoints(
     start_map, end_map = _valid_uid_mapping(start_keys), _valid_uid_mapping(end_keys)
     if start_map is None or end_map is None or set(start_map) != set(end_map):
         return full("uid_mapping", code[0])
+    # Hotkey swaps, found from the cooldown the runtime records for them. A
+    # swap that moves a hotkey on the subnet, on its own or on all subnets,
+    # sets LastHotkeySwapOnNetuid(netuid, coldkey) to its block, and only a
+    # dissolution or the prune of records older than
+    # HotkeySwapOnSubnetInterval removes one (subtensor v448-v481). The
+    # cooldown is per coldkey and a coldkey swap carries none over, so one
+    # UID's hotkey can go A -> B -> A inside a range under two coldkeys, with
+    # Keys and BlockAtRegistration equal at both ends. While the interval is
+    # longer than the range, no coldkey swaps twice in it and none of its
+    # records is pruned, so the records at the end name every swap inside it.
+    interval = _unwrap(
+        await substrate.get_constant(
+            "SubtensorModule", "HotkeySwapOnSubnetInterval", block_hash=end
+        )
+    )
+    if not isinstance(interval, int) or interval <= last_block - first_block:
+        return full("hotkey_swap_interval", code[0])
+    swaps = {
+        block
+        for _coldkey, swapped in await mapping_at("LastHotkeySwapOnNetuid", end)
+        if first_block <= (block := _uint(swapped)) <= last_block
+    }
     # UIDs re-registered inside the range, found by BlockAtRegistration: every
     # registration sets it to the current block, so per UID it only increases
     # and never repeats. That catches A -> B -> A, which equal Keys at the
     # ends would hide (SN118's 300-block immunity is shorter than a range),
-    # and bisecting it finds every registration exactly. A hotkey swap
-    # registers nothing, so Keys is bisected for it, but only between
-    # registrations: a registration can restore the hotkey a swap moved away,
-    # or a swap the hotkey a registration replaced, and Keys would then read
-    # the same across both. Between registrations only a swap changes Keys,
-    # and a UID's hotkey can be swapped at most once per
-    # HotkeySwapOnSubnetInterval (a day), so there it cannot flip back.
+    # and bisecting it finds every registration exactly. Keys is bisected too,
+    # between registrations: a registration can restore the hotkey a swap
+    # moved away, or a swap the hotkey a registration replaced. That finds a
+    # UID's swaps only where Keys differs across a stretch; the swap records
+    # above find the rest.
     registered = await _gather_or_cancel(
         *(mapping_at("BlockAtRegistration", at) for at in (start, end))
     )
@@ -1023,7 +1044,7 @@ async def _range_endpoints(
         for uid in start_map
         if start_map[uid] != end_map[uid] or first_reg[uid] != last_reg[uid]
     )
-    if len(changed) > _MAX_IDENTITY_CHANGES:
+    if max(len(changed), len(swaps)) > _MAX_IDENTITY_CHANGES:
         return full("identity_changes", code[0])
     gate = asyncio.Semaphore(8)
 
@@ -1054,7 +1075,7 @@ async def _range_endpoints(
         )
         return {*registrations, *(block for found in swaps for block in found)}
 
-    identity_changes: set[int] = set()
+    identity_changes = set(swaps)
     for blocks in await _gather_or_cancel(
         *(identity_change_blocks(uid) for uid in changed)
     ):

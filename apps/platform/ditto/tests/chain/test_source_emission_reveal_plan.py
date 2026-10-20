@@ -61,6 +61,10 @@ class RevealChain:
     registrations: dict[int, list[tuple[int, str]]] = field(default_factory=dict)
     # uid -> [(block, new hotkey)]: hotkey swaps, which register nothing.
     swaps: dict[int, list[tuple[int, str]]] = field(default_factory=dict)
+    # block -> the coldkey that swapped there; by default each swap's own.
+    swapped_by: dict[int, str] = field(default_factory=dict)
+    # HotkeySwapOnSubnetInterval; None when the runtime has no such constant.
+    swap_interval: int | None = 7200
 
     def keys_at(self, block: int) -> list[tuple[int, str]]:
         keys = dict(KEYS)
@@ -74,6 +78,15 @@ class RevealChain:
             if at <= block:
                 keys[uid] = hotkey
         return sorted(keys.items())
+
+    def swap_records_at(self, block: int) -> list[tuple[str, int]]:
+        """``LastHotkeySwapOnNetuid``: each coldkey's latest swap by ``block``."""
+        records = {"long-ago-coldkey": 500}  # a swap well before the range
+        swaps = sorted(at for rows in self.swaps.values() for at, _ in rows)
+        for at in swaps:
+            if at <= block:
+                records[self.swapped_by.get(at, f"coldkey-{at}")] = at
+        return sorted(records.items())
 
     def registered_at(self, block: int) -> list[tuple[int, int]]:
         """``BlockAtRegistration``: the latest registration at or before ``block``."""
@@ -202,6 +215,8 @@ class RevealChain:
             rows = self.keys_at(block)
         elif storage_function == "BlockAtRegistration":
             rows = self.registered_at(block)
+        elif storage_function == "LastHotkeySwapOnNetuid":
+            rows = self.swap_records_at(block)
         elif block in self.v2_commit_at:
             assert storage_function == "WeightCommits"
             rows = [("validator", ["hash"])]
@@ -214,6 +229,13 @@ class RevealChain:
 
     async def get_block_metadata(self, **_):
         raise AssertionError("audited artifacts need no metadata")
+
+    async def get_constant(self, module_name: str, constant_name: str, **_: Any):
+        assert (module_name, constant_name) == (
+            "SubtensorModule",
+            "HotkeySwapOnSubnetInterval",
+        )
+        return self.swap_interval
 
 
 def _event(name: str, attributes: Any) -> dict[str, Any]:
@@ -288,12 +310,18 @@ async def test_range_starting_on_a_payout_includes_its_own_reveals() -> None:
         (lambda c: setattr(c, "epoch_shift", (1300, 1460)), "epoch_without_payout"),
         # One owner change per 360 blocks would allow off-then-on inside 720.
         (lambda c: setattr(c, "owner_limit", 1), "owner_rate_limit"),
+        # A coldkey could swap twice inside the range, and its swap record
+        # would keep only the second.
+        (lambda c: setattr(c, "swap_interval", LAST - FIRST), "hotkey_swap_interval"),
+        (lambda c: setattr(c, "swap_interval", None), "hotkey_swap_interval"),
     ],
     ids=[
         "v2-commit-store-in-use",
         "reveal-period-changed",
         "epoch-without-payout",
         "owner-could-toggle-controls-inside-the-range",
+        "swap-cooldown-shorter-than-the-range",
+        "swap-cooldown-unknown",
     ],
 )
 async def test_unsupported_shapes_fall_back_to_the_full_scan(mutate, reason) -> None:
@@ -375,6 +403,24 @@ async def test_a_registration_and_a_swap_that_restore_a_hotkey_are_both_found(
     plan = await planner(chain, netuid=NETUID, first_block=FIRST, last_block=LAST)
     assert not plan.full_scan
     assert {1200, 1550} <= set(plan.interesting)
+
+
+@pytest.mark.parametrize(
+    "planner", [plan_source_emission_range, plan_source_emission_range_by_reveals]
+)
+async def test_a_hotkey_swapped_away_and_back_is_found(planner) -> None:
+    # Two coldkeys (the first swapped its coldkey in between) each swap once,
+    # so the per-coldkey cooldown allows both inside one range. Keys and
+    # BlockAtRegistration match at both ends; the swap records do not.
+    chain = _chain()
+    chain.swaps = {2: [(1200, "swapped"), (1550, "miner")]}
+    assert chain.keys_at(FIRST - 1) == chain.keys_at(LAST)
+    assert chain.registered_at(FIRST - 1) == chain.registered_at(LAST)
+    plan = await planner(chain, netuid=NETUID, first_block=FIRST, last_block=LAST)
+    assert not plan.full_scan
+    assert {1200, 1550} <= set(plan.interesting)
+    # The record from before the range is not a block of it.
+    assert all(FIRST <= block <= LAST for block in plan.interesting)
 
 
 async def test_a_hotkey_swap_is_found_without_a_registration() -> None:

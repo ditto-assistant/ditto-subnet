@@ -14,10 +14,10 @@ from ditto.chain.runtime_interface import RuntimeInterface
 AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
     # v473: runtime 0x7773f5c0a6d6e9ea9ff347edcc491246eec08a5cf441d964ee96f40d7fa65a08
     # at Finney block 9220000.
-    "d3f7e66fbd59f567e3330576a3c7404dec046c30be22a739489dddb4547234ef": (
+    "8d652c00bbd60263f4aeb4f2e0fa0f08da437d5a61d2226a073f42af01408d12": (
         "v473",
         RuntimeInterface(
-            digest="d3f7e66fbd59f567e3330576a3c7404dec046c30be22a739489dddb4547234ef",
+            digest="8d652c00bbd60263f4aeb4f2e0fa0f08da437d5a61d2226a073f42af01408d12",
             has_epoch_consensus=False,
             entries={
                 "call:SubtensorModule.commit_timelocked_mechanism_weights": (
@@ -58,6 +58,9 @@ AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
                 ),
                 "storage:SubtensorModule.Keys": (
                     "d94df250ac2b3791220aae792cb994c4ec4f2f836939f8517c7875dc4e87fa82"
+                ),
+                "storage:SubtensorModule.LastHotkeySwapOnNetuid": (
+                    "23487cb1128c4bc47c3cb812cad0caab38a99e3c8af9f8bcd7ba10ed14f66a64"
                 ),
                 "storage:SubtensorModule.LastMechansimStepBlock": (
                     "a8dc1869cfd0cc74c2168d747e7d74aeaae0f8b9fe0743c15c3d466fe9d75526"
@@ -115,10 +118,10 @@ AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
     ),
     # v478: runtime 0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1
     # at Finney block 9280000.
-    "fc28727e4cd4b95f4bfe5164159274a03f3763c4d580bee213490d5827bc9a8e": (
+    "1ef98cc80020ae30fd6db2c7ab1cb3d9be974facca18b51e88682ff434d518fe": (
         "v478",
         RuntimeInterface(
-            digest="fc28727e4cd4b95f4bfe5164159274a03f3763c4d580bee213490d5827bc9a8e",
+            digest="1ef98cc80020ae30fd6db2c7ab1cb3d9be974facca18b51e88682ff434d518fe",
             has_epoch_consensus=True,
             entries={
                 "call:SubtensorModule.commit_timelocked_mechanism_weights": (
@@ -159,6 +162,9 @@ AUDITED_RUNTIME_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
                 ),
                 "storage:SubtensorModule.Keys": (
                     "d94df250ac2b3791220aae792cb994c4ec4f2f836939f8517c7875dc4e87fa82"
+                ),
+                "storage:SubtensorModule.LastHotkeySwapOnNetuid": (
+                    "23487cb1128c4bc47c3cb812cad0caab38a99e3c8af9f8bcd7ba10ed14f66a64"
                 ),
                 "storage:SubtensorModule.LastMechansimStepBlock": (
                     "a8dc1869cfd0cc74c2168d747e7d74aeaae0f8b9fe0743c15c3d466fe9d75526"

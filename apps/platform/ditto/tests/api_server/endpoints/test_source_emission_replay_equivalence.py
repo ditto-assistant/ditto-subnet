@@ -22,6 +22,8 @@ from ditto.api_server import source_emission_collector as module
 from ditto.chain.source_emission_verifier import (
     SourceEmissionBlock,
     SourceEmissionReadCache,
+    plan_source_emission_range,
+    plan_source_emission_range_by_reveals,
 )
 from ditto.db.models import (
     SourceEmissionCollectorCursor,
@@ -34,6 +36,7 @@ from ditto.tests.api_server.endpoints.test_source_emission_collector import (
 )
 from ditto.tests.chain.source_emission_chain import (
     CODE,
+    HOTKEY_SWAP_INTERVAL,
     NETUID,
     SubtensorTimeline,
     foreign_payout,
@@ -62,10 +65,13 @@ B_LATE = ((0, 6553), (3, 25000), (4, 33982))
 RESET = "uid_mapping_changed"
 
 
-def _history(payouts: tuple[int, ...] = (740, 1100, 1460, 1800)) -> SubtensorTimeline:
+def _history(
+    payouts: tuple[int, ...] = (740, 1100, 1460, 1800),
+    swap_interval: int = HOTKEY_SWAP_INTERVAL,
+) -> SubtensorTimeline:
     """Both validators committed in epoch 101 and revealed before the range."""
     return (
-        SubtensorTimeline(payouts=payouts, head=HEAD)
+        SubtensorTimeline(payouts=payouts, head=HEAD, swap_interval=swap_interval)
         .commit(700, "validator-a")
         .commit(710, "validator-b")
         .reveal(990, "validator-a", A_990)
@@ -206,6 +212,21 @@ SCENARIOS = [
         acted=(1100, 1200, 1300, 1460, 1550),
         bindings={"validator-a": (1550, RESET), "validator-b": (1550, RESET)},
         payouts={1100: None, 1460: None},
+    ),
+    Scenario(
+        "swap-away-and-back-under-two-coldkeys",
+        # The swap cooldown is per coldkey and a coldkey swap carries none
+        # over, so miner-a's hotkey leaves and returns inside the range with
+        # no registration: Keys and BlockAtRegistration match at both ends.
+        lambda: (
+            _history()
+            .swap(1200, 3, "swapped")
+            .coldkey_swap(1300, "miner-a-coldkey", "fresh-coldkey")
+            .swap(1550, 3, "miner-a")
+        ),
+        acted=(1100, 1200, 1460, 1550),
+        bindings={"validator-a": (1550, RESET), "validator-b": (1550, RESET)},
+        payouts={1100: None, 1460: "no_verified_reveal_provenance"},
     ),
     Scenario(
         "range-boundaries",
@@ -410,3 +431,21 @@ async def test_sparse_replay_commits_what_the_per_block_scan_commits(
         async with session_maker() as session:
             cursor = await session.get(SourceEmissionCollectorCursor, NETUID)
             assert cursor.reveal_plan_shadow["last_outcome"] == "agreed"
+
+
+@pytest.mark.parametrize(
+    "planner", [plan_source_emission_range, plan_source_emission_range_by_reveals]
+)
+async def test_a_swap_cooldown_shorter_than_the_range_is_planned_in_full(planner):
+    # One coldkey swaps miner-a away and back 350 blocks apart, which a
+    # 300-block cooldown allows. Its swap record then names only the second
+    # swap, so the range cannot be planned from the records.
+    chain = (
+        _history(swap_interval=300)
+        .swap(1200, 3, "swapped")
+        .swap(1550, 3, "miner-a")
+        .build()
+    )
+    assert chain.state(FIRST - 1).keys == chain.state(LAST).keys
+    plan = await planner(chain, netuid=NETUID, first_block=FIRST, last_block=LAST)
+    assert (plan.full_scan, plan.full_scan_reason) == (True, "hotkey_swap_interval")

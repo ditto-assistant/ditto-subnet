@@ -51,6 +51,7 @@ CONSUMED_STORAGE: tuple[tuple[str, str], ...] = (
     ("SubtensorModule", "BlockAtRegistration"),
     ("SubtensorModule", "CommitRevealWeightsEnabled"),
     ("SubtensorModule", "Keys"),
+    ("SubtensorModule", "LastHotkeySwapOnNetuid"),
     ("SubtensorModule", "LastMechansimStepBlock"),
     ("SubtensorModule", "LastUpdate"),
     ("SubtensorModule", "MechanismCountCurrent"),
