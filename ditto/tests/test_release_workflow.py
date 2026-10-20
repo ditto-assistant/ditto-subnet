@@ -48,21 +48,14 @@ def test_release_is_the_single_post_merge_component_orchestrator() -> None:
             (WORKFLOW_DIR / workflow_name).read_text(), Loader=yaml.BaseLoader
         )
         triggers = workflow["on"]
-        assert "pull_request" in triggers, workflow_name
+        assert "pull_request" not in triggers, workflow_name
         assert "workflow_dispatch" in triggers, workflow_name
         assert "push" not in triggers, workflow_name
 
 
 def test_coding_starter_ci_tracks_the_public_contract_and_builds_the_image() -> None:
     workflow = yaml.load(CODING_STARTER_CI_PATH.read_text(), Loader=yaml.BaseLoader)
-    paths = workflow["on"]["pull_request"]["paths"]
-    assert "miners/dittobench-coding-starter-kit/**" in paths
-    assert "miners/dittobench-unified-starter-kit/**" in paths
-    assert "miners/dittobench-starter-kit/**" in paths
-    assert "research/dittobench-coding-datagen/**" in paths
-    assert "services/dittobench-api/internal/codingcontract/**" in paths
-    assert "services/dittobench-api/internal/codingrelay/**" in paths
-    assert "scripts/test-coding-starter-practice-e2e.sh" in paths
+    assert set(workflow["on"]) == {"workflow_dispatch"}
     verify = workflow["jobs"]["verify"]
     gate = _step(verify["steps"], "Verify format, lint, and tests")
     assert "cargo fmt --check" in gate["run"]

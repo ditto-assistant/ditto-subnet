@@ -5,6 +5,8 @@ name: Preview controls
 # emits a static artifact and calls the same-run publisher, which checks out
 # only the default branch before entering the preview environment.
 
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
     inputs:
@@ -25,9 +27,6 @@ on:
         description: Exact 40-character commit to check out and test
         type: string
         required: false
-  pull_request:
-    types: [opened, reopened, synchronize, closed]
-
 permissions:
   contents: read
   pull-requests: read

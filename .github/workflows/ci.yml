@@ -1,9 +1,9 @@
 name: CI
 
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
-  pull_request:
-
 jobs:
   compose-config:
     runs-on: ubuntu-24.04
