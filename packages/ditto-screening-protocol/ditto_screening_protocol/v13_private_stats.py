@@ -65,6 +65,8 @@ def _one_sided_t_crit(df: int) -> float:
 
 
 def _scores(row: PrivatePairCounts) -> tuple[int, int, int]:
+    ties = row.pairs - row.control_only_correct - row.variant_only_correct
+    both_correct = row.control_correct - row.control_only_correct
     if (
         row.pairs < 2
         or row.control_correct > row.pairs
@@ -72,11 +74,12 @@ def _scores(row: PrivatePairCounts) -> tuple[int, int, int]:
         or row.control_only_correct + row.variant_only_correct > row.pairs
         or row.control_correct - row.variant_correct
         != row.control_only_correct - row.variant_only_correct
+        or not 0 <= both_correct <= ties
     ):
         raise PrivateStatisticalUnavailable("private pair aggregate is inconsistent")
     plus = row.control_only_correct
     minus = row.variant_only_correct
-    return plus, minus, row.pairs - plus - minus
+    return plus, minus, ties
 
 
 def _mean_and_variance(plus: int, minus: int, ties: int) -> tuple[int, float, float]:

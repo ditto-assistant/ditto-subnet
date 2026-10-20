@@ -184,6 +184,36 @@ def test_inconsistent_counts_fail_closed() -> None:
         )
 
 
+@pytest.mark.parametrize("side", ["target", "clean_control"])
+@pytest.mark.parametrize("control,variant", [(1, 0), (10, 9)])
+def test_impossible_both_correct_counts_fail_closed(
+    side: str, control: int, variant: int
+) -> None:
+    valid = _balanced(plus=5, minus=4, ties=1)
+    broken = valid.aggregates[0].model_copy(
+        update={"control_correct": control, "variant_correct": variant}
+    )
+    impossible = valid.model_copy(
+        update={"aggregates": (broken, *valid.aggregates[1:])}
+    )
+    inputs = {"target": valid, "clean_control": valid, side: impossible}
+    with pytest.raises(PrivateStatisticalUnavailable, match="inconsistent"):
+        analyze_v13_private_pairs(**inputs)
+
+
+@pytest.mark.parametrize("control,variant", [(5, 4), (6, 5)])
+def test_both_correct_can_span_the_tie_count(control: int, variant: int) -> None:
+    valid = _balanced(plus=5, minus=4, ties=1)
+    boundary = valid.aggregates[0].model_copy(
+        update={"control_correct": control, "variant_correct": variant}
+    )
+    result = valid.model_copy(update={"aggregates": (boundary, *valid.aggregates[1:])})
+    assert (
+        analyze_v13_private_pairs(target=result, clean_control=result).primary_pairs
+        == 60
+    )
+
+
 def _draw(
     rng: random.Random, n: int, p_plus: float, p_minus: float
 ) -> tuple[int, int, int]:
