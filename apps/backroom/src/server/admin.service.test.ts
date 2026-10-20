@@ -1701,6 +1701,29 @@ describe('artifact release administration', () => {
     expect((await fetchArtifactReleaseControl()).release_gate).toBeUndefined()
   })
 
+  it.each([
+    { collector_backlog_blocks: 12_400, collector_cursor_age_seconds: 60 },
+    { collector_backlog_blocks: null, collector_cursor_age_seconds: null },
+  ])('keeps collector staleness and backlog, null meaning unknown (%o)', async (staleness) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const release_gate = {
+      version: 'completed-winner-emission-v1', automatic_confirmation_enabled: true,
+      collector_cursor_updated_at: '2026-10-09T08:00:00Z',
+      collector_stall_threshold_seconds: 900,
+      collector_stalled: false,
+      ...staleness,
+      receipt_diagnostics: [],
+      receipt_diagnostics_has_more: false,
+      pending_kings: 0,
+      confirmed_kings: 0,
+      rows_limit: 25,
+      rows_has_more: false,
+      rows: [],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({ ...control, release_gate })))
+    expect((await fetchArtifactReleaseControl()).release_gate).toEqual(release_gate)
+  })
+
   it('writes CAS, reason, confirmation, and operator attribution before refreshing', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi

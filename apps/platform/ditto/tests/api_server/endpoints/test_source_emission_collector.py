@@ -741,6 +741,9 @@ async def test_sweep_widens_batch_and_skips_leading_resolution_in_catchup(
     await collector._sweep_provider(substrate)
     assert scanned == list(range(101, 229))
     assert len(resolved) == 1
+    # The backlog is measured against the finalized head before the batch.
+    assert collector.last_finalized_block == 15000
+    assert collector.last_backlog_blocks == 14900
 
 
 async def test_failed_catchup_scan_still_resolves_pending_payouts(

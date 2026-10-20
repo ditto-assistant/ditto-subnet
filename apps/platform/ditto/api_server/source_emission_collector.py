@@ -7,7 +7,7 @@ import logging
 import random
 from collections.abc import Awaitable, Mapping
 from contextlib import suppress
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -57,6 +57,11 @@ from ditto.db.queries.source_emission_collector import (
     upsert_source_emission_vector_binding,
 )
 from ditto.db.queries.weight_receipts import get_finalized_weight_receipts
+from ditto.metrics import (
+    SOURCE_EMISSION_COLLECTOR_BACKLOG_BLOCKS,
+    SOURCE_EMISSION_COLLECTOR_CURSOR_AGE_SECONDS,
+    SOURCE_EMISSION_COLLECTOR_STALLED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +99,60 @@ _SPARSE_AUDIT_SAMPLES = 2
 # took 1-1.7 minutes on Dwellir, run one after another, which was most of a
 # range's time.
 _SPARSE_READ_CONCURRENCY = 4
+
+# A healthy collector advances its cursor on every sweep: the finalized head
+# moves every ~12s and the sweep runs every 30s. A recorded blocked reason with
+# no advance for this long is ~30 consecutive failed sweeps -- well past a
+# transient archive hiccup, and far short of the multi-day silent stalls behind
+# #2231 and #2703 (unaudited runtime fingerprints).
+SOURCE_EMISSION_COLLECTOR_STALL_SECONDS = 15 * 60
+
+
+@dataclass(frozen=True)
+class CollectorStaleness:
+    """How long ago the durable cursor last advanced, and whether it stalled.
+
+    Cursor age is not chain lag: a throttled archive can advance the cursor
+    every sweep while falling ever further behind the finalized head (#2850).
+    That backlog is reported separately as ``collector_backlog_blocks``.
+    """
+
+    cursor_updated_at: datetime | None
+    cursor_age_seconds: int | None
+    stalled: bool
+    threshold_seconds: int
+
+
+def collector_staleness(
+    *,
+    cursor_updated_at: datetime | None,
+    blocked_reason: str | None,
+    now: datetime,
+    threshold_seconds: int = SOURCE_EMISSION_COLLECTOR_STALL_SECONDS,
+) -> CollectorStaleness:
+    """Classify the collector cursor as current or stalled.
+
+    Stalled means both halves of the failure signature: the collector recorded
+    why it is blocked, and the cursor has not advanced for longer than the
+    threshold. A reason on a fresh cursor is a reset or a single failed sweep;
+    an old cursor without a reason is reported through ``cursor_age_seconds``
+    alone.
+    A missing cursor (never initialized) is unknown, never stalled.
+    """
+    if cursor_updated_at is None:
+        return CollectorStaleness(
+            cursor_updated_at=None,
+            cursor_age_seconds=None,
+            stalled=False,
+            threshold_seconds=threshold_seconds,
+        )
+    age = max(0, int((now - cursor_updated_at).total_seconds()))
+    return CollectorStaleness(
+        cursor_updated_at=cursor_updated_at,
+        cursor_age_seconds=age,
+        stalled=bool(blocked_reason) and age > threshold_seconds,
+        threshold_seconds=threshold_seconds,
+    )
 
 
 def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
@@ -211,6 +270,15 @@ class SourceEmissionCollector:
         # Set at the start of each provider sweep; a deep backlog widens the
         # scan batch and its timeout, then decays back to steady state.
         self._backlog_deep = False
+        # Last observed stall state; the ERROR log fires once per transition.
+        self._stalled = False
+        # Finalized head and ``finalized - cursor`` as measured by the most
+        # recent sweep that reached a provider, and when. Process-local: only
+        # the process running the collector (DITTO_ROLE=platform) ever sets
+        # them, so every other process reports the backlog as unknown.
+        self.last_finalized_block: int | None = None
+        self.last_backlog_blocks: int | None = None
+        self.last_backlog_observed_at: datetime | None = None
         # (first, last, blocks the full reader acted on) of the last sparse
         # range, compared once payouts for the sweep have been resolved.
         self._pending_shadow: tuple[int, int, list[int]] | None = None
@@ -233,6 +301,30 @@ class SourceEmissionCollector:
                 await self._task
             self._task = None
 
+    def backlog_blocks(self, *, now: datetime) -> int | None:
+        """Blocks the cursor trailed the finalized head at the last measurement.
+
+        Unknown (None) before any sweep reached a provider in this process, or
+        once the last measurement is older than the stall threshold -- a
+        backlog nobody has been able to re-measure for that long must not be
+        served as current.
+        """
+        observed_at = self.last_backlog_observed_at
+        if observed_at is None or self.last_backlog_blocks is None:
+            return None
+        if (
+            now - observed_at
+        ).total_seconds() > SOURCE_EMISSION_COLLECTOR_STALL_SECONDS:
+            return None
+        return self.last_backlog_blocks
+
+    def _record_backlog(self, *, finalized: int, current: int) -> None:
+        backlog = max(0, finalized - current)
+        self.last_finalized_block = finalized
+        self.last_backlog_blocks = backlog
+        self.last_backlog_observed_at = datetime.now(UTC)
+        SOURCE_EMISSION_COLLECTOR_BACKLOG_BLOCKS.set(backlog)
+
     async def _run(self) -> None:
         while not self._stop.is_set():
             try:
@@ -252,8 +344,102 @@ class SourceEmissionCollector:
                         )
                 except Exception:
                     logger.exception("source emission collector status write failed")
+            await self._observe_staleness()
             with suppress(TimeoutError):
                 await asyncio.wait_for(self._stop.wait(), self.interval_seconds)
+
+    async def _observe_staleness(self) -> None:
+        """Publish cursor staleness so a fail-closed stop pages, not sits silent."""
+        try:
+            async with self.sessions() as session:
+                cursor = await session.get(SourceEmissionCollectorCursor, self.netuid)
+                updated_at = cursor.updated_at if cursor is not None else None
+                blocked_reason = (
+                    cursor.last_blocked_reason if cursor is not None else None
+                )
+                block = cursor.block if cursor is not None else None
+                runtime_code_hash = (
+                    cursor.runtime_code_hash if cursor is not None else None
+                )
+        except Exception:
+            logger.exception("source emission collector staleness read failed")
+            # Unknown, not healthy: no previous scrape's value (``stalled=0``,
+            # an old age or backlog) may keep being exported as current while
+            # the cursor is unreadable.
+            SOURCE_EMISSION_COLLECTOR_STALLED.set(float("nan"))
+            SOURCE_EMISSION_COLLECTOR_CURSOR_AGE_SECONDS.set(float("nan"))
+            SOURCE_EMISSION_COLLECTOR_BACKLOG_BLOCKS.set(float("nan"))
+            return
+        self._record_staleness(
+            collector_staleness(
+                cursor_updated_at=updated_at,
+                blocked_reason=blocked_reason,
+                now=datetime.now(UTC),
+            ),
+            blocked_reason=blocked_reason,
+            cursor_block=block,
+            runtime_code_hash=runtime_code_hash,
+        )
+
+    def _record_staleness(
+        self,
+        staleness: CollectorStaleness,
+        *,
+        blocked_reason: str | None,
+        cursor_block: int | None,
+        runtime_code_hash: str | None,
+    ) -> None:
+        """Set the gauges every sweep; log ERROR only on the transition into a stall.
+
+        One line per transition keeps log-based alerting from flooding at the
+        30s sweep cadence; the gauge carries the persistent state. A process
+        restart re-arms the transition, so a stall that survives a deploy is
+        reported again.
+        """
+        SOURCE_EMISSION_COLLECTOR_STALLED.set(1 if staleness.stalled else 0)
+        SOURCE_EMISSION_COLLECTOR_CURSOR_AGE_SECONDS.set(
+            float("nan")
+            if staleness.cursor_age_seconds is None
+            else staleness.cursor_age_seconds
+        )
+        backlog = self.backlog_blocks(now=datetime.now(UTC))
+        if backlog is None:
+            SOURCE_EMISSION_COLLECTOR_BACKLOG_BLOCKS.set(float("nan"))
+        fields = {
+            "source_emission_collector_stalled": staleness.stalled,
+            "netuid": self.netuid,
+            "cursor_block": cursor_block,
+            "cursor_age_seconds": staleness.cursor_age_seconds,
+            "backlog_blocks": backlog,
+            "stall_threshold_seconds": staleness.threshold_seconds,
+            "runtime_code_hash": runtime_code_hash,
+            "blocked_reason": blocked_reason,
+        }
+        if staleness.stalled and not self._stalled:
+            logger.error(
+                "source emission collector stalled netuid=%s cursor_block=%s "
+                "cursor_age_seconds=%s backlog_blocks=%s "
+                "stall_threshold_seconds=%s runtime_code_hash=%s blocked_reason=%s",
+                self.netuid,
+                cursor_block,
+                staleness.cursor_age_seconds,
+                backlog,
+                staleness.threshold_seconds,
+                runtime_code_hash,
+                blocked_reason,
+                extra=fields,
+            )
+        elif self._stalled and not staleness.stalled:
+            logger.warning(
+                "source emission collector recovered netuid=%s cursor_block=%s "
+                "cursor_age_seconds=%s backlog_blocks=%s",
+                self.netuid,
+                cursor_block,
+                staleness.cursor_age_seconds,
+                backlog,
+                extra=fields,
+            )
+        self._stalled = staleness.stalled
 
     async def sweep(self) -> None:
         from async_substrate_interface import AsyncSubstrateInterface
@@ -310,6 +496,7 @@ class SourceEmissionCollector:
                     now=datetime.now(UTC),
                 )
         backlog = finalized - current
+        self._record_backlog(finalized=finalized, current=current)
         catchup = backlog > _SWEEP_CATCHUP_MIN_BACKLOG
         self._backlog_deep = catchup
         if budget is not None:
