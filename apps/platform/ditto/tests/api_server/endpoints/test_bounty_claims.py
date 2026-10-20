@@ -425,6 +425,7 @@ async def test_the_stored_claim_reverifies_from_its_own_fields(world):
         ("revision", 409, "terms changed"),
         ("digest", 409, "terms changed"),
         ("unknown", 404, "bounty not found"),
+        ("reviewer", 403, "reviewer cannot claim"),
         ("payee", 403, "Owner(hotkey)"),
         ("unlinked", 403, "active verified link"),
         ("login", 403, "active verified link"),
@@ -434,7 +435,9 @@ async def test_the_stored_claim_reverifies_from_its_own_fields(world):
     ],
 )
 async def test_refused_claims_write_nothing(world, case, status, message):
-    await world.start(ALICE)
+    # GitHub logins are case-insensitive: any spelling of hers is the reviewer.
+    reviewer = {"reviewer_login": ALICE.login.upper()} if case == "reviewer" else {}
+    await world.start(ALICE, **reviewer)
     await world.link(BOB, sign_cla=False)
     who, over, body = ALICE, {}, None
     if case == "netuid":

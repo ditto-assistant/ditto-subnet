@@ -88,6 +88,9 @@ existing slots or claims.
   whatever the upload gate's mode.
 - **One live slot per person.** A GitHub account and a payee coldkey can each
   hold one live slot per bounty.
+- **Not the reviewer.** A claim whose `github_login` is the revision's
+  `reviewer_login` is refused with `403`. GitHub logins are case-insensitive,
+  so the two are compared without regard to letter case.
 - **Teams.** v1 claims are solo. The claim still signs a `team_digest`, the
   digest of a one-member team, so team claims can be added without a new
   signature domain.
@@ -255,6 +258,7 @@ operators.
 | Terms changed after work began | The claim binds `spec_digest`. New revisions apply to new claims only |
 | Someone else confirms a held claim and starts its deadline | Only the payee can pay a live fee. A rehearsal receipt derives from the claim's own signature, which no view shows, and only the hold's response carries it |
 | Squatting on slots | A short unpaid hold, a fee to claim, a fixed delivery deadline with no renewals, and one live slot per GitHub account and payee |
+| The reviewer claims the work they review | A claim signed with the revision's `reviewer_login`, in any letter case, is refused before anything is recorded |
 | Placeholder pull requests | A submission names an exact commit, and the reviewer decides on that commit within the review target |
 | A pull request is rewritten after review | `submit` binds `head_sha`. New commits need a new signed submission |
 | A hotkey leaks, is sold, or changes owner | The new holder can make new claims but can't act on or redirect existing ones. A changed owner before fee confirmation refunds the fee, and afterwards an award's payout holds until the owner is the payee again |

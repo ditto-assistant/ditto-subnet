@@ -41,7 +41,8 @@ Platform changes the terms, and it applies to new claims only.
    `uv run ditto cla sign`. Bounty claims always need it, whatever the upload
    gate's mode. See [the miner guide](MINER.md#github-identity-and-contributor-agreement).
 
-A GitHub account and a payee coldkey can each hold one live slot per bounty.
+A GitHub account and a payee coldkey can each hold one live slot per bounty,
+and the bounty's reviewer cannot claim it.
 
 ## Claim a slot
 
@@ -166,5 +167,6 @@ owner of a hotkey that has changed hands cannot act on your claim.
 | `new claims are paused for this bounty` | Wait for operators to resume claims. Existing holds and payments are unaffected |
 | `every slot in round N is taken` | No slot in the current round is open |
 | `this GitHub account or payee coldkey already holds a slot on this bounty` | One live slot per account and payee |
+| `the bounty's reviewer cannot claim it` | The GitHub account named as the bounty's reviewer, in any letter case, cannot claim a slot on it |
 | A CLA or GitHub link message | Run `ditto cla sign` or `ditto link-github`, then claim again |
 | `bounty action nonce already used` | That signature was already used for a different request. An exact retry returns the original result |
