@@ -194,7 +194,15 @@ class ChainClient:
         cache = getattr(self, "_treasury_runtime_cache", None)
         if cache is None:
             cache = self._treasury_runtime_cache = TreasuryRuntimeCache()
-        return _treasury_substrate(self._substrate_url(), runtime_cache=cache)
+        # Use the same configured/archive transport order as finalized receipt
+        # reads. The public live entrypoint can refuse websocket handshakes with
+        # HTTP 429 while these existing providers still serve current finalized
+        # identity and permission evidence. This selects transport only: each
+        # request retains its exact-hash reads, genesis/identity validation and
+        # existing eight-second windows; no observed authority is cached.
+        return _treasury_substrate(
+            self._historical_substrate_urls()[0], runtime_cache=cache
+        )
 
     async def __aenter__(self) -> ChainClient:
         """Open the underlying Pylon client connection."""
