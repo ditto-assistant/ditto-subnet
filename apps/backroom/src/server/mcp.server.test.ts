@@ -487,6 +487,8 @@ describe('Backroom MCP tools', () => {
         'dispatch_bounty_obligation',
         'reconcile_bounty_transfer',
         'record_bounty_fact',
+        'record_bounty_evaluation',
+        'decide_bounty_evaluation',
         'get_owner_attestations',
         'get_submission_cooldown',
         'get_treasury_settings',
@@ -702,8 +704,10 @@ describe('Backroom MCP tools', () => {
     // schemas (ids as format uuid, terms as an object; services parse
     // strictly) and one-line summaries with procedures in tool help: measured
     // 197,867 bytes together. Main's runtime-interface report read (#2994)
-    // adds 659: measured 198,526 with both. Keep the same ~0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(199_000)
+    // adds 659: measured 198,526 with both. The appeals queue option (#2943)
+    // and the two compact bounty evaluation writes (#2944), whose enums stay
+    // in the catalog, measure 200,358. Keep the same ~0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(200_900)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

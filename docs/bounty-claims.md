@@ -253,9 +253,9 @@ The public board (`/api/v1/public/bounties`) and claim records
 - obligations, approval counts, transfers and delivery facts;
 - a public event trail with ids, which appeals cite.
 
-Operator identities, appeal statements, and the reasons for pausing,
-cancelling, reopening and awarding are private. Backroom shows them to
-operators.
+Operator identities, appeal statements, the pilot's evaluation records, and
+the reasons for pausing, cancelling, reopening and awarding are private.
+Backroom shows them to operators.
 
 ## Threat model
 

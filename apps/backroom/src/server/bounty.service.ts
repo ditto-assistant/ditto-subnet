@@ -8,6 +8,10 @@ import {
   bountyClaimInputSchema,
   bountyClaimSchema,
   bountyDispatchInputSchema,
+  bountyEvaluationDecisionInputSchema,
+  bountyEvaluationDecisionSchema,
+  bountyEvaluationEntryInputSchema,
+  bountyEvaluationEntrySchema,
   bountyFactInputSchema,
   bountyIdInputSchema,
   bountyObligationSchema,
@@ -539,3 +543,79 @@ export async function recordBountyFact(actor: string, rawInput: unknown) {
   return settled(outcome, 'The delivery fact')
 }
 
+/** The record that superseded `expected` (0: the first record), if any.
+ *
+ * Each evaluation write names the record it supersedes, so this is the exact
+ * record the write would create: once another write took that place, this
+ * one can never apply.
+ */
+function successor<T>(history: T[], id: (record: T) => number, expected: number): T | undefined {
+  const ordered = [...history].sort((a, b) => id(a) - id(b))
+  if (expected === 0) return ordered[0]
+  const at = ordered.findIndex((record) => id(record) === expected)
+  return at === -1 ? undefined : ordered[at + 1]
+}
+
+export async function recordBountyEvaluationEntry(actor: string, rawInput: unknown) {
+  const input = bountyEvaluationEntryInputSchema.parse(rawInput)
+  const outcome = await platformAdminWrite(`${ADMIN}/${input.bountyId}/evaluation/entries`, {
+    actor,
+    body: {
+      kind: input.kind,
+      metric: input.metric,
+      value: input.value,
+      expected_entry_id: input.expectedEntryId,
+      note: input.note ?? null,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  }, {
+    parse: parsed(bountyEvaluationEntrySchema),
+    readBack: async () => {
+      const view = await fetchBounty({ bountyId: input.bountyId })
+      const history = (view.evaluation?.entries ?? [])
+        .filter((entry) => entry.kind === input.kind && entry.metric === input.metric)
+      const made = successor(history, (entry) => entry.entry_id, input.expectedEntryId)
+      if (!made) return { state: 'absent' }
+      if (
+        made.value === input.value && made.note === (input.note ?? null) && made.reason === input.reason &&
+        made.actor === actor.trim()
+      ) {
+        return { state: 'applied', value: made }
+      }
+      return { state: 'superseded', detail: `Entry ${made.entry_id} was already recorded by ${made.actor}` }
+    },
+    retryHint: 'read the bounty for its current entry and retry naming it.',
+  })
+  return settled(outcome, `The ${input.kind} of ${input.metric}`)
+}
+
+export async function recordBountyEvaluationDecision(actor: string, rawInput: unknown) {
+  const input = bountyEvaluationDecisionInputSchema.parse(rawInput)
+  const outcome = await platformAdminWrite(`${ADMIN}/${input.bountyId}/evaluation/decisions`, {
+    actor,
+    body: {
+      decision: input.decision,
+      integration_status: input.integrationStatus,
+      expected_decision_id: input.expectedDecisionId,
+      reasons: input.reasons,
+      confirmation: input.confirmation,
+    },
+  }, {
+    parse: parsed(bountyEvaluationDecisionSchema),
+    readBack: async () => {
+      const view = await fetchBounty({ bountyId: input.bountyId })
+      const made = successor(view.evaluation?.decisions ?? [], (decided) => decided.decision_id, input.expectedDecisionId)
+      if (!made) return { state: 'absent' }
+      if (
+        made.decision === input.decision && made.integration_status === input.integrationStatus &&
+        made.reasons === input.reasons && made.actor === actor.trim()
+      ) {
+        return { state: 'applied', value: made }
+      }
+      return { state: 'superseded', detail: `Decision ${made.decision_id} was already recorded by ${made.actor}` }
+    },
+    retryHint: 'read the bounty for its current decision and retry naming it.',
+  })
+  return settled(outcome, 'The evaluation decision')
+}

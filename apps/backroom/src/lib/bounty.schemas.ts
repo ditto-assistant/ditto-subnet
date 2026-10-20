@@ -133,6 +133,31 @@ export const bountyFactInputSchema = z.object({
   reference: z.string().min(1).max(500),
   confirmation,
 })
+const evaluationKinds = ['estimate', 'actual'] as const
+const evaluationMetrics = ['build_hours', 'reviewer_hours', 'integration_hours', 'operator_hours', 'turnaround_days'] as const
+const evaluationDecisions = ['expand', 'revise', 'stop'] as const
+const integrationStatuses = ['not_integrated', 'integrating', 'integrated', 'adopted', 'not_adopted'] as const
+// The record a write supersedes: 0 before the first.
+const evaluationId = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+export const bountyEvaluationEntryInputSchema = z.object({
+  bountyId: uuid,
+  kind: z.enum(evaluationKinds),
+  metric: z.enum(evaluationMetrics),
+  // Hours, or days of turnaround.
+  value: z.number().nonnegative().max(1_000_000),
+  expectedEntryId: evaluationId,
+  note: z.string().min(1).max(2000).optional(),
+  reason,
+  confirmation,
+})
+export const bountyEvaluationDecisionInputSchema = z.object({
+  bountyId: uuid,
+  decision: z.enum(evaluationDecisions),
+  integrationStatus: z.enum(integrationStatuses),
+  expectedDecisionId: evaluationId,
+  reasons: reason,
+  confirmation,
+})
 
 // Responses.
 const transferSchema = z.object({ transfer_id: uuid, round: z.number().int(), state: z.string() }).passthrough()
@@ -176,6 +201,22 @@ const auditEntrySchema = z.object({
   slot_id: uuid.nullable(),
   obligation_id: uuid.nullable(),
 }).passthrough()
+export const bountyEvaluationEntrySchema = z.object({
+  entry_id: z.number().int(),
+  kind: z.string(),
+  metric: z.string(),
+  value: z.number(),
+  note: z.string().nullable(),
+  reason: z.string(),
+  actor: z.string(),
+}).passthrough()
+export const bountyEvaluationDecisionSchema = z.object({
+  decision_id: z.number().int(),
+  decision: z.string(),
+  integration_status: z.string(),
+  reasons: z.string(),
+  actor: z.string(),
+}).passthrough()
 export const bountyOperatorSchema = z.object({
   detail: bountyDetailSchema,
   reviewer_actor: z.string(),
@@ -197,6 +238,12 @@ export const bountyOperatorSchema = z.object({
     restored_deadline_at: z.string().nullable(),
   }).passthrough()),
   audit: z.array(auditEntrySchema),
+  // Every evaluation record, oldest first. Optional, so an operator view
+  // from a Platform without them still reads.
+  evaluation: z.object({
+    entries: z.array(bountyEvaluationEntrySchema),
+    decisions: z.array(bountyEvaluationDecisionSchema),
+  }).passthrough().optional(),
 }).passthrough()
 export const bountyQueueSchema = z.object({ items: z.array(z.object({}).passthrough()), total: z.number().int() }).passthrough()
 export const bountyPreviewSchema = z.object({
@@ -260,4 +307,12 @@ export const bountyCatalogInputs = {
     rehearsalOutcome: z.enum(['confirmed', 'failed', 'expired', 'unknown']), confirmation: z.string(),
   }),
   fact: z.object({ claimId: catalogId, kind: z.enum(['merged', 'deployed', 'adopted']), reference: z.string(), confirmation: z.string() }),
+  evaluationEntry: z.object({
+    bountyId: catalogId, kind: z.enum(evaluationKinds), metric: z.enum(evaluationMetrics), value: z.number(),
+    expectedEntryId: z.number().int(), note: z.string().optional(), reason: z.string(), confirmation: z.string(),
+  }),
+  evaluationDecision: z.object({
+    bountyId: catalogId, decision: z.enum(evaluationDecisions), integrationStatus: z.enum(integrationStatuses),
+    expectedDecisionId: z.number().int(), reasons: z.string(), confirmation: z.string(),
+  }),
 }

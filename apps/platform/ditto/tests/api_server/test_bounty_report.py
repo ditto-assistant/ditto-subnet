@@ -16,7 +16,13 @@ from typing import Any
 
 import pytest
 
-from ditto.api_models.bounty import BountyClaimView, BountyDetail
+from ditto.api_models.bounty import (
+    BountyClaimView,
+    BountyDetail,
+    BountyEvaluationDecisionView,
+    BountyEvaluationEntryView,
+    BountyEvaluationView,
+)
 from ditto.api_server.bounty_report import bounty_report
 
 FIXTURES = Path(__file__).resolve().parents[3] / "dashboard" / "fixtures"
@@ -29,12 +35,20 @@ def by_login(claims: dict[str, Any], login: str) -> dict[str, Any]:
     return next(c for c in claims.values() if c["github_login"] == login)
 
 
-def report(detail: dict[str, Any], claims: dict[str, Any]):
+NONE = BountyEvaluationView(entries=[], decisions=[])
+
+
+def report(
+    detail: dict[str, Any],
+    claims: dict[str, Any],
+    evaluation: BountyEvaluationView = NONE,
+):
     return bounty_report(
         detail=BountyDetail.model_validate(detail),
         claims=[BountyClaimView.model_validate(c) for c in claims.values()],
         appeals=[],
         audit=[],
+        evaluation=evaluation,
     )
 
 
@@ -192,3 +206,91 @@ def test_each_check_catches_its_own_violation(
     edit(state)
     made = report(state["detail"], state["claims"])
     assert {c.name for c in made.checks if not c.ok} == {check}
+
+
+AT = datetime.fromisoformat("2026-10-20T00:00:00+00:00")
+
+
+def entry(entry_id: int, kind: str, metric: str, value: float):
+    return BountyEvaluationEntryView(
+        entry_id=entry_id,
+        kind=kind,
+        metric=metric,
+        value=value,
+        note=f"private note {entry_id}",
+        reason=f"private reason {entry_id}",
+        actor=f"operator-{entry_id}@example.com",
+        recorded_at=AT + timedelta(hours=entry_id),
+    )
+
+
+def test_an_unrecorded_evaluation_reads_null():
+    made = report(DETAIL, CLAIMS).evaluation
+    nothing = dict.fromkeys(
+        (
+            "build_hours",
+            "reviewer_hours",
+            "integration_hours",
+            "operator_hours",
+            "turnaround_days",
+        )
+    )
+    assert made.estimates.model_dump() == made.actuals.model_dump() == nothing
+    assert (made.decision, made.integration_status, made.reasons) == (None,) * 3
+    assert made.decided_at is None
+
+
+def test_the_evaluation_keeps_estimates_and_actuals_apart_and_names_no_one():
+    evaluation = BountyEvaluationView(
+        entries=[
+            entry(1, "estimate", "build_hours", 40.0),
+            entry(2, "actual", "build_hours", 52.5),
+            entry(3, "estimate", "reviewer_hours", 6.0),
+            # A later estimate supersedes the first; the actual stays apart.
+            entry(4, "estimate", "build_hours", 45.0),
+            entry(5, "actual", "turnaround_days", 9.0),
+        ],
+        decisions=[
+            BountyEvaluationDecisionView(
+                decision_id=1,
+                decision="revise",
+                integration_status="integrating",
+                reasons="Smaller scope next time.",
+                actor="decider-one@example.com",
+                recorded_at=AT,
+            ),
+            BountyEvaluationDecisionView(
+                decision_id=2,
+                decision="expand",
+                integration_status="integrated",
+                reasons="Cheaper than building it internally.",
+                actor="decider-two@example.com",
+                recorded_at=AT + timedelta(days=1),
+            ),
+        ],
+    )
+    made = report(DETAIL, CLAIMS, evaluation).evaluation
+    assert made.estimates.model_dump() == {
+        "build_hours": 45.0,
+        "reviewer_hours": 6.0,
+        "integration_hours": None,
+        "operator_hours": None,
+        "turnaround_days": None,
+    }
+    assert made.actuals.model_dump() == {
+        "build_hours": 52.5,
+        "reviewer_hours": None,
+        "integration_hours": None,
+        "operator_hours": None,
+        "turnaround_days": 9.0,
+    }
+    assert (made.decision, made.integration_status, made.reasons) == (
+        "expand",
+        "integrated",
+        "Cheaper than building it internally.",
+    )
+    assert made.decided_at == AT + timedelta(days=1)
+    # Source-safe: no operator, and no entry's private note or reason.
+    published = report(DETAIL, CLAIMS, evaluation).model_dump_json()
+    for private in ("@example.com", "private note", "private reason"):
+        assert private not in published

@@ -80,6 +80,32 @@ capped pilot needs before any of that changes.
 5. **Facts.** `record_bounty_fact` records a merge, deployment or adoption.
    None of them gates payment.
 
+## Record the evaluation
+
+Each bounty of a pilot is evaluated against building the same work
+internally (#2944). Record the evaluation in Platform, where it is kept
+append-only:
+
+- **Estimates and actuals.** `record_bounty_evaluation` records an `estimate`
+  or an `actual` of one metric: `build_hours`, `reviewer_hours`,
+  `integration_hours`, `operator_hours` or `turnaround_days`, as a
+  non-negative number up to 1,000,000, with an optional note and a reason. The
+  phrase is `RECORD BOUNTY {KIND} {METRIC} {repo}#{issue}`. Record estimates
+  before work starts and actuals as they become known.
+- **Decision.** `decide_bounty_evaluation` records whether to `expand`,
+  `revise` or `stop` the pilot, with its `integrationStatus`
+  (`not_integrated`, `integrating`, `integrated`, `adopted` or `not_adopted`)
+  and non-blank reasons. The phrase is
+  `DECIDE BOUNTY EVALUATION {repo}#{issue} {DECISION}`.
+
+Each write names the record it supersedes: `expectedEntryId` is the current
+entry of the same kind and metric, and `expectedDecisionId` the current
+decision, `0` before the first. A stale id is refused, so two operators never
+overwrite each other unseen, and an exact retry returns the record it made.
+Nothing is edited: the latest entry of each kind and metric, and the latest
+decision, are current, and `get_bounty` lists every record with its operator
+and reason under `evaluation` and in the audit.
+
 ## Pause and roll back
 
 - **Pause.** `set_bounty_claims_paused` stops new holds on one bounty. Holds
@@ -96,7 +122,8 @@ capped pilot needs before any of that changes.
 ## Read the report
 
 `get_bounty` includes a `report`: a source-safe account of the bounty for its
-evaluation. It names only what the public board shows and counts operator
+evaluation. Beyond what the public board shows, it adds only the current
+evaluation values and decision with its reasons, and it counts operator
 actions without naming operators, so it can be published as it is.
 
 | Field | What it counts |
@@ -113,6 +140,7 @@ actions without naming operators, so it can be published as it is.
 | `appeals_filed`, `appeals_upheld`, `appeals_denied` | Appeals and their outcomes |
 | `facts` | Recorded merges, deployments and adoptions |
 | `operator_actions` | Operator records in the audit |
+| `evaluation` | The current `estimates` and `actuals` of each metric, kept apart and `null` where none is recorded, and the current `decision`, `integration_status`, `reasons` and `decided_at`, all `null` before the first decision. It names no operator and leaves out entries' notes and reasons |
 
 `checks` verifies the settlement invariants from the recorded history: awards
 stay within the pool and go only to accepted work, each paid fee has at most one

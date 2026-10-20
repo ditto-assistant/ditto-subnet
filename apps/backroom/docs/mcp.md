@@ -534,10 +534,11 @@ rehearsal funding only: fees and transfers are simulated, and no funds move.
 - `get_bounty_board`: each bounty's current terms, effective slot counts, claims
   pause, overdue reviews and recorded awards. Filter by `repo` and `issue`.
 - `get_bounty`: one bounty with everything public views hide: the reviewer in
-  force, each revision's operator and reason, every claim, appeal statements, and
-  a chronological `audit` of every operator record with its actor and reason.
-  Its `report` is a source-safe account of fees, awards, transfers, reviews and
-  appeals, with settlement checks that should all pass; the
+  force, each revision's operator and reason, every claim, appeal statements,
+  every `evaluation` record with its operator, and a chronological `audit` of
+  every operator record with its actor and reason. Its `report` is a
+  source-safe account of fees, awards, transfers, reviews, appeals and the
+  current evaluation, with settlement checks that should all pass; the
   [operator runbook](../../../docs/bounty-operations.md#read-the-report)
   explains each field. Read it before a write and to verify one after.
 - `get_bounty_claim`: one claim's hold, receipts, submissions and decisions,
@@ -569,11 +570,14 @@ rehearsal funding only: fees and transfers are simulated, and no funds move.
 | `dispatch_bounty_obligation` | one dispatch of an approved round |
 | `reconcile_bounty_transfer` | the settled outcome of a dispatched or uncertain transfer |
 | `record_bounty_fact` | a public merge, deployment or adoption fact |
+| `record_bounty_evaluation` | an estimate or actual of one evaluation metric, superseding the entry `expectedEntryId` names |
+| `decide_bounty_evaluation` | expand, revise or stop the pilot, with integration status and reasons, superseding `expectedDecisionId` |
 
 Every write follows the outcome rule below (`src/server/platform-write.ts`).
 Each read-back recognises the exact record its write creates (your revision,
-review, award, approval, transfer round, fact, or your audit entry), so an
-unknown outcome is safe to retry with the same input. Never resend a dispatch
+review, award, approval, transfer round, fact, the evaluation record after the
+one you named, or your audit entry), so an unknown outcome is safe to retry
+with the same input. Never resend a dispatch
 whose transfer is recorded: reconcile it. Money moves only through approved,
 dispatched transfers; awards, refunds and facts record facts and move nothing.
 An award's approval and dispatch are refused with `payout held` while the claim

@@ -6,8 +6,9 @@ last applied state without the UI (repo rule: err toward more visibility).
 These reads are admin-only and change nothing:
 
 - one bounty's operator view: the public detail plus the reviewer in force,
-  every revision's private fields, every claim, appeal statements, and one
-  chronological audit of every operator record with its actor and reason;
+  every revision's private fields, every claim, appeal statements, the
+  evaluation records, and one chronological audit of every operator record
+  with its actor and reason;
 - the review queue: submissions awaiting a decision, overdue first;
 - the settlement queue: obligations that still need an operator, with the
   operators who approved their current round;
@@ -39,6 +40,7 @@ from ditto.api_models.bounty import (
 )
 from ditto.api_server import bounty, bounty_claims
 from ditto.api_server.bounty_claims import claim_views
+from ditto.api_server.bounty_evaluation import evaluation_view
 from ditto.api_server.bounty_obligations import (
     current_policy,
     obligation_state,
@@ -53,6 +55,8 @@ from ditto.db.models import (
     BountyClaim,
     BountyClaimControl,
     BountyDeliveryFact,
+    BountyEvaluationDecision,
+    BountyEvaluationEntry,
     BountyEvent,
     BountyObligation,
     BountyObligationApproval,
@@ -129,6 +133,34 @@ async def _audit(
                 control.reason,
                 "new claims paused" if control.paused else "new claims open",
                 control.recorded_at,
+            )
+        )
+    for recorded in await session.scalars(
+        select(BountyEvaluationEntry).where(
+            BountyEvaluationEntry.bounty_id == bounty_id
+        )
+    ):
+        entries.append(
+            _entry(
+                "evaluation_recorded",
+                recorded.actor,
+                recorded.reason,
+                f"{recorded.kind} {recorded.metric} {recorded.value}",
+                recorded.recorded_at,
+            )
+        )
+    for decided in await session.scalars(
+        select(BountyEvaluationDecision).where(
+            BountyEvaluationDecision.bounty_id == bounty_id
+        )
+    ):
+        entries.append(
+            _entry(
+                "evaluation_decided",
+                decided.actor,
+                decided.reasons,
+                f"{decided.decision}, {decided.integration_status}",
+                decided.recorded_at,
             )
         )
     for assignment in await session.scalars(
@@ -378,6 +410,7 @@ async def operator_view(session: AsyncSession, bounty_id: UUID) -> BountyOperato
         for appeal, decision in appeals
     ]
     audit = await _audit(session, bounty_id, claim_ids)
+    evaluation = await evaluation_view(session, bounty_id)
     return BountyOperatorView(
         detail=detail,
         reviewer_actor=await current_reviewer(session, bounty_id),
@@ -395,8 +428,13 @@ async def operator_view(session: AsyncSession, bounty_id: UUID) -> BountyOperato
         claims=views,
         appeals=appeal_views,
         audit=audit,
+        evaluation=evaluation,
         report=bounty_report(
-            detail=detail, claims=views, appeals=appeal_views, audit=audit
+            detail=detail,
+            claims=views,
+            appeals=appeal_views,
+            audit=audit,
+            evaluation=evaluation,
         ),
     )
 

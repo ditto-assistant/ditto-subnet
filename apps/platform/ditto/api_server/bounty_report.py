@@ -5,6 +5,10 @@ public views already show, and counts operator actions without naming the
 operators. It reads only what the operator view reads, so the two never
 disagree, and it checks the settlement invariants the database enforces, so a
 rehearsal ends with evidence that each one held.
+
+Its evaluation shows the current estimate and actual of each metric, kept
+apart, and the current pilot decision with its integration status and
+reasons. It leaves out who recorded them and their private notes and reasons.
 """
 
 from __future__ import annotations
@@ -18,12 +22,15 @@ from ditto.api_models.bounty import (
     BountyAuditEntry,
     BountyClaimView,
     BountyDetail,
+    BountyEvaluationView,
     BountyObligationView,
     BountyReport,
     BountyReportAmount,
     BountyReportCheck,
     BountyReportClaim,
+    BountyReportEvaluation,
     BountyReportFee,
+    BountyReportMetrics,
 )
 
 # A fee refund for these reasons settles a paid fee. The other refund reasons
@@ -192,12 +199,39 @@ def _checks(
     ]
 
 
+def _evaluation(evaluation: BountyEvaluationView) -> BountyReportEvaluation:
+    """The current values and decision; records are listed oldest first."""
+    current: dict[str, dict[str, float]] = {"estimate": {}, "actual": {}}
+    for entry in evaluation.entries:
+        current[entry.kind][entry.metric] = entry.value
+    decision = evaluation.decisions[-1] if evaluation.decisions else None
+    return BountyReportEvaluation(
+        estimates=BountyReportMetrics.model_validate(
+            {
+                name: current["estimate"].get(name)
+                for name in BountyReportMetrics.model_fields
+            }
+        ),
+        actuals=BountyReportMetrics.model_validate(
+            {
+                name: current["actual"].get(name)
+                for name in BountyReportMetrics.model_fields
+            }
+        ),
+        decision=decision.decision if decision else None,
+        integration_status=decision.integration_status if decision else None,
+        reasons=decision.reasons if decision else None,
+        decided_at=decision.recorded_at if decision else None,
+    )
+
+
 def bounty_report(
     *,
     detail: BountyDetail,
     claims: list[BountyClaimView],
     appeals: list[BountyAdminAppealView],
     audit: list[BountyAuditEntry],
+    evaluation: BountyEvaluationView,
 ) -> BountyReport:
     summary = detail.summary
     obligations = [o for claim in claims for o in claim.obligations]
@@ -252,4 +286,5 @@ def bounty_report(
         facts=dict(Counter(f.kind for claim in claims for f in claim.facts)),
         operator_actions=len(audit),
         checks=_checks(detail, claims),
+        evaluation=_evaluation(evaluation),
     )

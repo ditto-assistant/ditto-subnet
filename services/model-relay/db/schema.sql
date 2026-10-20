@@ -1758,6 +1758,68 @@ ALTER TABLE public.bounty_delivery_facts ALTER COLUMN fact_id ADD GENERATED ALWA
 
 
 --
+-- Name: bounty_evaluation_decisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_evaluation_decisions (
+    decision_id bigint NOT NULL,
+    bounty_id uuid NOT NULL,
+    decision text NOT NULL,
+    integration_status text NOT NULL,
+    reasons text NOT NULL,
+    actor text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_evaluation_decisions_decision CHECK (((decision = ANY (ARRAY['expand'::text, 'revise'::text, 'stop'::text])) AND (integration_status = ANY (ARRAY['not_integrated'::text, 'integrating'::text, 'integrated'::text, 'adopted'::text, 'not_adopted'::text])) AND (length(btrim(reasons)) > 0)))
+);
+
+
+--
+-- Name: bounty_evaluation_decisions_decision_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_evaluation_decisions ALTER COLUMN decision_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_evaluation_decisions_decision_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bounty_evaluation_entries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_evaluation_entries (
+    entry_id bigint NOT NULL,
+    bounty_id uuid NOT NULL,
+    kind text NOT NULL,
+    metric text NOT NULL,
+    value double precision NOT NULL,
+    note text,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_evaluation_entries_entry CHECK (((kind = ANY (ARRAY['estimate'::text, 'actual'::text])) AND (metric = ANY (ARRAY['build_hours'::text, 'reviewer_hours'::text, 'integration_hours'::text, 'operator_hours'::text, 'turnaround_days'::text])) AND (value >= (0)::double precision) AND (value <= (1000000)::double precision) AND ((note IS NULL) OR (length(btrim(note)) > 0)) AND (length(btrim(reason)) > 0)))
+);
+
+
+--
+-- Name: bounty_evaluation_entries_entry_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_evaluation_entries ALTER COLUMN entry_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_evaluation_entries_entry_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: bounty_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8245,6 +8307,22 @@ ALTER TABLE ONLY public.bounty_delivery_facts
 
 
 --
+-- Name: bounty_evaluation_decisions pk_bounty_evaluation_decisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_evaluation_decisions
+    ADD CONSTRAINT pk_bounty_evaluation_decisions PRIMARY KEY (decision_id);
+
+
+--
+-- Name: bounty_evaluation_entries pk_bounty_evaluation_entries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_evaluation_entries
+    ADD CONSTRAINT pk_bounty_evaluation_entries PRIMARY KEY (entry_id);
+
+
+--
 -- Name: bounty_events pk_bounty_events; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10231,6 +10309,20 @@ CREATE INDEX bounty_claims_slot_idx ON public.bounty_claims USING btree (slot_id
 
 
 --
+-- Name: bounty_evaluation_decisions_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_evaluation_decisions_bounty_idx ON public.bounty_evaluation_decisions USING btree (bounty_id, decision_id);
+
+
+--
+-- Name: bounty_evaluation_entries_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_evaluation_entries_bounty_idx ON public.bounty_evaluation_entries USING btree (bounty_id, kind, metric, entry_id);
+
+
+--
 -- Name: bounty_events_bounty_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -11516,6 +11608,34 @@ CREATE TRIGGER bounty_delivery_facts_immutable BEFORE DELETE OR UPDATE ON public
 --
 
 CREATE TRIGGER bounty_delivery_facts_no_truncate BEFORE TRUNCATE ON public.bounty_delivery_facts FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_evaluation_decisions bounty_evaluation_decisions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_evaluation_decisions_immutable BEFORE DELETE OR UPDATE ON public.bounty_evaluation_decisions FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_evaluation_decisions bounty_evaluation_decisions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_evaluation_decisions_no_truncate BEFORE TRUNCATE ON public.bounty_evaluation_decisions FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_evaluation_entries bounty_evaluation_entries_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_evaluation_entries_immutable BEFORE DELETE OR UPDATE ON public.bounty_evaluation_entries FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_evaluation_entries bounty_evaluation_entries_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_evaluation_entries_no_truncate BEFORE TRUNCATE ON public.bounty_evaluation_entries FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
 
 
 --
@@ -12926,6 +13046,22 @@ ALTER TABLE ONLY public.bounty_claims
 
 ALTER TABLE ONLY public.bounty_delivery_facts
     ADD CONSTRAINT fk_bounty_delivery_facts_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_evaluation_decisions fk_bounty_evaluation_decisions_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_evaluation_decisions
+    ADD CONSTRAINT fk_bounty_evaluation_decisions_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_evaluation_entries fk_bounty_evaluation_entries_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_evaluation_entries
+    ADD CONSTRAINT fk_bounty_evaluation_entries_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
 
 
 --

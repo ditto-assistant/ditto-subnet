@@ -189,8 +189,38 @@ async def test_a_bounty_round_rehearses_every_outcome(
     )
     assert merged.status_code == 200, merged.text
 
-    # The report accounts for every fee, award and transfer.
+    # The pilot's evaluation: the build's estimate and actual, and a decision.
     bounty_id = world.detail["summary"]["bounty_id"]
+    for kind, value in (("estimate", 30.0), ("actual", 36.5)):
+        recorded = await world.client.post(
+            f"{ADMIN}/{bounty_id}/evaluation/entries",
+            headers=ONE,
+            json={
+                "kind": kind,
+                "metric": "build_hours",
+                "value": value,
+                "expected_entry_id": 0,
+                "note": "rehearsal evaluation note",
+                "reason": "rehearsal evaluation reason",
+                "confirmation": f"RECORD BOUNTY {kind.upper()} BUILD_HOURS "
+                f"{REPO}#{ISSUE}",
+            },
+        )
+        assert recorded.status_code == 200, recorded.text
+    decided = await world.client.post(
+        f"{ADMIN}/{bounty_id}/evaluation/decisions",
+        headers=TWO,
+        json={
+            "decision": "expand",
+            "integration_status": "integrated",
+            "expected_decision_id": 0,
+            "reasons": "Two of three slots delivered.",
+            "confirmation": f"DECIDE BOUNTY EVALUATION {REPO}#{ISSUE} EXPAND",
+        },
+    )
+    assert decided.status_code == 200, decided.text
+
+    # The report accounts for every fee, award and transfer.
     view = (await world.client.get(f"{ADMIN}/{bounty_id}", headers=_HEADERS)).json()
     report = view["report"]
     assert [(c["name"], c["ok"]) for c in report["checks"] if not c["ok"]] == []
@@ -228,14 +258,25 @@ async def test_a_bounty_round_rehearses_every_outcome(
     ) == (2, 1, 1)
     assert report["facts"] == {"merged": 1}
     assert report["operator_actions"] == len(view["audit"]) > 0
+    evaluation = report["evaluation"]
+    assert (
+        evaluation["estimates"]["build_hours"],
+        evaluation["actuals"]["build_hours"],
+        evaluation["decision"],
+        evaluation["integration_status"],
+        evaluation["reasons"],
+    ) == (30.0, 36.5, "expand", "integrated", "Two of three slots delivered.")
     # Source-safe: no operator, private reason or appeal statement appears.
     published = json.dumps(report)
     for private in (
         "operator-fixture@example.com",
         "reviewer-private@example.com",
         "approver-one@example.com",
+        "approver-two@example.com",
         "rehearsal appeal decision",
         "My CI was down.",
+        "rehearsal evaluation note",
+        "rehearsal evaluation reason",
     ):
         assert private not in published
 

@@ -17,6 +17,8 @@ from sqlalchemy import func, select
 
 from ditto.db.models import (
     BountyClaimControl,
+    BountyEvaluationDecision,
+    BountyEvaluationEntry,
     BountyObligation,
     BountyReviewerAssignment,
 )
@@ -32,6 +34,7 @@ from ditto.tests.api_server.endpoints.test_bounty_settlement import accepted
 
 BEFORE_BOUNTIES = "dc41b7a6e205"
 P1, P2, P3 = "bb24cc6f573b", "c5f81d2a9e47", "d7a3e9b2c641"
+SETTLEMENT = "e1b8c4f7a209"
 
 
 def alembic(*args: str) -> subprocess.CompletedProcess[str]:
@@ -124,6 +127,37 @@ async def test_a_linked_refund_event_blocks_the_settlement_downgrade(world):
     assert cancelled.status_code == 200, cancelled.text
     refused(P3)
     assert await count(world, BountyObligation) == 1
+
+
+@pytest.mark.parametrize("record", ["entries", "decisions"])
+async def test_a_recorded_evaluation_blocks_the_evaluation_downgrade(world, record):
+    await world.start(ALICE)
+    bounty_id = world.detail["summary"]["bounty_id"]
+    body = (
+        {
+            "kind": "actual",
+            "metric": "reviewer_hours",
+            "value": 2.5,
+            "expected_entry_id": 0,
+            "reason": "fixture actual for the downgrade guard",
+            "confirmation": f"RECORD BOUNTY ACTUAL REVIEWER_HOURS {REPO}#{ISSUE}",
+        }
+        if record == "entries"
+        else {
+            "decision": "stop",
+            "integration_status": "not_integrated",
+            "expected_decision_id": 0,
+            "reasons": "fixture decision for the downgrade guard",
+            "confirmation": f"DECIDE BOUNTY EVALUATION {REPO}#{ISSUE} STOP",
+        }
+    )
+    recorded = await world.client.post(
+        f"{ADMIN}/{bounty_id}/evaluation/{record}", headers=_HEADERS, json=body
+    )
+    assert recorded.status_code == 200, recorded.text
+    refused(SETTLEMENT)
+    model = BountyEvaluationEntry if record == "entries" else BountyEvaluationDecision
+    assert await count(world, model) == 1
 
 
 async def test_an_empty_bounty_schema_round_trips(world):

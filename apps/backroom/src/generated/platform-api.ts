@@ -979,6 +979,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/bounties/{bounty_id}/evaluation/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evaluation Decision
+         * @description Record the decision to expand, revise or stop the pilot (#2944).
+         *
+         *     It supersedes the current decision, which the request names; the history
+         *     stays.
+         */
+        post: operations["evaluation_decision_api_v1_admin_bounties__bounty_id__evaluation_decisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/bounties/{bounty_id}/evaluation/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evaluation Entry
+         * @description Record an estimate or actual of one evaluation metric (#2944).
+         *
+         *     It supersedes the current entry of its kind and metric, which the request
+         *     names; the history stays.
+         */
+        post: operations["evaluation_entry_api_v1_admin_bounties__bounty_id__evaluation_entries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/bounties/{bounty_id}/reviewer": {
         parameters: {
             query?: never;
@@ -16083,7 +16129,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "revision_published" | "claims_paused" | "claims_resumed" | "reviewer_assigned" | "review_decided" | "appeal_decided" | "slot_cancelled" | "slot_reopened" | "award_recorded" | "obligation_approved" | "transfer_dispatched" | "transfer_reconciled" | "fact_recorded";
+            kind: "revision_published" | "claims_paused" | "claims_resumed" | "reviewer_assigned" | "review_decided" | "appeal_decided" | "slot_cancelled" | "slot_reopened" | "award_recorded" | "obligation_approved" | "transfer_dispatched" | "transfer_reconciled" | "fact_recorded" | "evaluation_recorded" | "evaluation_decided";
             /** Obligation Id */
             obligation_id: string | null;
             /** Reason */
@@ -16280,6 +16326,111 @@ export interface components {
             /** Round */
             round: number;
         };
+        /** BountyEvaluationDecisionRequest */
+        BountyEvaluationDecisionRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "expand" | "revise" | "stop";
+            /** Expected Decision Id */
+            expected_decision_id: number;
+            /**
+             * Integration Status
+             * @enum {string}
+             */
+            integration_status: "not_integrated" | "integrating" | "integrated" | "adopted" | "not_adopted";
+            /** Reasons */
+            reasons: string;
+        };
+        /** BountyEvaluationDecisionView */
+        BountyEvaluationDecisionView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "expand" | "revise" | "stop";
+            /** Decision Id */
+            decision_id: number;
+            /**
+             * Integration Status
+             * @enum {string}
+             */
+            integration_status: "not_integrated" | "integrating" | "integrated" | "adopted" | "not_adopted";
+            /** Reasons */
+            reasons: string;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+        };
+        /** BountyEvaluationEntryRequest */
+        BountyEvaluationEntryRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Entry Id */
+            expected_entry_id: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "estimate" | "actual";
+            /**
+             * Metric
+             * @enum {string}
+             */
+            metric: "build_hours" | "reviewer_hours" | "integration_hours" | "operator_hours" | "turnaround_days";
+            /** Note */
+            note?: string | null;
+            /** Reason */
+            reason: string;
+            /** Value */
+            value: number;
+        };
+        /** BountyEvaluationEntryView */
+        BountyEvaluationEntryView: {
+            /** Actor */
+            actor: string;
+            /** Entry Id */
+            entry_id: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "estimate" | "actual";
+            /**
+             * Metric
+             * @enum {string}
+             */
+            metric: "build_hours" | "reviewer_hours" | "integration_hours" | "operator_hours" | "turnaround_days";
+            /** Note */
+            note: string | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Value */
+            value: number;
+        };
+        /**
+         * BountyEvaluationView
+         * @description Every evaluation record, oldest first. The latest entry of each kind
+         *     and metric, and the latest decision, are current.
+         */
+        BountyEvaluationView: {
+            /** Decisions */
+            decisions: components["schemas"]["BountyEvaluationDecisionView"][];
+            /** Entries */
+            entries: components["schemas"]["BountyEvaluationEntryView"][];
+        };
         /** BountyEventView */
         BountyEventView: {
             /** Claim Id */
@@ -16395,6 +16546,7 @@ export interface components {
             /** Claims */
             claims: components["schemas"]["BountyClaimView"][];
             detail: components["schemas"]["BountyDetail"];
+            evaluation: components["schemas"]["BountyEvaluationView"];
             report: components["schemas"]["BountyReport"];
             /** Reviewer Actor */
             reviewer_actor: string;
@@ -16521,8 +16673,9 @@ export interface components {
          * BountyReport
          * @description A source-safe account of one bounty for its evaluation (#2944).
          *
-         *     It names only what public views show and counts operator actions without
-         *     naming operators, so it can be published as it is.
+         *     Beyond what public views show, it adds only the current evaluation
+         *     values and decision with its reasons, and it counts operator actions
+         *     without naming operators, so it can be published as it is.
          */
         BountyReport: {
             /** Appeals Denied */
@@ -16541,6 +16694,7 @@ export interface components {
             decisions: {
                 [key: string]: number;
             };
+            evaluation: components["schemas"]["BountyReportEvaluation"];
             /** Facts */
             facts: {
                 [key: string]: number;
@@ -16622,6 +16776,39 @@ export interface components {
             round: number;
             /** Submissions */
             submissions: number;
+        };
+        /**
+         * BountyReportEvaluation
+         * @description The pilot's evaluation. Estimates and actuals are kept apart, and no
+         *     operator is named; an absent record reads null.
+         */
+        BountyReportEvaluation: {
+            actuals: components["schemas"]["BountyReportMetrics"];
+            /** Decided At */
+            decided_at: string | null;
+            /** Decision */
+            decision: ("expand" | "revise" | "stop") | null;
+            estimates: components["schemas"]["BountyReportMetrics"];
+            /** Integration Status */
+            integration_status: ("not_integrated" | "integrating" | "integrated" | "adopted" | "not_adopted") | null;
+            /** Reasons */
+            reasons: string | null;
+        };
+        /**
+         * BountyReportMetrics
+         * @description The current value of each evaluation metric; null when none is recorded.
+         */
+        BountyReportMetrics: {
+            /** Build Hours */
+            build_hours: number | null;
+            /** Integration Hours */
+            integration_hours: number | null;
+            /** Operator Hours */
+            operator_hours: number | null;
+            /** Reviewer Hours */
+            reviewer_hours: number | null;
+            /** Turnaround Days */
+            turnaround_days: number | null;
         };
         /** BountyReviewQueue */
         BountyReviewQueue: {
@@ -42753,6 +42940,172 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BountySummary"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    evaluation_decision_api_v1_admin_bounties__bounty_id__evaluation_decisions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
+            };
+            path: {
+                bounty_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BountyEvaluationDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyEvaluationDecisionView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    evaluation_entry_api_v1_admin_bounties__bounty_id__evaluation_entries_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+                "X-Admin-Actor"?: string | null;
+            };
+            path: {
+                bounty_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BountyEvaluationEntryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BountyEvaluationEntryView"];
                 };
             };
             /** @description Bad Request */

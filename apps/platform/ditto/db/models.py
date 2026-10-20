@@ -12052,6 +12052,25 @@ BOUNTY_OBLIGATION_REASONS = (
 )
 BOUNTY_TRANSFER_STATES = ("dispatched", "confirmed", "failed", "expired", "uncertain")
 BOUNTY_NONCE_ACTIONS = ("claim", "submit", "withdraw", "appeal")
+BOUNTY_EVALUATION_KINDS = ("estimate", "actual")
+BOUNTY_EVALUATION_METRICS = (
+    "build_hours",
+    "reviewer_hours",
+    "integration_hours",
+    "operator_hours",
+    "turnaround_days",
+)
+BOUNTY_EVALUATION_DECISIONS = ("expand", "revise", "stop")
+BOUNTY_EVALUATION_INTEGRATION = (
+    "not_integrated",
+    "integrating",
+    "integrated",
+    "adopted",
+    "not_adopted",
+)
+# The largest value an evaluation metric records. The bound also refuses NaN
+# and infinity, which PostgreSQL orders above every number.
+BOUNTY_EVALUATION_MAX_VALUE = 1_000_000
 
 
 class Bounty(Base):
@@ -12889,4 +12908,77 @@ class BountyDeliveryFact(Base):
             "kind IN ('merged','deployed','adopted') AND length(reference) > 0",
             name="fact",
         ),
+    )
+
+
+class BountyEvaluationEntry(Base):
+    """One estimate or actual of a bounty's evaluation metric. Append-only.
+
+    The latest entry of a bounty's kind and metric is the current one; the
+    entries before it stay as its history.
+    """
+
+    __tablename__ = "bounty_evaluation_entries"
+    entry_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    metric: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Private: why the operator recorded it, and who.
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        CheckConstraint(
+            "kind IN ("
+            + ",".join(f"'{k}'" for k in BOUNTY_EVALUATION_KINDS)
+            + ") AND metric IN ("
+            + ",".join(f"'{m}'" for m in BOUNTY_EVALUATION_METRICS)
+            + f") AND value >= 0 AND value <= {BOUNTY_EVALUATION_MAX_VALUE}"
+            " AND (note IS NULL OR length(btrim(note)) > 0)"
+            " AND length(btrim(reason)) > 0",
+            name="entry",
+        ),
+        Index(
+            "bounty_evaluation_entries_bounty_idx",
+            "bounty_id",
+            "kind",
+            "metric",
+            "entry_id",
+        ),
+    )
+
+
+class BountyEvaluationDecision(Base):
+    """An operator decision on a bounty's pilot. Append-only; latest wins."""
+
+    __tablename__ = "bounty_evaluation_decisions"
+    decision_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    integration_status: Mapped[str] = mapped_column(Text, nullable=False)
+    reasons: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        CheckConstraint(
+            "decision IN ("
+            + ",".join(f"'{d}'" for d in BOUNTY_EVALUATION_DECISIONS)
+            + ") AND integration_status IN ("
+            + ",".join(f"'{s}'" for s in BOUNTY_EVALUATION_INTEGRATION)
+            + ") AND length(btrim(reasons)) > 0",
+            name="decision",
+        ),
+        Index("bounty_evaluation_decisions_bounty_idx", "bounty_id", "decision_id"),
     )
