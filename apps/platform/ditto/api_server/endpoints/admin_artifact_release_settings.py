@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.artifact_release_settings import (
     AdminArtifactReleaseSettingsRequest,
     AdminArtifactReleaseSettingsResponse,
+    CatchUpStatus,
     ReceiptDiagnosticRow,
     RevealPlanShadowStatus,
     SourceArchiveProviderStatus,
@@ -82,6 +83,17 @@ def _reveal_plan_shadow(cursor: Any) -> RevealPlanShadowStatus | None:
         # No comparison has run: zero counters would read as zero misses.
         return None
     return RevealPlanShadowStatus.model_validate({**summary, "mode": _REVEAL_PLAN_MODE})
+
+
+def _catch_up(cursor: Any) -> CatchUpStatus | None:
+    """The collector's catch-up summary, or None before the first planned range."""
+    from ditto.api_server.source_emission_collector import _REVEAL_PLAN_MODE
+
+    summary = getattr(cursor, "catch_up", None) if cursor else None
+    if not summary:
+        return None
+    planner = "reveal" if _REVEAL_PLAN_MODE == "primary" else "event"
+    return CatchUpStatus.model_validate({**summary, "planner": planner})
 
 
 @router.get("", response_model=AdminArtifactReleaseSettingsResponse)
@@ -207,6 +219,7 @@ async def get_settings(
             collector_runtime_code_hash=cursor.runtime_code_hash if cursor else None,
             collector_blocked_reason=cursor.last_blocked_reason if cursor else None,
             reveal_plan_shadow=_reveal_plan_shadow(cursor),
+            catch_up=_catch_up(cursor),
             last_payout_block=last_payout.block if last_payout else None,
             last_payout_blocked_reason=last_payout.blocked_reason
             if last_payout

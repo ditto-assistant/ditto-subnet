@@ -17515,6 +17515,62 @@ export interface components {
             zeroed_cases: number;
         };
         /**
+         * CatchUpStatus
+         * @description How the collector replays deep catch-up ranges with ``planner``.
+         *
+         *     ``sparse`` ranges read ``blocks_read`` blocks in full and committed
+         *     ``blocks_skipped`` as quiet; ``full_scan`` ranges fell back to the per-block
+         *     scan, counted by the planner's reason in ``full_scan_reasons``; ``error``
+         *     ranges could not be planned (``last_error``). A fallback costs throughput,
+         *     never correctness.
+         */
+        CatchUpStatus: {
+            /**
+             * Blocks Read
+             * @default 0
+             */
+            blocks_read: number;
+            /**
+             * Blocks Skipped
+             * @default 0
+             */
+            blocks_skipped: number;
+            /**
+             * Error
+             * @default 0
+             */
+            error: number;
+            /**
+             * Full Scan
+             * @default 0
+             */
+            full_scan: number;
+            /** Full Scan Reasons */
+            full_scan_reasons?: {
+                [key: string]: number;
+            };
+            /** Last Error */
+            last_error?: string | null;
+            /** Last Outcome */
+            last_outcome?: string | null;
+            /** Last Range */
+            last_range?: number[] | null;
+            /** Planner */
+            planner: string;
+            /**
+             * Ranges
+             * @default 0
+             */
+            ranges: number;
+            /**
+             * Sparse
+             * @default 0
+             */
+            sparse: number;
+            /** Updated At */
+            updated_at?: string | null;
+        };
+        /**
          * CategoryStat
          * @description Per-category aggregate inside a :class:`ScoreReport`.
          *
@@ -35377,6 +35433,7 @@ export interface components {
              * @default false
              */
             automatic_confirmation_enabled: boolean;
+            catch_up?: components["schemas"]["CatchUpStatus"] | null;
             /** Collector Blocked Reason */
             collector_blocked_reason?: string | null;
             /** Collector Cursor Block */

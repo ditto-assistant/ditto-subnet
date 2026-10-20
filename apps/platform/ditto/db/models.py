@@ -6827,6 +6827,9 @@ class SourceEmissionCollectorCursor(Base):
     reveal_plan_shadow: Mapped[dict | None] = mapped_column(
         _NULLABLE_JSON_VARIANT, nullable=True
     )
+    # How deep catch-up ranges were replayed: sparsely, by a full-scan
+    # fallback (and why), or not at all after a planner error.
+    catch_up: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
 
 
 class SourceEmissionVectorBinding(Base):

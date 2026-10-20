@@ -51,6 +51,7 @@ from ditto.db.queries.king_reign import KingEmissionProof, record_emission_confi
 from ditto.db.queries.source_emission_collector import (
     advance_source_emission_cursor,
     list_source_emission_vector_bindings,
+    record_catch_up_range,
     record_reveal_plan_shadow,
     record_source_emission_payout,
     skip_quiet_source_emission_blocks,
@@ -417,14 +418,21 @@ class SourceEmissionCollector:
             )
         except Exception as error:
             chain = getattr(self.state, "chain", None)
-            logger.warning(
-                "source emission sparse plan unavailable; scanning per block: %s",
+            detail = (
                 chain._safe_rpc_error(error)[:200]
                 if chain is not None
-                else type(error).__name__,
+                else type(error).__name__
             )
+            logger.warning(
+                "source emission sparse plan unavailable; scanning per block: %s",
+                detail,
+            )
+            await self._record_catch_up(current + 1, end, "error", detail=detail)
             return False
         if plan.full_scan:
+            await self._record_catch_up(
+                current + 1, end, "full_scan", detail=plan.full_scan_reason
+            )
             return False
         async with self.sessions() as session:
             cursor = await session.get(SourceEmissionCollectorCursor, self.netuid)
@@ -474,7 +482,7 @@ class SourceEmissionCollector:
         }
         try:
             await asyncio.gather(*audits)
-            return await self._replay_planned(
+            replayed = await self._replay_planned(
                 current=current, end=end, plan=plan, ahead=ahead
             )
         finally:
@@ -483,6 +491,37 @@ class SourceEmissionCollector:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*audits, *ahead.values(), return_exceptions=True)
+        await self._record_catch_up(
+            current + 1, end, "sparse", read=len(interesting), skipped=len(quiet)
+        )
+        return replayed
+
+    async def _record_catch_up(
+        self,
+        first_block: int,
+        last_block: int,
+        outcome: str,
+        *,
+        read: int = 0,
+        skipped: int = 0,
+        detail: str | None = None,
+    ) -> None:
+        """Fold one range into Backroom's catch-up summary. Never raises."""
+        try:
+            async with self.sessions() as session, session.begin():
+                await record_catch_up_range(
+                    session,
+                    netuid=self.netuid,
+                    first_block=first_block,
+                    last_block=last_block,
+                    outcome=outcome,
+                    read=read,
+                    skipped=skipped,
+                    detail=detail,
+                    now=datetime.now(UTC),
+                )
+        except Exception:
+            logger.exception("source emission catch-up summary write failed")
 
     async def _replay_planned(
         self,

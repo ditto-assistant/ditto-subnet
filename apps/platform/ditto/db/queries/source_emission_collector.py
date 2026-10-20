@@ -189,6 +189,49 @@ async def record_source_emission_payout(
 _SHADOW_MISS_LIMIT = 5
 
 
+async def record_catch_up_range(
+    session: AsyncSession,
+    *,
+    netuid: int,
+    first_block: int,
+    last_block: int,
+    outcome: str,
+    read: int = 0,
+    skipped: int = 0,
+    detail: str | None = None,
+    now: datetime,
+) -> None:
+    """Fold one deep catch-up range into the cursor row's running summary.
+
+    ``outcome`` is ``sparse`` (``read`` blocks read in full, ``skipped``
+    committed as quiet), ``full_scan`` (the planner asked for the per-block
+    scan; ``detail`` is its reason) or ``error`` (no plan; ``detail`` is the
+    provider error). A fallback costs throughput, never correctness, so this
+    only makes it visible.
+    """
+    cursor = await session.get(
+        SourceEmissionCollectorCursor, netuid, with_for_update=True
+    )
+    if cursor is None:
+        return
+    summary = dict(cursor.catch_up or {})
+    summary["ranges"] = int(summary.get("ranges", 0)) + 1
+    summary[outcome] = int(summary.get(outcome, 0)) + 1
+    summary["blocks_read"] = int(summary.get("blocks_read", 0)) + read
+    summary["blocks_skipped"] = int(summary.get("blocks_skipped", 0)) + skipped
+    summary["last_range"] = [first_block, last_block]
+    summary["last_outcome"] = outcome
+    summary["updated_at"] = now.isoformat()
+    if outcome == "full_scan":
+        reasons = dict(summary.get("full_scan_reasons") or {})
+        reason = detail or "unknown"
+        reasons[reason] = int(reasons.get(reason, 0)) + 1
+        summary["full_scan_reasons"] = reasons
+    if outcome == "error":
+        summary["last_error"] = (detail or "")[:300]
+    cursor.catch_up = summary
+
+
 async def record_reveal_plan_shadow(
     session: AsyncSession,
     *,

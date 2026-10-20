@@ -100,6 +100,32 @@ class RevealPlanShadowStatus(BaseModel):
     updated_at: datetime | None = None
 
 
+class CatchUpStatus(BaseModel):
+    """How the collector replays deep catch-up ranges with ``planner``.
+
+    ``sparse`` ranges read ``blocks_read`` blocks in full and committed
+    ``blocks_skipped`` as quiet; ``full_scan`` ranges fell back to the per-block
+    scan, counted by the planner's reason in ``full_scan_reasons``; ``error``
+    ranges could not be planned (``last_error``). A fallback costs throughput,
+    never correctness.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    planner: str
+    ranges: int = 0
+    sparse: int = 0
+    full_scan: int = 0
+    error: int = 0
+    blocks_read: int = 0
+    blocks_skipped: int = 0
+    full_scan_reasons: dict[str, int] = Field(default_factory=dict)
+    last_range: list[int] | None = None
+    last_outcome: str | None = None
+    last_error: str | None = None
+    updated_at: datetime | None = None
+
+
 class SourceReleaseGateStatus(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -111,6 +137,7 @@ class SourceReleaseGateStatus(BaseModel):
     collector_runtime_code_hash: str | None = None
     collector_blocked_reason: str | None = None
     reveal_plan_shadow: RevealPlanShadowStatus | None = None
+    catch_up: CatchUpStatus | None = None
     last_payout_block: int | None = None
     last_payout_blocked_reason: str | None = None
     last_payout_attributed: bool = False

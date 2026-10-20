@@ -481,3 +481,48 @@ async def test_release_gate_reports_the_reveal_plan_shadow(
     assert shadow["recent_misses"] == [
         {"first_block": 1, "last_block": 720, "blocks": [42]}
     ]
+
+
+async def test_release_gate_reports_how_catch_up_ranges_replayed(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    _install(app, session_maker)
+    response = await client.get(
+        "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+    )
+    # No planned range yet: no summary, never a zero-fallback one.
+    assert response.json()["release_gate"]["catch_up"] is None
+    async with session_maker() as session, session.begin():
+        session.add(
+            SourceEmissionCollectorCursor(
+                netuid=app.state.config.chain.netuid,
+                block=9200000,
+                block_hash="0x" + "ab" * 32,
+                updated_at=datetime(2026, 10, 20, tzinfo=UTC),
+                catch_up={
+                    "ranges": 4,
+                    "sparse": 2,
+                    "full_scan": 1,
+                    "error": 1,
+                    "blocks_read": 9,
+                    "blocks_skipped": 1431,
+                    "full_scan_reasons": {"uid_mapping": 1},
+                    "last_range": [9199281, 9200000],
+                    "last_outcome": "sparse",
+                    "last_error": "RPC call is unsafe",
+                    "updated_at": "2026-10-20T03:00:00+00:00",
+                },
+            )
+        )
+    response = await client.get(
+        "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+    )
+    catch_up = response.json()["release_gate"]["catch_up"]
+    assert catch_up["planner"] == "reveal"
+    assert (catch_up["sparse"], catch_up["full_scan"], catch_up["error"]) == (2, 1, 1)
+    assert catch_up["full_scan_reasons"] == {"uid_mapping": 1}
+    assert (catch_up["blocks_read"], catch_up["blocks_skipped"]) == (9, 1431)

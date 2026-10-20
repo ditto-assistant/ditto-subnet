@@ -1210,6 +1210,23 @@ export const revealPlanShadowSchema = z.object({
   updated_at: z.string().nullish().default(null),
 })
 
+// How the collector replays deep catch-up ranges. A full_scan fallback costs
+// throughput, never correctness; full_scan_reasons counts each planner reason.
+export const catchUpSchema = z.object({
+  planner: z.string(),
+  ranges: z.number().int().nonnegative().default(0),
+  sparse: z.number().int().nonnegative().default(0),
+  full_scan: z.number().int().nonnegative().default(0),
+  error: z.number().int().nonnegative().default(0),
+  blocks_read: z.number().int().nonnegative().default(0),
+  blocks_skipped: z.number().int().nonnegative().default(0),
+  full_scan_reasons: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  last_range: z.array(z.number().int()).nullish().default(null),
+  last_outcome: z.string().nullish().default(null),
+  last_error: z.string().nullish().default(null),
+  updated_at: z.string().nullish().default(null),
+})
+
 export const sourceReleaseGateSchema = z.object({
   version: z.string(),
   automatic_confirmation_enabled: z.boolean(),
@@ -1224,6 +1241,7 @@ export const sourceReleaseGateSchema = z.object({
   collector_runtime_code_hash: z.string().nullable().optional(),
   collector_blocked_reason: z.string().nullable().optional(),
   reveal_plan_shadow: revealPlanShadowSchema.nullish(),
+  catch_up: catchUpSchema.nullish(),
   last_payout_block: z.number().nullable().optional(),
   last_payout_blocked_reason: z.string().nullable().optional(),
   last_payout_attributed: z.boolean().optional(),

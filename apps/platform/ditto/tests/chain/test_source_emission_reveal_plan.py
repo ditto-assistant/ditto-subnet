@@ -281,13 +281,13 @@ async def test_range_starting_on_a_payout_includes_its_own_reveals() -> None:
 
 
 @pytest.mark.parametrize(
-    "mutate",
+    ("mutate", "reason"),
     [
-        lambda c: c.v2_commit_at.add(1460),
-        lambda c: c.reveal_period.update({LAST: 2}),
-        lambda c: setattr(c, "epoch_shift", (1300, 1460)),
+        (lambda c: c.v2_commit_at.add(1460), "v2_commits"),
+        (lambda c: c.reveal_period.update({LAST: 2}), "reveal_period"),
+        (lambda c: setattr(c, "epoch_shift", (1300, 1460)), "epoch_without_payout"),
         # One owner change per 360 blocks would allow off-then-on inside 720.
-        lambda c: setattr(c, "owner_limit", 1),
+        (lambda c: setattr(c, "owner_limit", 1), "owner_rate_limit"),
     ],
     ids=[
         "v2-commit-store-in-use",
@@ -296,10 +296,11 @@ async def test_range_starting_on_a_payout_includes_its_own_reveals() -> None:
         "owner-could-toggle-controls-inside-the-range",
     ],
 )
-async def test_unsupported_shapes_fall_back_to_the_full_scan(mutate) -> None:
+async def test_unsupported_shapes_fall_back_to_the_full_scan(mutate, reason) -> None:
     chain = _chain()
     mutate(chain)
-    assert (await _plan(chain)).full_scan
+    plan = await _plan(chain)
+    assert (plan.full_scan, plan.full_scan_reason) == (True, reason)
 
 
 async def test_malformed_storage_hash_is_not_read_as_unchanged() -> None:
@@ -339,7 +340,8 @@ async def test_too_many_changed_uids_plan_the_range_in_full(monkeypatch) -> None
     monkeypatch.setattr(source_emission_verifier, "_MAX_IDENTITY_CHANGES", 0)
     chain = _chain()
     chain.registrations = {2: [(1333, "newminer")]}
-    assert (await _plan(chain)).full_scan
+    plan = await _plan(chain)
+    assert (plan.full_scan, plan.full_scan_reason) == (True, "identity_changes")
 
 
 async def test_a_uid_that_returns_to_its_old_hotkey_is_still_found() -> None:
