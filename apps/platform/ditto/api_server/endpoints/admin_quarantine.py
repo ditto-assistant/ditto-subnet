@@ -1044,14 +1044,22 @@ async def _failed_release_conflict(
     """
     if decision.expected_attempt_id is None or decision.expected_score_count is None:
         return "failed release requires latest attempt and score count guards"
-    latest = await session.scalar(
-        select(ScreeningAttempt)
-        .where(ScreeningAttempt.agent_id == agent.agent_id)
-        .order_by(
-            ScreeningAttempt.started_at.desc(), ScreeningAttempt.attempt_id.desc()
+    latest_attempts = list(
+        await session.scalars(
+            select(ScreeningAttempt)
+            .where(ScreeningAttempt.agent_id == agent.agent_id)
+            .order_by(ScreeningAttempt.started_at.desc())
+            .limit(2)
         )
-        .limit(1)
     )
+    # UUIDs do not encode chronology. A tied timestamp cannot establish the
+    # latest attempt, so refuse rather than silently choosing an older one.
+    if (
+        len(latest_attempts) > 1
+        and latest_attempts[0].started_at == latest_attempts[1].started_at
+    ):
+        return "latest screening attempt order is ambiguous"
+    latest = latest_attempts[0] if latest_attempts else None
     if (
         latest is None
         or latest.attempt_id != decision.expected_attempt_id
@@ -1060,6 +1068,14 @@ async def _failed_release_conflict(
         or latest.status not in {"failed", "expired"}
     ):
         return "latest failed screening attempt changed"
+    pending_retry = await session.scalar(
+        select(ScreeningRetryOverride.override_id).where(
+            ScreeningRetryOverride.agent_id == agent.agent_id,
+            ScreeningRetryOverride.attempt_id == latest.attempt_id,
+        )
+    )
+    if pending_retry is not None:
+        return "screening retry is pending"
     score_count = int(
         await session.scalar(
             select(func.count())

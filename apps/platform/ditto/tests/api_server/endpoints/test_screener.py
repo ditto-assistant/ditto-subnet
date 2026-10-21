@@ -14160,6 +14160,9 @@ class TestQuarantineReviewContext:
             "active_review",
             "wrong_status",
             "new_rejection",
+            "pending_retry",
+            "tied_low_uuid",
+            "tied_high_uuid",
         ],
     )
     async def test_failed_release_preview_and_execution_refuse_stale_or_active_work(
@@ -14192,7 +14195,36 @@ class TestQuarantineReviewContext:
                 attempt = await session.get(
                     ScreeningAttempt, UUID(decision["expected_attempt_id"])
                 )
-                if change == "running":
+                if change == "pending_retry":
+                    session.add(
+                        ScreeningRetryOverride(
+                            override_id=uuid4(),
+                            agent_id=agent_id,
+                            attempt_id=attempt.attempt_id,
+                            artifact_sha256=agent.sha256,
+                            expected_score_count=1,
+                            force_full_review=True,
+                            reason="Previously authorized manual full review",
+                            actor="another-operator",
+                            created_at=datetime.now(UTC),
+                        )
+                    )
+                elif change in {"tied_low_uuid", "tied_high_uuid"}:
+                    session.add(
+                        ScreeningAttempt(
+                            attempt_id=UUID(
+                                int=1 if change == "tied_low_uuid" else (1 << 128) - 1
+                            ),
+                            agent_id=agent_id,
+                            screener_hotkey=_SCREENER_HOTKEY,
+                            policy_version=SCREENING_POLICY_VERSION,
+                            status="expired",
+                            started_at=attempt.started_at,
+                            deadline=attempt.deadline,
+                            artifact_sha256=agent.sha256,
+                        )
+                    )
+                elif change == "running":
                     attempt.status = "running"
                 elif change == "new_attempt":
                     session.add(
@@ -14249,6 +14281,10 @@ class TestQuarantineReviewContext:
             json={"decisions": [decision]},
         )
         assert blocked.json()["blocked_count"] == 1
+        if change.startswith("tied_"):
+            assert "ambiguous" in blocked.json()["items"][0]["message"]
+        if change == "pending_retry":
+            assert "retry is pending" in blocked.json()["items"][0]["message"]
         executed = await client.post(
             "/api/v1/admin/screening-quarantines/batch-resolve",
             headers=_ADMIN_HEADERS,

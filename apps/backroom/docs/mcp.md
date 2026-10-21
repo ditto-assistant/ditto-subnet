@@ -661,7 +661,8 @@ select its latest resolved `rescreen` quarantine, `resolution: release`, and sup
 `expectedAttemptId` and `expectedScoreCount` from its current quarantine context
 (`agent.score_count`). Agent UUID and artifact SHA guards remain mandatory. Preview
 and the locked write share the same checks: the quarantine belongs to the latest
-failed/expired attempt for the artifact, counts match, and no screening, source
+failed/expired attempt for the artifact, its start time is unambiguous, counts
+match, and no pending retry grant, screening, source
 review or image/runtime build is active. The actor-bound preview signs both new
 guards. Approval appends a manual release ruling and preserves failed attempts,
 prior resolutions, scores and dataset pins. It enters ordinary build, health and
