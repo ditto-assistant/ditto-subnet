@@ -14,8 +14,9 @@ from ditto_screener.conversation_runtime import ConversationRuntime
 from ditto_screening_protocol.conversation import ConversationLaunch
 
 
-def fixture_image():
-    config = json.dumps({"rootfs": {"type": "layers", "diff_ids": []}}).encode()
+def fixture_image(layer: bytes | None = None, *, tampered: bool = False):
+    diff_ids = ["sha256:" + hashlib.sha256(layer).hexdigest()] if layer else []
+    config = json.dumps({"rootfs": {"type": "layers", "diff_ids": diff_ids}}).encode()
     digest = "sha256:" + hashlib.sha256(config).hexdigest()
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w") as archive:
@@ -24,11 +25,22 @@ def fixture_image():
             (
                 "manifest.json",
                 json.dumps(
-                    [{"Config": "config.json", "RepoTags": None, "Layers": []}]
+                    [
+                        {
+                            "Config": "config.json",
+                            "RepoTags": None,
+                            "Layers": ["layer.tar"] if layer else [],
+                        }
+                    ]
                 ).encode(),
             ),
         ):
             info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+        if layer:
+            data = b"different filesystem bytes" if tampered else layer
+            info = tarfile.TarInfo("layer.tar")
             info.size = len(data)
             archive.addfile(info, io.BytesIO(data))
     return stream.getvalue(), digest
@@ -65,7 +77,9 @@ async def test_verified_image_is_fresh_isolated_and_never_receives_provider_key(
         calls.append((args, kwargs))
         if args[0] == "info":
             return '["name=rootless"]'
-        if args[:2] == ("image", "inspect") and args[-1] == runtime.image:
+        if args[:2] == ("image", "load"):
+            return f"Loaded image ID: {image_id}"
+        if args[:2] == ("image", "inspect") and args[-1] in (runtime.image, image_id):
             return json.dumps([{"Id": image_id, "Config": {}}])
         if args[0] == "inspect":
             return json.dumps({runtime.network: {"IPAddress": "172.20.0.2"}})
@@ -137,6 +151,140 @@ async def test_rootful_executor_rejected_before_image_or_network_operations():
     runtime.docker = docker
     with pytest.raises(AssessmentFailure, match="requires_rootless"):
         await runtime.preflight()
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("containerd", [False, True])
+async def test_loaded_handle_is_bound_to_config_and_layers(tmp_path, containerd):
+    archive, image_id = fixture_image(b"pinned filesystem bytes")
+    portable = tmp_path / "portable.tar"
+    portable.write_bytes(archive)
+    handle = "sha256:" + "d" * 64 if containerd else image_id
+    runtime = ConversationRuntime(
+        SimpleNamespace(), SimpleNamespace(assessment_id=uuid4()), "secret"
+    )
+    calls = []
+
+    async def docker(*args, **_kwargs):
+        calls.append(args)
+        if args[:2] == ("image", "load"):
+            return f"Loaded image ID: {handle}"
+        if args[:2] == ("image", "inspect"):
+            return json.dumps([{"Id": handle, "Config": {}}])
+        if args[:2] == ("image", "save"):
+            from pathlib import Path
+
+            Path(args[3]).write_bytes(archive)
+        return ""
+
+    runtime.docker = docker
+    await runtime.load_verified_archive(portable, image_id)
+    assert ("tag", handle, runtime.image) in calls
+    assert any(args[:2] == ("image", "save") for args in calls) == containerd
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["portable.tar"]
+
+
+@pytest.mark.asyncio
+async def test_manifest_handle_with_tampered_layer_never_gets_tagged(tmp_path):
+    archive, image_id = fixture_image(b"pinned filesystem bytes")
+    tampered, unchanged_id = fixture_image(b"pinned filesystem bytes", tampered=True)
+    assert unchanged_id == image_id
+    portable = tmp_path / "portable.tar"
+    portable.write_bytes(archive)
+    handle = "sha256:" + "d" * 64
+    runtime = ConversationRuntime(
+        SimpleNamespace(), SimpleNamespace(assessment_id=uuid4()), "secret"
+    )
+    calls = []
+
+    async def docker(*args, **_kwargs):
+        calls.append(args)
+        if args[:2] == ("image", "load"):
+            return f"Loaded image ID: {handle}"
+        if args[:2] == ("image", "inspect"):
+            return json.dumps([{"Id": handle, "Config": {}}])
+        if args[:2] == ("image", "save"):
+            from pathlib import Path
+
+            Path(args[3]).write_bytes(tampered)
+        return ""
+
+    runtime.docker = docker
+    from ditto_screener.gate import _ScreenedImageExportError
+
+    with pytest.raises(_ScreenedImageExportError, match="layer bytes"):
+        await runtime.load_verified_archive(portable, image_id)
+    assert not any(args[0] == "tag" for args in calls)
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["portable.tar"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["config", "volumes", "tag_drift"])
+async def test_manifest_handle_cannot_substitute_unverified_runtime(tmp_path, failure):
+    archive, image_id = fixture_image()
+    portable = tmp_path / "portable.tar"
+    portable.write_bytes(archive)
+    handle = "sha256:" + "d" * 64
+    runtime = ConversationRuntime(
+        SimpleNamespace(), SimpleNamespace(assessment_id=uuid4()), "secret"
+    )
+    calls = []
+
+    async def docker(*args, **_kwargs):
+        calls.append(args)
+        if args[:2] == ("image", "load"):
+            return f"Loaded image ID: {handle}"
+        if args[:2] == ("image", "inspect"):
+            identity = (
+                image_id
+                if failure == "tag_drift" and args[-1] == runtime.image
+                else handle
+            )
+            config = {"Volumes": {"/data": {}}} if failure == "volumes" else {}
+            return json.dumps([{"Id": identity, "Config": config}])
+        if args[:2] == ("image", "save"):
+            from pathlib import Path
+
+            Path(args[3]).write_bytes(archive)
+        return ""
+
+    runtime.docker = docker
+    expected = "sha256:" + "e" * 64 if failure == "config" else image_id
+    with pytest.raises(AssessmentFailure, match="screened_image_runtime_mismatch"):
+        await runtime.load_verified_archive(portable, expected)
+    if failure != "tag_drift":
+        assert not any(args[0] == "tag" for args in calls)
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["portable.tar"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "loaded",
+    [
+        "",
+        "Loaded image: untrusted:tag",
+        "Loaded image ID: sha256:bad",
+        "Loaded image ID: sha256:" + "a" * 64 + "\nLoaded image ID: sha256:" + "b" * 64,
+    ],
+)
+async def test_ambiguous_load_identity_never_reaches_launch(loaded, tmp_path):
+    runtime = ConversationRuntime(
+        SimpleNamespace(), SimpleNamespace(assessment_id=uuid4()), "secret"
+    )
+    calls = []
+
+    async def docker(*args, **_kwargs):
+        calls.append(args)
+        return loaded
+
+    runtime.docker = docker
+    with pytest.raises(
+        AssessmentFailure, match="screened_image_load_identity_unavailable"
+    ):
+        await runtime.load_verified_archive(
+            tmp_path / "portable.tar", "sha256:" + "c" * 64
+        )
     assert len(calls) == 1
 
 

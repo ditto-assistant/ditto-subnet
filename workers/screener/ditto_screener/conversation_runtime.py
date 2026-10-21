@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -119,6 +120,56 @@ class ConversationRuntime:
         # Pull only this release-pinned trusted helper, before claiming paid work.
         await self.docker("image", "inspect", _CANARY_IMAGE)
 
+    async def load_verified_archive(self, portable: Path, image_id: str) -> None:
+        """Resolve a daemon handle without changing the pinned config identity.
+
+        Containerd-backed Docker can return a manifest handle after importing a
+        classic archive. Inspect's Id then names that manifest, not its config.
+        Re-export and verify the config and every filesystem layer before the
+        handle is allowed to become this case's launch tag.
+        """
+        loaded = await self.docker(
+            "image", "load", "--input", str(portable), timeout=300
+        )
+        handles = re.findall(
+            r"^Loaded image ID: (sha256:[0-9a-f]{64})$", loaded, re.MULTILINE
+        )
+        if len(handles) != 1:
+            raise AssessmentFailure("screened_image_load_identity_unavailable")
+        handle = handles[0]
+        try:
+            info = json.loads(await self.docker("image", "inspect", handle))[0]
+            loaded_id = info["Id"]
+            if loaded_id != handle or info.get("Config", {}).get("Volumes"):
+                raise ValueError("unexpected loaded image")
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise AssessmentFailure("screened_image_runtime_mismatch") from None
+        if loaded_id != image_id:
+            exported = portable.with_name("loaded-image.tar")
+            normalized = portable.with_name("loaded-image-portable.tar")
+            try:
+                await self.docker(
+                    "image", "save", "--output", str(exported), handle, timeout=300
+                )
+                actual = await asyncio.to_thread(
+                    BuildGate._portable_image_archive,
+                    str(exported),
+                    str(normalized),
+                    deadline=time.monotonic() + 300,
+                )
+                if actual.image_id != image_id:
+                    raise AssessmentFailure("screened_image_runtime_mismatch")
+            finally:
+                exported.unlink(missing_ok=True)
+                normalized.unlink(missing_ok=True)
+        await self.docker("tag", handle, self.image)
+        try:
+            tagged = json.loads(await self.docker("image", "inspect", self.image))[0]
+            if tagged["Id"] != loaded_id or tagged.get("Config", {}).get("Volumes"):
+                raise ValueError("launch tag changed identity")
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise AssessmentFailure("screened_image_runtime_mismatch") from None
+
     async def start(self) -> str:
         await self.preflight()
         directory, _ = _prepare_gateway_state()
@@ -163,13 +214,7 @@ class ConversationRuntime:
         )
         if verified.image_id != self.launch.screened_image_id:
             raise AssessmentFailure("screened_image_identity_mismatch")
-        await self.docker("image", "load", "--input", str(portable), timeout=300)
-        await self.docker("tag", verified.image_id, self.image)
-        info = json.loads(await self.docker("image", "inspect", self.image))[0]
-        if info["Id"] != self.launch.screened_image_id or info.get("Config", {}).get(
-            "Volumes"
-        ):
-            raise AssessmentFailure("screened_image_runtime_mismatch")
+        await self.load_verified_archive(portable, verified.image_id)
         archive.unlink()
         portable.unlink()
         await asyncio.to_thread(_write_openrouter_shim_certs, directory)
