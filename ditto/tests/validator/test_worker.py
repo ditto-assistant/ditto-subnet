@@ -30,6 +30,7 @@ from ditto.api_models.stack_health import (
 from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.api_models.validator import (
     ArtifactResponse,
+    BenchmarkRuntimeSettings,
     ConfirmationDatasetPin,
     FailJobResponse,
     JobResponse,
@@ -943,6 +944,66 @@ def _platform_with_ledger(
 
 
 class TestTop5ConfirmationLane:
+    @pytest.mark.parametrize("memory_limit_mib", [None, 8192, 12288])
+    @pytest.mark.parametrize("dataset_count", [1, 2])
+    async def test_confirmation_lease_forwards_runtime_to_every_scorer_run(
+        self, memory_limit_mib: int | None, dataset_count: int
+    ) -> None:
+        """Retests obey the lease cap, concurrency, and delay policy on every seed."""
+        runtime = (
+            BenchmarkRuntimeSettings(
+                sandbox_memory_limit_mib=memory_limit_mib,
+                case_concurrency=7,
+                relay_delay_fingerprint_mode="shadow",
+                relay_delay_fingerprint_min_ms=43,
+                relay_delay_fingerprint_max_ms=179,
+            )
+            if memory_limit_mib is not None
+            else None
+        )
+        bench_version = 13 if runtime is not None else 9
+        job = _job("5Miner" + "x" * 42).model_copy(
+            update={"bench_version": bench_version, "benchmark_runtime": runtime}
+        )
+        datasets = _confirmation_pins(job.agent_id, count=dataset_count)
+        job = job.model_copy(update={"confirmation_datasets": datasets})
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.get_artifact.return_value = (
+            platform.get_artifact.return_value.model_copy(
+                update={"bench_version": bench_version}
+            )
+        )
+        dittobench = MagicMock()
+        dittobench.score_tarball = AsyncMock(
+            side_effect=[
+                _report(str(pin.seed), 0.8).model_copy(
+                    update={"seed": pin.seed, "bench_version": bench_version}
+                )
+                for pin in datasets
+            ]
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._activate_ticket_inference = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+        report = await worker._evaluate_confirmation_lease(job)
+
+        assert report is not None
+        assert report.confirmation_seeds == sorted(pin.seed for pin in datasets)
+        assert dittobench.score_tarball.await_count == dataset_count
+        for call, pin in zip(
+            dittobench.score_tarball.await_args_list, datasets, strict=True
+        ):
+            assert call.kwargs["benchmark_runtime"] == runtime
+            assert call.kwargs["seed"] == pin.seed
+            assert call.kwargs["dataset_sha256"] == pin.dataset_sha256
+            assert call.kwargs["ticket_deadline"] == job.deadline
+
     async def test_single_seed_v9_preserves_stderr_for_submission(self) -> None:
         report = _v9_report()
         assert report.details is not None

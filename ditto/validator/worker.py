@@ -3221,6 +3221,7 @@ class ValidatorWorker:
                     job.deadline if broker is not None else None
                 ),
                 ticket_deadline=job.deadline,
+                benchmark_runtime=job.benchmark_runtime,
             )
         finally:
             if broker is not None:
@@ -3238,6 +3239,7 @@ class ValidatorWorker:
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
+        benchmark_runtime: BenchmarkRuntimeSettings | None = None,
     ) -> ScoreReport | None:
         """Evaluate fresh seeds and package one signed append-only receipt.
 
@@ -3274,6 +3276,7 @@ class ValidatorWorker:
                         inference_slot_id=inference_slot_id,
                         inference_ticket_deadline=inference_ticket_deadline,
                         ticket_deadline=ticket_deadline,
+                        benchmark_runtime=benchmark_runtime,
                     )
                 )
             except (PlatformError, DittobenchError) as exc:
