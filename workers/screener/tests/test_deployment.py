@@ -186,10 +186,12 @@ def test_gce_pull_authenticates_and_activates_the_descriptor_once(
     )
 
 
-def test_pull_request_ci_keeps_fast_safety_gates() -> None:
+def test_manual_ci_keeps_fast_safety_gates() -> None:
     workflow = workflow_text("screener-ci.yml")
 
-    assert "pull_request:" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "pull_request:" not in workflow
+    assert "  push:" not in workflow
     assert 'uv run pytest -m "not integration"' in workflow
     assert "uv run ruff format --check ." in workflow
     assert "uv run ruff check ." in workflow
@@ -199,22 +201,20 @@ def test_pull_request_ci_keeps_fast_safety_gates() -> None:
     assert "screener-core-e2e" not in workflow
 
 
-def test_pull_request_ci_runs_on_starter_kit_changes() -> None:
-    # The starter provenance drift guard is a screener test, so a kit-only
-    # change must still run this workflow.
-    lines = workflow_text("screener-ci.yml").splitlines()
-    start = lines.index("  pull_request:")
-    assert lines[start + 1] == "    paths:"
-    paths = []
-    for line in lines[start + 2 :]:
-        if line.lstrip().startswith("#"):
-            continue
-        if not line.startswith("      - "):
-            break
-        paths.append(line.removeprefix("      - "))
-
-    assert "miners/dittobench-starter-kit/**" in paths
-    assert "workers/screener/**" in paths
+def test_manual_and_release_ci_keep_starter_provenance_checks() -> None:
+    # Cost controls deliberately removed automatic path-triggered PR CI. The
+    # manual verifier and selected screener releases must still collect the
+    # complete non-integration suite, including the starter drift guard.
+    guard = ROOT / "tests" / "test_starter_provenance_current.py"
+    assert guard.is_file()
+    workflow = workflow_text("screener-ci.yml")
+    release = workflow_text("release.yml").split("  verify-screener:\n", 1)[1]
+    release = release.split("  verify-screener-orchestrator:\n", 1)[0]
+    for gate in (workflow, release):
+        assert 'uv run pytest -m "not integration"' in gate
+        assert "--ignore" not in gate
+    assert "Gate screener release on exact merge source" in release
+    assert "ref: ${{ github.sha }}" in release
 
 
 def test_container_entrypoints_do_not_require_a_writable_uv_cache() -> None:

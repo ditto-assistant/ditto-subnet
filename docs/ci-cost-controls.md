@@ -22,3 +22,8 @@ duplicated by a release job.
 
 To restore automatic CI, review a change restoring the event triggers and
 re-enable the corresponding workflow through GitHub Actions settings.
+
+Screener deployment contract tests assert the manual-only trigger and retained
+lint/type/provenance collection plus the exact-merge release gate. For a
+starter-kit-only change, explicitly dispatch the screener workflow to check
+starter provenance; automatic PR path triggers remain disabled.
