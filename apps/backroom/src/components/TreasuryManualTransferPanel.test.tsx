@@ -234,14 +234,15 @@ it('shows verified delivery separately from incomplete source attribution withou
     blocked_reason: 'A previous transfer or its public receipt is still pending',
     requests: [{ request_id: result.envelope.request.request_id, envelope: result.envelope,
       status: 'audit_pending', actor: 'operator@example.com', last_error: null,
+      created_at: '2026-10-21T04:00:00Z', updated_at: '2026-10-21T04:01:00Z',
       receipt: { receipt_id: 'c'.repeat(64), extrinsic_hash: '0x' + 'd'.repeat(64),
         published: true, source_attribution: 'incomplete' } }],
   })
   render(<TreasuryManualTransferPanel initialState={state} readOnly={false} />)
   expect(screen.getByText(/Public wallet receipt published/)).toBeTruthy()
   expect(screen.getByText(/do not resend this transfer/)).toBeTruthy()
-  expect(screen.getByRole('link', { name: 'View transaction on Taostats' })).toHaveAttribute(
-    'href', 'https://taostats.io/extrinsic/0x' + 'd'.repeat(64),
+  expect(screen.getByRole('link', { name: 'View transaction on Taostats' }).getAttribute('href')).toBe(
+    'https://taostats.io/extrinsic/0x' + 'd'.repeat(64),
   )
   expect(queue).not.toHaveBeenCalled()
   expect(preview).not.toHaveBeenCalled()
