@@ -955,6 +955,40 @@ CREATE FUNCTION public.protect_private_benchmark_preparation_identity() RETURNS 
 
 
 --
+-- Name: protect_v13_official_control_approval(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.protect_v13_official_control_approval() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          RAISE EXCEPTION 'official control approvals are immutable audit evidence';
+        END;
+        $$;
+
+
+--
+-- Name: protect_v13_official_control_image(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.protect_v13_official_control_image() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'official control images are retained audit evidence';
+          END IF;
+          IF OLD.verified_at IS NOT NULL OR
+             (to_jsonb(NEW) - 'verified_at' - 'verified_storage_key') IS DISTINCT FROM
+             (to_jsonb(OLD) - 'verified_at' - 'verified_storage_key') THEN
+            RAISE EXCEPTION 'official control image identity is immutable';
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+
+
+--
 -- Name: reject_benchmark_canary_score(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -6422,6 +6456,53 @@ CREATE TABLE public.v13_known_benign_control_approvals (
 
 
 --
+-- Name: v13_official_control_approvals; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_official_control_approvals (
+    approval_id uuid NOT NULL,
+    control_id uuid NOT NULL,
+    profile_sha256 text NOT NULL,
+    review_evidence_sha256 text NOT NULL,
+    approval_receipt_sha256 text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    approved_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_official_control_approvals_v13oca_actor CHECK (((length(actor) >= 1) AND (length(actor) <= 320))),
+    CONSTRAINT ck_v13_official_control_approvals_v13oca_approval_recei_048d CHECK ((approval_receipt_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_v13_official_control_approvals_v13oca_profile_sha256 CHECK ((profile_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_v13_official_control_approvals_v13oca_reason CHECK ((length(reason) >= 8)),
+    CONSTRAINT ck_v13_official_control_approvals_v13oca_review_evidence_sha256 CHECK ((review_evidence_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: v13_official_control_images; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_official_control_images (
+    control_id uuid NOT NULL,
+    request_id uuid NOT NULL,
+    fixture_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    image_sha256 text NOT NULL,
+    image_id text NOT NULL,
+    size_bytes bigint NOT NULL,
+    producer text NOT NULL,
+    staging_id uuid NOT NULL,
+    verified_storage_key text,
+    verified_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_official_control_images_v13oci_artifact CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_v13_official_control_images_v13oci_image CHECK ((image_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_v13_official_control_images_v13oci_image_id CHECK ((image_id ~ '^sha256:[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_v13_official_control_images_v13oci_producer CHECK (((length(producer) >= 1) AND (length(producer) <= 320))),
+    CONSTRAINT ck_v13_official_control_images_v13oci_size CHECK (((size_bytes > 0) AND (size_bytes <= '8589934592'::bigint))),
+    CONSTRAINT ck_v13_official_control_images_v13oci_verified_pair CHECK (((verified_at IS NULL) = (verified_storage_key IS NULL)))
+);
+
+
+--
 -- Name: v13_private_generation_groups; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9263,6 +9344,22 @@ ALTER TABLE ONLY public.v13_known_benign_control_approvals
 
 
 --
+-- Name: v13_official_control_approvals pk_v13_official_control_approvals; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_approvals
+    ADD CONSTRAINT pk_v13_official_control_approvals PRIMARY KEY (approval_id);
+
+
+--
+-- Name: v13_official_control_images pk_v13_official_control_images; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_images
+    ADD CONSTRAINT pk_v13_official_control_images PRIMARY KEY (control_id);
+
+
+--
 -- Name: v13_private_generation_groups pk_v13_private_generation_groups; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10076,6 +10173,22 @@ ALTER TABLE ONLY public.upload_admission_reservations
 
 ALTER TABLE ONLY public.v13_known_benign_control_approvals
     ADD CONSTRAINT uq_v13_known_benign_control_approvals_attempt_id UNIQUE (attempt_id, profile_sha256);
+
+
+--
+-- Name: v13_official_control_approvals uq_v13_official_control_approvals_control_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_approvals
+    ADD CONSTRAINT uq_v13_official_control_approvals_control_id UNIQUE (control_id, profile_sha256);
+
+
+--
+-- Name: v13_official_control_images uq_v13_official_control_images_request_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_images
+    ADD CONSTRAINT uq_v13_official_control_images_request_id UNIQUE (request_id);
 
 
 --
@@ -12343,6 +12456,20 @@ CREATE TRIGGER v13_known_benign_control_approvals_immutable BEFORE DELETE OR UPD
 
 
 --
+-- Name: v13_official_control_approvals v13_official_control_approval_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_official_control_approval_immutable BEFORE DELETE OR UPDATE ON public.v13_official_control_approvals FOR EACH ROW EXECUTE FUNCTION public.protect_v13_official_control_approval();
+
+
+--
+-- Name: v13_official_control_images v13_official_control_image_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_official_control_image_immutable BEFORE DELETE OR UPDATE ON public.v13_official_control_images FOR EACH ROW EXECUTE FUNCTION public.protect_v13_official_control_image();
+
+
+--
 -- Name: v13_private_generation_groups v13_private_generation_groups_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -13810,6 +13937,22 @@ ALTER TABLE ONLY public.v13_known_benign_control_approvals
 
 ALTER TABLE ONLY public.v13_known_benign_control_approvals
     ADD CONSTRAINT fk_v13_known_benign_control_approvals_attempt_id_screen_70b4 FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_official_control_approvals fk_v13_official_control_approvals_control_id_v13_offici_028d; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_approvals
+    ADD CONSTRAINT fk_v13_official_control_approvals_control_id_v13_offici_028d FOREIGN KEY (control_id) REFERENCES public.v13_official_control_images(control_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_official_control_images fk_v13_official_control_images_fixture_id_screener_l2_r_4a8c; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_images
+    ADD CONSTRAINT fk_v13_official_control_images_fixture_id_screener_l2_r_4a8c FOREIGN KEY (fixture_id) REFERENCES public.screener_l2_report_canaries(canary_id) ON DELETE RESTRICT;
 
 
 --
