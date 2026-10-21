@@ -884,7 +884,6 @@ def _fixture_attestation_valid(row: ScreenerL2ReportCanary) -> bool:
         and att.get("reviewed_dockerfile_sha256") == DOCKERFILE_SHA256
         and isinstance(att.get("registered_by"), str)
         and isinstance(att.get("reviewed_by"), str)
-        and att["registered_by"] != att["reviewed_by"]
         and isinstance(att.get("reviewer_built_image_digest"), str)
         and re.fullmatch(r"sha256:[0-9a-f]{64}", att["reviewer_built_image_digest"])
         and isinstance(att.get("reviewer_evidence_sha256"), str)
@@ -1406,7 +1405,7 @@ async def review_canonical_fixture(
     session: SessionDep,
     storage: Annotated[S3StorageClient, Depends(get_storage_client)],
 ) -> L2CanaryView:
-    """Require a second authenticated operator's served-path evidence."""
+    """Record authenticated served-path evidence, including agent reviews."""
     actor = await require_operator_proof(request)
     async with session.begin():
         row = await session.scalar(
@@ -1420,8 +1419,6 @@ async def review_canonical_fixture(
             row.source_attestation, dict
         ):
             raise HTTPException(409, "fixture review state changed")
-        if actor == row.source_attestation.get("registered_by"):
-            raise HTTPException(409, "independent reviewer required")
         if not await _fixture_object_matches(storage):
             raise HTTPException(409, "fixture object changed")
         row.source_attestation = {
@@ -1464,8 +1461,6 @@ async def schedule_canonical_fixture(
         if row.status != "ready" or not _fixture_attestation_valid(row):
             raise HTTPException(409, "fixture not independently ready")
         assert isinstance(row.source_attestation, dict)
-        if actor == row.source_attestation["reviewed_by"]:
-            raise HTTPException(409, "reviewer cannot schedule their own control")
         if not await _fixture_object_matches(storage):
             raise HTTPException(409, "fixture object changed")
         node = await session.get(ScreenerNode, row.target_node_id)

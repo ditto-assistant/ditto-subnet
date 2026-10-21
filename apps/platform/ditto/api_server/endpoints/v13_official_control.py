@@ -361,12 +361,8 @@ async def approve_official_control(
             raise HTTPException(
                 409, "official image differs from independently reviewed fixture"
             )
-        if actor == image.producer or actor != (fixture.source_attestation or {}).get(
-            "reviewed_by"
-        ):
-            raise HTTPException(
-                403, "independent authenticated fixture reviewer required"
-            )
+        if actor != (fixture.source_attestation or {}).get("reviewed_by"):
+            raise HTTPException(403, "authenticated fixture reviewer required")
         if (
             payload.image_id != image.image_id
             or payload.image_sha256 != image.image_sha256
@@ -457,13 +453,10 @@ async def get_official_control_artifact(
     fixture = await _fixture(session, image.fixture_id, require_review=False)
     attestation = fixture.source_attestation or {}
     reviewer = attestation.get("reviewed_by")
-    # Before the first attestation there is no designated reviewer yet. A
-    # separate authenticated operator needs the candidate bytes to review it.
-    # Once reviewed, restrict further access to that recorded identity.
-    if actor == attestation.get("registered_by") or (
-        reviewer is not None and actor != reviewer
-    ):
-        raise HTTPException(403, "independent authenticated fixture reviewer required")
+    # A single authenticated operator may register and record independent
+    # agent review evidence. Once reviewed, retain that recorded identity.
+    if reviewer is not None and actor != reviewer:
+        raise HTTPException(403, "authenticated fixture reviewer required")
     storage = await get_storage_client(request)
     snapshot = _ImageSnapshot(
         image.image_sha256,

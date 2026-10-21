@@ -57,6 +57,9 @@ platform_inference_relay_ports: [8010, 8011]
 # Per-env Secret Manager secret ids (shared ones are in the platform_app role).
 # Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
 secret_pylon_token: platform-prod-pylon-open-access-token
+# Payload version 1 exists. The protected Terraform apply grants runtime read
+# access before the managed app role consumes this shared proof binding.
+secret_backroom_platform_operator_proof: backroom-platform-operator-proof
 
 # Platform-operated screener auth: allowlist the dedicated prod screener hotkey
 # and share its bearer token (the same SCREENER_API_TOKEN configured on

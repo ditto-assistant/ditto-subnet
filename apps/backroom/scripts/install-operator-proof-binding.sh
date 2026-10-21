@@ -8,7 +8,8 @@ if [[ "${1:-}" != "INSTALL BACKROOM OPERATOR PROOF BINDING" ]]; then
   exit 2
 fi
 
-: "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN is required}"
+# Wrangler may use the operator's existing OAuth session or an API token.
+# Never read or copy its stored OAuth credential into the environment.
 : "${CLOUDFLARE_ACCOUNT_ID:?CLOUDFLARE_ACCOUNT_ID is required}"
 : "${BACKROOM_OAUTH_KV_ID:?BACKROOM_OAUTH_KV_ID is required}"
 project="${GCP_PROJECT:-ditto-app-dev}"

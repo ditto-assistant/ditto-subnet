@@ -222,9 +222,11 @@ async def test_fixture_capability_uses_signed_protocol_not_version_string(
 
 
 @pytest.mark.asyncio
-async def test_fixture_requires_distinct_review_and_one_schedule(
+@pytest.mark.parametrize("reviewer", ["registrar@omniaura.ai", "reviewer@omniaura.ai"])
+async def test_authenticated_operator_can_review_and_schedule_fixture(
     session_maker: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
+    reviewer: str,
 ) -> None:
     monkeypatch.setenv("BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET", SECRET)
     monkeypatch.setattr(
@@ -284,20 +286,10 @@ async def test_fixture_requires_distinct_review_and_one_schedule(
     }
     path = f"{BASE}/{registered.canary_id}/review"
     async with session_maker() as session:
-        with pytest.raises(HTTPException, match="independent reviewer"):
-            await endpoints.review_canonical_fixture(
-                registered.canary_id,
-                CanonicalFixtureReviewRequest.model_validate(review_body),
-                _request(path, review_body, "registrar@omniaura.ai"),
-                None,
-                session,
-                storage,
-            )
-    async with session_maker() as session:
         reviewed = await endpoints.review_canonical_fixture(
             registered.canary_id,
             CanonicalFixtureReviewRequest.model_validate(review_body),
-            _request(path, review_body, "reviewer@omniaura.ai"),
+            _request(path, review_body, reviewer),
             None,
             session,
             storage,
@@ -315,20 +307,10 @@ async def test_fixture_requires_distinct_review_and_one_schedule(
     schedule_body = {"confirm_report_only": True}
     schedule_path = f"{BASE}/{registered.canary_id}/schedule"
     async with session_maker() as session:
-        with pytest.raises(HTTPException, match="reviewer cannot schedule"):
-            await endpoints.schedule_canonical_fixture(
-                registered.canary_id,
-                CanonicalFixtureScheduleRequest.model_validate(schedule_body),
-                _request(schedule_path, schedule_body, "reviewer@omniaura.ai"),
-                None,
-                session,
-                storage,
-            )
-    async with session_maker() as session:
         queued = await endpoints.schedule_canonical_fixture(
             registered.canary_id,
             CanonicalFixtureScheduleRequest.model_validate(schedule_body),
-            _request(schedule_path, schedule_body, "registrar@omniaura.ai"),
+            _request(schedule_path, schedule_body, reviewer),
             None,
             session,
             storage,

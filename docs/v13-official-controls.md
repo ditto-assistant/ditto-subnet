@@ -15,8 +15,10 @@ pinned by that fixture.
 ## Operator workflow
 
 1. Read `get_canonical_starter_fixture_preflight` and register the canonical
-   source through its existing authenticated tool. A registrar cannot review
-   their own fixture.
+   source through its existing authenticated tool. One operator may perform
+   registration, record review evidence and schedule; a second human account
+   is not required. Independent agent reviews remain evidence, not a fabricated
+   operator identity or an automatically verified semantic pass.
 2. The same signed-in registrar calls `stage_v13_official_control_image` with
    a fresh request UUID, fixture UUID, image-tar SHA-256, byte size and exact
    candidate Docker image ID. Use the returned constrained PUT and headers.
@@ -34,17 +36,18 @@ pinned by that fixture.
 4. The independent reviewer uses `get_v13_official_control_artifact` to inspect
    the sealed archive before source attestation. It requires artifact scope
    and a current write-level account with authenticated operator proof. Before
-   source attestation, any such operator other than the registrar may inspect
-   the candidate; afterward only the recorded reviewer may download it.
+   source attestation, any such operator may inspect the candidate; afterward
+   only the recorded reviewer may download it.
    Platform rechecks sealed bytes and metadata before issuing a URL. Verify
    the returned digest and review
    the candidate in isolation without credentials or host mounts. Then use
    `review_canonical_starter_fixture` to attest the exact source and config
    image identity. Downloading a candidate does not attest it.
-5. The fixture's second authenticated reviewer calls
+5. The fixture's authenticated reviewer calls
    `record_v13_official_control_approval` with the exact tar/image/profile
-   identities, review-evidence digest and complete reason. The producer cannot
-   self-approve, and an unrelated actor cannot substitute for that reviewer.
+   identities, review-evidence digest and complete reason. The reviewer may
+   also be the producer; an unrelated actor cannot substitute for the recorded
+   reviewer.
    An identical approval retry returns the original receipt; conflicting
    attestations require a new reviewed asset instead of overwriting history.
 6. Read `get_v13_official_controls` and
@@ -71,7 +74,7 @@ archive. The API therefore always reports
 runner must load the archive and compare the actual image identity, then bind
 its observations to that identity and the approved runtime configuration.
 
-An approval records an independently authenticated operator claim with status
+An approval records an authenticated operator claim about review evidence with status
 `recorded_unverified`. Its receipt must predate the private generation event
 and challenge randomness. It neither proves semantic benignness nor supplies
 missing model-authority, tool, isolation, opaque-role or policy checks.

@@ -861,15 +861,15 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_v13_official_controls:
     'List official control image identities; no miner, private bytes or verdict.',
   get_v13_official_control_approvals:
-    'Read immutable independent official-image attestations; not certification.',
+    'Read immutable official-image review claims; not certification.',
   get_v13_official_control_artifact:
     'Download sealed candidate image for independent review; no verdict.',
   stage_v13_official_control_image:
-    'Registrar stages an exact independently reviewed official image; no miner row.',
+    'Registrar stages an exact official image for review; no miner row.',
   verify_v13_official_control_image:
     'Hash and seal official image bytes; no execution or verdict authority.',
   record_v13_official_control_approval:
-    'Independent fixture reviewer records one exact official-image attestation.',
+    'Authenticated fixture reviewer records exact-image evidence; one account may perform all steps.',
   register_canonical_starter_fixture:
     'Stage exact released starter: operator fixture, no miner submission.',
   review_canonical_starter_fixture:
@@ -2900,7 +2900,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'review_canonical_starter_fixture',
     {
       title: 'Attest canonical starter served path',
-      description: 'A different signed-in operator binds a public exact-source and served-path review digest plus built image digest. Candidate only; no clear authority. Requires backroom:write and confirmation.',
+      description: 'The authenticated operator binds public exact-source and served-path review evidence plus built image digest. The registrar may record independent agent review evidence using the same account. Candidate only; no clear authority. Requires backroom:write and confirmation.',
       inputSchema: reviewCanonicalStarterInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2928,13 +2928,13 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   // reparses its strict schema before creating a Platform URL or proof.
   registerTool('get_v13_official_control_approvals', {
     title: 'Read official V13 control approvals',
-    description: 'Read append-only independent operator attestations for a controlId. Each binds the official fixture, exact image, profile and review evidence. recorded_unverified is not a semantic pass or terminal authorization. Requires backroom:read.',
+    description: 'Read append-only authenticated operator attestations for a controlId. Each binds the official fixture, exact image, profile and review evidence. recorded_unverified is not a semantic pass or terminal authorization. Requires backroom:read.',
     inputSchema: officialControlLookupSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchOfficialV13ControlApprovals(input)))
 
   registerTool('stage_v13_official_control_image', {
     title: 'Stage official V13 control image',
-    description: 'The signed-in fixture registrar pins requestId, fixtureId, image tar SHA, config image ID and byte size. May stage before independent source review so the second operator can inspect sealed image bytes first. Once reviewed, the source fixture image ID must match. Returns a short-lived constrained PUT and headers. Creates no miner or attempt and cannot clear anything. Same exact requestId may remint an unverified upload; conflicts refuse. Requires backroom:write and exact confirmation.',
+    description: 'The signed-in fixture registrar pins requestId, fixtureId, image tar SHA, config image ID and byte size. May stage before independent source review so the operator can inspect sealed image bytes first; one account may register and record review evidence. Once reviewed, the source fixture image ID must match. Returns a short-lived constrained PUT and headers. Creates no miner or attempt and cannot clear anything. Same exact requestId may remint an unverified upload; conflicts refuse. Requires backroom:write and exact confirmation.',
     inputSchema: officialControlStageSchema.extend({ requestId: officialControlCatalogId(), fixtureId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => stageOfficialV13ControlImage(input, props.session.email)))
 
@@ -2945,8 +2945,8 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   }, async (input) => write(() => verifyOfficialV13ControlImage(input, props.session.email)))
 
   registerTool('record_v13_official_control_approval', {
-    title: 'Record independent official control approval',
-    description: 'Only the second authenticated fixture reviewer can attest the exact verified archive, image ID, profile and evidence digest. The registrar cannot self-approve. The append-only recorded_unverified receipt must predate private generation and does not establish semantic benignness, execution or a policy verdict. No miner or attempt is fabricated. Requires backroom:write and exact confirmation.',
+    title: 'Record official control approval',
+    description: 'The authenticated fixture reviewer records the exact verified archive, image ID, profile and evidence digest; this may be the same account that registered and built it. Independent agent review evidence is not a second human identity or an automated semantic pass. The append-only recorded_unverified receipt must predate private generation and does not establish semantic benignness, execution or a policy verdict. No miner or attempt is fabricated. Requires backroom:write and exact confirmation.',
     inputSchema: officialControlApprovalSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => recordOfficialV13ControlApproval(input, props.session.email)))
 

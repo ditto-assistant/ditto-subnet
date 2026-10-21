@@ -220,11 +220,13 @@ async def test_official_control_roundtrip_has_no_miner_or_attempt_and_no_verdict
     assert restage.status_code == 409
 
 
-async def test_reviewer_can_inspect_sealed_bytes_before_independent_attestation(
+@pytest.mark.parametrize("reviewer", [_REGISTRAR, _REVIEWER])
+async def test_operator_can_inspect_then_record_review_and_approval(
     official_control: dict,
     client: httpx.AsyncClient,
     app: FastAPI,
     session_maker: async_sessionmaker[AsyncSession],
+    reviewer: str,
 ) -> None:
     fixture_id = UUID(official_control["fixture_id"])
     async with session_maker() as session, session.begin():
@@ -256,11 +258,10 @@ async def test_reviewer_can_inspect_sealed_bytes_before_independent_attestation(
         },
     )
     assert verified.status_code == 200, verified.text
-    blocked = await _post(client, f"{_BASE}/{ident}/approvals", _approval(), _REVIEWER)
+    blocked = await _post(client, f"{_BASE}/{ident}/approvals", _approval(), reviewer)
     assert blocked.status_code == 409
     assert (await _artifact(client, ident, signed=False)).status_code == 403
-    assert (await _artifact(client, ident, _REGISTRAR)).status_code == 403
-    artifact = await _artifact(client, ident)
+    artifact = await _artifact(client, ident, reviewer)
     assert artifact.status_code == 200, artifact.text
     assert artifact.headers["Cache-Control"] == "no-store"
     assert artifact.json()["control"]["policy_verification_complete"] is False
@@ -286,14 +287,14 @@ async def test_reviewer_can_inspect_sealed_bytes_before_independent_attestation(
             "reviewer_evidence_url": "https://github.com/ditto-assistant/ditto-subnet/pull/3048",
             "confirm_candidate_review": True,
         },
-        _REVIEWER,
+        reviewer,
     )
     assert review.status_code == 200, review.text
-    approved = await _post(client, f"{_BASE}/{ident}/approvals", _approval(), _REVIEWER)
+    approved = await _post(client, f"{_BASE}/{ident}/approvals", _approval(), reviewer)
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "recorded_unverified"
     assert (await _artifact(client, ident, "unrelated@omniaura.ai")).status_code == 403
-    assert (await _artifact(client, ident)).status_code == 200
+    assert (await _artifact(client, ident, reviewer)).status_code == 200
 
 
 @pytest.mark.parametrize("tamper", ["bytes", "metadata", "unavailable"])

@@ -41,16 +41,20 @@ trajectory before treating this source as candidate benign.
 2. A signed-in Backroom operator calls `register_canonical_starter_fixture` with
    a new request UUID and active Hetzner node. This creates only a fixture row
    in `awaiting_review`; it creates no miner agent or screening attempt.
-3. A **different** signed-in operator independently reviews the exact archive,
+3. The signed-in operator records a review of the exact archive,
    built image, and served path against V13, including repeated external tool
-   calls. Publish the review evidence in this public repository, calculate its
+   calls. The same account may register, record review, and schedule. Independent
+   reviewer agents may supply the review evidence; their evidence is not a
+   second authenticated human account or an automated semantic pass. Publish
+   the review evidence in this public repository, calculate its
    SHA-256, and call `review_canonical_starter_fixture` with that digest, public
    evidence URL, exact archive and Dockerfile digests, and the reviewed build's
    image digest. Platform records an authenticated operator attestation; it
    does not fetch or validate the linked document. This marks a *candidate*
    only. A
    suspected or confirmed violation must not be attested as candidate benign.
-4. After the fixture-capable screener release is adopted, a different operator
+4. After the fixture-capable screener release is adopted, the authenticated
+   operator
    calls `schedule_canonical_starter_fixture`. Platform rechecks the object,
    reviewer, node, and version before queuing one job. The worker inventories
    and builds the untrusted archive in isolation, then runs L1/L2 source review
