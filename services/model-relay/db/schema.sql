@@ -6739,6 +6739,7 @@ CREATE TABLE public.validator_retry_recoveries (
     ticket_snapshot jsonb NOT NULL,
     granted_validator_hotkeys jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    target_validator_hotkey text,
     CONSTRAINT validator_retry_recoveries_actor_length CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT validator_retry_recoveries_bench_version_positive CHECK ((bench_version > 0)),
     CONSTRAINT validator_retry_recoveries_reason_length CHECK ((length(TRIM(BOTH FROM reason)) >= 3)),
