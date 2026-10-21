@@ -2051,7 +2051,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Retry validation after validator infrastructure failure',
       description:
-        'Restore only the exhausted validation slots needed for quorum after an operator verifies validator-owned infrastructure failure. Preserves scores, screening verdicts, artifacts, payments, ownership, and all ticket history. This is not rescreening and acts on one agent only. Refused (409) while provider_outage_blocks_retry is true unless acknowledgeProviderOutage=true: the provider-wide circuit is open or a provider-parked slot remains inside the recovery quiet window. Requires backroom:write.',
+        'Restore only the exhausted validation slots needed for quorum after an operator verifies validator-owned infrastructure failure. When exactly one score is missing, targetValidatorHotkey may select one currently available exhausted validator instead of the default deadline order; it never adds a ticket or overrides existing retry gates. Preserves scores, screening verdicts, artifacts, payments, ownership, and all ticket history. This is not rescreening and acts on one agent only. Refused (409) while provider_outage_blocks_retry is true unless acknowledgeProviderOutage=true: the provider-wide circuit is open or a provider-parked slot remains inside the recovery quiet window. Requires backroom:write.',
       inputSchema: retryValidationInputSchema,
       annotations: toolAnnotations('write', true),
     },

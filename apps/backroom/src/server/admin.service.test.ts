@@ -3173,6 +3173,33 @@ describe('copy review admin service', () => {
       }),
     )
 
+    // A distinct route fails closed on old Platform deployments.
+    fetchMock.mockResolvedValueOnce(Response.json({ recovery, idempotent: false }))
+    await retryValidation(
+      {
+        agentId,
+        expectedSnapshot: snapshot,
+        reason: 'Verified compatible host',
+        targetValidatorHotkey: 'validator-3',
+      },
+      'operator@example.com',
+    )
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/${agentId}/retry-targeted`,
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'operator@example.com' }),
+        body: JSON.stringify({
+          request_id: await deriveRequestId('validation-retry', [
+            agentId, 'operator@example.com', 'Verified compatible host', snapshot, 'validator-3',
+          ]),
+          expected_snapshot: snapshot,
+          reason: 'Verified compatible host',
+          acknowledge_provider_outage: false,
+          target_validator_hotkey: 'validator-3',
+        }),
+      }),
+    )
+
     const withdrawal = {
       withdrawal_id: requestId,
       agent_id: agentId,

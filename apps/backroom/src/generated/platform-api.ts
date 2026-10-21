@@ -4777,6 +4777,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/validation-retries/{agent_id}/retry-targeted": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Targeted Validation After Infrastructure Failure */
+        post: operations["retry_targeted_validation_after_infrastructure_failure_api_v1_admin_validation_retries__agent_id__retry_targeted_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/validation-retries/{agent_id}/validators/{validator_hotkey}": {
         parameters: {
             query?: never;
@@ -14161,6 +14178,25 @@ export interface components {
             /** Replacement Signature */
             replacement_signature: string;
         };
+        /** AdminTargetedValidationRetryRequest */
+        AdminTargetedValidationRetryRequest: {
+            /**
+             * Acknowledge Provider Outage
+             * @default false
+             */
+            acknowledge_provider_outage: boolean;
+            /** Expected Snapshot */
+            expected_snapshot: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Target Validator Hotkey */
+            target_validator_hotkey: string;
+        };
         /** AdminTranscriptMirrorSettingsRequest */
         AdminTranscriptMirrorSettingsRequest: {
             /**
@@ -14657,6 +14693,8 @@ export interface components {
              * Format: uuid
              */
             request_id: string;
+            /** Target Validator Hotkey */
+            target_validator_hotkey?: string | null;
         };
         /** AdminValidationRetryResponse */
         AdminValidationRetryResponse: {
@@ -50920,6 +50958,44 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AdminValidationRetryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminValidationRetryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_targeted_validation_after_infrastructure_failure_api_v1_admin_validation_retries__agent_id__retry_targeted_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTargetedValidationRetryRequest"];
             };
         };
         responses: {

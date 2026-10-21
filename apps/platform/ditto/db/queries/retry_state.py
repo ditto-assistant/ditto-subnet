@@ -355,6 +355,7 @@ def recovery_gate(
     bench_version: int,
     rollout_qualification: bool = False,
     work_available_hotkeys: set[str] | None = None,
+    target_validator_hotkey: str | None = None,
 ) -> tuple[bool, bool, str | None, list[ValidatorTicket]]:
     """Decide whether an operator retry is possible.
 
@@ -422,6 +423,27 @@ def recovery_gate(
         return False, False, "not enough expired tickets to restore quorum", []
     if is_agent_attributable_exhaustion(scores=scores, tickets=tickets):
         return False, False, AGENT_ATTRIBUTABLE_WITHDRAW_REASON, []
+    if target_validator_hotkey is not None:
+        if needed != 1:
+            return (
+                False,
+                False,
+                "validator selection requires exactly one missing score",
+                [],
+            )
+        selected = [
+            ticket
+            for ticket in exhausted
+            if ticket.validator_hotkey == target_validator_hotkey
+        ]
+        if not selected:
+            return False, False, "selected validator has no exhausted ticket", []
+        if (
+            work_available_hotkeys is not None
+            and target_validator_hotkey not in work_available_hotkeys
+        ):
+            return False, False, "selected validator is not currently available", []
+        return False, True, None, selected
     return False, True, None, exhausted[:needed]
 
 

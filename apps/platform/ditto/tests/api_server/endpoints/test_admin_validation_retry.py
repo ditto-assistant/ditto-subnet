@@ -4164,3 +4164,77 @@ async def test_provider_outage_exhaustion_withholds_retry_until_provider_recover
     assert detail["provider_outage"]["state"] == "closed"
     assert detail["recovery_allowed"] is True
     assert detail["recommended_action"] == "retry"
+
+
+async def test_targeted_final_quorum_retry_is_guarded_audited_and_idempotent(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed(retry_maker, score_count=2)
+    await _seed_online_heartbeat(retry_maker, hotkey="validator-2")
+    await _seed_online_heartbeat(retry_maker, hotkey="validator-3")
+    _install(app, retry_maker)
+    detail = await client.get(
+        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
+    )
+    payload = {
+        "request_id": str(uuid4()),
+        "expected_snapshot": detail.json()["snapshot"],
+        "reason": "Use the compatible validator after verified resource correction",
+        "target_validator_hotkey": "validator-3",
+    }
+    targeted = f"/api/v1/admin/validation-retries/{agent_id}/retry-targeted"
+    stale = await client.post(
+        targeted, json={**payload, "expected_snapshot": "0" * 64}, headers=_HEADERS
+    )
+    assert stale.status_code == 409
+    bad = await client.post(
+        targeted,
+        json={**payload, "target_validator_hotkey": "validator-0"},
+        headers=_HEADERS,
+    )
+    assert bad.status_code == 409
+    missing = await client.post(
+        targeted,
+        json={
+            key: value
+            for key, value in payload.items()
+            if key != "target_validator_hotkey"
+        },
+        headers=_HEADERS,
+    )
+    assert missing.status_code == 422
+    response = await client.post(targeted, json=payload, headers=_HEADERS)
+    assert response.status_code == 200
+    assert response.json()["recovery"]["granted_validator_hotkeys"] == ["validator-3"]
+    replay = await client.post(targeted, json=payload, headers=_HEADERS)
+    assert replay.status_code == 200 and replay.json()["idempotent"] is True
+    mismatch = await client.post(
+        targeted,
+        json={**payload, "target_validator_hotkey": "validator-2"},
+        headers=_HEADERS,
+    )
+    assert mismatch.status_code == 409
+    async with retry_maker() as session:
+        tickets = list(
+            (
+                await session.scalars(
+                    select(ValidatorTicket)
+                    .where(ValidatorTicket.agent_id == agent_id)
+                    .order_by(ValidatorTicket.validator_hotkey)
+                )
+            ).all()
+        )
+        recoveries = list(
+            (
+                await session.scalars(
+                    select(ValidatorRetryRecovery).where(
+                        ValidatorRetryRecovery.agent_id == agent_id
+                    )
+                )
+            ).all()
+        )
+    assert [ticket.manual_retry_grants for ticket in tickets] == [0, 0, 0, 1]
+    assert len(recoveries) == 1 and recoveries[0].actor == "operator"
+    assert len(recoveries[0].ticket_snapshot) == 4

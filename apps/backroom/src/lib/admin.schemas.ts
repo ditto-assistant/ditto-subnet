@@ -6263,6 +6263,7 @@ export const retryValidationInputSchema = z.object({
   agentId: z.string().uuid(),
   expectedSnapshot: z.string().regex(/^[0-9a-f]{64}$/),
   reason: auditReasonSchema(3),
+  targetValidatorHotkey: z.string().min(1).max(64).optional(),
   // Required to grant while provider_outage_blocks_retry is true: the
   // provider-wide circuit is open, so every restored lease is parked again.
   acknowledgeProviderOutage: z.boolean().default(false),

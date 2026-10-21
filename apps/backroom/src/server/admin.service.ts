@@ -3023,15 +3023,13 @@ export async function fetchValidationRetry(rawInput: unknown) {
 
 export async function retryValidation(rawInput: unknown, actor: string) {
   const input = retryValidationInputSchema.parse(rawInput)
-  const requestId = await deriveRequestId('validation-retry', [
-    input.agentId,
-    actor,
-    input.reason,
-    input.expectedSnapshot,
-  ])
+  const identity = [input.agentId, actor, input.reason, input.expectedSnapshot]
+  if (input.targetValidatorHotkey) identity.push(input.targetValidatorHotkey)
+  const requestId = await deriveRequestId('validation-retry', identity)
   type RetryRequest = PlatformOperations['retry_validation_after_infrastructure_failure_api_v1_admin_validation_retries__agent_id__retry_post']['requestBody']['content']['application/json']
+  const action = input.targetValidatorHotkey ? 'retry-targeted' : 'retry'
   const payload = await platformAdminRequest(
-    `/api/v1/admin/validation-retries/${encodeURIComponent(input.agentId)}/retry`,
+    `/api/v1/admin/validation-retries/${encodeURIComponent(input.agentId)}/${action}`,
     {
       method: 'POST',
       actor,
@@ -3040,6 +3038,9 @@ export async function retryValidation(rawInput: unknown, actor: string) {
         expected_snapshot: input.expectedSnapshot,
         reason: input.reason,
         acknowledge_provider_outage: input.acknowledgeProviderOutage,
+        ...(input.targetValidatorHotkey
+          ? { target_validator_hotkey: input.targetValidatorHotkey }
+          : {}),
       } satisfies RetryRequest,
     },
   )
