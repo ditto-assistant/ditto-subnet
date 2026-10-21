@@ -2683,7 +2683,7 @@ export interface paths {
         put?: never;
         /**
          * Review Canonical Fixture
-         * @description Require a second authenticated operator's served-path evidence.
+         * @description Record authenticated served-path evidence, including agent reviews.
          */
         post: operations["review_canonical_fixture_api_v1_admin_screener_l2_report_canaries_fixture__canary_id__review_post"];
         delete?: never;
