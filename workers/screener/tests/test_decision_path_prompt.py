@@ -9,10 +9,13 @@ from ditto_screener.decision_path_prompt import (
     DECISION_PATH_GUIDANCE,
     V13_BATCH_READS_GUIDANCE,
 )
+from ditto_screener.l2_review import _l2_review_system_prompt
 from ditto_screener.source_review import _source_review_system_prompt
 
 
-@pytest.mark.parametrize("render", [_source_review_system_prompt, _system_prompt])
+@pytest.mark.parametrize(
+    "render", [_source_review_system_prompt, _l2_review_system_prompt, _system_prompt]
+)
 def test_decision_path_guidance_is_version_scoped(render) -> None:
     assert DECISION_PATH_GUIDANCE in render(13)
     for historical in (10, 11, 12):

@@ -4045,7 +4045,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v32-policy-v13"
+    assert _prompt_revision(13) == "source-review-v33-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -4318,8 +4318,7 @@ def test_written_policy_v13_covers_new_invariant_and_activation_boundaries() -> 
         "`bench_version` or another protocol-version field",
         "Conditionality is neither necessary nor sufficient",
         "V1: required submission evidence missing",
-        "V2: platform verification not completed",
-        "V3: provider verification not completed",
+        "Platform and provider verification not completed",
         "Approval and emission eligibility",
         "Activation prerequisites",
         "policy-v13-opaque-verification.md",
@@ -4349,7 +4348,7 @@ def test_written_policy_v13_accepts_exact_official_component_provenance() -> Non
         "verification-profile digest all match",
         "artifact-bound screening and challenge records",
         "V1.required_submission_evidence_missing",
-        "V2.platform_verification_failed",
+        "Historical V2 records remain readable",
     }
 
     assert not sorted(
@@ -4360,20 +4359,18 @@ def test_written_policy_v13_accepts_exact_official_component_provenance() -> Non
     )
 
 
-def test_written_policy_v13_is_strictly_two_outcome() -> None:
-    """v13 resolves every completed review to CLEAR or REJECT.
-
-    A verification failure is a rejection with ``violation_proven: false`` and
-    a named failure domain, never an indefinite hold and never an allegation
-    of cheating.
-    """
+def test_written_policy_v13_parks_incomplete_verification() -> None:
+    """Eligibility decisions need evidence; reviewer failure grants no verdict."""
 
     policy = (
         Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
     ).read_text()
     required = {
         "Policy v13 has exactly two final outcomes",
-        "There is no `REVIEW_INCOMPLETE`, `INCONCLUSIVE`, implied clearance",
+        "submission stays `screening_failed`",
+        "Repeated inconclusive reviews and platform/provider failures are evidence of",
+        "There are no automatic cost-bearing retries",
+        "Counting reviews does not supply missing evidence",
         "violation_proven: true | false",
         "failure_domain: artifact | submission | platform | provider | none",
         "must never be described as cheating",
@@ -4443,7 +4440,7 @@ def test_written_policy_v13_forbids_every_non_decisive_admission() -> None:
 
     assert "may produce `CLEAR`, and none of them may submit a passing" in policy
     assert "v13 protocol guard that rejects\n  `pass_inconclusive`" in policy
-    assert "deadline finalizer" in policy
+    assert "Expire unresolved attempts into a parked failure" in policy
 
 
 def test_written_policy_v13_covers_the_prompt_security_surface() -> None:

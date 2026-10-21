@@ -30,6 +30,7 @@ from ditto_screener.causal_evidence import (
     causal_summary,
     verify_causal_finding,
 )
+from ditto_screener.decision_path_prompt import DECISION_PATH_GUIDANCE
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.scored_runtime_evidence import fetch_runtime_evidence
 from ditto_screener.source_review import (
@@ -131,35 +132,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v53-policy-v13"
+        return "l2-terra-source-review-v54-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v25-policy-v13"
+        return "l3-sol-adversarial-critic-v26-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-violation-cause-v30-policy-v13"
+        return "l3-sol-violation-cause-v31-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v10-policy-v13"
+        return "l3-sol-cause-disagreement-v11-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v28-policy-v13"
+        return "l3-sol-safety-adjudicator-v29-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -1367,7 +1368,9 @@ Trace the effective build and component role. Security findings use lifecycle
 reachability to an unauthorized data, execution, persistence, privilege, or
 material availability effect and do not require a model/scorer effect.
 """
-_L2_POLICY_TAILS[13] = _L2_POLICY_TAILS[12] + _L2_POLICY_V13_ADDENDUM
+_L2_POLICY_TAILS[13] = (
+    _L2_POLICY_TAILS[12] + _L2_POLICY_V13_ADDENDUM + "\n" + DECISION_PATH_GUIDANCE
+)
 
 
 def _l2_review_system_prompt(policy_version: int) -> str:
@@ -3195,10 +3198,7 @@ class TerraSolSourceReviewAgent:
                     analyst_cache_hit=result.analyst_cache_hit,
                     critic_cache_hit=result.critic_cache_hit,
                 )
-            elif not result.cache_hit and (
-                result.observation.ok
-                or result.observation.failure_disposition == "inconclusive"
-            ):
+            elif not result.cache_hit and result.observation.ok:
                 self._store_cache(cache_key, result)
             if (
                 result.observation.error_code
@@ -5682,6 +5682,11 @@ class TerraSolSourceReviewAgent:
                 observation_value.get("categories", ())
             )
             observation = SourceReviewObservation(**observation_value)
+            # Old workers persisted inconclusive finals for seven days. A
+            # manually issued retry must perform the unfinished review rather
+            # than replaying that attempt as another completed model review.
+            if not observation.ok:
+                return None
             usage = L2Usage(**value["usage"])
             return L2RunResult(
                 observation=observation,
@@ -5717,6 +5722,8 @@ class TerraSolSourceReviewAgent:
             return None
 
     def _store_cache(self, key: str, result: L2RunResult) -> None:
+        if not result.observation.ok:
+            return
         path = self._cache_dir / f"{key}.json"
         payload = {
             "observation": {

@@ -221,10 +221,8 @@ from ditto.db.queries.screener_provider_settings import (
     resolve_screener_provider_settings,
 )
 from ditto.db.queries.screening import (
-    L2_MODEL_INCONCLUSIVE_REASON_CODE,
     POLICY_ONLY_RESCREEN_REASON,
     claim_screening_attempts,
-    complete_static_inconclusive_count,
     get_screening_attempt,
     infra_retry_agent_admitted,
     prerequisite_screening_predicates,
@@ -234,9 +232,6 @@ from ditto.db.queries.screening import (
     try_acquire_screening_claim_lock,
 )
 from ditto.db.queries.screening_infra_retry import INFRA_AUTO_RETRY_REASON_CODES
-from ditto.db.queries.screening_retry import (
-    authorize_automatic_review_retry,
-)
 from ditto.db.queries.screening_review_events import append_automated_review_event
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
@@ -262,17 +257,13 @@ from ditto_screening_protocol.reason_codes import (
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
     SOURCE_REVIEW_CONFIRMED_VIOLATION,
-    V2_COMPLETE_STATIC_REVIEWS,
-    VERIFICATION_INCOMPLETE_UNREVIEWABLE,
     WORKER_CLAIM_NOT_STARTED,
 )
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
 
-AUTO_REVIEW_RETRY_PUBLIC_REASON = (
-    "Screening ended without a verdict; retrying automatically"
-)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/screener", tags=["screener"])
@@ -427,16 +418,6 @@ def _screened_image_key(agent_id: UUID, image_upload_id: UUID) -> str:
 # Agents a verdict may act on. ``screening`` is included for forward-compat with
 # a future claim step; the terminal targets are handled separately (idempotency).
 _SCREENABLE_STATUSES = (AgentStatus.UPLOADED, AgentStatus.SCREENING)
-# Miner-visible text for policy v13 V2.platform_verification_failed. It must
-# say no violation was found: V2 records ``violation_proven: false``.
-V2_UNREVIEWABLE_PUBLIC_REASON = (
-    "Rejected as unreviewable (policy v13 V2, platform verification not "
-    "completed): repeated complete source reviews could not settle the served "
-    "decision path. No violation was found. A simpler, more traceable version "
-    "may be resubmitted."
-)
-
-
 _INVARIANT_LABELS = {
     "i1_model_invocation": "I1 model invocation",
     "i2_evidence_retention": "I2 evidence retention",
@@ -496,24 +477,6 @@ def _confirmed_violation_reason(
     return (
         "Rejected under screening policy v13: independent L2 and L3 source "
         "review confirmed an invariant breach. " + " ".join(parts)
-    )
-
-
-def _completes_static_review(payload: ScreenResultRequest) -> bool:
-    """Whether a verdict is a finished review that stayed statically unsettled.
-
-    Budget, time, provider and infrastructure stops carry other reason codes or
-    a ``budget_stop_reason``; only a model-chosen inconclusive over a complete
-    review counts toward V2.
-    """
-    audit = payload.review_audit
-    return (
-        payload.outcome == ScreenResultOutcome.INCONCLUSIVE
-        and payload.reason_code == L2_MODEL_INCONCLUSIVE_REASON_CODE
-        and payload.adjudication is None
-        and audit is not None
-        and audit.resolution_basis == "insufficient_static_evidence"
-        and audit.budget_stop_reason in (None, "none")
     )
 
 
@@ -5632,33 +5595,9 @@ async def submit_result(
             target = AgentStatus.REJECTED
             public_reason = payload.adjudication.reason
             attempt_status = "rejected"
-        if (
-            payload.policy_version >= 13
-            and not deferred_attempt_lifecycle
-            and _completes_static_review(payload)
-            and (
-                attempt.reason_code == VERIFICATION_INCOMPLETE_UNREVIEWABLE
-                or (
-                    agent.status in _SCREENABLE_STATUSES
-                    and await complete_static_inconclusive_count(
-                        session,
-                        agent_id=agent_id,
-                        policy_version=payload.policy_version,
-                    )
-                    + 1
-                    >= V2_COMPLETE_STATIC_REVIEWS
-                )
-            )
-        ):
-            # Policy v13 has no indefinite INCONCLUSIVE outcome: a mandatory
-            # verification still incomplete after the published retries is
-            # V2, a terminal REJECT with violation_proven false. The worker's
-            # signed inconclusive evidence is kept below; only the outcome
-            # and its code change.
-            target = AgentStatus.REJECTED
-            public_reason = V2_UNREVIEWABLE_PUBLIC_REASON
-            attempt_status = "rejected"
-            stored_reason_code = VERIFICATION_INCOMPLETE_UNREVIEWABLE
+        # An inconclusive source review is a failed verification attempt, not
+        # evidence against the artifact. Repeated failures stay parked for an
+        # operator; they never acquire rejection authority by being counted.
         confirmed_reason = _confirmed_violation_reason(
             payload, artifact_sha256=agent.sha256
         )
@@ -5980,9 +5919,6 @@ async def submit_result(
                 evidence_deferred = target != AgentStatus.QUARANTINED or (
                     deferred_attempt_lifecycle
                 )
-                v2_unreviewable = (
-                    stored_reason_code == VERIFICATION_INCOMPLETE_UNREVIEWABLE
-                )
                 confirmed_violation = (
                     target == AgentStatus.REJECTED
                     and stored_reason_code == SOURCE_REVIEW_CONFIRMED_VIOLATION
@@ -6025,9 +5961,7 @@ async def submit_result(
                         status="resolved" if evidence_deferred else "active",
                         resolved_at=resolved_at,
                         resolved_by=(
-                            "platform:v13-v2-unreviewable"
-                            if v2_unreviewable
-                            else "platform:v13-confirmed-violation"
+                            "platform:v13-confirmed-violation"
                             if confirmed_violation
                             else "platform:deferred-source-review"
                             if evidence_deferred
@@ -6035,15 +5969,13 @@ async def submit_result(
                         ),
                         resolution=(
                             "reject"
-                            if v2_unreviewable or confirmed_violation
+                            if confirmed_violation
                             else "rescreen"
                             if evidence_deferred
                             else None
                         ),
                         resolution_reason=(
-                            V2_UNREVIEWABLE_PUBLIC_REASON
-                            if v2_unreviewable
-                            else public_reason
+                            public_reason
                             if confirmed_violation
                             else payload.adjudication.reason
                             if payload.adjudication is not None
@@ -6062,6 +5994,11 @@ async def submit_result(
                             )
                             if payload.review_notes is not None
                             and outcome_value == "pass"
+                            else (
+                                "Screening did not complete; manual review or retry "
+                                "required"
+                            )
+                            if target == AgentStatus.SCREENING_FAILED
                             else "Bounded source review exhausted; admitted for scoring"
                         )
                         if evidence_deferred
@@ -6213,24 +6150,8 @@ async def submit_result(
                 reason_code=stored_reason_code,
                 reason=public_reason,
             )
-        if (
-            not late_deferred_result
-            and not deferred_attempt_lifecycle
-            and agent.status == AgentStatus.SCREENING_FAILED
-            and attempt.status in {"expired", "failed"}
-            and await authorize_automatic_review_retry(
-                session,
-                agent=agent,
-                attempt=attempt,
-                reason_code=attempt.reason_code,
-                now=datetime.now(UTC),
-            )
-            is not None
-        ):
-            # Same pairing as the operator retry: the failed attempt keeps its
-            # code; the agent no longer advertises it.
-            agent.screening_reason = AUTO_REVIEW_RETRY_PUBLIC_REASON
-            agent.screening_reason_code = None
+        # Failed and inconclusive reviews consume their one dispatch. Only
+        # Backroom's guarded manual retry may mint a latest-attempt override.
         result_status = agent.status
 
     try:

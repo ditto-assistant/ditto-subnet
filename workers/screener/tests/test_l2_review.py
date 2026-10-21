@@ -17,7 +17,7 @@ import sys
 import tarfile
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -458,9 +458,9 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "blocks the call before endpoint dispatch" in v13
     assert "external tool's actual name and argument schema" in v13
     assert "hypothetically use the same field name" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v53-policy-v13"
-    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v25-policy-v13"
-    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v28-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v54-policy-v13"
+    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v26-policy-v13"
+    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v29-policy-v13"
     assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
     assert "Use at most four targeted analyzer" not in (
         l2_review._V13_SAFETY_ADJUDICATOR_TASK
@@ -545,7 +545,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "validator mints `inference_base_url`" in v13
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v53-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v54-policy-v13"
     assert "v13" not in _benchmark_contract_capsule(12)
     assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
     assert (
@@ -3720,7 +3720,7 @@ async def test_signed_lease_must_match_exact_attempt_and_artifact_before_model(
         scored_runtime_evidence=delayed,
     )
     assert result.observation.error_code == "l2-model-inconclusive"
-    assert len(seen) == 2  # same exact packet may hit the isolated L2 cache
+    assert len(seen) == 3  # an inconclusive review is never a reusable final
 
     for wrong in (
         lease.model_copy(update={"attempt_id": UUID(int=1)}),
@@ -3738,7 +3738,7 @@ async def test_signed_lease_must_match_exact_attempt_and_artifact_before_model(
         )
         assert result.observation.error_code == "l2-runtime-evidence-unavailable"
         assert result.observation.failure_disposition == "pass_inconclusive"
-    assert len(seen) == 2
+    assert len(seen) == 3
 
 
 async def test_required_signed_lease_absence_holds_before_model(
@@ -4059,7 +4059,11 @@ async def test_incomplete_dossier_components_are_signed_without_source(
 ) -> None:
     agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
 
+    reviews = 0
+
     async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
+        nonlocal reviews
+        reviews += 1
         return L2RunResult(
             observation=l2_review._failure(
                 "l2-only-clearance-unproven", "inconclusive"
@@ -4094,7 +4098,73 @@ async def test_incomplete_dossier_components_are_signed_without_source(
         assert audit.dossier_complete is False
         assert result.failure_subcode == "dossier-incomplete"
         assert not result.observation.clearance_certified
-    assert second.cache_hit
+    assert reviews == 2
+    assert not second.cache_hit
+
+
+@pytest.mark.parametrize("legacy_cached", [False, True])
+async def test_manual_retry_does_not_replay_inconclusive_final(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_cached: bool
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    reviews = 0
+    unsettled = L2RunResult(
+        observation=replace(
+            l2_review._failure("l2-model-inconclusive", "inconclusive"),
+            inconclusive_model_audit={
+                "categories": ["none"],
+                "evidence": [],
+                "causal_path": [],
+            },
+        ),
+        analyzed_files=(),
+        causal_path=(),
+        tools=(),
+        usage=L2Usage(),
+        cache_hit=False,
+        resolution_basis="insufficient_static_evidence",
+        dossier_complete=True,
+    )
+
+    async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
+        nonlocal reviews
+        reviews += 1
+        return unsettled
+
+    monkeypatch.setattr(agent, "_review_uncached", review_uncached)
+    artifact_sha = "ab" * 32
+    cache_key = agent._cache_key(artifact_sha, _l1())
+    if legacy_cached:
+        # Simulate a seven-day final written by a pre-fix worker, including
+        # its zero-evidence model disposition. Reading old cache must be safe.
+        agent._cache_dir.mkdir(parents=True, exist_ok=True)
+        (agent._cache_dir / f"{cache_key}.json").write_text(
+            json.dumps(asdict(unsettled))
+        )
+    first = await agent.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+    second = await agent.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256=artifact_sha,
+        attempt_id=UUID("96af45fd-65da-4f59-87f8-8ddf5d57f88d"),
+        l1_observation=_l1(),
+        deadline=None,
+    )
+    assert reviews == 2, "each manually issued attempt must review unfinished evidence"
+    for result in (first, second):
+        assert not result.cache_hit
+        assert not result.observation.ok
+        assert not result.observation.clearance_certified
+        assert result.observation.error_code == "l2-model-inconclusive"
+        audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+        assert audit.model_categories == ["none"]
+        assert audit.model_evidence_count == 0
+        assert audit.resolution_basis == "insufficient_static_evidence"
 
 
 async def test_dossier_component_labels_name_only_truncated_analyzers(

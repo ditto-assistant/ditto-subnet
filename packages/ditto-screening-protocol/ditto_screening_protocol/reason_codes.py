@@ -114,14 +114,11 @@ SOURCE_REVIEW_CONFIRMED_VIOLATION: Final = "source-review-confirmed-violation"
 independent L3 violation adjudicator confirmed after it could have refuted it.
 The worker transports it as a hold; Platform records the terminal reject."""
 VERIFICATION_INCOMPLETE_UNREVIEWABLE: Final = "verification-incomplete-unreviewable"
-"""Policy v13 ``V2.platform_verification_failed``: Platform's terminal reject
-after ``V2_COMPLETE_STATIC_REVIEWS`` complete source reviews of the exact
-artifact all ended ``l2-model-inconclusive`` (``insufficient_static_evidence``).
-Not misconduct: the miner may resubmit, and nothing is banned."""
+"""Historical platform verification rejection, retained for existing records.
+Repeated inconclusive, infrastructure, and provider failures now stay parked for
+manual review or retry; they do not produce this policy reason code."""
 V2_COMPLETE_STATIC_REVIEWS: Final = 2
-"""Published retry count behind ``VERIFICATION_INCOMPLETE_UNREVIEWABLE``
-(docs/policy-v13.md, V2). Budget, time, provider and infrastructure stops end
-with other codes and never count."""
+"""Historical threshold retained for compatibility; no longer a rejection rule."""
 
 _F = ReasonCodeClass.FLEET_INFRA
 _P = ReasonCodeClass.PROVIDER_BACKOFF
