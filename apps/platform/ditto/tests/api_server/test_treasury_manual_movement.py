@@ -242,3 +242,15 @@ async def test_cached_public_payload_integrity_is_checked_on_replay_and_read(
             await publish_finalized_movement(session, None, row)
         with pytest.raises(ValueError, match="proof changed"):
             verified_movement_payload(changed)
+
+
+@pytest.mark.parametrize("cached", [[], {}, "malformed receipt", True])
+async def test_malformed_cached_json_is_a_controlled_refusal(
+    app, session_maker, cached
+):
+    request_id, _ = await seed_movement(app, session_maker)
+    async with session_maker() as session:
+        row = await session.get(TreasuryManualTransfer, request_id)
+        row.receipt = cached
+        with pytest.raises(ValueError, match="verified manual movement proof required"):
+            await publish_finalized_movement(session, None, row)

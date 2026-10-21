@@ -66,8 +66,6 @@ async def publish_finalized_movement(session, chain, row):
     ):
         raise ValueError("exact finalized manual request required")
     if row.receipt is not None:
-        if row.receipt.get("proof_kind") != KIND:
-            raise ValueError("manual movement receipt cannot overwrite other proof")
         cached = verified_movement_payload(row.receipt)
         if (
             cached.extrinsic_hash != settlement.extrinsic_hash
