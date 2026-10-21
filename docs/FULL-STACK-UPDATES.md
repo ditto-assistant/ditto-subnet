@@ -90,7 +90,11 @@ intake via `USR2`.
 
 Any failure rolls **all four services** back to the retained previous
 descriptor and resumes the old validator only once that stack is healthy; the
-failed digest stays suppressed until the channel advances. Crashes recover
+failed digest stays suppressed until the channel advances. Every Docker and
+Compose call in the transaction is bounded by
+`VALIDATOR_AUTO_UPDATE_COMMAND_TIMEOUT_SECONDS` (default: the ready timeout),
+so a wedged `compose up`, stop, or exec fails into that rollback instead of
+leaving the validator drained indefinitely. Crashes recover
 from the journal, and once `USR2` may have fired the updater refuses to
 recreate the validator without a new drained acknowledgement. Named volumes
 and the wallet bind survive the transaction; unrelated containers are never
