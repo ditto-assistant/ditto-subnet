@@ -5232,7 +5232,20 @@ func normalizeChatRequest(body []byte, model string, benchVersion int) ([]byte, 
 	flatEffort := ""
 	if nestedPresent {
 		nested, ok := nestedRaw.(map[string]any)
-		if !ok || len(nested) != 1 {
+		if !ok {
+			return nil, fmt.Errorf("invalid reasoning")
+		}
+		// Match Platform's accepted shapes. Repeating the trusted privacy
+		// value is harmless; the normalized body below still owns exclude.
+		_, hasEffort := nested["effort"]
+		excludeRaw, hasExclude := nested["exclude"]
+		switch {
+		case hasEffort && len(nested) == 1:
+		case hasEffort && hasExclude && len(nested) == 2:
+			if exclude, ok := excludeRaw.(bool); !ok || !exclude {
+				return nil, fmt.Errorf("invalid reasoning")
+			}
+		default:
 			return nil, fmt.Errorf("invalid reasoning")
 		}
 		candidate, ok := nested["effort"].(string)

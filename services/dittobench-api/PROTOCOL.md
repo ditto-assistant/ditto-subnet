@@ -98,9 +98,11 @@ effort on each OpenAI-compatible chat request. The accepted spellings are:
 ```
 
 The allowed values are exactly `low`, `medium`, and `high`. Omitting both
-fields selects `medium`. Supplying both is accepted only when the values agree;
-conflicting aliases, unknown values, wrong types, and caller-supplied provider
-controls fail before provider capacity or request accounting is spent.
+fields selects `medium`. When both aliases are present, the nested effort wins.
+The nested form may also repeat `"exclude": true`, the privacy value already
+pinned by the scorer. `"exclude": false`, wrong types, unknown effort values,
+and other caller-supplied provider controls fail before provider capacity or
+request accounting is spent.
 
 The trusted scorer broker canonicalizes either spelling to one provider body:
 
