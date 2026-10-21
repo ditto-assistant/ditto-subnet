@@ -901,10 +901,7 @@ async def _apply_recovery(
             or existing.actor != actor
             or existing.reason != reason
             or existing.expected_snapshot != expected_snapshot
-            or (
-                target_validator_hotkey is not None
-                and existing.granted_validator_hotkeys != [target_validator_hotkey]
-            )
+            or existing.target_validator_hotkey != target_validator_hotkey
         ):
             return "skipped", "request id already used", None
         return "idempotent", None, existing
@@ -981,6 +978,7 @@ async def _apply_recovery(
         score_count=len(scores),
         bench_version=bench_version,
         ticket_snapshot=ticket_snapshot,
+        target_validator_hotkey=target_validator_hotkey,
         granted_validator_hotkeys=[ticket.validator_hotkey for ticket in selected],
         created_at=now,
     )

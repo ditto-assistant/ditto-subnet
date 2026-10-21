@@ -8246,6 +8246,7 @@ class ValidatorRetryRecovery(Base):
     score_count: Mapped[int] = mapped_column(Integer, nullable=False)
     bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
     ticket_snapshot: Mapped[list[dict]] = mapped_column(_JSON_VARIANT, nullable=False)
+    target_validator_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
     granted_validator_hotkeys: Mapped[list[str]] = mapped_column(
         _JSON_VARIANT, nullable=False
     )
