@@ -124,10 +124,11 @@ async def test_read_only_fixture_probe_requires_valid_body_bound_operator_proof(
     path = f"{BASE}/operator-proof/preflight"
     # No session or storage dependency: the probe cannot stage or alter a fixture.
     assert await endpoints.verify_canonical_fixture_operator_proof(
-        _request(path, {}, "reader@omniaura.ai"), None
+        {}, _request(path, {}, "reader@omniaura.ai"), None
     ) == {"verified": True}
     with pytest.raises(HTTPException) as rejected:
         await endpoints.verify_canonical_fixture_operator_proof(
+            {},
             _request(path, {}, "reader@omniaura.ai", proof_actor="other@omniaura.ai"),
             None,
         )
@@ -135,7 +136,7 @@ async def test_read_only_fixture_probe_requires_valid_body_bound_operator_proof(
     monkeypatch.delenv("BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET")
     with pytest.raises(HTTPException) as unavailable:
         await endpoints.verify_canonical_fixture_operator_proof(
-            _request(path, {}, "reader@omniaura.ai"), None
+            {}, _request(path, {}, "reader@omniaura.ai"), None
         )
     assert unavailable.value.status_code == 503
 
