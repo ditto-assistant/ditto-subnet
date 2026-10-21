@@ -102,6 +102,12 @@ describe('official V13 control boundary', () => {
     expect(mock).not.toHaveBeenCalled()
   })
 
+  it('rejects whitespace-only approval reasons before making a request', async () => {
+    const mock = install({})
+    await expect(recordOfficialV13ControlApproval({ ...approval, reason: ' '.repeat(12) }, 'reviewer@omniaura.ai')).rejects.toThrow()
+    expect(mock).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['stage_v13_official_control_image', { ...stage, requestId: 'not-a-uuid' }],
     ['stage_v13_official_control_image', { ...stage, fixtureId: 'not-a-uuid' }],

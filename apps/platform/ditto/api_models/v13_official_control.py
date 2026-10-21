@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ImageId = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
@@ -73,7 +73,7 @@ class OfficialControlApprovalRequest(BaseModel):
     image_id: ImageId
     profile_sha256: Sha256
     review_evidence_sha256: Sha256
-    reason: Annotated[str, Field(min_length=8)]
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8)]
 
 
 class OfficialControlApprovalView(OfficialControlApprovalRequest):

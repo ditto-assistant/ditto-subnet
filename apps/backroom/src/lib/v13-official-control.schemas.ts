@@ -20,7 +20,7 @@ export const officialControlVerifySchema = z.object({
 export const officialControlApprovalSchema = z.object({
   controlId: z.string().uuid(), imageSha256: sha, imageId,
   profileSha256: sha, reviewEvidenceSha256: sha,
-  reason: z.string().min(8),
+  reason: z.string().trim().min(8),
   confirmation: z.literal('RECORD OFFICIAL V13 CONTROL APPROVAL'),
 })
 export const officialControlImageSchema = z.object({

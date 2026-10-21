@@ -19,7 +19,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server import canonical_starter_control as starter
-from ditto.api_server.storage import create_storage_client
+from ditto.api_server.storage import StorageError, create_storage_client
 from ditto.db.models import (
     Agent,
     ScreenerL2ReportCanary,
@@ -365,6 +365,13 @@ async def test_official_control_requires_real_proof_and_separate_actor(
     assert (
         await _post(client, f"{_BASE}/{control_id}/verify", guard)
     ).status_code == 200
+    blank_reason = await _post(
+        client,
+        f"{_BASE}/{control_id}/approvals",
+        {**_approval(), "reason": " " * 10},
+        _REVIEWER,
+    )
+    assert blank_reason.status_code == 422
     self_approval = await _post(client, f"{_BASE}/{control_id}/approvals", _approval())
     assert self_approval.status_code == 403
     third_actor = await _post(
@@ -421,10 +428,21 @@ async def test_concurrent_verifiers_pin_one_immutable_control(
     client: httpx.AsyncClient,
     app: FastAPI,
     session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     staged = await _uploaded(client, official_control)
     ident = UUID(staged["control"]["control_id"])
     guard = {"image_sha256": _SHA, "image_id": _IMAGE_ID}
+    original_copy = app.state.storage.copy_object
+    copies: list[str] = []
+    both_copying = asyncio.Barrier(2)
+
+    async def concurrent_copy(*, source_key: str, dest_key: str) -> None:
+        copies.append(dest_key)
+        await both_copying.wait()
+        await original_copy(source_key=source_key, dest_key=dest_key)
+
+    monkeypatch.setattr(app.state.storage, "copy_object", concurrent_copy)
     async with asyncio.timeout(20):
         first, second = await asyncio.gather(
             _post(client, f"{_BASE}/{ident}/verify", guard),
@@ -438,7 +456,11 @@ async def test_concurrent_verifiers_pin_one_immutable_control(
         protected = await app.state.storage.verify_object_sha256(
             key=image.verified_storage_key, expected_size_bytes=len(_IMAGE)
         )
+        assert len(copies) == 2
+        loser = next(key for key in copies if key != image.verified_storage_key)
     assert protected.sha256 == _SHA
+    with pytest.raises(StorageError):
+        await app.state.storage.head_object(key=loser)
 
 
 async def test_official_control_refuses_mismatched_review_and_reused_request(

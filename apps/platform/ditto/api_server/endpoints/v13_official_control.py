@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
@@ -337,7 +338,15 @@ async def verify_official_control_image(
             row.verified_at = await _database_now(session)
             row.verified_storage_key = final_key
             await session.flush()
-        return _view(row)
+        result = _view(row)
+        unused_copy = row.verified_storage_key != final_key
+    if unused_copy:
+        # Only this request's distinct, never-pinned copy is disposable. Keep
+        # storage cleanup outside lifecycle locks and preserve a successful
+        # verification if best-effort cleanup is unavailable.
+        with suppress(Exception):
+            await storage.delete_object(key=final_key)
+    return result
 
 
 @router.post("/{control_id}/approvals", response_model=OfficialControlApprovalView)

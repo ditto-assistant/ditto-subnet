@@ -865,6 +865,9 @@ async def _exact_source(
 
 
 def _fixture_attestation_valid(row: ScreenerL2ReportCanary) -> bool:
+    # One authenticated account may register, record review evidence and
+    # schedule. Independent agent review belongs in the committed evidence;
+    # a second human account is not the operator authorization boundary.
     att = row.source_attestation
     return bool(
         row.source_kind == "canonical_starter_fixture"
