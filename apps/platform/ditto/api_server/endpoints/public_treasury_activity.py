@@ -11,11 +11,10 @@ from ditto.api_models.treasury_activity import (
     PublicTreasuryEventPage,
 )
 from ditto.api_models.treasury_movement import (
-    PublicTreasuryMovement,
     PublicTreasuryMovementPage,
 )
 from ditto.api_server.dependencies import get_session
-from ditto.api_server.treasury_manual_movement import KIND
+from ditto.api_server.treasury_manual_movement import KIND, verified_movement_payload
 from ditto.db.models import (
     TreasuryManualTransfer,
     TreasuryPublicEvent,
@@ -50,7 +49,7 @@ async def list_manual_movements(
     for row in rows:
         if row.receipt is None:
             raise ValueError("verified movement projection absent")
-        items.append(PublicTreasuryMovement.model_validate(row.receipt["movement"]))
+        items.append(verified_movement_payload(row.receipt))
     return PublicTreasuryMovementPage(items=items)
 
 

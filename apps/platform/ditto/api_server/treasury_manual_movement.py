@@ -34,6 +34,22 @@ from ditto_screening_protocol.treasury_manual import (
 KIND = "finalized_manual_movement_v1"
 
 
+def verified_movement_payload(receipt):
+    """Validate the entire retained projection, including non-financial fields."""
+    if not isinstance(receipt, dict) or receipt.get("proof_kind") != KIND:
+        raise ValueError("verified manual movement proof required")
+    movement = PublicTreasuryMovement.model_validate(receipt.get("movement"))
+    if (
+        receipt.get("movement_digest") != digest(movement.model_dump(mode="json"))
+        or receipt.get("receipt_id") != movement.payment_id
+        or receipt.get("extrinsic_hash") != movement.extrinsic_hash
+        or receipt.get("published") is not True
+        or receipt.get("source_attribution") != "incomplete"
+    ):
+        raise ValueError("retained manual movement proof changed")
+    return movement
+
+
 async def publish_finalized_movement(session, chain, row):
     envelope = parse_manual_envelope(row.envelope)
     report = ManualReport.model_validate(row.report)
@@ -52,7 +68,7 @@ async def publish_finalized_movement(session, chain, row):
     if row.receipt is not None:
         if row.receipt.get("proof_kind") != KIND:
             raise ValueError("manual movement receipt cannot overwrite other proof")
-        cached = PublicTreasuryMovement.model_validate(row.receipt["movement"])
+        cached = verified_movement_payload(row.receipt)
         if (
             cached.extrinsic_hash != settlement.extrinsic_hash
             or cached.block_hash != settlement.block_hash
@@ -181,4 +197,5 @@ async def publish_finalized_movement(session, chain, row):
         "proof_kind": KIND,
         "source_attribution": "incomplete",
         "movement": movement.model_dump(mode="json"),
+        "movement_digest": digest(movement.model_dump(mode="json")),
     }

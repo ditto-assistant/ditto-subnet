@@ -42,7 +42,9 @@ export function GammaReceiptFeed(): JSX.Element {
     return items
       .sort((a, b) => b.event_at.localeCompare(a.event_at))
       .filter((item) => {
-        const key = item.extrinsic_hash || item.payment_id;
+        // One extrinsic can contain distinct finalized event receipts. The
+        // canonical payment ID binds chain/block/extrinsic/event coordinates.
+        const key = item.payment_id;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;

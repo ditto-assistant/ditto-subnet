@@ -210,3 +210,35 @@ async def test_duplicate_chain_effect_cannot_publish_for_another_request(
         )
         == 1
     )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("public_sender", "altered sender"),
+        ("event_at", "2030-01-01T00:00:00Z"),
+        ("event_index", 99),
+        ("payment_id", "altered receipt"),
+    ],
+)
+async def test_cached_public_payload_integrity_is_checked_on_replay_and_read(
+    app,
+    session_maker,
+    field,
+    value,
+):
+    import copy
+
+    from ditto.api_server.treasury_manual_movement import verified_movement_payload
+
+    request_id, _ = await seed_movement(app, session_maker)
+    async with session_maker() as session, session.begin():
+        row = await session.get(TreasuryManualTransfer, request_id)
+        await publish_finalized_movement(session, app.state.chain, row)
+        changed = copy.deepcopy(row.receipt)
+        changed["movement"][field] = value
+        row.receipt = changed
+        with pytest.raises(ValueError, match="proof changed"):
+            await publish_finalized_movement(session, None, row)
+        with pytest.raises(ValueError, match="proof changed"):
+            verified_movement_payload(changed)

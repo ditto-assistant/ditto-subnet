@@ -76,3 +76,30 @@ it("publishes verified delivery while clearly withholding source attribution", a
   expect(screen.getByText("GM credits not proven")).toBeInTheDocument();
   expect(screen.queryByText(/No finalized/)).not.toBeInTheDocument();
 });
+
+it("keeps distinct event receipts from one transaction", async () => {
+  const base = {
+    bucket_id: "gm",
+    event_kind: "service_distribution",
+    event_at: "2026-10-21T04:00:00Z",
+    state: "chain_finalized",
+    public_sender: "collector",
+    public_recipient: "holding",
+    deposit_amount_atomic: "1000000000",
+    deposit_asset: "SN118_ALPHA",
+    credited_usd_nano: null,
+    block_hash: "canonical-block",
+    extrinsic_index: 5,
+    extrinsic_hash: "same-transaction",
+  };
+  vi.mocked(getJSON).mockImplementation(async (path) => ({
+    items: String(path).includes("manual-movements")
+      ? []
+      : [
+          { ...base, payment_id: "event-one" },
+          { ...base, payment_id: "event-two" },
+        ],
+  }));
+  render(() => <GammaReceiptFeed />);
+  expect(await screen.findAllByRole("link", { name: "same-transaction" })).toHaveLength(2);
+});

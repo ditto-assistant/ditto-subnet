@@ -96,7 +96,7 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
     {actionError && <p role="alert" className="text-[var(--red)]">{actionError}</p>}
     {message && <p role="status">{message}</p>}
     <ul className="space-y-3">{state.requests.map(r => <li key={r.request_id} className="rounded border border-[var(--line)] p-3 text-sm">
-      <p>{alphaDisplay(r.envelope.request.amount_rao)} alpha → {r.envelope.request.bucket_id.toUpperCase()} · {statusLabels[r.status]}</p>
+      <p>{alphaDisplay(r.envelope.request.amount_rao)} alpha → {r.envelope.request.bucket_id.toUpperCase()} · {r.status === 'audit_pending' && r.receipt?.source_attribution === 'incomplete' ? 'Finalized — wallet receipt published; source audit pending' : statusLabels[r.status]}</p>
       <p className="break-all text-xs">Request {r.request_id} · {r.actor}</p>
       {r.last_error && <p>{r.last_error}</p>}
       {r.receipt?.source_attribution === "incomplete" && <p>Public wallet receipt published. Source earnings attribution remains incomplete; do not resend this transfer.</p>}
