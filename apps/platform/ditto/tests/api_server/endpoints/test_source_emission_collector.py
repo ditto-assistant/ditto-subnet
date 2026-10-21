@@ -1090,10 +1090,12 @@ async def test_a_payout_row_cut_short_by_the_deadline_stays_pending(
     )
     async with session_maker() as session:
         row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
-        # At most a transient retry note: never terminal, never confirmed.
+        # At most a transient retry note: never terminal, never confirmed. A
+        # loaded event loop can pass the deadline before the row is reached,
+        # which leaves the reopened verdict untouched.
         assert row.terminal is False
-        assert row.blocked_reason is None or row.blocked_reason.startswith(
-            "receipt_retry"
+        assert row.blocked_reason in (None, f"unverifiable_payout: {_OWNERSHIP}") or (
+            row.blocked_reason.startswith("receipt_retry")
         )
 
 
