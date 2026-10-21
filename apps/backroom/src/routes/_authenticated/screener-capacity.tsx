@@ -3,17 +3,32 @@ import { AlertTriangle, ServerCog } from 'lucide-react'
 import { PageHeader } from '../../components/PageHeader'
 import { ScreenerCapacityPanel } from '../../components/ScreenerCapacityPanel'
 import { ScreeningInfraRetryPanel } from '../../components/ScreeningInfraRetryPanel'
-import { getScreenerCapacity, getScreeningInfraRetries } from '../../server/admin.functions'
+import { SubnetLivenessPanel } from '../../components/SubnetLivenessPanel'
+import {
+  getScreenerCapacity,
+  getScreeningInfraRetries,
+  getSubnetLiveness,
+} from '../../server/admin.functions'
 
 export const Route = createFileRoute('/_authenticated/screener-capacity')({
-  // The retry read reports its own failure (readScreeningInfraRetries never
-  // throws) so it cannot take the capacity page down or hide why it is missing.
+  // The retry and liveness reads report their own failures (neither reader
+  // throws) so they cannot take the capacity page down or hide why they are
+  // missing. This is the signed-in landing page, so liveness is seen first,
+  // and a failed capacity read must not discard a liveness verdict either:
+  // capacity failing is exactly when the verdict matters most.
   loader: async () => {
-    const [capacity, infraRetries] = await Promise.all([
-      getScreenerCapacity(),
+    const [capacity, infraRetries, liveness] = await Promise.all([
+      getScreenerCapacity().then(
+        (view) => ({ ok: true as const, view }),
+        (error: unknown) => ({
+          ok: false as const,
+          message: error instanceof Error ? error.message : 'Unknown error reading screener capacity.',
+        }),
+      ),
       getScreeningInfraRetries(),
+      getSubnetLiveness(),
     ])
-    return { capacity, infraRetries }
+    return { capacity, infraRetries, liveness }
   },
   pendingComponent: Pending,
   errorComponent: ErrorState,
@@ -21,7 +36,7 @@ export const Route = createFileRoute('/_authenticated/screener-capacity')({
 })
 
 function ScreenerCapacityPage() {
-  const { capacity: initialState, infraRetries } = Route.useLoaderData()
+  const { capacity, infraRetries, liveness } = Route.useLoaderData()
   const { user } = Route.useRouteContext()
   return (
     <div>
@@ -36,10 +51,15 @@ function ScreenerCapacityPage() {
           </div>
         }
       />
-      <ScreenerCapacityPanel
-        initialState={initialState}
-        readOnly={user.accessLevel === 'read'}
-      />
+      <SubnetLivenessPanel initialState={liveness} />
+      {capacity.ok ? (
+        <ScreenerCapacityPanel
+          initialState={capacity.view}
+          readOnly={user.accessLevel === 'read'}
+        />
+      ) : (
+        <ErrorState error={new Error(capacity.message)} />
+      )}
       <ScreeningInfraRetryPanel initialState={infraRetries} />
     </div>
   )

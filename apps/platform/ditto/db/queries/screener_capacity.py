@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Literal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.screener_node_settings import ScreenerNodeChannelSettings
@@ -12,6 +13,9 @@ from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
 from ditto.db.models import ScreenerCapacitySnapshot, ScreenerNode
 from ditto.db.queries.screener_node_settings import (
     latest_screener_node_channel_settings,
+)
+from ditto.db.queries.screener_provider_settings import (
+    resolve_screener_provider_settings,
 )
 
 ScreenerFallbackReason = Literal[
@@ -79,3 +83,37 @@ async def screener_gcp_fallback_allowed(
     # Route priority can change where admitted work runs; it cannot reopen an
     # operator's zero-admission stop or an unknown primary.
     return channels.screening_concurrency > 0
+
+
+async def legacy_gcp_claim_authorized(
+    session: AsyncSession, *, now: datetime, lock: bool
+) -> bool:
+    """Route authenticated legacy GCP workers through the watchdog safety net.
+
+    A missing, stale or unready controller permits GCP overflow only while
+    current operator policy allows it. Fresh, ready controllers still own the
+    bounded target and must match the current provider revision. Registered
+    nodes retain their separate per-node admission limits.
+
+    The claim path passes ``lock=True`` so the snapshot it decides on cannot
+    move under it; read-only observers (the subnet liveness read) pass
+    ``False`` and answer the same predicate without taking a row lock.
+    """
+    revision, settings = await resolve_screener_provider_settings(
+        session, environment="prod"
+    )
+    if not await screener_gcp_fallback_allowed(
+        session, environment="prod", settings=settings
+    ):
+        return False
+    statement = select(ScreenerCapacitySnapshot).where(
+        ScreenerCapacitySnapshot.environment == "prod"
+    )
+    if lock:
+        statement = statement.with_for_update()
+    snapshot = await session.scalar(statement)
+    fallback_active, _ = screener_fallback_active(snapshot, now)
+    if fallback_active:
+        return True
+    assert snapshot is not None
+    return snapshot.provider_settings_revision == revision and snapshot.gce_target > 0

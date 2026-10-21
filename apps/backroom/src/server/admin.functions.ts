@@ -118,6 +118,7 @@ import {
   fetchScreenerReviewControl,
   fetchScreenerCapacity,
   readScreeningInfraRetries,
+  readSubnetLiveness,
   retryTrustedImageBuild as retryTrustedImageBuildService,
   updateScreenerProviderSettings as updateScreenerProviderSettingsService,
   updateScreenerNodeChannelSettings as updateScreenerNodeChannelSettingsService,
@@ -430,6 +431,14 @@ export const getScreeningInfraRetries = createServerFn({ method: 'GET' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return readScreeningInfraRetries()
+  })
+
+export const getSubnetLiveness = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return readSubnetLiveness()
   })
 
 export const retryTrustedImageBuild = createServerFn({ method: 'POST' })

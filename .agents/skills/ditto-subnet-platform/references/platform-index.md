@@ -18,6 +18,7 @@
 | Hippius sealed Coding evidence | `apps/platform/ditto/api_server/coding_hippius_evidence.py`, `apps/platform/ditto/db/queries/coding_evidence.py`, `apps/platform/docs/coding-hippius-sealed-evidence-mediator.md` |
 | Hippius Coding custody/recovery | `apps/platform/ditto/api_server/coding_hippius_custody.py`, `apps/platform/docs/coding-hippius-custody-recovery.md` |
 | Owner representative and continual retest admission diagnosis | `apps/platform/ditto/api_server/endpoints/admin_leaderboard.py` (`continual-retest-diagnostic`), `endpoints/validator.py` (`_current_retest_cohort`), Backroom MCP `get_continual_retest_diagnostic`, `apps/backroom/docs/mcp.md` |
+| Subnet liveness signals (#2600) | `apps/platform/ditto/api_server/subnet_liveness.py`, `endpoints/admin_subnet_liveness.py`, Backroom MCP `get_subnet_liveness` and the landing-page panel, `apps/backroom/docs/mcp.md` |
 | Affected-component graph | `release/components.toml` |
 | Production DB and Targon logs (read-only) | `.agents/skills/gcloud-ditto-readonly/` |
 
@@ -76,5 +77,6 @@ git diff --check
 - Backroom is public subnet operations only; private Ditto app operations stay in the private product Backroom.
 - Authenticated Worker responses are `no-store`; writes require same-origin protection.
 - API changes mark `platform_api`, `platform`, and `backroom` affected. Dashboard changes mark `platform_dashboard` and `platform` only.
+- An operator liveness read reuses the producer's own predicate rather than a copy: `subnet_liveness` calls `screener_heartbeat_ready`, `legacy_gcp_claim_authorized(lock=False)`, `claimable_screening_upload_backlog`, `scoring_queue_backlog` (the allocator's `queue_candidate_predicate`) and `member_packets` + `authority_from_packets`, the pair `pinned_validator_allowed` reaches through `cohort_authority`. It runs in a `READ ONLY` transaction with a statement timeout and never scans `inference_requests`. Add a signal there, not as a second health endpoint.
 - A guarded admin write and its Backroom preflight read call one shared predicate (for example `_evaluate_exact_source` behind `schedule_l2_report_canary` and `get_l2_report_canary_preflight`), so an operator sees the exact guard, current and expected values, and 409 detail instead of a generic conflict.
 - Backroom MCP input schemas stay portable: no `z.tuple` (draft-07 array-form `items`) or `prefixItems`, or some clients silently omit the tool even though `tools/list` and `get_backroom_tool_help` show it (#2559). See `apps/backroom/docs/mcp.md`.
