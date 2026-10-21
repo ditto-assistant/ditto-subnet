@@ -14019,6 +14019,261 @@ class TestQuarantineReviewContext:
         assert body["shadow_review"] is None
         assert body["quarantine"]["quarantine_id"] == quarantine_id
 
+    async def _park_for_manual_release(self, app, client, session_maker):
+        agent_id, ctx = await self._quarantine(app, client, session_maker)
+        assert ctx["response"].status_code == 200
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, agent_id)
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.agent_id == agent_id
+                )
+            )
+            attempt = await session.get(ScreeningAttempt, quarantine.attempt_id)
+            agent.status = AgentStatus.SCREENING_FAILED
+            agent.dataset_seed, agent.dataset_sha256, agent.dataset_run_size = (
+                7,
+                "ab" * 32,
+                "small",
+            )
+            quarantine.status, quarantine.resolution = "resolved", "rescreen"
+            quarantine.resolution_reason = "Provider failed; parked for manual review"
+            quarantine.resolved_by, quarantine.resolved_at = (
+                "screener",
+                datetime.now(UTC),
+            )
+            attempt.status, attempt.reason_code = "expired", "l2-model-provider-fault"
+            decision = {
+                "quarantine_id": str(quarantine.quarantine_id),
+                "expected_agent_id": str(agent_id),
+                "expected_artifact_sha256": agent.sha256,
+                "expected_attempt_id": str(attempt.attempt_id),
+                "expected_score_count": 1,
+                "resolution": "release",
+                "reason": "Manual source review: seed notes retain original evidence",
+            }
+            session.add(
+                ScreeningQuarantineResolution(
+                    resolution_id=uuid4(),
+                    quarantine_id=quarantine.quarantine_id,
+                    resolution="rescreen",
+                    reason=quarantine.resolution_reason,
+                    actor="screener",
+                    created_at=quarantine.resolved_at,
+                )
+            )
+        await _seed_score(session_maker, agent_id=agent_id)
+        return agent_id, decision
+
+    async def test_failed_manual_release_preserves_history_scores_and_build_gate(
+        self, app, client, session_maker
+    ):
+        agent_id, decision = await self._park_for_manual_release(
+            app, client, session_maker
+        )
+        preview = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-preview",
+            headers=_ADMIN_HEADERS,
+            json={"decisions": [decision]},
+        )
+        assert preview.status_code == 200
+        assert preview.json()["ready_count"] == 1
+        body = {
+            "decisions": [decision],
+            "preview_token": preview.json()["preview_token"],
+            "confirmed": True,
+        }
+        executed = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-resolve",
+            headers=_ADMIN_HEADERS,
+            json=body,
+        )
+        assert executed.status_code == 200
+        assert executed.json()["applied_count"] == 1, executed.text
+        replay = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-resolve",
+            headers=_ADMIN_HEADERS,
+            json=body,
+        )
+        assert replay.json()["already_applied_count"] == 1
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(
+                ScreeningAttempt, UUID(decision["expected_attempt_id"])
+            )
+            assert agent.status == AgentStatus.EVALUATING
+            assert agent.screening_policy_version == SCREENING_POLICY_VERSION
+            assert agent.screening_reason == decision["reason"]
+            assert agent.screening_reason_code == "operator-released-quarantine"
+            assert (agent.dataset_seed, agent.dataset_sha256) == (7, "ab" * 32)
+            assert agent.screened_image_sha256 is None
+            assert (attempt.status, attempt.reason_code) == (
+                "expired",
+                "l2-model-provider-fault",
+            )
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Score)
+                    .where(Score.agent_id == agent_id)
+                )
+                == 1
+            )
+            history = (
+                await session.scalars(
+                    select(ScreeningQuarantineResolution)
+                    .where(
+                        ScreeningQuarantineResolution.quarantine_id
+                        == UUID(decision["quarantine_id"])
+                    )
+                    .order_by(ScreeningQuarantineResolution.created_at)
+                )
+            ).all()
+            assert [(row.actor, row.resolution) for row in history] == [
+                ("screener", "rescreen"),
+                ("backroom:test-user", "release"),
+            ]
+            event = await session.scalar(
+                select(ScreeningReviewEvent).where(
+                    ScreeningReviewEvent.agent_id == agent_id,
+                    ScreeningReviewEvent.event_kind == "manual",
+                )
+            )
+            assert (event.prior_agent_status, event.next_agent_status) == (
+                "screening_failed",
+                "evaluating",
+            )
+            assert event.artifact_sha256 == decision["expected_artifact_sha256"]
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            "missing_attempt",
+            "missing_count",
+            "count",
+            "attempt",
+            "artifact",
+            "running",
+            "new_attempt",
+            "active_build",
+            "active_runtime",
+            "active_review",
+            "wrong_status",
+            "new_rejection",
+        ],
+    )
+    async def test_failed_release_preview_and_execution_refuse_stale_or_active_work(
+        self, app, client, session_maker, change
+    ):
+        agent_id, decision = await self._park_for_manual_release(
+            app, client, session_maker
+        )
+        preview = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-preview",
+            headers=_ADMIN_HEADERS,
+            json={"decisions": [decision]},
+        )
+        assert preview.json()["ready_count"] == 1
+        if change == "missing_attempt":
+            decision.pop("expected_attempt_id")
+        elif change == "missing_count":
+            decision.pop("expected_score_count")
+        elif change == "count":
+            await _seed_score(
+                session_maker, agent_id=agent_id, validator_hotkey="another-validator"
+            )
+        elif change == "attempt":
+            decision["expected_attempt_id"] = str(uuid4())
+        elif change == "artifact":
+            decision["expected_artifact_sha256"] = "ef" * 32
+        else:
+            async with session_maker() as session, session.begin():
+                agent = await session.get(Agent, agent_id)
+                attempt = await session.get(
+                    ScreeningAttempt, UUID(decision["expected_attempt_id"])
+                )
+                if change == "running":
+                    attempt.status = "running"
+                elif change == "new_attempt":
+                    session.add(
+                        ScreeningAttempt(
+                            attempt_id=uuid4(),
+                            agent_id=agent_id,
+                            screener_hotkey=_SCREENER_HOTKEY,
+                            policy_version=SCREENING_POLICY_VERSION,
+                            status="expired",
+                            started_at=datetime.now(UTC) + timedelta(minutes=1),
+                            deadline=datetime.now(UTC) + timedelta(hours=1),
+                            artifact_sha256=agent.sha256,
+                        )
+                    )
+                elif change in {"active_build", "active_runtime"}:
+                    session.add(
+                        SubmissionImageBuild(
+                            build_id=uuid4(),
+                            agent_id=agent_id,
+                            attempt_id=attempt.attempt_id,
+                            environment="test",
+                            artifact_sha256=agent.sha256,
+                            image_ref=f"ditto-screen/{agent_id}-{attempt.attempt_id}:latest",
+                            output_key="test/image",
+                            status="running"
+                            if change == "active_build"
+                            else "succeeded",
+                            runtime_status="skipped"
+                            if change == "active_build"
+                            else "pending",
+                        )
+                    )
+                elif change == "active_review":
+                    session.add(
+                        SubmissionSourceReview(
+                            review_id=uuid4(),
+                            agent_id=agent_id,
+                            attempt_id=attempt.attempt_id,
+                            environment="test",
+                            artifact_sha256=agent.sha256,
+                            status="running",
+                        )
+                    )
+                else:
+                    agent.status = AgentStatus.REJECTED
+                    if change == "new_rejection":
+                        quarantine = await session.get(
+                            ScreeningQuarantine, UUID(decision["quarantine_id"])
+                        )
+                        quarantine.resolution = "reject"
+        blocked = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-preview",
+            headers=_ADMIN_HEADERS,
+            json={"decisions": [decision]},
+        )
+        assert blocked.json()["blocked_count"] == 1
+        executed = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-resolve",
+            headers=_ADMIN_HEADERS,
+            json={
+                "decisions": [decision],
+                "preview_token": preview.json()["preview_token"],
+                "confirmed": True,
+            },
+        )
+        assert executed.status_code == 409 or executed.json()["failed_count"] == 1
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent.status != AgentStatus.EVALUATING
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(ScreeningReviewEvent)
+                    .where(
+                        ScreeningReviewEvent.agent_id == agent_id,
+                        ScreeningReviewEvent.event_kind == "manual",
+                    )
+                )
+                == 0
+            )
+
     async def test_batch_context_and_signed_preview_reject_changed_decisions(
         self,
         app: FastAPI,

@@ -2335,6 +2335,8 @@ function toPlatformBatchDecision(decision: {
   quarantineId: string
   expectedAgentId: string
   expectedArtifactSha256: string
+  expectedAttemptId?: string
+  expectedScoreCount?: number
   resolution: 'release' | 'rescreen' | 'reject'
   reason: string
 }) {
@@ -2342,6 +2344,8 @@ function toPlatformBatchDecision(decision: {
     quarantine_id: decision.quarantineId,
     expected_agent_id: decision.expectedAgentId,
     expected_artifact_sha256: decision.expectedArtifactSha256,
+    expected_attempt_id: decision.expectedAttemptId,
+    expected_score_count: decision.expectedScoreCount,
     resolution: decision.resolution,
     reason: decision.reason,
   }

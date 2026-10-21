@@ -12064,6 +12064,8 @@ export interface components {
             miner_coldkey?: string | null;
             /** Miner Hotkey */
             miner_hotkey: string;
+            /** Score Count */
+            score_count?: number | null;
             /** Screening Policy Version */
             screening_policy_version: number;
             /** Screening Reason */
@@ -12114,6 +12116,10 @@ export interface components {
             expected_agent_id: string;
             /** Expected Artifact Sha256 */
             expected_artifact_sha256: string;
+            /** Expected Attempt Id */
+            expected_attempt_id?: string | null;
+            /** Expected Score Count */
+            expected_score_count?: number | null;
             /**
              * Quarantine Id
              * Format: uuid

@@ -707,7 +707,9 @@ describe('Backroom MCP tools', () => {
     // adds 659: measured 198,526 with both. The appeals queue option (#2943)
     // and the two compact bounty evaluation writes (#2944), whose enums stay
     // in the catalog, measure 200,358. Keep the same ~0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(200_900)
+    // Two optional failure-release guards on both batch inputs add 715 bytes.
+    // Keep procedure text in tool help and retain about 0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(201_600)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1947,7 +1949,9 @@ describe('Backroom MCP tools', () => {
       quarantineId: '11111111-1111-4111-8111-111111111111',
       expectedAgentId: '22222222-2222-4222-8222-222222222222',
       expectedArtifactSha256: 'ab'.repeat(32),
-      resolution: 'rescreen',
+      resolution: 'release',
+      expectedAttemptId: '33333333-3333-4333-8333-333333333333',
+      expectedScoreCount: 1,
       reason: 'Run the preserved artifact against the current policy',
     }
     const previewPayload = {
@@ -1981,6 +1985,10 @@ describe('Backroom MCP tools', () => {
     expect(preview.isError).not.toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls[0]?.[0]).toContain('/batch-preview')
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body).decisions[0]).toMatchObject({
+      resolution: 'release', expected_attempt_id: decision.expectedAttemptId,
+      expected_score_count: 1,
+    })
 
     const execute = await client.callTool({
       name: 'execute_screening_quarantine_batch',

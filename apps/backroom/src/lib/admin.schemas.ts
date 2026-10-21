@@ -5641,6 +5641,7 @@ export const quarantineAgentContextSchema = z.object({
   submitted_at: z.string(),
   screening_policy_version: z.number().int().nonnegative(),
   screening_reason: z.string().nullable(),
+  score_count: z.number().int().nonnegative().nullable().optional(),
 })
 
 export const minerQuarantineSummarySchema = z.object({
@@ -5746,6 +5747,8 @@ export const screeningQuarantineBatchDecisionSchema = z.object({
   quarantineId: z.string().uuid(),
   expectedAgentId: z.string().uuid(),
   expectedArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedAttemptId: z.string().uuid().optional(),
+  expectedScoreCount: z.number().int().nonnegative().optional(),
   resolution: quarantineResolutionSchema,
   reason: auditReasonSchema(3),
 })

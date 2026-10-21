@@ -654,3 +654,18 @@ original proof, current blocker, confirmation and any operator recovery audit.
 history, preserves the miner's original signature, and frees the account for a
 fresh OAuth-verified link. Stale targets cannot revoke a replacement link.
 Revocation does not change payments or previously accepted submissions.
+
+Manual source approval of a parked `screening_failed` submission uses the existing
+`preview_screening_quarantine_batch` / `execute_screening_quarantine_batch` flow:
+select its latest resolved `rescreen` quarantine, `resolution: release`, and supply
+`expectedAttemptId` and `expectedScoreCount` from its current quarantine context
+(`agent.score_count`). Agent UUID and artifact SHA guards remain mandatory. Preview
+and the locked write share the same checks: the quarantine belongs to the latest
+failed/expired attempt for the artifact, counts match, and no screening, source
+review or image/runtime build is active. The actor-bound preview signs both new
+guards. Approval appends a manual release ruling and preserves failed attempts,
+prior resolutions, scores and dataset pins. It enters ordinary build, health and
+validation gates without rerunning deep source review or granting a paid retry.
+The review console exposes this release action on the resolved quarantine when its
+submission is still `screening_failed`; older Platform contexts without score
+counts fail closed. Inconclusive reviews alone do not establish a policy violation.
