@@ -58,6 +58,14 @@ class OfficialControlImageUpload(BaseModel):
     expires_at: datetime
 
 
+class OfficialControlImageArtifact(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    control: OfficialControlImageView
+    download_url: str
+    expires_at: datetime
+
+
 class OfficialControlApprovalRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 

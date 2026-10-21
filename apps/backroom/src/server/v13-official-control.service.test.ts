@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
-  BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE, TOOL_SCOPE_REQUIREMENTS,
+  BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE, BACKROOM_ARTIFACT_SCOPE, TOOL_SCOPE_REQUIREMENTS,
   createBackroomMcpServer,
 } from './mcp.server'
 import { stageOfficialV13ControlImage, verifyOfficialV13ControlImage, recordOfficialV13ControlApproval } from './v13-official-control.service'
@@ -89,5 +89,40 @@ describe('official V13 control boundary', () => {
     const mock = install({})
     await expect(stageOfficialV13ControlImage({ ...stage, confirmation: 'CLEAR' }, image.producer)).rejects.toThrow()
     expect(mock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['stage_v13_official_control_image', { ...stage, requestId: 'not-a-uuid' }],
+    ['stage_v13_official_control_image', { ...stage, fixtureId: 'not-a-uuid' }],
+    ['verify_v13_official_control_image', { ...verify, controlId: '../other-path' }],
+    ['record_v13_official_control_approval', { ...approval, controlId: 'not-a-uuid' }],
+    ['get_v13_official_control_approvals', { controlId: 'not-a-uuid' }],
+  ])('rejects malformed UUIDs through %s before any Platform request', async (name, input) => {
+    const mock = install({})
+    const server = createBackroomMcpServer({ session: { version: 2, uid: 'writer', email: image.producer,
+      name: 'Writer', picture: '', accessLevel: 'write', issuedAt: Date.now(), expiresAt: Date.now() + 60_000 },
+      scopes: [BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE, BACKROOM_ARTIFACT_SCOPE], clientName: 'Official control UUID test' })
+    const client = new Client({ name: 'official-control-uuid-test', version: '1' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+    try {
+      expect((await client.callTool({ name: name as string, arguments: input as Record<string, unknown> })).isError).toBe(true)
+      expect(mock).not.toHaveBeenCalled()
+    } finally { await client.close(); await server.close() }
+  })
+
+  it('keeps candidate image downloads behind artifact scope', async () => {
+    const mock = install({})
+    expect(TOOL_SCOPE_REQUIREMENTS.get('get_v13_official_control_artifact')).toBe(BACKROOM_ARTIFACT_SCOPE)
+    const server = createBackroomMcpServer({ session: { version: 2, uid: 'writer', email: image.producer,
+      name: 'Writer', picture: '', accessLevel: 'write', issuedAt: Date.now(), expiresAt: Date.now() + 60_000 },
+      scopes: [BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE], clientName: 'Official control artifact test' })
+    const client = new Client({ name: 'official-control-artifact-test', version: '1' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+    try {
+      expect((await client.callTool({ name: 'get_v13_official_control_artifact', arguments: { controlId } })).isError).toBe(true)
+      expect(mock).not.toHaveBeenCalled()
+    } finally { await client.close(); await server.close() }
   })
 })

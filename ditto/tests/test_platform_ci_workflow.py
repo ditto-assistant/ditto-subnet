@@ -99,7 +99,7 @@ def test_shared_verification_shards_the_complete_suite_without_deselection() -> 
             f"--ignore={endpoint_root}test_admin_validator_slot_settings.py "
             f"--ignore={endpoint_root}test_admin_confirmation_bundles.py "
             "--ignore=ditto/tests/api_server/endpoints/test_gate_notes.py",
-            False,
+            True,
         ),
         "api-server": (
             "ditto/tests/api_server --ignore=ditto/tests/api_server/endpoints",

@@ -17,12 +17,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.v13_official_control import (
     OfficialControlApprovalRequest,
     OfficialControlApprovalView,
+    OfficialControlImageArtifact,
     OfficialControlImageRequest,
     OfficialControlImageUpload,
     OfficialControlImageVerifyRequest,
     OfficialControlImageView,
 )
-from ditto.api_server.canonical_starter_control import ARCHIVE_SHA256
+from ditto.api_server.canonical_starter_control import (
+    ARCHIVE_BYTES,
+    ARCHIVE_SHA256,
+    OBJECT_KEY,
+    RELEASE,
+    RELEASE_COMMIT,
+    SOURCE_TREE,
+)
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.admin_v13_private_generation import _database_now
@@ -70,16 +78,39 @@ def _approval_view(
     )
 
 
-async def _fixture(session: AsyncSession, fixture_id: UUID) -> ScreenerL2ReportCanary:
+async def _fixture(
+    session: AsyncSession,
+    fixture_id: UUID,
+    *,
+    require_review: bool = True,
+) -> ScreenerL2ReportCanary:
     row = await session.get(
         ScreenerL2ReportCanary, fixture_id, with_for_update=True, populate_existing=True
     )
+    att = row.source_attestation if row is not None else None
     if (
         row is None
         or row.source_kind != "canonical_starter_fixture"
+        or row.fixture_key != OBJECT_KEY
         or row.artifact_sha256 != ARCHIVE_SHA256
-        or not _fixture_attestation_valid(row)
+        or row.policy_version != 13
+        or row.bench_version != 13
+        or row.run_mode != "source_only"
+        or not isinstance(att, dict)
+        or any(
+            att.get(key) != value
+            for key, value in {
+                "release": RELEASE,
+                "release_commit": RELEASE_COMMIT,
+                "source_tree": SOURCE_TREE,
+                "archive_sha256": ARCHIVE_SHA256,
+                "archive_size_bytes": ARCHIVE_BYTES,
+            }.items()
+        )
+        or not isinstance(att.get("registered_by"), str)
     ):
+        raise HTTPException(409, "official fixture source registration is unavailable")
+    if require_review and not _fixture_attestation_valid(row):
         raise HTTPException(409, "official fixture is not independently attested")
     return row
 
@@ -88,21 +119,25 @@ def _producer(fixture: ScreenerL2ReportCanary, actor: str, image_id: str) -> Non
     attestation = fixture.source_attestation or {}
     if actor != attestation.get("registered_by"):
         raise HTTPException(403, "only the fixture registrar may stage its image")
-    if image_id != attestation.get("reviewer_built_image_digest"):
+    reviewed_id = attestation.get("reviewer_built_image_digest")
+    if reviewed_id is not None and image_id != reviewed_id:
         raise HTTPException(
             409, "image identity differs from independently reviewed fixture"
         )
 
 
 async def _locked_image(
-    session: AsyncSession, control_id: UUID
+    session: AsyncSession,
+    control_id: UUID,
+    *,
+    require_review: bool = True,
 ) -> tuple[V13OfficialControlImage, ScreenerL2ReportCanary]:
     # Match staging's lock order: fixture, then image. The fixture identity
     # cannot change even before verification (the database trigger guards it).
     current = await session.get(V13OfficialControlImage, control_id)
     if current is None:
         raise HTTPException(404, "official control not found")
-    fixture = await _fixture(session, current.fixture_id)
+    fixture = await _fixture(session, current.fixture_id, require_review=require_review)
     row = await session.get(
         V13OfficialControlImage,
         control_id,
@@ -163,7 +198,7 @@ async def stage_official_control_image(
     response.headers["Cache-Control"] = "no-store"
     try:
         async with session.begin():
-            fixture = await _fixture(session, payload.fixture_id)
+            fixture = await _fixture(session, payload.fixture_id, require_review=False)
             _producer(fixture, actor, payload.image_id)
             row = await session.scalar(
                 select(V13OfficialControlImage)
@@ -256,7 +291,7 @@ async def verify_official_control_image(
 ) -> OfficialControlImageView:
     actor = await require_operator_proof(request)
     async with session.begin():
-        row, fixture = await _locked_image(session, control_id)
+        row, fixture = await _locked_image(session, control_id, require_review=False)
         _producer(fixture, actor, payload.image_id)
         if (
             row.image_id != payload.image_id
@@ -289,7 +324,7 @@ async def verify_official_control_image(
             503, "official control image verification unavailable"
         ) from None
     async with session.begin():
-        row, fixture = await _locked_image(session, control_id)
+        row, fixture = await _locked_image(session, control_id, require_review=False)
         _producer(fixture, actor, payload.image_id)
         if (
             row.image_id != snapshot.image_id
@@ -320,6 +355,12 @@ async def approve_official_control(
         image, fixture = await _locked_image(session, control_id)
         if image.verified_at is None or image.verified_storage_key is None:
             raise HTTPException(409, "official control archive is not verified")
+        if image.image_id != (fixture.source_attestation or {}).get(
+            "reviewer_built_image_digest"
+        ):
+            raise HTTPException(
+                409, "official image differs from independently reviewed fixture"
+            )
         if actor == image.producer or actor != (fixture.source_attestation or {}).get(
             "reviewed_by"
         ):
@@ -397,3 +438,29 @@ async def list_official_control_approvals(
         )
     ).all()
     return [_approval_view(row, image) for row in rows]
+
+
+@router.get("/{control_id}/artifact", response_model=OfficialControlImageArtifact)
+async def get_official_control_artifact(
+    control_id: UUID,
+    request: Request,
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> OfficialControlImageArtifact:
+    """Let the independent reviewer inspect sealed bytes before attestation."""
+    response.headers["Cache-Control"] = "no-store"
+    image = await session.get(V13OfficialControlImage, control_id)
+    if image is None or image.verified_at is None or image.verified_storage_key is None:
+        raise HTTPException(409, "official control archive is not verified")
+    await _fixture(session, image.fixture_id, require_review=False)
+    storage = await get_storage_client(request)
+    url = await storage.presigned_get_url(
+        key=image.verified_storage_key,
+        expires_in=_URL_TTL,
+    )
+    return OfficialControlImageArtifact(
+        control=_view(image),
+        download_url=url,
+        expires_at=datetime.now(UTC) + timedelta(seconds=_URL_TTL),
+    )

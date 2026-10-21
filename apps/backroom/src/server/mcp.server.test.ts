@@ -416,6 +416,7 @@ describe('Backroom MCP tools', () => {
         'get_canonical_starter_fixture_preflight',
         'get_v13_official_controls',
         'get_v13_official_control_approvals',
+        'get_v13_official_control_artifact',
         'stage_v13_official_control_image',
         'verify_v13_official_control_image',
         'record_v13_official_control_approval',
@@ -714,7 +715,7 @@ describe('Backroom MCP tools', () => {
     // in the catalog, measure 200,358. Keep the same ~0.5 KB headroom.
     // Two optional failure-release guards on both batch inputs add 715 bytes.
     // Keep procedure text in tool help and retain about 0.5 KB headroom.
-    // Five official-control operations add compact UUID schemas and short
+    // Six official-control operations add compact UUID schemas and short
     // summaries. Detailed procedures stay in help; services validate IDs.
     expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(205_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
@@ -754,7 +755,7 @@ describe('Backroom MCP tools', () => {
       // Four fixture tool summaries bring the measured total to 31,772.
       // The canary review-posture pin clause measured 31,854; the node
       // canary cap (#2447) also adds a short catalog note.
-      // Five concise official-control summaries, with procedure text in help.
+      // Six concise official-control summaries, with procedure text in help.
       32_500,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)

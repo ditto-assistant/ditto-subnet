@@ -6,18 +6,22 @@ emission entitlement. This path does not alter the existing miner-control
 registry or reinterpret historical approvals.
 
 The initial source kind is the exact canonical starter fixture. Its existing
-authenticated registration and independent served-path attestation must be
-complete before an image can be staged. The source archive, source tree,
-Dockerfile and reviewed image identity remain pinned by that fixture.
+authenticated source registration must be complete before an image is staged.
+The independent served-path attestation and image approval remain mandatory,
+but staging and sealing come first so the reviewer can inspect actual bytes.
+The source archive, source tree, Dockerfile and reviewed image identity remain
+pinned by that fixture.
 
 ## Operator workflow
 
-1. Read `get_canonical_starter_fixture_preflight`. Register and independently
-   review the canonical source through its existing guarded tools. A registrar
-   cannot review their own fixture.
+1. Read `get_canonical_starter_fixture_preflight` and register the canonical
+   source through its existing authenticated tool. A registrar cannot review
+   their own fixture.
 2. The same signed-in registrar calls `stage_v13_official_control_image` with
    a fresh request UUID, fixture UUID, image-tar SHA-256, byte size and exact
-   reviewed Docker image ID. Use the returned constrained PUT and headers.
+   candidate Docker image ID. Use the returned constrained PUT and headers.
+   Use the config-digest identity verified from the image archive; a Docker
+   build's image-index digest is a different identity.
    Reusing that request UUID may remint an unverified upload only when every
    bound field and the authenticated actor match. The tool never accepts a
    miner or attempt UUID.
@@ -27,13 +31,19 @@ Dockerfile and reviewed image identity remain pinned by that fixture.
    uses a different destination; a late verifier cannot replace the key
    another request already committed. Storage I/O does not hold lifecycle
    locks, and the fixture, actor and image binding are checked again afterward.
-4. The fixture's second authenticated reviewer calls
+4. The independent reviewer uses `get_v13_official_control_artifact` to inspect
+   the sealed archive before source attestation. It requires artifact scope
+   and a current write-level account. Verify the returned digest and review
+   the candidate in isolation without credentials or host mounts. Then use
+   `review_canonical_starter_fixture` to attest the exact source and config
+   image identity. Downloading a candidate does not attest it.
+5. The fixture's second authenticated reviewer calls
    `record_v13_official_control_approval` with the exact tar/image/profile
    identities, review-evidence digest and complete reason. The producer cannot
    self-approve, and an unrelated actor cannot substitute for that reviewer.
    An identical approval retry returns the original receipt; conflicting
    attestations require a new reviewed asset instead of overwriting history.
-5. Read `get_v13_official_controls` and
+6. Read `get_v13_official_controls` and
    `get_v13_official_control_approvals`. These views expose identities and
    timestamps, not storage keys, URLs, credentials or private case bytes.
 

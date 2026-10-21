@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -24,6 +25,7 @@ from ditto.db.models import (
     ScreenerL2ReportCanary,
     ScreenerNode,
     ScreeningAttempt,
+    V13OfficialControlImage,
 )
 from ditto.tests.api_server.endpoints.test_admin_v13_private_generation import _install
 from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE_SHA256
@@ -198,6 +200,79 @@ async def test_official_control_roundtrip_has_no_miner_or_attempt_and_no_verdict
     assert restage.status_code == 409
 
 
+async def test_reviewer_can_inspect_sealed_bytes_before_independent_attestation(
+    official_control: dict,
+    client: httpx.AsyncClient,
+    app: FastAPI,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    fixture_id = UUID(official_control["fixture_id"])
+    async with session_maker() as session, session.begin():
+        fixture = await session.get(ScreenerL2ReportCanary, fixture_id)
+        assert fixture is not None and fixture.source_attestation is not None
+        fixture.status = "awaiting_review"
+        fixture.review_label = "unreviewed"
+        fixture.source_attestation = {
+            key: value
+            for key, value in fixture.source_attestation.items()
+            if key
+            in {
+                "release",
+                "release_commit",
+                "source_tree",
+                "archive_sha256",
+                "archive_size_bytes",
+                "registered_by",
+            }
+        }
+    staged = await _uploaded(client, official_control)
+    ident = staged["control"]["control_id"]
+    verified = await _post(
+        client,
+        f"{_BASE}/{ident}/verify",
+        {
+            "image_sha256": _SHA,
+            "image_id": _IMAGE_ID,
+        },
+    )
+    assert verified.status_code == 200, verified.text
+    blocked = await _post(client, f"{_BASE}/{ident}/approvals", _approval(), _REVIEWER)
+    assert blocked.status_code == 409
+    headers = {"Authorization": "Bearer test-admin-token-at-least-32-characters"}
+    artifact = await client.get(f"{_BASE}/{ident}/artifact", headers=headers)
+    assert artifact.status_code == 200, artifact.text
+    assert artifact.headers["Cache-Control"] == "no-store"
+    assert artifact.json()["control"]["policy_verification_complete"] is False
+    async with httpx.AsyncClient() as downloader:
+        actual = await downloader.get(artifact.json()["download_url"])
+    assert actual.status_code == 200
+    assert actual.content == _IMAGE
+    # Source registration is public and immutable; the existing independent
+    # source-review route still verifies its canonical stored object.
+    await app.state.storage.put_object(
+        key=starter.OBJECT_KEY,
+        body=starter.archive_bytes(),
+        content_type="application/gzip",
+    )
+    review = await _post(
+        client,
+        f"/api/v1/admin/screener-l2-report-canaries/fixture/{fixture_id}/review",
+        {
+            "reviewer_evidence_sha256": "b" * 64,
+            "reviewed_archive_sha256": starter.ARCHIVE_SHA256,
+            "reviewed_dockerfile_sha256": starter.DOCKERFILE_SHA256,
+            "built_image_digest": _IMAGE_ID,
+            "reviewer_evidence_url": "https://github.com/ditto-assistant/ditto-subnet/pull/3048",
+            "confirm_candidate_review": True,
+        },
+        _REVIEWER,
+    )
+    assert review.status_code == 200, review.text
+    approved = await _post(client, f"{_BASE}/{ident}/approvals", _approval(), _REVIEWER)
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "recorded_unverified"
+
+
 async def test_official_control_requires_real_proof_and_separate_actor(
     official_control: dict, client: httpx.AsyncClient
 ) -> None:
@@ -236,6 +311,61 @@ async def test_official_control_hashes_actual_staged_bytes(
     assert verified.status_code == 409
     approved = await _post(client, f"{_BASE}/{ident}/approvals", _approval(), _REVIEWER)
     assert approved.status_code == 409
+
+
+async def test_late_staging_overwrite_cannot_replace_verified_control(
+    official_control: dict,
+    client: httpx.AsyncClient,
+    app: FastAPI,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    staged = await _uploaded(client, official_control)
+    control_id = UUID(staged["control"]["control_id"])
+    guard = {"image_sha256": _SHA, "image_id": _IMAGE_ID}
+    first = await _post(client, f"{_BASE}/{control_id}/verify", guard)
+    assert first.status_code == 200, first.text
+    async with httpx.AsyncClient() as uploader:
+        changed = await uploader.put(
+            staged["upload_url"],
+            content=b"Z" * len(_IMAGE),
+            headers=staged["required_headers"],
+        )
+    assert changed.status_code == 200
+    async with session_maker() as session:
+        image = await session.get(V13OfficialControlImage, control_id)
+        assert image is not None and image.verified_storage_key is not None
+        protected_key = image.verified_storage_key
+    protected = await app.state.storage.verify_object_sha256(
+        key=protected_key, expected_size_bytes=len(_IMAGE)
+    )
+    assert protected.sha256 == _SHA
+    retry = await _post(client, f"{_BASE}/{control_id}/verify", guard)
+    assert retry.json() == first.json()
+
+
+async def test_concurrent_verifiers_pin_one_immutable_control(
+    official_control: dict,
+    client: httpx.AsyncClient,
+    app: FastAPI,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    staged = await _uploaded(client, official_control)
+    ident = UUID(staged["control"]["control_id"])
+    guard = {"image_sha256": _SHA, "image_id": _IMAGE_ID}
+    async with asyncio.timeout(20):
+        first, second = await asyncio.gather(
+            _post(client, f"{_BASE}/{ident}/verify", guard),
+            _post(client, f"{_BASE}/{ident}/verify", guard),
+        )
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    async with session_maker() as session:
+        image = await session.get(V13OfficialControlImage, ident)
+        assert image is not None and image.verified_storage_key is not None
+        protected = await app.state.storage.verify_object_sha256(
+            key=image.verified_storage_key, expected_size_bytes=len(_IMAGE)
+        )
+    assert protected.sha256 == _SHA
 
 
 async def test_official_control_refuses_mismatched_review_and_reused_request(

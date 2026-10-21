@@ -16,7 +16,7 @@ import {
   officialControlVerifySchema, officialControlApprovalSchema,
 } from '../lib/v13-official-control.schemas'
 import {
-  fetchOfficialV13Controls, fetchOfficialV13ControlApprovals, stageOfficialV13ControlImage,
+  fetchOfficialV13Controls, fetchOfficialV13ControlApprovals, fetchOfficialV13ControlArtifact, stageOfficialV13ControlImage,
   verifyOfficialV13ControlImage, recordOfficialV13ControlApproval,
 } from './v13-official-control.service'
 import {
@@ -544,6 +544,7 @@ export const WRITE_TOOL_NAMES = new Set([
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
+  ['get_v13_official_control_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_verification_readiness', BACKROOM_ARTIFACT_SCOPE],
   ['download_runtime_profile', BACKROOM_ARTIFACT_SCOPE],
@@ -737,6 +738,9 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // `z.string().uuid()` schema before any Platform request, so validation is
 // unchanged; only the advertised JSON Schema is shorter.
 const sourceAgentId = () => z.string().meta({ format: 'uuid' })
+const officialControlCatalogId = () => z.string()
+  .refine((value) => officialControlLookupSchema.shape.controlId.safeParse(value).success, { message: 'Invalid UUID' })
+  .meta({ format: 'uuid' })
 
 // Tool descriptions are injected into model context before any tool is used.
 // Keep the catalog decision-grade; the original, detailed operation notes stay
@@ -858,6 +862,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'List official control image identities; no miner, private bytes or verdict.',
   get_v13_official_control_approvals:
     'Read immutable independent official-image attestations; not certification.',
+  get_v13_official_control_artifact:
+    'Download sealed candidate image for independent review; no verdict.',
   stage_v13_official_control_image:
     'Registrar stages an exact independently reviewed official image; no miner row.',
   verify_v13_official_control_image:
@@ -2918,29 +2924,37 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     inputSchema: officialControlsInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchOfficialV13Controls(input)))
 
+  // Keep compact catalog UUIDs runtime-validated as well. Every service also
+  // reparses its strict schema before creating a Platform URL or proof.
   registerTool('get_v13_official_control_approvals', {
     title: 'Read official V13 control approvals',
     description: 'Read append-only independent operator attestations for a controlId. Each binds the official fixture, exact image, profile and review evidence. recorded_unverified is not a semantic pass or terminal authorization. Requires backroom:read.',
-    inputSchema: officialControlLookupSchema.extend({ controlId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('read'),
+    inputSchema: officialControlLookupSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchOfficialV13ControlApprovals(input)))
 
   registerTool('stage_v13_official_control_image', {
     title: 'Stage official V13 control image',
-    description: 'The signed-in fixture registrar pins requestId, fixtureId, image tar SHA, image ID and byte size. Requires the independently attested canonical starter image ID. Returns a short-lived constrained PUT and headers. Creates no miner or attempt and cannot clear anything. Same exact requestId may remint an unverified upload; conflicts refuse. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlStageSchema.extend({ requestId: z.string().meta({ format: 'uuid' }), fixtureId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('write', true),
+    description: 'The signed-in fixture registrar pins requestId, fixtureId, image tar SHA, config image ID and byte size. May stage before independent source review so the second operator can inspect sealed image bytes first. Once reviewed, the source fixture image ID must match. Returns a short-lived constrained PUT and headers. Creates no miner or attempt and cannot clear anything. Same exact requestId may remint an unverified upload; conflicts refuse. Requires backroom:write and exact confirmation.',
+    inputSchema: officialControlStageSchema.extend({ requestId: officialControlCatalogId(), fixtureId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => stageOfficialV13ControlImage(input, props.session.email)))
 
   registerTool('verify_v13_official_control_image', {
     title: 'Verify official V13 control archive',
     description: 'The registrar hashes the staged tar, copies it to a distinct protected key and hashes again before pinning immutable archive identity. Claimed Docker image ID remains unverified until the private runner loads it. No source, semantic or admission pass. May take up to three minutes; reread after ambiguous delivery before retrying. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlVerifySchema.extend({ controlId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('write', true),
+    inputSchema: officialControlVerifySchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => verifyOfficialV13ControlImage(input, props.session.email)))
 
   registerTool('record_v13_official_control_approval', {
     title: 'Record independent official control approval',
     description: 'Only the second authenticated fixture reviewer can attest the exact verified archive, image ID, profile and evidence digest. The registrar cannot self-approve. The append-only recorded_unverified receipt must predate private generation and does not establish semantic benignness, execution or a policy verdict. No miner or attempt is fabricated. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlApprovalSchema.extend({ controlId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('write', true),
+    inputSchema: officialControlApprovalSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => recordOfficialV13ControlApproval(input, props.session.email)))
+
+  registerTool('get_v13_official_control_artifact', {
+    title: 'Download official V13 control candidate',
+    description: 'Return a short-lived GET for the verified protected archive and its exact size, SHA and claimed config image ID. Available before independent source attestation so the reviewer can inspect these actual bytes. A candidate can be unreviewed; verify the digest and use isolated review without credentials or host mounts. No private case bytes or verdict authority. Requires backroom:artifact:read and a current write-level account.',
+    inputSchema: officialControlLookupSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('read'),
+  }, async (input) => artifact(() => fetchOfficialV13ControlArtifact(input, props.session.email)))
 
   registerTool(
     'authorize_conversation_retry',

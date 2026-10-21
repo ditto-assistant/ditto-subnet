@@ -1,7 +1,7 @@
 import '@tanstack/react-start/server-only'
 import { z } from 'zod'
 import {
-  officialControlApprovalSchema, officialControlApprovalViewSchema,
+  officialControlApprovalSchema, officialControlApprovalViewSchema, officialControlArtifactSchema,
   officialControlImageSchema, officialControlLookupSchema,
   officialControlsInputSchema, officialControlStageSchema,
   officialControlUploadSchema, officialControlVerifySchema,
@@ -21,6 +21,13 @@ export async function fetchOfficialV13ControlApprovals(raw: unknown) {
   const input = officialControlLookupSchema.parse(raw)
   return z.array(officialControlApprovalViewSchema).parse(await platformAdminRequest(
     `${base}/${input.controlId}/approvals`,
+  ))
+}
+
+export async function fetchOfficialV13ControlArtifact(raw: unknown, actor: string) {
+  const input = officialControlLookupSchema.parse(raw)
+  return officialControlArtifactSchema.parse(await platformAdminRequest(
+    `${base}/${input.controlId}/artifact`, { actor },
   ))
 }
 

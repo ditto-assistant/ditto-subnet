@@ -194,7 +194,8 @@ jobs:
               --ignore=ditto/tests/api_server/endpoints/test_admin_validator_slot_settings.py
               --ignore=ditto/tests/api_server/endpoints/test_admin_confirmation_bundles.py
               --ignore=ditto/tests/api_server/endpoints/test_gate_notes.py
-            object_storage: false
+            # Official-control uploads hash and seal real S3 objects.
+            object_storage: true
           - suite: api-server
             pytest_args: ditto/tests/api_server --ignore=ditto/tests/api_server/endpoints
             object_storage: false
@@ -295,8 +296,8 @@ jobs:
           asyncio.run(main())
           PY
 
-      # Only integration tests request the object_storage fixture. Keeping
-      # MinIO out of the other shards avoids image pulls and startup loops
+      # Integration and official-control endpoint tests request object_storage.
+      # Keeping MinIO out of other shards avoids image pulls and startup loops
       # without weakening the hard requirement in the shard that uses it.
       - name: Start MinIO
         if: matrix.object_storage

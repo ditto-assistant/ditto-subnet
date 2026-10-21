@@ -4321,6 +4321,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/v13-official-controls/{control_id}/artifact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Official Control Artifact
+         * @description Let the independent reviewer inspect sealed bytes before attestation.
+         */
+        get: operations["get_official_control_artifact_api_v1_admin_v13_official_controls__control_id__artifact_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v13-official-controls/{control_id}/verify": {
         parameters: {
             query?: never;
@@ -27031,6 +27051,17 @@ export interface components {
              * @constant
              */
             status: "recorded_unverified";
+        };
+        /** OfficialControlImageArtifact */
+        OfficialControlImageArtifact: {
+            control: components["schemas"]["OfficialControlImageView"];
+            /** Download Url */
+            download_url: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
         };
         /** OfficialControlImageRequest */
         OfficialControlImageRequest: {
@@ -50466,6 +50497,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OfficialControlApprovalView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_official_control_artifact_api_v1_admin_v13_official_controls__control_id__artifact_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                control_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfficialControlImageArtifact"];
                 };
             };
             /** @description Validation Error */

@@ -36,6 +36,9 @@ export const officialControlUploadSchema = z.object({
   control: officialControlImageSchema, upload_url: z.string().url(),
   required_headers: z.record(z.string(), z.string()), expires_at: z.string(),
 })
+export const officialControlArtifactSchema = z.object({
+  control: officialControlImageSchema, download_url: z.string().url(), expires_at: z.string(),
+})
 export const officialControlApprovalViewSchema = z.object({
   source_kind: z.literal('canonical_starter_fixture'),
   approval_id: z.string().uuid(), control_id: z.string().uuid(), fixture_id: z.string().uuid(),
