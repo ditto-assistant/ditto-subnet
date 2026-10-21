@@ -37,3 +37,14 @@ The original generic custody ValueError no longer reproduced; no exact original
 exception message is asserted. Recovery is publication-only. Never create a
 replacement transfer, clear a delivery fence or manufacture missing snapshots to
 repair this receipt.
+
+## Release-gate repair
+
+The full Platform gate exposed an existing pin mismatch from merged PR3019:
+its reviewed I2 clarification changed policy-v13.md to SHA-256
+`c121fa84e9feb24df3ce498adf839e76eb286deb21341363ff446c3c06d6cc06`,
+but the Platform constant still named the prior document. Align the constant
+with the already-reviewed source; keep the exact-byte regression and all clock
+authority checks. Authenticated public get_v13_review_clock before rollout had
+latest=null, revisions=[], finalizer_state=not_configured. No clock, policy
+activation, finalizer, review settings or deadline write is performed here.
