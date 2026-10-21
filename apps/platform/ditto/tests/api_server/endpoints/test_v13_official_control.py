@@ -62,6 +62,26 @@ async def _post(
     return await client.post(path, content=raw, headers=headers)
 
 
+async def _artifact(
+    client: httpx.AsyncClient,
+    control_id: str,
+    actor: str = _REVIEWER,
+    *,
+    signed: bool = True,
+) -> httpx.Response:
+    path = f"{_BASE}/{control_id}/artifact"
+    now = str(int(time.time()))
+    message = "\n".join((now, actor, "GET", path, hashlib.sha256(b"").hexdigest()))
+    signature = hmac.new(_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+    headers = {
+        "Authorization": "Bearer test-admin-token-at-least-32-characters",
+        "X-Admin-Actor": actor,
+    }
+    if signed:
+        headers["X-Backroom-Operator-Proof"] = f"{now}:{signature}"
+    return await client.get(path, headers=headers)
+
+
 @pytest.fixture
 async def official_control(
     app: FastAPI,
@@ -238,8 +258,9 @@ async def test_reviewer_can_inspect_sealed_bytes_before_independent_attestation(
     assert verified.status_code == 200, verified.text
     blocked = await _post(client, f"{_BASE}/{ident}/approvals", _approval(), _REVIEWER)
     assert blocked.status_code == 409
-    headers = {"Authorization": "Bearer test-admin-token-at-least-32-characters"}
-    artifact = await client.get(f"{_BASE}/{ident}/artifact", headers=headers)
+    assert (await _artifact(client, ident, signed=False)).status_code == 403
+    assert (await _artifact(client, ident, _REGISTRAR)).status_code == 403
+    artifact = await _artifact(client, ident)
     assert artifact.status_code == 200, artifact.text
     assert artifact.headers["Cache-Control"] == "no-store"
     assert artifact.json()["control"]["policy_verification_complete"] is False
@@ -271,6 +292,57 @@ async def test_reviewer_can_inspect_sealed_bytes_before_independent_attestation(
     approved = await _post(client, f"{_BASE}/{ident}/approvals", _approval(), _REVIEWER)
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "recorded_unverified"
+    assert (await _artifact(client, ident, "unrelated@omniaura.ai")).status_code == 403
+    assert (await _artifact(client, ident)).status_code == 200
+
+
+@pytest.mark.parametrize("tamper", ["bytes", "metadata", "unavailable"])
+async def test_artifact_download_rechecks_sealed_object(
+    official_control: dict,
+    client: httpx.AsyncClient,
+    app: FastAPI,
+    session_maker: async_sessionmaker[AsyncSession],
+    tamper: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staged = await _uploaded(client, official_control)
+    ident = staged["control"]["control_id"]
+    verified = await _post(
+        client, f"{_BASE}/{ident}/verify", {"image_sha256": _SHA, "image_id": _IMAGE_ID}
+    )
+    assert verified.status_code == 200, verified.text
+    async with session_maker() as session:
+        row = await session.get(V13OfficialControlImage, UUID(ident))
+        assert row is not None and row.verified_storage_key is not None
+        key = row.verified_storage_key
+    if tamper == "unavailable":
+
+        async def unavailable(**_kwargs):
+            raise OSError("synthetic storage outage")
+
+        monkeypatch.setattr(app.state.storage, "head_object", unavailable)
+    else:
+        head = await app.state.storage.head_object(key=key)
+        metadata = head.metadata if tamper == "bytes" else {"changed": "true"}
+        url = await app.state.storage.presigned_put_url(
+            key=key,
+            size_bytes=len(_IMAGE),
+            metadata=metadata,
+            expires_in=60,
+        )
+        async with httpx.AsyncClient() as uploader:
+            changed = await uploader.put(
+                url,
+                content=b"X" * len(_IMAGE) if tamper == "bytes" else _IMAGE,
+                headers={
+                    "Content-Type": "application/x-tar",
+                    **{f"x-amz-meta-{key}": value for key, value in metadata.items()},
+                },
+            )
+        assert changed.status_code == 200, changed.text
+    download = await _artifact(client, ident)
+    assert download.status_code == (503 if tamper == "unavailable" else 409)
+    assert "download_url" not in download.text
 
 
 async def test_official_control_requires_real_proof_and_separate_actor(

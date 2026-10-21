@@ -27,7 +27,7 @@ export async function fetchOfficialV13ControlApprovals(raw: unknown) {
 export async function fetchOfficialV13ControlArtifact(raw: unknown, actor: string) {
   const input = officialControlLookupSchema.parse(raw)
   return officialControlArtifactSchema.parse(await platformAdminRequest(
-    `${base}/${input.controlId}/artifact`, { actor },
+    `${base}/${input.controlId}/artifact`, { actor, operatorProof: true, timeoutMs: 180_000 },
   ))
 }
 

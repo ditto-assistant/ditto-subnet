@@ -197,12 +197,12 @@ export async function platformAdminRequest(
   let operatorProof: string | undefined
   if (options.operatorProof) {
     const secret = process.env.BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET
-    if (!secret || secret.length < 32 || !actor || !body) {
+    if (!secret || secret.length < 32 || !actor || (method !== 'GET' && !body)) {
       throw new Error('Backroom fixture operator proof is not configured')
     }
     const timestamp = Math.floor(Date.now() / 1000)
     const bytes = new TextEncoder()
-    const digest = await crypto.subtle.digest('SHA-256', bytes.encode(body))
+    const digest = await crypto.subtle.digest('SHA-256', bytes.encode(body ?? ''))
     const hex = (value: ArrayBuffer) =>
       Array.from(new Uint8Array(value), (byte) => byte.toString(16).padStart(2, '0')).join('')
     const message = `${timestamp}\n${actor}\n${method}\n${path}\n${hex(digest)}`

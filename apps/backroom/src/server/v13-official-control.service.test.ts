@@ -5,7 +5,7 @@ import {
   BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE, BACKROOM_ARTIFACT_SCOPE, TOOL_SCOPE_REQUIREMENTS,
   createBackroomMcpServer,
 } from './mcp.server'
-import { stageOfficialV13ControlImage, verifyOfficialV13ControlImage, recordOfficialV13ControlApproval } from './v13-official-control.service'
+import { fetchOfficialV13ControlArtifact, stageOfficialV13ControlImage, verifyOfficialV13ControlImage, recordOfficialV13ControlApproval } from './v13-official-control.service'
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
@@ -37,6 +37,17 @@ function install(response: unknown) {
 }
 
 describe('official V13 control boundary', () => {
+  it('authenticates the operator for candidate image downloads', async () => {
+    const mock = install({ control: { ...image, verified_at: '2026-10-21T00:01:00Z' },
+      download_url: 'https://store.example.test/sealed', expires_at: '2026-10-21T00:05:00Z' })
+    await fetchOfficialV13ControlArtifact({ controlId }, 'reviewer@omniaura.ai')
+    const [url, request] = mock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain(`/${controlId}/artifact`)
+    expect(request.method).toBe('GET')
+    expect(request.headers).toHaveProperty('X-Admin-Actor', 'reviewer@omniaura.ai')
+    expect(request.headers).toHaveProperty('X-Backroom-Operator-Proof')
+  })
+
   it('binds upload, verify and approval to the signed operator without fabricating miner IDs', async () => {
     const mock = install({ control: image, upload_url: 'https://store.example.test/staging',
       required_headers: { 'Content-Length': '123' }, expires_at: '2026-10-21T00:05:00Z' })

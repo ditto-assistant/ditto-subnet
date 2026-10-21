@@ -33,7 +33,11 @@ pinned by that fixture.
    locks, and the fixture, actor and image binding are checked again afterward.
 4. The independent reviewer uses `get_v13_official_control_artifact` to inspect
    the sealed archive before source attestation. It requires artifact scope
-   and a current write-level account. Verify the returned digest and review
+   and a current write-level account with authenticated operator proof. Before
+   source attestation, any such operator other than the registrar may inspect
+   the candidate; afterward only the recorded reviewer may download it.
+   Platform rechecks sealed bytes and metadata before issuing a URL. Verify
+   the returned digest and review
    the candidate in isolation without credentials or host mounts. Then use
    `review_canonical_starter_fixture` to attest the exact source and config
    image identity. Downloading a candidate does not attest it.

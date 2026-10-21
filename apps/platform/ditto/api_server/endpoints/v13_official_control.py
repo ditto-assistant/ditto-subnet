@@ -450,15 +450,38 @@ async def get_official_control_artifact(
 ) -> OfficialControlImageArtifact:
     """Let the independent reviewer inspect sealed bytes before attestation."""
     response.headers["Cache-Control"] = "no-store"
+    actor = await require_operator_proof(request)
     image = await session.get(V13OfficialControlImage, control_id)
     if image is None or image.verified_at is None or image.verified_storage_key is None:
         raise HTTPException(409, "official control archive is not verified")
-    await _fixture(session, image.fixture_id, require_review=False)
+    fixture = await _fixture(session, image.fixture_id, require_review=False)
+    attestation = fixture.source_attestation or {}
+    reviewer = attestation.get("reviewed_by")
+    # Before the first attestation there is no designated reviewer yet. A
+    # separate authenticated operator needs the candidate bytes to review it.
+    # Once reviewed, restrict further access to that recorded identity.
+    if actor == attestation.get("registered_by") or (
+        reviewer is not None and actor != reviewer
+    ):
+        raise HTTPException(403, "independent authenticated fixture reviewer required")
     storage = await get_storage_client(request)
-    url = await storage.presigned_get_url(
-        key=image.verified_storage_key,
-        expires_in=_URL_TTL,
+    snapshot = _ImageSnapshot(
+        image.image_sha256,
+        image.image_id,
+        image.size_bytes,
+        image.verified_storage_key,
+        _metadata(image),
     )
+    try:
+        await _check_object(storage, image.verified_storage_key, snapshot)
+        url = await storage.presigned_get_url(
+            key=image.verified_storage_key,
+            expires_in=_URL_TTL,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(503, "official control artifact unavailable") from None
     return OfficialControlImageArtifact(
         control=_view(image),
         download_url=url,
