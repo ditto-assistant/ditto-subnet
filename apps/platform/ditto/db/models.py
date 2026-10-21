@@ -760,6 +760,83 @@ class V13KnownBenignControlApproval(Base):
     )
 
 
+class V13OfficialControlImage(Base):
+    """An operator-produced official image; never an economic miner record."""
+
+    __tablename__ = "v13_official_control_images"
+
+    control_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    fixture_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    image_id: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    producer: Mapped[str] = mapped_column(Text, nullable=False)
+    staging_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    verified_storage_key: Mapped[str | None] = mapped_column(Text)
+    verified_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["fixture_id"],
+            ["screener_l2_report_canaries.canary_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("request_id"),
+        CheckConstraint("artifact_sha256 ~ '^[0-9a-f]{64}$'", name="v13oci_artifact"),
+        CheckConstraint("image_sha256 ~ '^[0-9a-f]{64}$'", name="v13oci_image"),
+        CheckConstraint("image_id ~ '^sha256:[0-9a-f]{64}$'", name="v13oci_image_id"),
+        CheckConstraint(
+            "size_bytes > 0 AND size_bytes <= 8589934592", name="v13oci_size"
+        ),
+        CheckConstraint("length(producer) BETWEEN 1 AND 320", name="v13oci_producer"),
+        CheckConstraint(
+            "(verified_at IS NULL) = (verified_storage_key IS NULL)",
+            name="v13oci_verified_pair",
+        ),
+    )
+
+
+class V13OfficialControlApproval(Base):
+    """Append-only independent operator attestation for one official image."""
+
+    __tablename__ = "v13_official_control_approvals"
+
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    control_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    review_evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["control_id"],
+            ["v13_official_control_images.control_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("control_id", "profile_sha256"),
+        *(
+            CheckConstraint(f"{name} ~ '^[0-9a-f]{{64}}$'", name=f"v13oca_{name}")
+            for name in (
+                "profile_sha256",
+                "review_evidence_sha256",
+                "approval_receipt_sha256",
+            )
+        ),
+        CheckConstraint("length(actor) BETWEEN 1 AND 320", name="v13oca_actor"),
+        CheckConstraint("length(reason) >= 8", name="v13oca_reason"),
+    )
+
+
 class V13PrivateGenerationGroup(Base):
     """One pre-randomness DB-time event shared by target and clean roles."""
 

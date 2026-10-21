@@ -4269,6 +4269,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/v13-official-controls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Official Controls */
+        get: operations["list_official_controls_api_v1_admin_v13_official_controls_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/v13-official-controls/images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stage Official Control Image */
+        post: operations["stage_official_control_image_api_v1_admin_v13_official_controls_images_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/v13-official-controls/{control_id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Official Control Approvals */
+        get: operations["list_official_control_approvals_api_v1_admin_v13_official_controls__control_id__approvals_get"];
+        put?: never;
+        /** Approve Official Control */
+        post: operations["approve_official_control_api_v1_admin_v13_official_controls__control_id__approvals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/v13-official-controls/{control_id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Verify Official Control Image */
+        post: operations["verify_official_control_image_api_v1_admin_v13_official_controls__control_id__verify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v13-private-generation/groups": {
         parameters: {
             query?: never;
@@ -26892,6 +26961,170 @@ export interface components {
              * @default
              */
             schema_sha256: string;
+        };
+        /** OfficialControlApprovalRequest */
+        OfficialControlApprovalRequest: {
+            /** Image Id */
+            image_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /** Reason */
+            reason: string;
+            /** Review Evidence Sha256 */
+            review_evidence_sha256: string;
+        };
+        /** OfficialControlApprovalView */
+        OfficialControlApprovalView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Approval Id
+             * Format: uuid
+             */
+            approval_id: string;
+            /** Approval Receipt Sha256 */
+            approval_receipt_sha256: string;
+            /**
+             * Approved At
+             * Format: date-time
+             */
+            approved_at: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Control Id
+             * Format: uuid
+             */
+            control_id: string;
+            /**
+             * Fixture Id
+             * Format: uuid
+             */
+            fixture_id: string;
+            /** Image Id */
+            image_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /**
+             * Policy Verification Complete
+             * @default false
+             * @constant
+             */
+            policy_verification_complete: false;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /** Reason */
+            reason: string;
+            /** Review Evidence Sha256 */
+            review_evidence_sha256: string;
+            /**
+             * Source Kind
+             * @default canonical_starter_fixture
+             * @constant
+             */
+            source_kind: "canonical_starter_fixture";
+            /**
+             * Status
+             * @default recorded_unverified
+             * @constant
+             */
+            status: "recorded_unverified";
+        };
+        /** OfficialControlImageRequest */
+        OfficialControlImageRequest: {
+            /**
+             * Fixture Id
+             * Format: uuid
+             */
+            fixture_id: string;
+            /** Image Id */
+            image_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Size Bytes */
+            size_bytes: number;
+        };
+        /** OfficialControlImageUpload */
+        OfficialControlImageUpload: {
+            control: components["schemas"]["OfficialControlImageView"];
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Required Headers */
+            required_headers: {
+                [key: string]: string;
+            };
+            /** Upload Url */
+            upload_url: string;
+        };
+        /** OfficialControlImageVerifyRequest */
+        OfficialControlImageVerifyRequest: {
+            /** Image Id */
+            image_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+        };
+        /** OfficialControlImageView */
+        OfficialControlImageView: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Control Id
+             * Format: uuid
+             */
+            control_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Fixture Id
+             * Format: uuid
+             */
+            fixture_id: string;
+            /** Image Id */
+            image_id: string;
+            /**
+             * Image Identity Execution Verified
+             * @default false
+             * @constant
+             */
+            image_identity_execution_verified: false;
+            /** Image Sha256 */
+            image_sha256: string;
+            /**
+             * Policy Verification Complete
+             * @default false
+             * @constant
+             */
+            policy_verification_complete: false;
+            /** Producer */
+            producer: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Source Kind
+             * @default canonical_starter_fixture
+             * @constant
+             */
+            source_kind: "canonical_starter_fixture";
+            /** Verified At */
+            verified_at: string | null;
         };
         /** OutlierEscalationActivityView */
         OutlierEscalationActivityView: {
@@ -50094,6 +50327,182 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustedImageBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_official_controls_api_v1_admin_v13_official_controls_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfficialControlImageView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stage_official_control_image_api_v1_admin_v13_official_controls_images_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OfficialControlImageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfficialControlImageUpload"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_official_control_approvals_api_v1_admin_v13_official_controls__control_id__approvals_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                control_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfficialControlApprovalView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_official_control_api_v1_admin_v13_official_controls__control_id__approvals_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                control_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OfficialControlApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfficialControlApprovalView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_official_control_image_api_v1_admin_v13_official_controls__control_id__verify_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                control_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OfficialControlImageVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfficialControlImageView"];
                 };
             };
             /** @description Validation Error */

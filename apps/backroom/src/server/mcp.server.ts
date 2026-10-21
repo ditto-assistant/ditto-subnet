@@ -12,6 +12,14 @@ import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.s
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
+  officialControlsInputSchema, officialControlLookupSchema, officialControlStageSchema,
+  officialControlVerifySchema, officialControlApprovalSchema,
+} from '../lib/v13-official-control.schemas'
+import {
+  fetchOfficialV13Controls, fetchOfficialV13ControlApprovals, stageOfficialV13ControlImage,
+  verifyOfficialV13ControlImage, recordOfficialV13ControlApproval,
+} from './v13-official-control.service'
+import {
   listV13BenignApprovalsInputSchema,
   v13BenignApprovalLookupInputSchema,
   v13BenignApprovalWriteInputSchema,
@@ -437,6 +445,9 @@ export const WRITE_TOOL_NAMES = new Set([
   'record_treasury_runtime',
   'record_treasury_receipt',
   'record_v13_benign_approval',
+  'stage_v13_official_control_image',
+  'verify_v13_official_control_image',
+  'record_v13_official_control_approval',
   'record_v13_replay_private_group',
   'register_v13_replay_private_package',
   'schedule_l2_report_canary',
@@ -843,6 +854,16 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
 
   get_canonical_starter_fixture_preflight:
     'Pinned starter source, independent review, object integrity and schedule readiness.',
+  get_v13_official_controls:
+    'List official control image identities; no miner, private bytes or verdict.',
+  get_v13_official_control_approvals:
+    'Read immutable independent official-image attestations; not certification.',
+  stage_v13_official_control_image:
+    'Registrar stages an exact independently reviewed official image; no miner row.',
+  verify_v13_official_control_image:
+    'Hash and seal official image bytes; no execution or verdict authority.',
+  record_v13_official_control_approval:
+    'Independent fixture reviewer records one exact official-image attestation.',
   register_canonical_starter_fixture:
     'Stage exact released starter: operator fixture, no miner submission.',
   review_canonical_starter_fixture:
@@ -2890,6 +2911,36 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) => write(() => scheduleCanonicalStarter(input, props.session.email)),
   )
+
+  registerTool('get_v13_official_controls', {
+    title: 'List official V13 control images',
+    description: 'Read operator-owned official control identities and archive verification time. No miner Agent or ScreeningAttempt is created. No storage URL, private cases, execution verification or policy verdict. Requires backroom:read.',
+    inputSchema: officialControlsInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchOfficialV13Controls(input)))
+
+  registerTool('get_v13_official_control_approvals', {
+    title: 'Read official V13 control approvals',
+    description: 'Read append-only independent operator attestations for a controlId. Each binds the official fixture, exact image, profile and review evidence. recorded_unverified is not a semantic pass or terminal authorization. Requires backroom:read.',
+    inputSchema: officialControlLookupSchema.extend({ controlId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchOfficialV13ControlApprovals(input)))
+
+  registerTool('stage_v13_official_control_image', {
+    title: 'Stage official V13 control image',
+    description: 'The signed-in fixture registrar pins requestId, fixtureId, image tar SHA, image ID and byte size. Requires the independently attested canonical starter image ID. Returns a short-lived constrained PUT and headers. Creates no miner or attempt and cannot clear anything. Same exact requestId may remint an unverified upload; conflicts refuse. Requires backroom:write and exact confirmation.',
+    inputSchema: officialControlStageSchema.extend({ requestId: z.string().meta({ format: 'uuid' }), fixtureId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => stageOfficialV13ControlImage(input, props.session.email)))
+
+  registerTool('verify_v13_official_control_image', {
+    title: 'Verify official V13 control archive',
+    description: 'The registrar hashes the staged tar, copies it to a distinct protected key and hashes again before pinning immutable archive identity. Claimed Docker image ID remains unverified until the private runner loads it. No source, semantic or admission pass. May take up to three minutes; reread after ambiguous delivery before retrying. Requires backroom:write and exact confirmation.',
+    inputSchema: officialControlVerifySchema.extend({ controlId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => verifyOfficialV13ControlImage(input, props.session.email)))
+
+  registerTool('record_v13_official_control_approval', {
+    title: 'Record independent official control approval',
+    description: 'Only the second authenticated fixture reviewer can attest the exact verified archive, image ID, profile and evidence digest. The registrar cannot self-approve. The append-only recorded_unverified receipt must predate private generation and does not establish semantic benignness, execution or a policy verdict. No miner or attempt is fabricated. Requires backroom:write and exact confirmation.',
+    inputSchema: officialControlApprovalSchema.extend({ controlId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => recordOfficialV13ControlApproval(input, props.session.email)))
 
   registerTool(
     'authorize_conversation_retry',
