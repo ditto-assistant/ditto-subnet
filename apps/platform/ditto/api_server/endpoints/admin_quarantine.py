@@ -1084,9 +1084,7 @@ async def _failed_release_conflict(
             SubmissionImageBuild.agent_id == agent.agent_id,
             or_(
                 SubmissionImageBuild.status.in_(("queued", "leased", "running")),
-                SubmissionImageBuild.runtime_status.in_(
-                    ("queued", "leased", "running")
-                ),
+                SubmissionImageBuild.runtime_status.in_(("pending", "running")),
             ),
         )
         .limit(1)
