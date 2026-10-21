@@ -238,9 +238,9 @@ export async function platformAdminRequest(
         method,
         headers,
         body,
-        // A write must not follow a redirect: fetch would replay a POST as a
-        // bodyless GET and report that answer as the write's.
-        redirect: method === 'GET' ? 'follow' : 'manual',
+        // Proofs bind the original path. Writes also must not redirect: fetch
+        // could replay a POST as a bodyless GET and report it as the write.
+        redirect: operatorProof || method !== 'GET' ? 'manual' : 'follow',
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {
