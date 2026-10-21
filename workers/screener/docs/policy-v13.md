@@ -21,11 +21,11 @@ does not silently become a prerequisite for every submission. The activation
 record must include the revised built-in manifest digest and release revision;
 historical decisions retain their original policy digest.
 
-Policy v13 is a strict two-outcome policy. Every completed review ends in
-`CLEAR` or `REJECT`. When verification cannot be completed the result is
-`REJECT` with `violation_proven: false` and an explicit failure domain; such a
-rejection is a certification failure and must never be described as cheating,
-fraud, or deliberate evasion.
+A completed eligibility decision is `CLEAR` or `REJECT`. A reviewer, platform
+or provider failure leaves verification incomplete and the attempt parked for
+operator review or manual retry; it does not establish rejection evidence.
+An artifact-controlled certification rejection records `violation_proven:
+false` and must never be described as cheating, fraud, or deliberate evasion.
 
 ## Final outcomes
 
@@ -818,7 +818,8 @@ observed incident.
 A null or omitted field in a score, leaderboard, or other compact projection
 proves only that the projection did not supply the field. It does not prove
 that an artifact-bound screening or challenge record is absent. Check the
-authoritative evidence store before assigning V1, V2, or V3.
+authoritative evidence store before assigning V1; V2/V3 are historical readback
+only.
 
 ## Mandatory verification
 
@@ -988,26 +989,23 @@ exact reason codes and distinguishes proven violations from verification
 failures. No owner, hotkey, sibling, or lineage penalty follows automatically.
 Appeals produce a new recorded `CLEAR` or `REJECT` without erasing history.
 
-## Retry and deadline procedure
+## Manual retry and deadline procedure
 
-Before a verification-failure `REJECT`:
+A failure ends the dispatched attempt once. A retry requires an explicit
+Backroom authorization bound to the exact artifact and latest terminal attempt;
+classification as platform/provider failure is not retry authority.
 
-- attempt the published number of retries;
-- use at least one independent worker when available;
+For each manually authorized retry:
+
 - distinguish artifact, platform, and provider failures;
-- preserve bounded diagnostics;
-- verify the artifact SHA remains unchanged;
-- apply the published deadline;
-- record every attempt; and
-- avoid duplicate paid work when a valid artifact-bound result already exists.
+- preserve bounded diagnostics and every attempt;
+- verify the artifact SHA remains unchanged; and
+- avoid duplicate paid work when a valid conclusive artifact-bound result exists.
 
-Recommended defaults:
+The following is a recommendation for a future explicitly activated review
+window, not an active failure-to-rejection rule:
 
 ```text
-artifact-controlled failure retries: 1
-provider failure retries: 2
-platform failure retries: 2
-independent worker required for platform/provider failure: yes
 maximum verification window: 24 hours
 ```
 
@@ -1023,7 +1021,9 @@ window from a later activation. Its transition requires a separate published
 rule and exact-artifact review. A deadline alone never supplies evidence for
 `CLEAR` or a verification-failure `REJECT`.
 
-At the end of the window, the result must be `CLEAR` or `REJECT`.
+At the end of a review window, unfinished attempts remain parked for an
+operator. Elapsed time and repeated inconclusive reviews supply neither
+clearance nor rejection authority.
 
 ## Required reason codes
 
