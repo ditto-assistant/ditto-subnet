@@ -159,6 +159,10 @@ function connectionError(path: string, error: unknown) {
     : new PlatformAdminError('transport', `The platform API connection failed during ${path}: ${detail}`)
 }
 
+export function operatorProofConfigured(): boolean {
+  return (process.env.BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET?.length ?? 0) >= 32
+}
+
 export async function platformAdminRequest(
   path: string,
   options: {

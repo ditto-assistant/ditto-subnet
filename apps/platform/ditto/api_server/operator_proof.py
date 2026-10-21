@@ -16,6 +16,11 @@ import time
 from fastapi import HTTPException, Request
 
 
+def operator_proof_configured() -> bool:
+    """Report configuration presence only, never a secret or peer match."""
+    return len(os.environ.get("BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET", "")) >= 32
+
+
 async def require_operator_proof(request: Request) -> str:
     secret = os.environ.get("BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET", "")
     if len(secret) < 32:

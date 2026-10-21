@@ -19,6 +19,7 @@ from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.l2_report_canary import (
+    CanonicalFixturePreflightView,
     CanonicalFixtureRegisterRequest,
     CanonicalFixtureReviewRequest,
     CanonicalFixtureScheduleRequest,
@@ -60,7 +61,10 @@ from ditto.api_server.endpoints.screener import (
     _resolve_effective_review_settings,
     require_screener,
 )
-from ditto.api_server.operator_proof import require_operator_proof
+from ditto.api_server.operator_proof import (
+    operator_proof_configured,
+    require_operator_proof,
+)
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.api_server.source_inspect import MAX_TARBALL_BYTES
 from ditto.api_server.storage import S3StorageClient, StorageError
@@ -1274,13 +1278,13 @@ async def _schedule_l2_report_canary(
         return _view(row)
 
 
-@admin_router.get("/fixture/preflight")
+@admin_router.get("/fixture/preflight", response_model=CanonicalFixturePreflightView)
 async def get_canonical_fixture_preflight(
     response: Response,
     _admin: AdminDep,
     session: SessionDep,
     storage: Annotated[S3StorageClient, Depends(get_storage_client)],
-) -> dict:
+) -> CanonicalFixturePreflightView:
     """Expose the pinned public source and current object before any queue write."""
     response.headers["Cache-Control"] = "no-store"
     row = await session.scalar(
@@ -1296,23 +1300,27 @@ async def get_canonical_fixture_preflight(
         and await _fixture_worker_ready(session, node=node, now=datetime.now(UTC))
     )
     object_matches = await _fixture_object_matches(storage)
-    return {
-        "release": RELEASE,
-        "release_commit": RELEASE_COMMIT,
-        "source_tree": SOURCE_TREE,
-        "archive_sha256": ARCHIVE_SHA256,
-        "archive_size_bytes": ARCHIVE_BYTES,
-        "fixture": _view(row).model_dump(mode="json") if row is not None else None,
-        "stored_object_matches": object_matches,
-        "fixture_capable_worker_ready": worker_ready,
-        "can_schedule": bool(
-            row is not None
-            and row.status == "ready"
-            and _fixture_attestation_valid(row)
-            and object_matches
-            and worker_ready
-        ),
-    }
+    return CanonicalFixturePreflightView.model_validate(
+        {
+            "release": RELEASE,
+            "release_commit": RELEASE_COMMIT,
+            "source_tree": SOURCE_TREE,
+            "archive_sha256": ARCHIVE_SHA256,
+            "archive_size_bytes": ARCHIVE_BYTES,
+            "fixture": _view(row).model_dump(mode="json") if row is not None else None,
+            "stored_object_matches": object_matches,
+            "fixture_capable_worker_ready": worker_ready,
+            "operator_proof_configured": operator_proof_configured(),
+            "can_schedule": bool(
+                row is not None
+                and row.status == "ready"
+                and _fixture_attestation_valid(row)
+                and object_matches
+                and worker_ready
+                and operator_proof_configured()
+            ),
+        }
+    )
 
 
 @admin_router.post("/fixture/register", response_model=L2CanaryView)

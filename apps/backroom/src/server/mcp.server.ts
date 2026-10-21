@@ -2851,7 +2851,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_canonical_starter_fixture_preflight',
     {
       title: 'Get canonical starter fixture preflight',
-      description: 'Read exact public release and archive identity, current object integrity, reviewer provenance and readiness. Requires backroom:read.',
+      description: 'Read exact public release and archive identity, current object integrity, reviewer provenance and readiness. Includes operator-proof configuration presence in Platform and Backroom; an older Platform reports unknown. Presence does not establish a matching shared binding or authorize a write. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },

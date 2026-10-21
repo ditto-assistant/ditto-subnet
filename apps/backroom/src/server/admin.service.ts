@@ -544,6 +544,7 @@ import {
 import {
   PlatformAdminError,
   isPlatformPublicNotFound,
+  operatorProofConfigured,
   platformAdminBinaryRequest,
   platformAdminRequest,
   platformPublicRequest,
@@ -875,7 +876,15 @@ export async function fetchCanonicalStarterPreflight() {
   const payload = await platformAdminRequest(
     '/api/v1/admin/screener-l2-report-canaries/fixture/preflight',
   )
-  return canonicalStarterPreflightSchema.parse(payload)
+  const preflight = canonicalStarterPreflightSchema.parse(payload)
+  const backroomConfigured = operatorProofConfigured()
+  return {
+    ...preflight,
+    backroom_operator_proof_configured: backroomConfigured,
+    // Presence is advisory: neither service can infer that the values match.
+    operator_proof_match: 'not_verified' as const,
+    can_schedule: preflight.can_schedule && backroomConfigured && preflight.operator_proof_configured === true,
+  }
 }
 
 export async function registerCanonicalStarter(rawInput: unknown, actor: string) {

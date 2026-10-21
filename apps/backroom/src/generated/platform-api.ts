@@ -17352,6 +17352,31 @@ export interface components {
             scope: string;
             settings: components["schemas"]["BurnSettings"];
         };
+        /**
+         * CanonicalFixturePreflightView
+         * @description Public fixture identity and advisory readiness; no mutation authority.
+         */
+        CanonicalFixturePreflightView: {
+            /** Archive Sha256 */
+            archive_sha256: string;
+            /** Archive Size Bytes */
+            archive_size_bytes: number;
+            /** Can Schedule */
+            can_schedule: boolean;
+            fixture: components["schemas"]["L2CanaryView"] | null;
+            /** Fixture Capable Worker Ready */
+            fixture_capable_worker_ready: boolean;
+            /** Operator Proof Configured */
+            operator_proof_configured: boolean;
+            /** Release */
+            release: string;
+            /** Release Commit */
+            release_commit: string;
+            /** Source Tree */
+            source_tree: string;
+            /** Stored Object Matches */
+            stored_object_matches: boolean;
+        };
         /** CanonicalFixtureRegisterRequest */
         CanonicalFixtureRegisterRequest: {
             /**
@@ -46678,9 +46703,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["CanonicalFixturePreflightView"];
                 };
             };
             /** @description Validation Error */

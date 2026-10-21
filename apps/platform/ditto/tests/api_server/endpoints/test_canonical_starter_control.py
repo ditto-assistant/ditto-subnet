@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.l2_report_canary import (
@@ -34,6 +34,33 @@ from ditto.db.models import ScreenerHeartbeat, ScreenerNode
 
 SECRET = "fixture-proof-test-secret-with-32-bytes-minimum"
 BASE = "/api/v1/admin/screener-l2-report-canaries/fixture"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "secret, configured", [("", False), ("short", False), (SECRET, True)]
+)
+async def test_fixture_preflight_exposes_only_proof_configuration_presence(
+    monkeypatch: pytest.MonkeyPatch, secret: str, configured: bool
+) -> None:
+    monkeypatch.setenv("BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET", secret)
+    monkeypatch.setattr(
+        endpoints, "_fixture_object_matches", AsyncMock(return_value=False)
+    )
+    # No registered fixture: this read must not stage one or upload source.
+    scalar = AsyncMock(return_value=None)
+    session = cast(AsyncSession, SimpleNamespace(scalar=scalar))
+    response = Response()
+    view = await endpoints.get_canonical_fixture_preflight(
+        response, None, session, cast(S3StorageClient, object())
+    )
+    assert view.operator_proof_configured is configured
+    assert view.can_schedule is False
+    assert view.fixture is None
+    assert response.headers["Cache-Control"] == "no-store"
+    if secret:
+        assert secret not in view.model_dump_json()
+    scalar.assert_awaited_once()
 
 
 def _request(
@@ -251,6 +278,15 @@ async def test_fixture_requires_distinct_review_and_one_schedule(
             storage,
         )
     assert reviewed.status == "ready"
+    for secret, configured in [("", False), (SECRET, True)]:
+        monkeypatch.setenv("BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET", secret)
+        async with session_maker() as session:
+            preflight = await endpoints.get_canonical_fixture_preflight(
+                Response(), None, session, storage
+            )
+        assert preflight.operator_proof_configured is configured
+        assert preflight.can_schedule is configured
+    # Configuration presence does not weaken the separate actor checks below.
     schedule_body = {"confirm_report_only": True}
     schedule_path = f"{BASE}/{registered.canary_id}/schedule"
     async with session_maker() as session:

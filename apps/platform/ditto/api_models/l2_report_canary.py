@@ -141,6 +141,25 @@ class L2CanaryView(BaseModel):
     completed_at: datetime | None
 
 
+class CanonicalFixturePreflightView(BaseModel):
+    """Public fixture identity and advisory readiness; no mutation authority."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    release: str
+    release_commit: str
+    source_tree: str
+    archive_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    archive_size_bytes: Annotated[int, Field(gt=0)]
+    fixture: L2CanaryView | None
+    stored_object_matches: bool
+    fixture_capable_worker_ready: bool
+    # Presence only. Matching the Backroom binding still requires a valid
+    # authenticated proof; this flag does not authorize a write.
+    operator_proof_configured: bool
+    can_schedule: bool
+
+
 L2CanaryGuardName = Literal[
     "ath_clear_action",
     "attempt_owner",

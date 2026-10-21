@@ -86,6 +86,15 @@ plain or forged `X-Admin-Actor` strings. Both services require the same
 configuration disables fixture mutations. Provisioning that secret, any
 production setting change, and either live control are separate operator gates.
 
+The read-only `get_canonical_starter_fixture_preflight` reports
+`operator_proof_configured` for Platform and
+`backroom_operator_proof_configured` for Backroom. An older Platform reports
+`null`, never a presumed configured binding. These booleans reveal no secret
+and do not establish that the values match; `operator_proof_match` remains
+`not_verified`. Scheduling readiness requires both configured bindings in
+addition to the object, reviewer, and worker checks. A real mutation still
+requires its authenticated body-bound proof and independent actor checks.
+
 The managed provisioning path is staged separately from this fixture code:
 
 1. Apply the reviewed `backroom-platform-operator-proof` Secret Manager

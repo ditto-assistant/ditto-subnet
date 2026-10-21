@@ -606,6 +606,8 @@ export const canonicalStarterPreflightSchema = z.object({
   fixture: l2ReportCanaryViewSchema.nullable(),
   stored_object_matches: z.boolean(),
   fixture_capable_worker_ready: z.boolean(),
+  // An older Platform does not report this. Absence remains unknown.
+  operator_proof_configured: z.boolean().nullable().optional().default(null),
   can_schedule: z.boolean(),
 })
 
