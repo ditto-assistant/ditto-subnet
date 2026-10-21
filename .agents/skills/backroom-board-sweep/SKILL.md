@@ -35,7 +35,12 @@ front-load artifact downloads.
 4. **Precedents first.** `search_ath_precedents` with the full hotkey or agent
    name. Results routinely overflow the tool output; parse the saved JSON with
    `python3 -c` instead of paging it. Find the latest ruled sibling and its
-   charged mechanism.
+   charged mechanism. Also check the existing local precedent store and
+   Peyton's relevant miner DMs under
+   [miner-communication precedents](../backroom-review/references/miner-communication-precedents.md).
+   Reconcile the exact assurance, clarification or reversal before ruling;
+   record verified additions in the existing store, without publishing private
+   conversations or unresolved findings.
 5. **Diff against the ruled sibling.** `get_lineage_source_diff` (add `path` for
    one file). If the diff removes exactly the charged mechanism and the other
    files are byte-identical to an artifact whose other paths were already read,
