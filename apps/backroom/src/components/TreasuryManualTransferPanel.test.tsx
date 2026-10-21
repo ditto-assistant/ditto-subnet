@@ -228,3 +228,21 @@ it('accepts an empty journal observation without authorizing a transfer', () => 
     expect(manualControlSchema.safeParse({ ...control, readiness: { ...readiness, after_operation: value } }).success).toBe(false)
   }
 })
+
+it('shows verified delivery separately from incomplete source attribution without resending', () => {
+  const state = manualControlSchema.parse({ ...control,
+    blocked_reason: 'A previous transfer or its public receipt is still pending',
+    requests: [{ request_id: result.envelope.request.request_id, envelope: result.envelope,
+      status: 'audit_pending', actor: 'operator@example.com', last_error: null,
+      receipt: { receipt_id: 'c'.repeat(64), extrinsic_hash: '0x' + 'd'.repeat(64),
+        published: true, source_attribution: 'incomplete' } }],
+  })
+  render(<TreasuryManualTransferPanel initialState={state} readOnly={false} />)
+  expect(screen.getByText(/Public wallet receipt published/)).toBeTruthy()
+  expect(screen.getByText(/do not resend this transfer/)).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'View transaction on Taostats' })).toHaveAttribute(
+    'href', 'https://taostats.io/extrinsic/0x' + 'd'.repeat(64),
+  )
+  expect(queue).not.toHaveBeenCalled()
+  expect(preview).not.toHaveBeenCalled()
+})
