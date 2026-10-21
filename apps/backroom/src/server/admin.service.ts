@@ -872,18 +872,31 @@ export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
   return l2ReportCanaryViewSchema.parse(payload)
 }
 
-export async function fetchCanonicalStarterPreflight() {
+export async function fetchCanonicalStarterPreflight(actor: string) {
   const payload = await platformAdminRequest(
     '/api/v1/admin/screener-l2-report-canaries/fixture/preflight',
   )
   const preflight = canonicalStarterPreflightSchema.parse(payload)
   const backroomConfigured = operatorProofConfigured()
+  let match: 'not_verified' | 'verified' | 'rejected' | 'unavailable' = 'not_verified'
+  if (backroomConfigured && preflight.operator_proof_configured === true) {
+    try {
+      const proof = await platformAdminRequest(
+        '/api/v1/admin/screener-l2-report-canaries/fixture/operator-proof/preflight',
+        { method: 'POST', actor, operatorProof: true, body: {} },
+      )
+      z.object({ verified: z.literal(true) }).parse(proof)
+      match = 'verified'
+    } catch (error) {
+      if (error instanceof PlatformAdminError && error.status === 403) match = 'rejected'
+      else match = 'unavailable'
+    }
+  }
   return {
     ...preflight,
     backroom_operator_proof_configured: backroomConfigured,
-    // Presence is advisory: neither service can infer that the values match.
-    operator_proof_match: 'not_verified' as const,
-    can_schedule: preflight.can_schedule && backroomConfigured && preflight.operator_proof_configured === true,
+    operator_proof_match: match,
+    can_schedule: preflight.can_schedule && match === 'verified',
   }
 }
 

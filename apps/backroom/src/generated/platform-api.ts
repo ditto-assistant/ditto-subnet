@@ -2612,6 +2612,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-l2-report-canaries/fixture/operator-proof/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Canonical Fixture Operator Proof
+         * @description Check a body-bound authenticated proof without touching fixture state.
+         */
+        post: operations["verify_canonical_fixture_operator_proof_api_v1_admin_screener_l2_report_canaries_fixture_operator_proof_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-l2-report-canaries/fixture/preflight": {
         parameters: {
             query?: never;
@@ -46673,6 +46693,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["L2CanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_canonical_fixture_operator_proof_api_v1_admin_screener_l2_report_canaries_fixture_operator_proof_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
                 };
             };
             /** @description Validation Error */

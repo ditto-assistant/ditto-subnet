@@ -2851,11 +2851,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_canonical_starter_fixture_preflight',
     {
       title: 'Get canonical starter fixture preflight',
-      description: 'Read exact public release and archive identity, current object integrity, reviewer provenance and readiness. Includes operator-proof configuration presence in Platform and Backroom; an older Platform reports unknown. Presence does not establish a matching shared binding or authorize a write. Requires backroom:read.',
+      description: 'Read exact public release and archive identity, current object integrity, reviewer provenance and readiness. Includes operator-proof configuration presence in Platform and Backroom; an older Platform reports unknown. When both are configured, a separate authenticated read-only probe verifies the binding. Rejected, unavailable or unverified proof cannot report scheduling readiness. No fixture mutation or write authority. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },
-    async () => result(await fetchCanonicalStarterPreflight()),
+    async () => result(await fetchCanonicalStarterPreflight(props.session.email)),
   )
 
   registerTool(

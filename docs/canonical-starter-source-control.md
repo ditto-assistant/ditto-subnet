@@ -90,9 +90,13 @@ The read-only `get_canonical_starter_fixture_preflight` reports
 `operator_proof_configured` for Platform and
 `backroom_operator_proof_configured` for Backroom. An older Platform reports
 `null`, never a presumed configured binding. These booleans reveal no secret
-and do not establish that the values match; `operator_proof_match` remains
-`not_verified`. Scheduling readiness requires both configured bindings in
-addition to the object, reviewer, and worker checks. A real mutation still
+and do not establish that the values match. When both are configured, Backroom
+sends a body-bound proof to the separate read-only
+`POST /fixture/operator-proof/preflight` endpoint, which never reads or writes
+fixture state. Only a successful authenticated probe reports
+`operator_proof_match: verified`; rejection or unavailable verification keeps
+scheduling readiness false. Scheduling readiness also requires the object,
+reviewer, and worker checks. A real mutation still
 requires its authenticated body-bound proof and independent actor checks.
 
 The managed provisioning path is staged separately from this fixture code:

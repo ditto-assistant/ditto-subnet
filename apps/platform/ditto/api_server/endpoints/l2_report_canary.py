@@ -1278,6 +1278,15 @@ async def _schedule_l2_report_canary(
         return _view(row)
 
 
+@admin_router.post("/fixture/operator-proof/preflight")
+async def verify_canonical_fixture_operator_proof(
+    request: Request, _admin: AdminDep
+) -> dict[str, bool]:
+    """Check a body-bound authenticated proof without touching fixture state."""
+    await require_operator_proof(request)
+    return {"verified": True}
+
+
 @admin_router.get("/fixture/preflight", response_model=CanonicalFixturePreflightView)
 async def get_canonical_fixture_preflight(
     response: Response,

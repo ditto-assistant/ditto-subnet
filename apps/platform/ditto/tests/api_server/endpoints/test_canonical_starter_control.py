@@ -117,6 +117,30 @@ def test_rollback_refuses_to_drop_registered_fixture_audit(
 
 
 @pytest.mark.asyncio
+async def test_read_only_fixture_probe_requires_valid_body_bound_operator_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET", SECRET)
+    path = f"{BASE}/operator-proof/preflight"
+    # No session or storage dependency: the probe cannot stage or alter a fixture.
+    assert await endpoints.verify_canonical_fixture_operator_proof(
+        _request(path, {}, "reader@omniaura.ai"), None
+    ) == {"verified": True}
+    with pytest.raises(HTTPException) as rejected:
+        await endpoints.verify_canonical_fixture_operator_proof(
+            _request(path, {}, "reader@omniaura.ai", proof_actor="other@omniaura.ai"),
+            None,
+        )
+    assert rejected.value.status_code == 403
+    monkeypatch.delenv("BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET")
+    with pytest.raises(HTTPException) as unavailable:
+        await endpoints.verify_canonical_fixture_operator_proof(
+            _request(path, {}, "reader@omniaura.ai"), None
+        )
+    assert unavailable.value.status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_operator_proof_rejects_forged_actor_and_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
