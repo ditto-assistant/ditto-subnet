@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
+from ditto.api_models.treasury_movement import TreasuryMovementSelector
 from ditto.chain.errors import ChainConnectionError, TreasuryReceiptReadProgress
 from ditto.chain.runtime_interface import (
     TREASURY_RECEIPT_SURFACE,
@@ -214,7 +215,7 @@ async def finalized_block(
 
 async def read_treasury_chain_proof(
     substrate: Any,
-    selector: TreasuryReceiptSelector,
+    selector: TreasuryReceiptSelector | TreasuryMovementSelector,
     policy: TreasuryEmissionPolicy,
     *,
     sender: str,
@@ -318,11 +319,14 @@ async def read_treasury_chain_proof(
         if credit is None:
             raise ValueError("liquid collector credit absent")
 
-    elif (
+    elif isinstance(selector, TreasuryReceiptSelector) and (
         chain_uint(await read("SubtensorModule", "SubnetEpochIndex", [118], at))
         != selector.epoch_index
     ):
         raise ValueError("vendor payment differs from historical policy epoch")
+    # A TreasuryMovementSelector makes no epoch/earnings allocation claim.
+    # Its signed historical wallet anchor was checked above; the exact payment
+    # origin, runtime and successful amount/destination effect still follow.
 
     progress.phase = "payment_extrinsic"
     raw = await substrate.rpc_request("chain_getBlock", [at])

@@ -6557,6 +6557,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/treasury-activity/manual-movements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Manual Movements
+         * @description Independent delivery proof while source allocation remains unverified.
+         *
+         *     No inbox assertion is public: only proof produced by the canonical chain
+         *     reader. Full ingress atomically replaces this projection with its complete
+         *     receipt in the ordinary feed. No actor, reason, approvals or billing data.
+         */
+        get: operations["list_manual_movements_api_v1_public_treasury_activity_manual_movements_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/treasury-allocation": {
         parameters: {
             query?: never;
@@ -31428,6 +31452,65 @@ export interface components {
             sampler: components["schemas"]["TreasuryLedgerSamplerStatus"];
             totals: components["schemas"]["TreasuryLedgerTotals"];
         };
+        /** PublicTreasuryMovement */
+        PublicTreasuryMovement: {
+            /** Block */
+            block: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Bucket Id */
+            bucket_id: string;
+            /** Credited Usd Nano */
+            credited_usd_nano?: null;
+            /** Deposit Amount Atomic */
+            deposit_amount_atomic: string;
+            /**
+             * Deposit Asset
+             * @default SN118_ALPHA
+             * @constant
+             */
+            deposit_asset: "SN118_ALPHA";
+            /**
+             * Event At
+             * Format: date-time
+             */
+            event_at: string;
+            /** Event Index */
+            event_index: number;
+            /**
+             * Event Kind
+             * @default wallet_transfer
+             * @constant
+             */
+            event_kind: "wallet_transfer";
+            /** Extrinsic Hash */
+            extrinsic_hash: string;
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /** Payment Id */
+            payment_id: string;
+            /** Public Recipient */
+            public_recipient: string;
+            /** Public Sender */
+            public_sender: string;
+            /**
+             * Source Attribution
+             * @default incomplete
+             * @constant
+             */
+            source_attribution: "incomplete";
+            /**
+             * State
+             * @default chain_finalized
+             * @constant
+             */
+            state: "chain_finalized";
+        };
+        /** PublicTreasuryMovementPage */
+        PublicTreasuryMovementPage: {
+            /** Items */
+            items: components["schemas"]["PublicTreasuryMovement"][];
+        };
         /**
          * PublicTreasuryRuntime
          * @description Recorded control only; no chain dispatch, payment or signer authority.
@@ -53625,6 +53708,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_manual_movements_api_v1_public_treasury_activity_manual_movements_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicTreasuryMovementPage"];
                 };
             };
         };

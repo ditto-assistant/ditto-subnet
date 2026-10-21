@@ -42,3 +42,37 @@ it("separates unavailable receipts from a verified empty feed", async () => {
   await screen.findByText(/Payment status is unknown/);
   expect(screen.queryByText(/No finalized/)).not.toBeInTheDocument();
 });
+
+it("publishes verified delivery while clearly withholding source attribution", async () => {
+  vi.mocked(getJSON).mockImplementation(async (path) => ({
+    items: String(path).includes("manual-movements")
+      ? [
+          {
+            payment_id: "movement-only",
+            bucket_id: "gm",
+            event_kind: "wallet_transfer",
+            event_at: "2026-10-21T04:00:00Z",
+            state: "chain_finalized",
+            public_sender: "collector",
+            public_recipient: "holding",
+            deposit_amount_atomic: "500000000000",
+            deposit_asset: "SN118_ALPHA",
+            credited_usd_nano: null,
+            source_attribution: "incomplete",
+            block_hash: "canonical-block",
+            extrinsic_index: 5,
+            extrinsic_hash: "verified-500",
+          },
+        ]
+      : [],
+  }));
+  render(() => <GammaReceiptFeed />);
+  expect(await screen.findByRole("link", { name: "verified-500" })).toHaveAttribute(
+    "href",
+    "https://taostats.io/extrinsic/verified-500",
+  );
+  expect(screen.getByText(/500 SN118_ALPHA/)).toBeInTheDocument();
+  expect(screen.getByText(/Source earnings attribution incomplete/)).toBeInTheDocument();
+  expect(screen.getByText("GM credits not proven")).toBeInTheDocument();
+  expect(screen.queryByText(/No finalized/)).not.toBeInTheDocument();
+});

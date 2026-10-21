@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from pylon_client.artanis import AsyncPylonClient
 
     from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
+    from ditto.api_models.treasury_movement import TreasuryMovementSelector
     from ditto.chain.runtime_interface_report import RuntimeInterfaceReport
     from ditto.chain.treasury_receipts import TreasuryChainProof
 
@@ -614,7 +615,7 @@ class ChainClient:
 
     async def get_treasury_receipt_proof(
         self,
-        selector: TreasuryReceiptSelector,
+        selector: TreasuryReceiptSelector | TreasuryMovementSelector,
         policy: TreasuryEmissionPolicy,
         *,
         sender: str,

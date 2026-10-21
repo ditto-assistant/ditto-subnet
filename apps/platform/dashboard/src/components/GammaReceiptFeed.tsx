@@ -17,6 +17,7 @@ interface Receipt {
   block_hash: string;
   extrinsic_index: number;
   extrinsic_hash: string | null;
+  source_attribution?: "incomplete";
 }
 
 function amount(value: string): string {
@@ -29,7 +30,25 @@ function amount(value: string): string {
 
 export function GammaReceiptFeed(): JSX.Element {
   const feed = useEndpoint<{ items: Receipt[] }>("/public/treasury-activity?limit=10");
+  const movements = useEndpoint<{ items: Receipt[] }>("/public/treasury-activity/manual-movements");
   const verifiedFeed = () => !feed.error() && Array.isArray(feed.data()?.items);
+  const verifiedMovements = () => !movements.error() && Array.isArray(movements.data()?.items);
+  const receipts = () => {
+    const items = [
+      ...(verifiedFeed() ? feed.data()!.items : []),
+      ...(verifiedMovements() ? movements.data()!.items : []),
+    ];
+    const seen = new Set<string>();
+    return items
+      .sort((a, b) => b.event_at.localeCompare(a.event_at))
+      .filter((item) => {
+        const key = item.extrinsic_hash || item.payment_id;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 10);
+  };
   return (
     <section class="gamma-policy" aria-label="Finalized wallet receipts">
       <h3>Finalized wallet receipts</h3>
@@ -37,19 +56,34 @@ export function GammaReceiptFeed(): JSX.Element {
         Collector distributions and service payments are separate receipts. A chain transfer does
         not confirm GM credits.
       </p>
-      <Show when={feed.loading()}>
+      <Show when={feed.loading() || movements.loading()}>
         <p role="status">Loading wallet receipts…</p>
       </Show>
-      <Show when={!feed.loading() && !verifiedFeed()}>
-        <p>Wallet receipts could not be loaded. Payment status is unknown.</p>
-        <button class="btn" onClick={() => feed.refresh()}>
+      <Show
+        when={!feed.loading() && !movements.loading() && (!verifiedFeed() || !verifiedMovements())}
+      >
+        <p>
+          Some wallet receipts could not be loaded. Payment status is unknown for unavailable
+          records.
+        </p>
+        <button
+          class="btn"
+          onClick={() => {
+            void feed.refresh();
+            void movements.refresh();
+          }}
+        >
           Retry receipts
         </button>
       </Show>
-      <Show when={verifiedFeed()}>
+      <Show when={verifiedFeed() || verifiedMovements()}>
         <Show
-          when={feed.data()!.items.length}
-          fallback={<p>No finalized wallet receipts have been published.</p>}
+          when={receipts().length}
+          fallback={
+            <Show when={verifiedFeed() && verifiedMovements()}>
+              <p>No finalized wallet receipts have been published.</p>
+            </Show>
+          }
         >
           <div class="gamma-table-scroll">
             <table class="gamma-table">
@@ -63,7 +97,7 @@ export function GammaReceiptFeed(): JSX.Element {
                 </tr>
               </thead>
               <tbody>
-                <For each={feed.data()!.items}>
+                <For each={receipts()}>
                   {(item) => (
                     <tr>
                       <td>
@@ -84,6 +118,11 @@ export function GammaReceiptFeed(): JSX.Element {
                       </td>
                       <td class="gamma-address">
                         {item.state}
+                        <Show when={item.source_attribution === "incomplete"}>
+                          <small>
+                            Source earnings attribution incomplete — wallet transfer verified.
+                          </small>
+                        </Show>
                         <small>
                           Transaction:{" "}
                           <Show

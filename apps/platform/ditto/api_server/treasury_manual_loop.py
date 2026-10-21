@@ -16,6 +16,7 @@ from ditto.api_server.treasury_manual import (
     lock_manual,
     publish_audit,
 )
+from ditto.api_server.treasury_manual_movement import publish_finalized_movement
 from ditto.api_server.treasury_runtime import lock_runtime, treasury_runtime
 from ditto.chain.errors import ChainError
 from ditto.db.models import TreasuryManualTransfer as Transfer
@@ -131,6 +132,16 @@ class TreasuryManualLoop:
                 .limit(1)
             )
             if row:
+                # Commit independently verified delivery even when the source
+                # attribution audit below cannot finish. This never changes
+                # audit_pending, clears a spending fence or calls custody.
+                try:
+                    async with session.begin_nested():
+                        await publish_finalized_movement(session, self.state.chain, row)
+                except (ChainError, ReceiptHistoryUnavailable, ValueError):
+                    # The full ingress may still succeed for legacy requests.
+                    # Neither an unavailable nor contradictory read is a receipt.
+                    pass
                 try:
                     # A failed chain read rolls back only this attempt. Nothing
                     # invokes custody or resends funds to repair publication.
@@ -138,8 +149,8 @@ class TreasuryManualLoop:
                         await publish_audit(session, self.state.chain, row)
                 except (ChainError, ReceiptHistoryUnavailable):
                     row.last_error = (
-                        "Finalized receipt history temporarily unavailable; "
-                        "automatic audit retry pending"
+                        "Wallet transfer finalized; source attribution incomplete. "
+                        "Historical proof unavailable; automatic audit retry pending"
                     )
                 except ValueError:
                     row.last_error = (

@@ -10,10 +10,47 @@ from ditto.api_models.treasury_activity import (
     PublicTreasuryEvent,
     PublicTreasuryEventPage,
 )
+from ditto.api_models.treasury_movement import (
+    PublicTreasuryMovement,
+    PublicTreasuryMovementPage,
+)
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import TreasuryPublicEvent, TreasuryVerifiedReceipt
+from ditto.api_server.treasury_manual_movement import KIND
+from ditto.db.models import (
+    TreasuryManualTransfer,
+    TreasuryPublicEvent,
+    TreasuryVerifiedReceipt,
+)
 
 router = APIRouter(prefix="/public/treasury-activity", tags=["public"])
+
+
+@router.get("/manual-movements", response_model=PublicTreasuryMovementPage)
+async def list_manual_movements(
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> PublicTreasuryMovementPage:
+    """Independent delivery proof while source allocation remains unverified.
+
+    No inbox assertion is public: only proof produced by the canonical chain
+    reader. Full ingress atomically replaces this projection with its complete
+    receipt in the ordinary feed. No actor, reason, approvals or billing data.
+    """
+    rows = await session.scalars(
+        select(TreasuryManualTransfer)
+        .where(
+            TreasuryManualTransfer.status == "audit_pending",
+            TreasuryManualTransfer.receipt["proof_kind"].as_string() == KIND,
+        )
+        .order_by(TreasuryManualTransfer.created_at.desc())
+        .limit(20)
+    )
+    response.headers["Cache-Control"] = "public, max-age=5"
+    return PublicTreasuryMovementPage(
+        items=[
+            PublicTreasuryMovement.model_validate(r.receipt["movement"]) for r in rows
+        ]
+    )
 
 
 @router.get("", response_model=PublicTreasuryEventPage)

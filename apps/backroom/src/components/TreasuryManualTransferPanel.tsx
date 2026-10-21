@@ -99,6 +99,7 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
       <p>{alphaDisplay(r.envelope.request.amount_rao)} alpha → {r.envelope.request.bucket_id.toUpperCase()} · {statusLabels[r.status]}</p>
       <p className="break-all text-xs">Request {r.request_id} · {r.actor}</p>
       {r.last_error && <p>{r.last_error}</p>}
+      {r.receipt?.source_attribution === "incomplete" && <p>Public wallet receipt published. Source earnings attribution remains incomplete; do not resend this transfer.</p>}
       {r.receipt && <><p className="break-all font-mono text-xs">Transaction {r.receipt.extrinsic_hash}</p><a href={`https://taostats.io/extrinsic/${encodeURIComponent(r.receipt.extrinsic_hash)}`} target="_blank" rel="noreferrer">View transaction on Taostats</a></>}
     </li>)}</ul>
   </section>
