@@ -34,6 +34,7 @@ from ditto_screener.decision_path_prompt import (
     V13_BATCH_READS_GUIDANCE,
     V13_COVERAGE_NUDGE,
 )
+from ditto_screener.errors import model_output_contract
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.review_provider import (
@@ -129,7 +130,12 @@ def _note_from_arguments(arguments: Mapping[str, object]) -> dict[str, object] |
     """Validate one reviewer note host-side; None when unusable."""
     kind = arguments.get("kind")
     summary = arguments.get("summary")
-    if kind not in _NOTE_KINDS or not isinstance(summary, str) or not summary.strip():
+    if (
+        not isinstance(kind, str)
+        or kind not in _NOTE_KINDS
+        or not isinstance(summary, str)
+        or not summary.strip()
+    ):
         return None
     category = arguments.get("category")
     note: dict[str, object] = {
@@ -3777,14 +3783,14 @@ class OpenRouterSourceReviewAgent:
                 deadline=deadline,
                 notes=notes,
                 policy_version=policy_version,
-                validate_result=lambda value: _parse_review(
+                validate_result=lambda value: _parse_l1_review(
                     value,
                     artifact_sha256=artifact_sha256,
                     repository=repository,
                     policy_version=policy_version,
                 ),
             )
-            observation = _parse_review(
+            observation = _parse_l1_review(
                 result,
                 artifact_sha256=artifact_sha256,
                 repository=repository,
@@ -4772,6 +4778,16 @@ def _parse_review(
         categories=tuple(sorted(set(categories))),
         finding=finding.model_dump(mode="json"),
     )
+
+
+# The L1 reply and repair paths. A list or dict where a string belongs is the
+# same contract miss as any other invalid field, so it reaches the repair turn
+# and the stable ``inconsistent-verdict-fields`` code instead of escaping as an
+# unhashable-type TypeError (ditto-subnet#2987). Fanout calls ``_parse_review``
+# directly and keeps its own TypeError handling and messages.
+_parse_l1_review = model_output_contract("source review fields are invalid")(
+    _parse_review
+)
 
 
 def _bounded_json(value: object) -> str:

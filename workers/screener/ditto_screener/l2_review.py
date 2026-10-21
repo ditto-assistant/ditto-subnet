@@ -30,6 +30,7 @@ from ditto_screener.causal_evidence import (
     causal_summary,
     verify_causal_finding,
 )
+from ditto_screener.errors import model_output_contract
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.scored_runtime_evidence import fetch_runtime_evidence
 from ditto_screener.source_review import (
@@ -6921,6 +6922,7 @@ def _inconclusive_model_audit(
     }
 
 
+@model_output_contract("L2 result fields are invalid")
 def _parse_l2_review(
     value: object,
     *,
@@ -8050,6 +8052,7 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 result evidence collection is invalid": "inconsistent-verdict",
     "L2 result generator_components is invalid": "inconsistent-verdict",
     "L2 result has unexpected fields": "inconsistent-verdict",
+    "L2 result fields are invalid": "inconsistent-verdict",
     "L2 result resolution basis is invalid": "inconsistent-verdict",
     "L2 result risk is invalid": "inconsistent-verdict",
     "L2 result summary is invalid": "inconsistent-verdict",
@@ -8371,6 +8374,7 @@ def _l1_lead_packet(
     return tuple(result)
 
 
+@model_output_contract("L2 lead disposition shape is invalid")
 def _validate_lead_dispositions(
     value: object,
     *,

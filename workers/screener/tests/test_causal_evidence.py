@@ -950,3 +950,28 @@ def test_a_certified_v13_breach_names_the_confirmed_violation_code() -> None:
     assert _source_review_reason_for(uncertified, policy_version=13)[0] != (
         CONFIRMED_VIOLATION_CODE
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("disposition", ["safe"]),
+        ("risk_level", {"level": "low"}),
+        ("categories", [{"category": "none"}]),
+    ],
+)
+def test_parser_reports_unhashable_fields_as_contract_misses(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    # ditto-subnet#2987: a list or dict where a string belongs raised an
+    # unhashable-type TypeError that parked the review as infrastructure.
+    archive, artifact_sha, digest = _tar(tmp_path, "fn run() {}\nfn sink() {}\n")
+    review = _review_value(digest)
+    review[field] = value
+
+    with pytest.raises(ValueError):
+        _parse_l2_review(
+            review,
+            artifact_sha256=artifact_sha,
+            repository=TarSourceRepository(str(archive)),
+        )
