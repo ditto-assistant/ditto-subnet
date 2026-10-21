@@ -46,11 +46,12 @@ async def list_manual_movements(
         .limit(20)
     )
     response.headers["Cache-Control"] = "public, max-age=5"
-    return PublicTreasuryMovementPage(
-        items=[
-            PublicTreasuryMovement.model_validate(r.receipt["movement"]) for r in rows
-        ]
-    )
+    items = []
+    for row in rows:
+        if row.receipt is None:
+            raise ValueError("verified movement projection absent")
+        items.append(PublicTreasuryMovement.model_validate(row.receipt["movement"]))
+    return PublicTreasuryMovementPage(items=items)
 
 
 @router.get("", response_model=PublicTreasuryEventPage)
