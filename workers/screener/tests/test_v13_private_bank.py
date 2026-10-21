@@ -6,6 +6,7 @@ import hashlib
 import json
 import multiprocessing
 import os
+from multiprocessing.connection import Connection
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,9 +18,11 @@ from ditto_screening_protocol.v13_private_provision import (
 )
 
 
-def _load_nonregular_bank(root: Path) -> None:
+def _load_nonregular_bank(root: Path, ready: Connection) -> None:
     import asyncio
 
+    ready.send(True)
+    ready.close()
     try:
         asyncio.run(FileProtectedBlueprintBank(root).load())
     except PrivateProvisioningUnavailable:
@@ -181,15 +184,21 @@ def test_protected_bank_rejects_fifo_without_waiting_for_a_writer(
     os.mkfifo(path, mode=0o600)
     # Bound the child as well as the async operation: a thread blocked in
     # open() cannot be cancelled by asyncio and would otherwise hang pytest.
-    process = multiprocessing.get_context("spawn").Process(
-        target=_load_nonregular_bank, args=(root,)
-    )
+    context = multiprocessing.get_context("spawn")
+    ready, child_ready = context.Pipe(duplex=False)
+    process = context.Process(target=_load_nonregular_bank, args=(root, child_ready))
     process.start()
+    child_ready.close()
     try:
+        # Starting a fresh interpreter can be slow under the full suite. Start
+        # the I/O deadline only after the child has imported the loader.
+        assert ready.poll(30), "bank loader child did not start"
+        assert ready.recv() is True
         process.join(timeout=5)
         assert not process.is_alive(), "bank loader blocked opening a FIFO"
         assert process.exitcode == 0
     finally:
+        ready.close()
         if process.is_alive():
             process.kill()
             process.join(timeout=5)
