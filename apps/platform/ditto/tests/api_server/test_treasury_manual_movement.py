@@ -1,6 +1,7 @@
 """Real SQL + canonical chain decoder; missing allocation never becomes proof."""
 
 import time
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -98,6 +99,50 @@ async def test_canonical_movement_publishes_without_claiming_allocation_or_sendi
     assert "PRIVATE" not in response.text
     assert "source_claims" not in item and "allocation_bps" not in item
     assert response.headers["Cache-Control"] == "public, max-age=5"
+
+
+@pytest.mark.parametrize("invalid_payment", [False, True])
+async def test_loop_backfills_prior_refusal_without_retrying_source_or_custody(
+    app, client, session_maker, monkeypatch, invalid_payment
+):
+    from ditto.api_server import treasury_manual_loop as module
+
+    request_id, rpc = await seed_movement(app, session_maker)
+    refusal = "Finalized receipt proof refused; operator review required"
+    async with session_maker() as session, session.begin():
+        row = await session.get(TreasuryManualTransfer, request_id)
+        row.last_error = refusal
+    if invalid_payment:
+        rpc.transfer_events[-1]["event"]["attributes"][3] = 41
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("refused source audit/custody must not be retried")
+
+    monkeypatch.setattr(module, "publish_audit", forbidden)
+    calls = []
+
+    async def checked_movement(*args):
+        calls.append(True)
+        return await publish_finalized_movement(*args)
+
+    monkeypatch.setattr(module, "publish_finalized_movement", checked_movement)
+    loop = module.TreasuryManualLoop(
+        app.state,
+        mailbox=SimpleNamespace(pull=lambda: None, publish=forbidden, ack=forbidden),
+    )
+    await loop.sweep()
+    await loop.sweep()
+    async with session_maker() as session:
+        row = await session.get(TreasuryManualTransfer, request_id)
+        assert row.status == "audit_pending" and row.last_error == refusal
+        assert bool(row.receipt) is not invalid_payment
+        assert await session.scalar(select(TreasuryVerifiedReceipt.receipt_id)) is None
+    public = (
+        await client.get("/api/v1/public/treasury-activity/manual-movements")
+    ).json()["items"]
+    assert len(public) == (0 if invalid_payment else 1)
+    # Success is retained once; unavailable/invalid proof never becomes a receipt.
+    assert len(calls) == (2 if invalid_payment else 1)
 
 
 @pytest.mark.parametrize(

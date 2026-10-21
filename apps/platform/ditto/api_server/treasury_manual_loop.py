@@ -116,6 +116,28 @@ class TreasuryManualLoop:
                         await asyncio.to_thread(self.mailbox.publish, row.envelope)
                         row.status = "dispatched"
                     row.updated_at = datetime.now(UTC)
+        # A prior source-audit refusal must not prevent an independently
+        # verified wallet movement. Backfill only absent receipts, without
+        # changing that refusal or retrying custody/full source attribution.
+        async with self.state.session_maker() as session, session.begin():
+            row = await session.scalar(
+                select(Transfer)
+                .where(
+                    Transfer.status == "audit_pending",
+                    Transfer.receipt.is_(None),
+                )
+                .order_by(Transfer.created_at)
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
+            if row:
+                try:
+                    async with session.begin_nested():
+                        await publish_finalized_movement(session, self.state.chain, row)
+                except (ChainError, ReceiptHistoryUnavailable, ValueError):
+                    # Failed/contradictory reads cannot publish or erase the
+                    # existing source-audit refusal. A later read may recover.
+                    pass
         async with self.state.session_maker() as session, session.begin():
             row = await session.scalar(
                 select(Transfer)
