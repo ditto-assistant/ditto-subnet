@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from ditto.api_server.treasury_ingress import ReceiptHistoryUnavailable
 from ditto.api_server.treasury_manual import (
-    ACTIVE,
+    UNSETTLED,
     InvalidManualReport,
     accept_report,
     lock_manual,
@@ -73,15 +73,15 @@ class TreasuryManualLoop:
         async with self.state.session_maker() as session, session.begin():
             await lock_runtime(session)
             await lock_manual(session)
+            # audit_pending rows already finalized; their audit continues below
+            # and must not hold a later, independently admitted request.
             row = await session.scalar(
                 select(Transfer)
-                .where(Transfer.status.in_(ACTIVE))
+                .where(Transfer.status.in_(UNSETTLED))
                 .order_by(Transfer.created_at)
                 .limit(1)
             )
-            if row is None:
-                return
-            if row.status == "queued":
+            if row is not None and row.status == "queued":
                 runtime = await treasury_runtime(session, self.state.config)
                 if not runtime.treasury_weight_enforcement or (
                     runtime.treasury_approved_collector_policy_digest

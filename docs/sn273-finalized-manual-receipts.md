@@ -18,8 +18,21 @@ The public `/api/v1/public/treasury-activity/manual-movements` feed returns only
 verified movement fields, marked `source_attribution: incomplete`, with no actor,
 audit reason, billing identity or free-form proof. Gamma displays this status and
 the Taostats transaction link. GM credits remain unproven. Backroom continues to
-show `audit_pending` and blocks another request until the full source audit is
-resolved. A public wallet receipt is not an approved source distribution.
+show `audit_pending`. A public wallet receipt is not an approved source distribution.
+
+## Delivery fence
+
+`audit_pending` alone still blocks another request. Once the row's retained
+movement proof re-validates against its own finalized report coordinates,
+destination, amount and digests, delivery is settled: a later request may be
+previewed after custody observes the completed claim (its readiness
+`after_operation` must move past the request's). Source attribution stays
+pending and is never retried after a refusal; custody's journal, not Platform,
+fences reuse of source entitlement. Dispatch selects only unsettled
+(`queued`/`dispatched`/`pending`) rows, so an old audit cannot hold a new one.
+Absent or altered movement proofs keep the fence closed. Missing epoch
+snapshots are past and never reappear, so this is the only path that lets an
+aggregate transfer that spans them stop blocking new transfers.
 
 Full ingress still requires every immutable source epoch, independent finalized
 source events, historical signed allocations and cumulative consumption bounds.

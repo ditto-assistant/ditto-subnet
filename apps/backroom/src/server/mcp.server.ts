@@ -3862,7 +3862,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
   registerTool(
     'get_treasury_receipt_preflight',
-    { title: 'Preflight exact finalized treasury receipt', description: 'Read-only exact historical policy, destination, finalized runtime and effect validation with sanitized archive checkpoint on failure. No receipt publication, allocation reservation, signing or provider credit. Ingress repeats all checks. Requires backroom:read.', inputSchema: { selectorJson: z.string().min(2).max(4096).describe('Exact receipt selector JSON; no secrets.') }, annotations: toolAnnotations('read') },
+    { title: 'Preflight exact finalized treasury receipt', description: 'Read-only exact historical policy, destination, finalized runtime and effect validation with sanitized archive checkpoint on failure. No receipt publication, allocation reservation, signing or provider credit. Ingress repeats all checks. Requires backroom:read.', inputSchema: { selectorJson: z.string().min(2).max(65536).describe('Exact receipt selector JSON (with source_claims); no secrets.') }, annotations: toolAnnotations('read') },
     async (input) => result(await fetchTreasuryReceiptPreflight(JSON.parse(input.selectorJson))),
   )
   registerTool(

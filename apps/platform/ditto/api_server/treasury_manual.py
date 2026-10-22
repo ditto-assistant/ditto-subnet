@@ -12,6 +12,7 @@ from ditto.api_models.treasury_ingress import (
     TreasurySourceClaim,
 )
 from ditto.api_server.treasury_ingress import ingest_receipt
+from ditto.api_server.treasury_manual_movement import verified_movement_payload
 from ditto.api_server.treasury_runtime import lock_runtime, treasury_runtime
 from ditto.db.models import TreasuryManualBridgeState as BridgeState
 from ditto.db.models import TreasuryManualTransfer as Transfer
@@ -25,7 +26,10 @@ from ditto_screening_protocol.treasury_manual import (
     parse_manual_envelope,
 )
 
-ACTIVE = ("queued", "dispatched", "pending", "audit_pending")
+# Requests whose custody delivery is still unresolved. audit_pending already
+# carries a finalized custody report; its delivery is resolved only once the
+# wallet movement is independently verified (see delivery_verified).
+UNSETTLED = ("queued", "dispatched", "pending")
 OBSERVATION_BLOCKERS = {
     "runtime_changed": (
         "Finney runtime changed; custody audit and offline approval required"
@@ -45,6 +49,38 @@ def readiness_is_fresh(observed_at):
 
 async def lock_manual(session):
     await session.execute(text("SELECT pg_advisory_xact_lock(118,2749)"))
+
+
+def delivery_verified(row) -> bool:
+    """True only for an exact, independently decoded finalized wallet movement.
+
+    Source attribution may remain incomplete forever (absent immutable epoch
+    snapshots are never reconstructed). That is a publication gap, not delivery
+    ambiguity: the movement proof binds this request's finalized coordinates,
+    destination and amount, and custody's own journal fences source reuse.
+    """
+    if row.status != "audit_pending" or row.receipt is None:
+        return False
+    try:
+        movement = verified_movement_payload(row.receipt)
+        envelope = parse_manual_envelope(row.envelope)
+        report = ManualReport.model_validate(row.report)
+    except ValueError:
+        return False
+    settlement = report.settlement
+    return (
+        report.status == "finalized"
+        and settlement is not None
+        and row.digest == envelope.digest == report.request_digest
+        and report.request_id == envelope.request.request_id == row.request_id
+        and movement.extrinsic_hash == settlement.extrinsic_hash
+        and movement.block_hash == settlement.block_hash
+        and movement.block == settlement.block
+        and movement.extrinsic_index == settlement.extrinsic_index
+        and movement.public_recipient == envelope.destination
+        and movement.deposit_amount_atomic == str(envelope.request.amount_rao)
+        and movement.bucket_id == envelope.request.bucket_id
+    )
 
 
 def transfer_result(row):
@@ -93,10 +129,18 @@ async def state(session, config, *, enabled):
                 blocked = None
     if enabled and not runtime.treasury_weight_enforcement:
         blocked = "Gamma is paused"
+    audited = list(
+        await session.scalars(
+            select(Transfer).where(Transfer.status == "audit_pending")
+        )
+    )
+    delivered = [r for r in audited if delivery_verified(r)]
+    if enabled and len(delivered) != len(audited):
+        blocked = "A previous transfer or its public receipt is still pending"
     if enabled and await session.scalar(
         select(Transfer.request_id)
         .where(
-            Transfer.status.in_(ACTIVE)
+            Transfer.status.in_(UNSETTLED)
             | (
                 (
                     (Transfer.status == "failed")
@@ -111,14 +155,20 @@ async def state(session, config, *, enabled):
         .limit(1)
     ):
         blocked = "A previous transfer or its public receipt is still pending"
-    if readiness and await session.scalar(
-        select(Transfer.request_id)
-        .where(
-            Transfer.status == "published",
-            Transfer.envelope["request"]["after_operation"].as_integer()
-            >= readiness.after_operation,
+    if readiness and (
+        await session.scalar(
+            select(Transfer.request_id)
+            .where(
+                Transfer.status == "published",
+                Transfer.envelope["request"]["after_operation"].as_integer()
+                >= readiness.after_operation,
+            )
+            .limit(1)
         )
-        .limit(1)
+        or any(
+            r.envelope["request"]["after_operation"] >= readiness.after_operation
+            for r in delivered
+        )
     ):
         blocked = "Waiting for custody to observe the completed claim"
     if readiness and not readiness.bounded_claim_available:

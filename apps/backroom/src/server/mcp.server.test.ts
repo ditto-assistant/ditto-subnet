@@ -128,8 +128,17 @@ describe('Backroom MCP tools', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1)
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/api/v1/admin/treasury-receipts/preflight')
-      expect(JSON.parse(String(init.body))).toEqual(selection)
+      expect(JSON.parse(String(init.body))).toEqual({ ...selection, source_claims: [] })
       expect(init.headers).not.toHaveProperty('X-Admin-Actor')
+      // An aggregate manual transfer must reach Platform with every source claim.
+      const source_claims = [
+        { source_block: 100, amount_rao: 10, epoch_index: 9 },
+        { source_block: 110, amount_rao: 15, epoch_index: 10 },
+      ]
+      await readonly.client.callTool({ name: 'get_treasury_receipt_preflight', arguments: {
+        selectorJson: JSON.stringify({ ...selection, source_claims }) } })
+      const [, aggregate] = fetchMock.mock.calls[1] as [string, RequestInit]
+      expect(JSON.parse(String(aggregate.body))).toEqual({ ...selection, source_claims })
     } finally { await readonly.client.close(); await readonly.server.close() }
   })
 

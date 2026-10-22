@@ -12,6 +12,7 @@ from ditto.api_server.treasury_aggregate import aggregate_receipt
 from ditto.api_server.treasury_ingress import ReceiptHistoryUnavailable
 from ditto.api_server.treasury_manual_movement import publish_finalized_movement
 from ditto.db.models import (
+    TreasuryManualBridgeState,
     TreasuryManualTransfer,
     TreasuryPublicEvent,
     TreasuryVerifiedReceipt,
@@ -299,3 +300,154 @@ async def test_malformed_cached_json_is_a_controlled_refusal(
         row.receipt = cached
         with pytest.raises(ValueError, match="verified manual movement proof required"):
             await publish_finalized_movement(session, None, row)
+
+
+def readiness_report(digest, destination, after_operation):
+    return ManualReport(
+        collector_policy_digest=digest,
+        observed_at=int(time.time()),
+        status="readiness",
+        readiness={
+            "policy": digest,
+            "after_operation": after_operation,
+            "previous_state": "finalized",
+            "bounded_claim_available": True,
+            "finalized_block": 1000,
+            "available_alpha_rao": 1000,
+            "max_distribution_rao": 100,
+            "sources": [
+                {
+                    "source_block": 111,
+                    "remaining": [
+                        {
+                            "bucket_id": "gamma",
+                            "holding_coldkey": destination,
+                            "alpha_rao": 50,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+
+@pytest.mark.parametrize("receipt", ["verified", "absent", "tampered"])
+async def test_verified_wallet_movement_releases_delivery_fence_not_source_audit(
+    app, session_maker, monkeypatch, receipt
+):
+    """An unattributable source audit must not strand every later transfer.
+
+    Delivery is settled by the independently decoded movement; the row stays
+    audit_pending with its refusal and custody/source audit is never retried.
+    """
+    from ditto.api_models.treasury_manual import ManualPreviewInput, ManualSubmitInput
+    from ditto.api_server import treasury_manual as manual
+    from ditto.api_server import treasury_manual_loop as loop_module
+    from ditto_screening_protocol.treasury import TreasuryEmissionBucket
+
+    request_id, _ = await seed_movement(app, session_maker)
+    refusal = "Finalized receipt proof refused; operator review required"
+    async with session_maker() as session, session.begin():
+        row = await session.get(TreasuryManualTransfer, request_id)
+        if receipt != "absent":
+            await publish_finalized_movement(session, app.state.chain, row)
+        if receipt == "tampered":
+            row.receipt = {**row.receipt, "extrinsic_hash": "0x" + "e" * 64}
+        row.last_error = refusal
+        envelope = ManualEnvelope.model_validate(row.envelope)
+    digest, destination = envelope.collector_policy_digest, envelope.destination
+    runtime = SimpleNamespace(
+        treasury_weight_enforcement=True,
+        treasury_approved_collector_policy_digest=digest,
+        treasury_shadow_policy=SimpleNamespace(
+            buckets=[
+                TreasuryEmissionBucket(
+                    bucket_id="gamma", allocation_bps=1000, holding_coldkey=destination
+                )
+            ]
+        ),
+    )
+
+    async def read(*_):
+        return runtime
+
+    monkeypatch.setattr(manual, "treasury_runtime", read)
+    monkeypatch.setattr(loop_module, "treasury_runtime", read)
+
+    async def observe(after_operation):
+        async with session_maker() as session, session.begin():
+            bridge = await session.get(TreasuryManualBridgeState, 1)
+            if bridge is not None:
+                await session.delete(bridge)
+        async with session_maker() as session, session.begin():
+            await manual.accept_report(
+                session,
+                None,
+                readiness_report(digest, destination, after_operation).model_dump(),
+            )
+        async with session_maker() as session:
+            return (await manual.state(session, None, enabled=True))["blocked_reason"]
+
+    # Custody has not yet journaled the completed claim (after_operation=3).
+    expected = (
+        "Waiting for custody to observe the completed claim"
+        if receipt == "verified"
+        else "A previous transfer or its public receipt is still pending"
+    )
+    assert await observe(3) == expected
+    blocked = await observe(4)
+    if receipt != "verified":
+        assert blocked == "A previous transfer or its public receipt is still pending"
+        return
+    assert blocked is None
+
+    async with session_maker() as session:
+        preview = await manual.preview(
+            session,
+            None,
+            ManualPreviewInput(
+                request_id=str(uuid4()),
+                bucket_id="gamma",
+                amount_rao=30,
+                retained_alpha_rao=100,
+                reason="second manual transfer",
+            ),
+            enabled=True,
+        )
+    async with session_maker() as session, session.begin():
+        queued = await manual.submit(
+            session,
+            None,
+            ManualSubmitInput(
+                envelope=preview["envelope"],
+                confirmation_digest=preview["confirmation_digest"],
+                confirmation="TRANSFER SN118 ALPHA ONCE",
+            ),
+            "operator@example.com",
+            enabled=True,
+        )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("refused source audit must not be retried")
+
+    published = []
+    monkeypatch.setattr(loop_module, "publish_audit", forbidden)
+    loop = loop_module.TreasuryManualLoop(
+        app.state,
+        mailbox=SimpleNamespace(
+            pull=lambda: None, publish=published.append, ack=forbidden
+        ),
+    )
+    await loop.sweep()
+    async with session_maker() as session:
+        old = await session.get(TreasuryManualTransfer, request_id)
+        new = await session.get(TreasuryManualTransfer, queued["request_id"])
+        assert (old.status, old.last_error) == ("audit_pending", refusal)
+        assert new.status == "dispatched"
+        assert published == [new.envelope]
+        # The new request is itself unsettled: a third claim stays fenced.
+        view = await manual.state(session, None, enabled=True)
+        assert (
+            view["blocked_reason"]
+            == "A previous transfer or its public receipt is still pending"
+        )
