@@ -2844,6 +2844,48 @@ export const inferenceFailureTaxonomySchema = z.object({
   // Nothing is enforced, rerouted, or retried on it. Null (not []) when the
   // Platform predates the signal, so a rollout skew never reads as "no burst".
   rate_limit_bursts: z.array(inferenceRateLimitBurstSchema).nullish().default(null),
+
+  // The confirmation lane reads confirmation_inference_requests, which the
+  // chat/embedding taxonomy above does not touch at all. Without these fields
+  // Zod would strip them and an operator would keep reading a dying lane as a
+  // healthy one -- which is exactly what happened through 2026-10.
+  confirmation_window_seconds: z.array(z.number().int().positive()).default([]),
+  confirmation_lanes: z
+    .array(
+      z.object({
+        window_seconds: z.number().int().positive(),
+        lane: z.enum(['reader', 'judge', 'embedding']),
+        calls: z.number().int().nonnegative(),
+        settled: z.number().int().nonnegative(),
+        completed: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        in_flight: z.number().int().nonnegative(),
+        failed_without_provider: z.number().int().nonnegative(),
+        failed_without_cost: z.number().int().nonnegative(),
+        bundles_with_failure: z.number().int().nonnegative(),
+        failed_max_duration_ms: z.number().int().nonnegative(),
+        failed_p50_duration_ms: z.number().int().nonnegative(),
+        failure_share: z.number().nonnegative(),
+      }),
+    )
+    .default([]),
+  confirmation_groups: z
+    .array(
+      z.object({
+        window_seconds: z.number().int().positive(),
+        lane: z.enum(['reader', 'judge', 'embedding']),
+        model: z.string(),
+        upstream_provider: z.string().nullable(),
+        provider_basis: z.string(),
+        status: z.string(),
+        calls: z.number().int().nonnegative(),
+        without_cost: z.number().int().nonnegative(),
+        bundles_affected: z.number().int().nonnegative(),
+        max_duration_ms: z.number().int().nonnegative(),
+        p50_duration_ms: z.number().int().nonnegative(),
+      }),
+    )
+    .default([]),
 })
 
 export const runtimeProfileCaptureInputSchema = z
