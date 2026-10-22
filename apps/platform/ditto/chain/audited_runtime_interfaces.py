@@ -372,11 +372,85 @@ TREASURY_RECEIPT_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
             },
         ),
     ),
+    # v482: runtime 0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62
+    # at Finney block 9336443.
+    "9e0d036eb8e9b4ab3d7b28aa28c66bd0ec3770c36769826cda8fd814b5dbaf5d": (
+        "v482",
+        RuntimeInterface(
+            digest="9e0d036eb8e9b4ab3d7b28aa28c66bd0ec3770c36769826cda8fd814b5dbaf5d",
+            has_epoch_consensus=True,
+            entries={
+                "call:Balances.transfer_keep_alive": (
+                    "0a875148574539d3fd9562fd1e5f09e6042b7328a4b863c86b4d9176f5b8ea93"
+                ),
+                "call:Proxy.proxy": (
+                    "56004aef104299d673dc07550d1bbf1584b5b635536cc30065b2d45a4f1ecfcb"
+                ),
+                "call:SubtensorModule.transfer_stake": (
+                    "542151d4661a5b33adb69c7da721185bbcb6b85fb9bd92bd67f619bc91c4e469"
+                ),
+                "event:Balances.Transfer": (
+                    "e0cc39dea0605bc500cdb5e5bc1cdd57c031890ed0aaabfa220d4a490a935fed"
+                ),
+                "event:Proxy.ProxyExecuted": (
+                    "eaf709e6b8eebc1bdc339652b42f5340901cccdc079a9a433bb517ff452c008c"
+                ),
+                "event:SubtensorModule.AutoStakeAdded": (
+                    "9e20df097d0513fbda36a107f7773ee1896e7f44d598fd47a4f627b21f7a5def"
+                ),
+                "event:SubtensorModule.IncentiveAlphaEmittedToMiners": (
+                    "473cf636e046e3a796b359ec8f6f61c3657b579a5b3fd648a49673c1d6b6ce90"
+                ),
+                "event:SubtensorModule.StakeAdded": (
+                    "4e2a07f77677f36d62f74bf47058e1d4a8e8baf2a7729b7eabc502f9a5cf9431"
+                ),
+                "event:SubtensorModule.StakeRemoved": (
+                    "bc56113c9b79676d959192540943317fd15ff2e2afddcdb2336632a24bc526f4"
+                ),
+                "event:System.ExtrinsicFailed": (
+                    "6277caee7eac68db6c2271d0ef6dc8e266e0cf2d1bd31c1f27f9dd07ce07ad6e"
+                ),
+                "event:System.ExtrinsicSuccess": (
+                    "723837d6bb4e343ea7035cafaef1a3a2e3eaeca1a032881507bcb801ad9b04cc"
+                ),
+                "storage:SubtensorModule.AutoStakeDestination": (
+                    "ab744f8296897159066c582b0d2aaa8f4b77444af1cdc043b12c175819784d86"
+                ),
+                "storage:SubtensorModule.Keys": (
+                    "d94df250ac2b3791220aae792cb994c4ec4f2f836939f8517c7875dc4e87fa82"
+                ),
+                "storage:SubtensorModule.LastEpochBlock": (
+                    "a8dc1869cfd0cc74c2168d747e7d74aeaae0f8b9fe0743c15c3d466fe9d75526"
+                ),
+                "storage:SubtensorModule.Owner": (
+                    "15bec8eb1ddc14a911cdc5e3b7447a8b102f6ef1a6a13976a96e10764b22ea03"
+                ),
+                "storage:SubtensorModule.SubnetEpochConsensus": (
+                    "d2693a1e490d0349a41327db34137c7e9b4d4b34ea91ee1048efe85c368a3343"
+                ),
+                "storage:SubtensorModule.SubnetEpochIndex": (
+                    "a8dc1869cfd0cc74c2168d747e7d74aeaae0f8b9fe0743c15c3d466fe9d75526"
+                ),
+                "storage:SubtensorModule.SubnetOwner": (
+                    "6649622c6caec6dd208fde3933fd2ad844a5ee62236c4ba4c6a3c3ac67196080"
+                ),
+                "storage:SubtensorModule.Uids": (
+                    "3d78fbb42fef4877e5824bd4d55eeed40833157c44941bbf3593b5ff882eba48"
+                ),
+                "storage:SubtensorModule.ValidatorPermit": (
+                    "b2f990cb7406d7e31486ce8ee723321022e0dd706a605ee9d1aa7de9ab1a7a5d"
+                ),
+                "storage:Timestamp.Now": (
+                    "e0165175e4ed1a4b634207ddff9aaf721124e73d209a6c309a10372dfb5e42b9"
+                ),
+            },
+        ),
+    ),
 }
 
 # Per-call digests of the runtime the treasury signer policy binds.
 TREASURY_CALL_BASELINE: tuple[str, dict[str, str]] = (
-    "v478",
+    "v482",
     {
         "AdminUtils.schedule_grandpa_change": "d7eff8a076c628c8",
         "AdminUtils.sudo_set_activity_cutoff": "4c1778efff010af4",
@@ -455,6 +529,7 @@ TREASURY_CALL_BASELINE: tuple[str, dict[str, str]] = (
         "AdminUtils.sudo_set_stake_threshold": "c8cf8e8ac0e13187",
         "AdminUtils.sudo_set_start_call_delay": "946b3ffc3a376029",
         "AdminUtils.sudo_set_subnet_emission_enabled": "cee0475a080c15ce",
+        "AdminUtils.sudo_set_subnet_emission_weights": "40b99707e2af0445",
         "AdminUtils.sudo_set_subnet_limit": "2fc1821611e91bba",
         "AdminUtils.sudo_set_subnet_moving_alpha": "4cb62001225d9d46",
         "AdminUtils.sudo_set_subnet_owner_cut": "d7f0cbc237e0d03d",
@@ -543,17 +618,17 @@ TREASURY_CALL_BASELINE: tuple[str, dict[str, str]] = (
         "Preimage.request_preimage": "1b6c3fc5ef7918e6",
         "Preimage.unnote_preimage": "291875d762dd1a6a",
         "Preimage.unrequest_preimage": "62e27e2c32b09b7e",
-        "Proxy.add_proxy": "d9b06323ceaa3e02",
+        "Proxy.add_proxy": "3a67d5a52d356d40",
         "Proxy.announce": "249726b48b1234d3",
-        "Proxy.create_pure": "458c32f03c23835e",
-        "Proxy.kill_pure": "ee2c8430088e79b3",
+        "Proxy.create_pure": "fe0df48c5ca386be",
+        "Proxy.kill_pure": "59f9bc27ed5791cf",
         "Proxy.poke_deposit": "a65847c9de790b39",
-        "Proxy.proxy": "1804196bb37fe329",
-        "Proxy.proxy_announced": "9446965d75cc4116",
+        "Proxy.proxy": "56004aef104299d6",
+        "Proxy.proxy_announced": "3dfcdec843a1d108",
         "Proxy.reject_announcement": "14a3025c45ba84a6",
         "Proxy.remove_announcement": "bf1dca82b4caa531",
         "Proxy.remove_proxies": "c6af3d798709fa71",
-        "Proxy.remove_proxy": "012ef9a178e63591",
+        "Proxy.remove_proxy": "58ea5a1fe243c2a9",
         "Proxy.set_real_pays_fee": "081cdc4c21a5557c",
         "SafeMode.enter": "f104b72ee9439d94",
         "SafeMode.extend": "7fde5464ef5ae66a",
@@ -578,6 +653,7 @@ TREASURY_CALL_BASELINE: tuple[str, dict[str, str]] = (
         "SubtensorModule.add_stake_burn": "cf2414aed44d54f5",
         "SubtensorModule.add_stake_limit": "d75123f053037734",
         "SubtensorModule.announce_coldkey_swap": "302a4f5b3eab0afc",
+        "SubtensorModule.announce_coldkey_swap_v2": "fe2b914ccf80566a",
         "SubtensorModule.associate_evm_key": "03aa9d3976b9396d",
         "SubtensorModule.batch_commit_weights": "e44b9918adca40a9",
         "SubtensorModule.batch_reveal_weights": "1167cf3495290b47",
@@ -609,10 +685,14 @@ TREASURY_CALL_BASELINE: tuple[str, dict[str, str]] = (
         "SubtensorModule.register_limit": "9f1ef2d644f65f0b",
         "SubtensorModule.register_network": "506d91c1ecaa91a5",
         "SubtensorModule.register_network_with_identity": "6c50da0f6f2f50ad",
+        "SubtensorModule.release_own_coldkey_swap_destination_reservation": (
+            "b0b289036db95ff8"
+        ),
         "SubtensorModule.remove_stake": "d7f96fef1bcc7d7e",
         "SubtensorModule.remove_stake_full_limit": "13464a659d2bb670",
         "SubtensorModule.remove_stake_limit": "a13c760b7b749332",
         "SubtensorModule.reset_coldkey_swap": "6841d43c7daf6eda",
+        "SubtensorModule.reset_coldkey_swap_keep_locked": "102d70bafd0e8cbb",
         "SubtensorModule.reveal_mechanism_weights": "109a5878773d1593",
         "SubtensorModule.reveal_weights": "5c26c01dba63ddb3",
         "SubtensorModule.root_dissolve_network": "c0454e5072e534dd",
@@ -632,6 +712,7 @@ TREASURY_CALL_BASELINE: tuple[str, dict[str, str]] = (
         "SubtensorModule.set_pending_childkey_cooldown": "3d5088ea09b2ae9e",
         "SubtensorModule.set_perpetual_lock": "f956784c73f7a05a",
         "SubtensorModule.set_reject_locked_alpha": "a7f011c1e5282c9a",
+        "SubtensorModule.set_reject_staking_hotkey_growth": "802ad9a4fb6cc884",
         "SubtensorModule.set_subnet_identity": "b432e3d5938f7bfc",
         "SubtensorModule.set_tempo": "042ae37d40291ed6",
         "SubtensorModule.set_weights": "3a823b008759fbe2",

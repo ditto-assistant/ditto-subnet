@@ -1247,15 +1247,20 @@ def test_v473_historical_receipt_does_not_require_new_consensus_storage():
     )
 
 
-@pytest.mark.parametrize("release", ["v478", "v479"])
-def test_old_runtime_is_read_only_under_new_v481_policy(release):
+@pytest.mark.parametrize("release", ["v478", "v479", "v481"])
+def test_old_runtime_is_read_only_under_new_v482_policy(release):
     from ditto_screening_protocol.collector_receipts import (
         AUDITED_COLLECTOR_RECEIPT_HASHES,
         V478_COLLECTOR_CODE_HASH,
         V479_READONLY_CODE_HASH,
+        V481_COLLECTOR_CODE_HASH,
     )
 
-    code = {"v478": V478_COLLECTOR_CODE_HASH, "v479": V479_READONLY_CODE_HASH}[release]
+    code = {
+        "v478": V478_COLLECTOR_CODE_HASH,
+        "v479": V479_READONLY_CODE_HASH,
+        "v481": V481_COLLECTOR_CODE_HASH,
+    }[release]
     c, filters = runtime_adapter(code)
     with pytest.raises(ValueError, match="runtime changed"):
         c.guard_runtime(policy(), "current")
@@ -1282,9 +1287,10 @@ def test_old_runtime_is_read_only_under_new_v481_policy(release):
     assert V479_READONLY_CODE_HASH not in AUDITED_COLLECTOR_RECEIPT_HASHES
 
 
-def test_v481_is_the_exact_current_published_artifact():
+def test_v482_is_the_exact_current_published_artifact():
+    # docs/audits/collector-finney-v482: official compressed WASM blake2b-256.
     assert AUDITED_CODE_HASH == (
-        "0x5fb504c1c793a3ddb5456f189ddef98b5146853aea6ff998501f1b6c6eb720bc"
+        "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62"
     )
     c, _ = runtime_adapter(AUDITED_CODE_HASH)
     assert c.guard_runtime(policy(), "current") == AUDITED_CODE_HASH

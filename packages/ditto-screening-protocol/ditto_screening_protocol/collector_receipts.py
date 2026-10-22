@@ -40,10 +40,13 @@ V478_COLLECTOR_CODE_HASH = (
 V479_READONLY_CODE_HASH = (
     "0x44e952fd1cebe9bd15c0c55cee6e1d7c6c97b44d941b79127343118dbbd342bc"
 )
-AUDITED_COLLECTOR_CODE_HASH = (
+V481_COLLECTOR_CODE_HASH = (
     "0x5fb504c1c793a3ddb5456f189ddef98b5146853aea6ff998501f1b6c6eb720bc"
 )
-# Official current artifact/source: docs/audits/collector-finney-v481.
+AUDITED_COLLECTOR_CODE_HASH = (
+    "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62"
+)
+# Official current artifact/source: docs/audits/collector-finney-v482.
 # No v474/v480 fingerprint is inferred; unknown/reverse states still refuse.
 COLLECTOR_RUNTIME_ORDER = (
     HISTORICAL_COLLECTOR_CODE_HASH,
@@ -53,6 +56,7 @@ COLLECTOR_RUNTIME_ORDER = (
     V477_COLLECTOR_CODE_HASH,
     V478_COLLECTOR_CODE_HASH,
     V479_READONLY_CODE_HASH,
+    V481_COLLECTOR_CODE_HASH,
     AUDITED_COLLECTOR_CODE_HASH,
 )
 COLLECTOR_READABLE_RUNTIME_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER)
@@ -64,8 +68,8 @@ AUDITED_COLLECTOR_RECEIPT_HASHES = COLLECTOR_READABLE_RUNTIME_HASHES - {
 # Native filter shape for exact historical observations, NOT signing authority.
 # The observed v479 Registration filter includes pow_register and its consensus
 # is Yuma (v481 audit manifest); omitting it would expect the wrong 3-call filter.
-# guard_runtime independently requires an audited v481 policy and, for current
-# signing, the exact same v481 chain hash before consulting this shape set.
+# guard_runtime independently requires an audited v482 policy and, for current
+# signing, the exact same v482 chain hash before consulting this shape set.
 COLLECTOR_POW_REGISTRATION_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER[2:])
 
 
