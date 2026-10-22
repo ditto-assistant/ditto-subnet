@@ -344,7 +344,7 @@ extract_descriptor() {
 
 resolve_channel_digest() {
   local ref="$1" digest
-  docker pull "$ref" >/dev/null
+  docker_pull "$ref" >/dev/null
   digest="$(docker_bounded image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref" | awk -v p="$DESCRIPTOR_REPOSITORY@" 'index($0,p)==1 {print; exit}')"
   is_descriptor_digest "$digest" || die "descriptor channel did not resolve to an immutable digest"
   printf '%s' "$digest"
@@ -354,7 +354,7 @@ pull_release_images() {
   local dir="$1" key image
   while IFS= read -r key; do
     image="$(manifest_value "$dir/manifest.env" "$key")"
-    docker pull "$image" >/dev/null || return 1
+    docker_pull "$image" >/dev/null || return 1
     docker_bounded image inspect "$image" >/dev/null 2>&1 || return 1
   done < <(release_image_keys "$dir")
   validate_release_image_labels "$dir"
@@ -428,6 +428,9 @@ bounded() {
 }
 
 docker_bounded() { bounded "$command_timeout" docker "$@"; }
+# Pulls run before the drain, so they get their own, longer bound: a stalled
+# registry cannot take the validator offline but would hold the updater lock.
+docker_pull() { bounded "$pull_timeout" docker pull "$@"; }
 
 compose() {
   local dir="$1"; shift
@@ -631,8 +634,14 @@ resume_and_verify_bootstrap() {
 request_drain() {
   local dir="$1" timeout="$2" interval="$3" container deadline state
   container="$(service_container "$dir" ditto-subnet)"; [ -n "$container" ] || return 1
-  docker_bounded kill --signal=USR1 "$container" >/dev/null || return 1
-  DRAINED_CONTAINER="$container"; DRAINED_RELEASE_DIR="$dir"; deadline=$((SECONDS+timeout))
+  # Record the drain before signalling: a timed-out kill may still have been
+  # delivered, and the resume path needs this state to undo it.
+  DRAINED_CONTAINER="$container"; DRAINED_RELEASE_DIR="$dir"
+  if ! docker_bounded kill --signal=USR1 "$container" >/dev/null; then
+    resume_and_verify "$dir" "$ready_timeout" "$interval" || return 1
+    return 1
+  fi
+  deadline=$((SECONDS+timeout))
   while ((SECONDS<deadline)); do
     state="$(runtime_state "$container")"
     if state_drained "$state" "$container"; then return 0; fi
@@ -741,7 +750,7 @@ prefetch_release() {
   fi
   current_version="$(manifest_value "$CURRENT_DIR/manifest.env" STACK_VERSION)"
   [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "managed current version is malformed"
-  docker pull "$candidate_ref" >/dev/null
+  docker_pull "$candidate_ref" >/dev/null
   extract_descriptor "$candidate_ref" "$STAGED_DIR" || die "prefetch descriptor is invalid"
   candidate_version="$(manifest_value "$STAGED_DIR/manifest.env" STACK_VERSION)"
   if ! semver_greater_same_major "$candidate_version" "$current_version"; then
@@ -768,7 +777,7 @@ prepare_initial_release() {
   local candidate_ref="$1" temporary
   [ ! -f "$MANAGED_FILE" ] || die "stack is already managed; use run or rollback"
   verify_descriptor_signature "$candidate_ref" || die "prepared descriptor publisher identity is invalid"
-  docker pull "$candidate_ref" >/dev/null
+  docker_pull "$candidate_ref" >/dev/null
   extract_descriptor "$candidate_ref" "$STAGED_DIR" || die "prepared descriptor is invalid"
   stack_has_containers "$STAGED_DIR" && die "validator services already exist; use adopt or migrate"
   pull_release_images "$STAGED_DIR" || die "prepared release images are unavailable"
@@ -788,7 +797,7 @@ bootstrap_initial_release() {
   if [ -f "$MANAGED_FILE" ]; then
     recorded_ref="$(managed_release)"
     [ "$recorded_ref" = "$candidate_ref" ] || die "stack is already managed at a different descriptor"
-    docker pull "$candidate_ref" >/dev/null
+    docker_pull "$candidate_ref" >/dev/null
     verify_descriptor_signature "$candidate_ref" || die "managed bootstrap descriptor publisher identity is invalid"
     if [ ! -d "$CURRENT_DIR" ] || ! validate_descriptor "$candidate_ref" "$CURRENT_DIR"; then
       die "managed bootstrap release is missing or invalid"
@@ -818,7 +827,7 @@ bootstrap_initial_release() {
     die "bootstrap digest does not match the prepared release"
 
   verify_descriptor_signature "$candidate_ref" || die "bootstrap descriptor publisher identity is invalid"
-  docker pull "$candidate_ref" >/dev/null
+  docker_pull "$candidate_ref" >/dev/null
 
   # Reuse an exact prepared release. If a previous bootstrap was interrupted
   # after the accepted staged directory moved, bind that exact current tree
@@ -947,12 +956,12 @@ perform_update() {
   # and re-authenticate it before validating the persisted current release.
   # Candidate verification remains independent and fail closed below.
   verify_descriptor_signature "$previous_ref" || die "managed current descriptor publisher identity is invalid"
-  docker pull "$previous_ref" >/dev/null || die "managed current descriptor is unavailable"
+  docker_pull "$previous_ref" >/dev/null || die "managed current descriptor is unavailable"
   [ -d "$CURRENT_DIR" ] && validate_descriptor "$previous_ref" "$CURRENT_DIR" || die "managed current descriptor is missing or invalid"
   assert_stack_matches "$CURRENT_DIR" || die "running stack has drifted from its managed release"
   current_container="$(service_container "$CURRENT_DIR" ditto-subnet)"
   state_ready "$(runtime_state "$current_container")" "$current_container" || { log "validator is not freshly platform-accepted; deferring"; return 0; }
-  docker pull "$candidate_ref" >/dev/null
+  docker_pull "$candidate_ref" >/dev/null
   extract_descriptor "$candidate_ref" "$STAGED_DIR" || die "candidate descriptor is invalid"
   pull_release_images "$STAGED_DIR" || die "candidate component pull failed before drain"
   current_version="$(manifest_value "$CURRENT_DIR/manifest.env" STACK_VERSION)"
@@ -1111,6 +1120,7 @@ failure_backoff_seconds="$(setting VALIDATOR_AUTO_UPDATE_FAILURE_BACKOFF_SECONDS
 require_positive_integer drain_timeout "$drain_timeout"; require_positive_integer ready_timeout "$ready_timeout"; require_positive_integer check_seconds "$check_seconds"
 require_positive_integer failure_backoff_seconds "$failure_backoff_seconds"; require_positive_integer failure_max_attempts "$failure_max_attempts"
 command_timeout="$(setting VALIDATOR_AUTO_UPDATE_COMMAND_TIMEOUT_SECONDS "$ready_timeout")"; require_positive_integer command_timeout "$command_timeout"
+pull_timeout="$(setting VALIDATOR_AUTO_UPDATE_PULL_TIMEOUT_SECONDS 1800)"; require_positive_integer pull_timeout "$pull_timeout"
 trap 'cleanup $?' EXIT; trap 'exit 143' INT TERM
 if [ "$mode" = prefetch ]; then
   [ ! -f "$TRANSACTION_FILE" ] || { log "transaction recovery takes priority; deferring candidate prefetch"; exit 0; }
@@ -1148,7 +1158,7 @@ if [ "$mode" = adopt ]; then
   is_descriptor_digest "$2" || die "adopt requires an immutable stack descriptor digest"
   [ ! -f "$MANAGED_FILE" ] || die "managed stack mode is already adopted"
   verify_descriptor_signature "$2" || die "adopted descriptor publisher identity is invalid"
-  docker pull "$2" >/dev/null; extract_descriptor "$2" "$STAGED_DIR" || die "adopted descriptor is invalid"; pull_release_images "$STAGED_DIR" || die "adopted release images unavailable"
+  docker_pull "$2" >/dev/null; extract_descriptor "$2" "$STAGED_DIR" || die "adopted descriptor is invalid"; pull_release_images "$STAGED_DIR" || die "adopted release images unavailable"
   assert_stack_matches "$STAGED_DIR" || die "running services do not exactly match the adopted release; perform the supervised Compose migration first"
   adopted_container="$(service_container "$STAGED_DIR" ditto-subnet)"
   state_ready "$(runtime_state "$adopted_container")" "$adopted_container" || die "running validator is not operational and freshly platform-accepted"
@@ -1160,7 +1170,7 @@ if [ "$mode" = migrate ]; then
   is_descriptor_digest "$2" || die "migrate requires an immutable stack descriptor digest"
   [ ! -f "$MANAGED_FILE" ] || die "stack is already managed; use run or rollback"
   verify_descriptor_signature "$2" || die "migration descriptor publisher identity is invalid"
-  docker pull "$2" >/dev/null
+  docker_pull "$2" >/dev/null
   extract_descriptor "$2" "$STAGED_DIR" || die "migration descriptor is invalid"
   pull_release_images "$STAGED_DIR" || die "migration component verification failed before drain"
   old_container="$(service_container "$STAGED_DIR" ditto-subnet)"
@@ -1184,7 +1194,7 @@ if [ "$mode" = rollback ]; then
   [ -f "$LAST_UPDATE_FILE" ] || die "no previous complete release recorded"
   rollback_ref="$(manifest_value "$LAST_UPDATE_FILE" PREVIOUS_RELEASE)"; is_descriptor_digest "$rollback_ref" || die "recorded rollback release is invalid"
   verify_descriptor_signature "$rollback_ref" || die "rollback descriptor publisher identity is invalid"
-  docker pull "$rollback_ref" >/dev/null; extract_descriptor "$rollback_ref" "$STAGED_DIR" || die "rollback descriptor unavailable"; pull_release_images "$STAGED_DIR" || die "rollback images unavailable"
+  docker_pull "$rollback_ref" >/dev/null; extract_descriptor "$rollback_ref" "$STAGED_DIR" || die "rollback descriptor unavailable"; pull_release_images "$STAGED_DIR" || die "rollback images unavailable"
   perform_update "$rollback_ref" true; exit 0
 fi
 if ! is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE true)"; then log "disabled (set VALIDATOR_STACK_AUTO_UPDATE=true to opt back in)"; exit 0; fi

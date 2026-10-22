@@ -601,6 +601,11 @@ def die(message="fake docker failure"):
 if args[:1] == ["pull"]:
     if args[1] == state.get("fail_pull"):
         die()
+    if args[1] == state.get("hang_pull"):
+        # A stalled registry transfer.
+        state["hung_calls"] = state.get("hung_calls", 0) + 1
+        save()
+        time.sleep(3600)
     if args[1] in state.get("missing_local_images", []):
         state["missing_local_images"].remove(args[1])
 elif args[:1] == ["create"]:
@@ -673,6 +678,12 @@ elif args[:1] == ["kill"]:
         for value in args
         if value.startswith("--signal=")
     )
+    if signal_name == "USR1" and state.pop("hang_drain_signal", False):
+        # The daemon delivers the signal but the CLI never gets its response.
+        state["runtime_state"]["state"] = "drained"
+        state["hung_calls"] = state.get("hung_calls", 0) + 1
+        save()
+        time.sleep(3600)
     if signal_name == "USR1" and "busy_checks_remaining" in state:
         state["drain_requested"] = True
     else:
@@ -2132,6 +2143,65 @@ def test_hung_candidate_docker_call_times_out_and_rolls_back(
     assert failed["FAILURES"] == "1"
     assert failed["REASON"] == reason
     assert not (state_dir / "transaction.env").exists()
+
+
+def test_timed_out_drain_signal_resumes_the_validator(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    old_images = {name: value["image"] for name, value in state["containers"].items()}
+    state["hang_drain_signal"] = True
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    env = {**env, "VALIDATOR_AUTO_UPDATE_COMMAND_TIMEOUT_SECONDS": "3"}
+
+    result = _run_updater(env, "run", timeout=60)
+
+    assert result.returncode == 0, result.stderr
+    assert "timed out after 3s" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["hung_calls"] == 1
+    # USR1 was delivered even though the CLI timed out; USR2 undid it.
+    assert final["runtime_state"]["state"] == "working"
+    assert ["kill", "--signal=USR2", "ditto-subnet-container"] in final["calls"]
+    assert not any(call[0] == "stop" for call in final["calls"])
+    assert {name: value["image"] for name, value in final["containers"].items()} == (
+        old_images
+    )
+    assert (state_dir / "managed-release.env").read_text() == (
+        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
+    )
+    assert not (state_dir / "transaction.env").exists()
+
+
+def test_stalled_registry_pull_times_out_before_drain(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, _, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    # The fixture derives each candidate image by swapping the old digest.
+    state["hang_pull"] = _images()["VALIDATOR_IMAGE"].rsplit(":", 1)[0] + (
+        ":" + "e" * 64
+    )
+    state["calls"] = []
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    env = {**env, "VALIDATOR_AUTO_UPDATE_PULL_TIMEOUT_SECONDS": "3"}
+
+    result = _run_updater(env, "run", timeout=60)
+
+    assert result.returncode != 0
+    assert "timed out after 3s" in result.stderr
+    assert "candidate component pull failed before drain" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["hung_calls"] == 1
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert final["runtime_state"]["state"] == "working"
 
 
 def test_same_release_digest_is_a_safe_noop(
