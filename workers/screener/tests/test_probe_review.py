@@ -33,7 +33,8 @@ def _record(response: dict, transcript: list[dict] | None = None) -> ProbeRecord
 
 
 def _tool_entry(name: str, args: object) -> dict:
-    return {"surface": "tool", "request": {"name": name, "args": args}}
+    # The gateway records the HTTP status of every delivery.
+    return {"surface": "tool", "status": 200, "request": {"name": name, "args": args}}
 
 
 def _chat_entry(tools_: list[str], tool_choice: object = None, text: str = "") -> dict:
@@ -616,6 +617,41 @@ def test_negative_cost_remote_daemon_and_nested_json_fail_safely(
     # Unparseable bodies are recorded as such; the route still answers.
     status, _, _, _ = gateway.route("POST", "/v1/chat/completions", deep)
     assert isinstance(status, int)
+
+
+def test_failed_deliveries_cleanup_errors_and_responses_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ditto_screener.probe_review import sandbox
+    from ditto_screener.probe_review.scripted_gateway import _last_user_text
+
+    failed = _tool_entry("s", {})
+    failed["status"] = 502
+    record = _record({"tool_calls": [{"name": "s", "args": {}}]}, [failed])
+    assert evaluate(record, {"op": "reported_not_executed"})[0]
+    assert evaluate(record, {"op": "tool_executed", "name": "s"})[0]
+
+    session = Session(
+        root=str(tmp_path), image="i", artifact_sha256="0" * 64, bench_version=13
+    )
+    session.started = True
+    monkeypatch.setattr(sandbox, "_docker", lambda *_a, **_k: (1, "permission denied"))
+    with pytest.raises(sandbox.SandboxError, match="cleanup failed"):
+        session.stop()
+    assert Session.load(str(tmp_path)).started
+    monkeypatch.setattr(
+        sandbox, "_docker", lambda *_a, **_k: (1, "Error: No such container: x")
+    )
+    assert tools.check_citations(session, {"findings": [{"source_citations": 1}]}) == [
+        "finding 0 source_citations must be strings"
+    ]
+
+    request = {
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+        ]
+    }
+    assert _last_user_text(request) == "hello"
 
 
 def _fixture_archive(path: Path, violations: str) -> None:

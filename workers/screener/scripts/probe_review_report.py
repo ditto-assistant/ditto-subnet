@@ -47,7 +47,7 @@ def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
         # not a completed review that found nothing.
         replay_failed = bool(replay and replay.get("problems"))
         reviewed = replay is not None and not replay_failed
-        verified = bool(replay and replay.get("verified"))
+        verified = bool(replay and not replay_failed and replay.get("verified"))
         found = sorted(
             {
                 f["invariant"]

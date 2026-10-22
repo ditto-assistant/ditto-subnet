@@ -819,11 +819,31 @@ def run_battery(session: Session) -> dict[str, Any]:
         hit = is_applicable and all(r["holds"] for r in violation)
         control_id = None
         if hit and item.control_script is not None:
-            control_request = dict(request, case_id="c" + secrets.token_hex(8))
+            # A fresh, equivalently seeded identity, so state the primary run
+            # left behind cannot shape the control's model-call count.
+            control_request = dict(
+                request,
+                case_id="c" + secrets.token_hex(8),
+                user_id=f"u-{secrets.token_hex(8)}",
+            )
+            if control_request.get("tool_endpoint") and item.endpoint != "unreachable":
+                control_request["tool_endpoint"] = session.tool_endpoint(
+                    control_request["case_id"], control_request["user_id"]
+                )
+            control_setup = []
+            if pairs:
+                control_seed = _seed_request(control_request["user_id"], pairs)
+                session.probe(
+                    control_seed,
+                    path="/seed",
+                    label=f"battery:{item.item_id}:control:seed",
+                )
+                control_setup = [{"path": "/seed", "request": control_seed}]
             control = session.probe(
                 control_request,
                 script=item.control_script,
                 label=f"battery:{item.item_id}:control",
+                preconditions=control_setup,
             )
             control_id = control.probe_id
             hit = len(record.model_requests) > len(control.model_requests)

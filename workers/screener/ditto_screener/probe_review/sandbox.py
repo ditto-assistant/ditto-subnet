@@ -414,12 +414,14 @@ class Session:
             timeout=300,
         )
         if code != 0:
-            self.stop()
+            with contextlib.suppress(SandboxError):
+                self.stop()
             raise SandboxError(f"gateway start failed: {out[-500:]}")
         try:
             self._start_harness(health_timeout)
         except SandboxError:
-            self.stop()
+            with contextlib.suppress(SandboxError):
+                self.stop()
             raise
         self.started = True
         self.save()
@@ -492,8 +494,22 @@ class Session:
         self._start_harness(health_timeout)
 
     def stop(self) -> None:
-        _docker(["rm", "-f", self.harness, self.gateway], timeout=180)
-        _docker(["network", "rm", self.network], timeout=120)
+        """Remove the session's containers and network; already-gone is fine.
+
+        A failed removal leaves ``started`` set so callers do not mistake
+        lingering sandbox resources for a stopped session.
+        """
+        failures = []
+        for name in (self.harness, self.gateway):
+            code, out = _docker(["rm", "-f", name], timeout=180)
+            if code != 0 and "no such container" not in out.casefold():
+                failures.append(f"{name}: {out.strip()[-200:]}")
+        code, out = _docker(["network", "rm", self.network], timeout=120)
+        if code != 0 and "not found" not in out.casefold():
+            failures.append(f"{self.network}: {out.strip()[-200:]}")
+        if failures:
+            self.save()
+            raise SandboxError("sandbox cleanup failed: " + "; ".join(failures))
         self.started = False
         self.save()
 

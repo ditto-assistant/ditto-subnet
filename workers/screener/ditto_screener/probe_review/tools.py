@@ -598,8 +598,16 @@ def check_citations(session: Session, verdict: dict[str, Any]) -> list[str]:
     """
     root = (Path(session.root) / "src").resolve()
     problems = []
-    for finding in verdict.get("findings") or []:
-        for citation in finding.get("source_citations") or []:
+    for index, finding in enumerate(verdict.get("findings") or []):
+        if not isinstance(finding, dict):
+            continue  # validate_verdict reports the malformed finding
+        citations = finding.get("source_citations") or []
+        if not isinstance(citations, list) or not all(
+            isinstance(citation, str) for citation in citations
+        ):
+            problems.append(f"finding {index} source_citations must be strings")
+            continue
+        for citation in citations:
             path, _, line = str(citation).rpartition(":")
             target = (root / path).resolve()
             if (

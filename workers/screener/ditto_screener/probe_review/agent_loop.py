@@ -267,7 +267,13 @@ def review(
         and ledger.admit()
         and time.monotonic() - started < deadline_seconds
     ):
-        response = complete(messages, TOOL_SCHEMAS)
+        remaining = deadline_seconds - (time.monotonic() - started)
+        # A pooled completer is bounded by the review's remaining wall time.
+        response = (
+            complete(messages, TOOL_SCHEMAS, timeout=max(1.0, remaining))
+            if isinstance(complete, HttpCompleter)
+            else complete(messages, TOOL_SCHEMAS)
+        )
         ledger.settle(response.get("usage") or {})
         if ledger.over_budget():
             # The response that crossed a budget is not acted on.
@@ -354,10 +360,15 @@ class HttpCompleter:
         self._client = httpx.Client(timeout=timeout)
 
     def __call__(
-        self, messages: list[dict[str, Any]], schemas: list[dict[str, Any]]
+        self,
+        messages: list[dict[str, Any]],
+        schemas: list[dict[str, Any]],
+        *,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         response = self._client.post(
             self._url,
+            timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
             headers={"Authorization": f"Bearer {self._key}", **self._headers},
             json={
                 "model": self._model,

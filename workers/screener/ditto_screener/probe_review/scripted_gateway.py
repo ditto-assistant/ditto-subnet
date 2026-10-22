@@ -165,6 +165,20 @@ def _last_user_text(request: dict) -> str:
                 content = message.get("content")
                 return content if isinstance(content, str) else json.dumps(content)
     value = request.get("input")
+    if isinstance(value, list):
+        # Responses API: the latest user item, string or input_text parts.
+        for item in reversed(value):
+            if isinstance(item, dict) and item.get("role") == "user":
+                content = item.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    return " ".join(
+                        str(part.get("text", ""))
+                        for part in content
+                        if isinstance(part, dict)
+                        and part.get("type") in {"input_text", "text"}
+                    )
     return value if isinstance(value, str) else json.dumps(value or "")
 
 

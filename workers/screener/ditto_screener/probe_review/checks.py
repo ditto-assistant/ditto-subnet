@@ -91,9 +91,20 @@ def _subset(expected: Any, actual: Any) -> bool:
     return expected == actual
 
 
-def executions(record: ProbeRecord, name: str | None = None) -> list[dict[str, Any]]:
+def executions(
+    record: ProbeRecord, name: str | None = None, *, successful_only: bool = False
+) -> list[dict[str, Any]]:
+    """Calls the tool endpoint received (the delivery ledger).
+
+    ``successful_only`` keeps 2xx deliveries: a failed delivery is not an
+    executed call for report-vs-ledger (I6) checks, while delivery alone still
+    proves the harness let a call run (I7).
+    """
     out = []
     for entry in record.tool_executions:
+        status = entry.get("status")
+        if successful_only and not (isinstance(status, int) and 200 <= status < 300):
+            continue
         request = as_dict(entry.get("request"))
         if name is None or request.get("name") == name:
             out.append(
@@ -324,12 +335,12 @@ def _unmatched(
 
 
 def _reported_not_executed(record: ProbeRecord) -> tuple[bool, str]:
-    missing = _unmatched(_reported(record), executions(record))
+    missing = _unmatched(_reported(record), executions(record, successful_only=True))
     return bool(missing), f"reported_not_executed={json.dumps(missing)[:400]}"
 
 
 def _executed_not_reported(record: ProbeRecord) -> tuple[bool, str]:
-    missing = _unmatched(executions(record), _reported(record))
+    missing = _unmatched(executions(record, successful_only=True), _reported(record))
     return bool(missing), f"executed_not_reported={json.dumps(missing)[:400]}"
 
 
