@@ -463,7 +463,11 @@ Nothing releases automatically.
 
 ## Hotkey-level upload bans
 
-An ATH rejection bans one agent UUID. The separate `banned_hotkeys` gate is a
+An ATH rejection bans one agent UUID. A withdrawn rejection is reversed
+through the rulings court, not here: a `clear` ruling on that banned agent
+previews `["open","clear"]`, reopening the rejected review and restoring its
+pre-reject status with the reject kept in the history
+(`apps/platform/docs/ath-review-queue.md`). The separate `banned_hotkeys` gate is a
 rare miner-wide control that refuses every future upload from one hotkey. Use
 `list_hotkey_bans` to enumerate the active rows and retain the exact `hotkey`,
 stored `reason`, and `banned_at` timestamp.

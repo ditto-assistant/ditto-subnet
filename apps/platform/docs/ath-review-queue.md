@@ -161,6 +161,36 @@ Both carry `hold_free: true` (the row's `algorithm_provenance` and the action's
   `open` (manual or automated) reopens the row and a reject supersedes it,
   leaving `clear`, `reopen`, `reject` in the action history.
 
+## A withdrawn reject is reconsidered on the record
+
+An ATH reject bans one agent UUID, but it is not irreversible. When a reject
+turns out to rest on an unsupported ground, the operator reconsiders it through
+the same court. The motivating case was ditto-subnet#3081: ten policy-v13 agents
+whose only ground was a benign 6000-character tool-result cut.
+
+- Single row: `open` on a `banned` agent whose review is `resolved` / `reject`
+  reopens that review (`reconsidering_rejection`), then `resolve` `clear`
+  restores it.
+- Batched: a `clear` ruling on such an agent previews `steps: ["open", "clear"]`,
+  and an `open` ruling previews `steps: ["open"]` (held for further review).
+- The guards are the usual `expected_sha256` and `expected_score_count`. The
+  ruling's `reason` becomes the `reopen` action's reason and then the
+  resolution reason, so the queue and `get_ath_review` read
+  `reason_source: reconsideration` with the reject as `superseded_*` history.
+- The reopen records the status from before the reject, and the clear returns
+  the agent to it: `live`, `scored`, or `evaluating` for a below-quorum reject,
+  which goes back to the validator queue rather than to a score it never earned.
+  A copy hold that never recorded one defaults to `scored`, never `live`.
+- `would_change_crown` estimates the restored agent's canonical quorum median
+  against the board, exactly like clearing a held agent.
+- The action history keeps `reject`, `reopen`, `clear`. Nothing is deleted.
+  Quarantines the reject closed stay closed, and validator tickets it expired
+  are not reissued.
+- Only a rejected ATH review is reconsidered. An agent banned by any other path
+  has no review to reopen and stays a `conflict`. The miner-wide
+  `banned_hotkeys` upload gate is separate (`unban_hotkey`) and is never
+  touched here.
+
 ## Precedents are the resolved holdings
 
 `GET /api/v1/admin/copy-reviews/precedents` is the court reporter, not the

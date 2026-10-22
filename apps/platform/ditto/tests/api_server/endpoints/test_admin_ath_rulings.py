@@ -1459,7 +1459,7 @@ async def test_attest_keeps_a_live_agent_live(
 async def test_attest_refuses_what_it_must_not_resolve(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
-    """Below quorum, banned, a moved guard: a hold-free clear stays a conflict."""
+    """Below quorum or a moved guard stays a conflict; a reject is reconsidered."""
     board = await _seed_board(maker)
     evaluating = await _seed_evaluating(maker, score_count=2, live_ticket=False)
     _install(app, maker)
@@ -1497,11 +1497,13 @@ async def test_attest_refuses_what_it_must_not_resolve(
     below_quorum, banned, stale = response.json()["items"]
     assert below_quorum["disposition"] == "conflict"
     assert below_quorum["conflict_reason"] == "agent is evaluating, not held"
-    assert banned["disposition"] == "conflict"
-    assert banned["conflict_reason"] == "agent is banned, not held"
+    # Never attested: a rejected agent is reopened, then cleared, on the record.
+    assert banned["disposition"] == "ready"
+    assert banned["steps"] == ["open", "clear"]
     assert stale["disposition"] == "stale_guard"
     assert stale["conflict_reason"] == "score count changed"
     assert await _status(maker, evaluating[0]) == "evaluating"
+    assert await _status(maker, runner_id) == "banned"
     assert (await _review(maker, evaluating[0]))[0] is None
     assert (await _review(maker, stale_id))[0] is None
 
@@ -1572,3 +1574,119 @@ async def test_single_row_attest_route_is_guarded_and_idempotent(
     assert pending.status_code == 409, pending.text
     assert "ATH review is pending; resolve the hold instead" in pending.text
     assert await _status(maker, held_id) == "ath_pending_review"
+
+
+async def test_a_withdrawn_reject_is_reconsidered_back_to_the_board(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A clear on a rejected (banned) agent reopens the review, then restores it."""
+    board = await _seed_board(maker)
+    _install(app, maker)
+    champion_id, champion_sha = board["champion"]
+    await _preview_and_execute(client, [_ruling("reject", champion_id, champion_sha)])
+    assert await _status(maker, champion_id) == "banned"
+
+    clear = _ruling(
+        "clear",
+        champion_id,
+        champion_sha,
+        reason="Reconsidered: the 6k cut alone is not a ground; no second factor",
+        refs=(),
+    )
+    preview, execute = await _preview_and_execute(client, [clear])
+
+    [item] = preview["items"]
+    assert item["disposition"] == "ready", item
+    assert item["agent_status"] == "banned"
+    assert item["steps"] == ["open", "clear"]
+    assert "pre-reject status" in item["message"]
+    # Restoring the top composite takes the crown back, and the preview says so.
+    assert item["would_change_crown"] is True
+    [applied] = execute["items"]
+    assert applied["status"] == "applied", applied
+    assert applied["steps_applied"] == ["open", "clear"]
+    assert applied["agent_status"] == "scored"
+    assert execute["board_after"]["champion_agent_id"] == str(champion_id)
+    assert await _status(maker, champion_id) == "scored"
+
+    review, actions = await _review(maker, champion_id)
+    assert review is not None
+    assert review.status == "resolved" and review.resolution == "clear"
+    assert review.resolution_reason == clear["reason"]
+    # The reject stays on the record; the reconsideration is appended after it.
+    assert [action.action for action in actions] == ["reject", "reopen", "clear"]
+    reopen = actions[1]
+    assert reopen.reason == clear["reason"]
+    assert reopen.evidence["previous_status"] == "scored"
+    assert reopen.evidence["sha256"] == champion_sha
+    assert actions[2].evidence["batch_ruling"]["evidence_references"] == []
+
+    replay = await client.post(_PREVIEW, json={"rulings": [clear]}, headers=_HEADERS)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["items"][0]["disposition"] == "already_applied"
+
+
+async def test_reconsidering_a_live_reject_restores_live_and_open_only_holds(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    await _activate(maker)
+    agent_id, sha256 = await _seed_live(maker, hotkey="5Live", composite=0.7)
+    _install(app, maker)
+    await _preview_and_execute(client, [_ruling("reject", agent_id, sha256)])
+    assert await _status(maker, agent_id) == "banned"
+
+    preview, execute = await _preview_and_execute(
+        client,
+        [_ruling("open", agent_id, sha256, reason="Reconsider the I2 ruling", refs=())],
+    )
+    assert preview["items"][0]["steps"] == ["open"]
+    assert preview["items"][0]["would_change_crown"] is False
+    assert execute["items"][0]["status"] == "applied", execute
+    assert await _status(maker, agent_id) == "ath_pending_review"
+
+    # The held reconsideration resolves like any hold, back to its old status.
+    _preview, cleared = await _preview_and_execute(
+        client,
+        [_ruling("clear", agent_id, sha256, reason="Reconsidered: clean", refs=())],
+    )
+    assert cleared["items"][0]["steps_applied"] == ["clear"]
+    assert await _status(maker, agent_id) == "live"
+
+
+async def test_a_ban_without_a_rejected_review_is_not_reconsidered(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Only an ATH reject is reversible here; other bans and guards stay strict."""
+    await _activate(maker)
+    agent_id, sha256 = await _seed_scored(
+        maker, hotkey="5Banned", composite=0.7, created_at=_T0
+    )
+    async with maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = AgentStatus.BANNED
+    rejected_id, rejected_sha = await _seed_scored(
+        maker, hotkey="5Rejected", composite=0.6, created_at=_T0
+    )
+    _install(app, maker)
+    await _preview_and_execute(client, [_ruling("reject", rejected_id, rejected_sha)])
+
+    items = []
+    for ruling in (
+        _ruling("clear", agent_id, sha256, refs=()),
+        _ruling("open", agent_id, sha256, refs=()),
+        _ruling("clear", rejected_id, rejected_sha, score_count=2, refs=()),
+    ):
+        response = await client.post(
+            _PREVIEW, json={"rulings": [ruling]}, headers=_HEADERS
+        )
+        assert response.status_code == 200, response.text
+        items.extend(response.json()["items"])
+    clear, hold, stale = items
+    assert clear["disposition"] == "conflict"
+    assert clear["conflict_reason"] == "agent is banned, not held"
+    assert hold["disposition"] == "conflict"
+    assert hold["conflict_reason"] == "agent is banned, not scored or live"
+    assert stale["disposition"] == "stale_guard"
+    assert await _status(maker, agent_id) == "banned"
+    assert await _status(maker, rejected_id) == "banned"
