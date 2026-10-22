@@ -9,10 +9,11 @@ default and asks for a specific transcript entry when it needs more.
 from __future__ import annotations
 
 import copy
-import fnmatch
 import json
 import re
 import secrets
+import subprocess
+import sys
 import tarfile
 import uuid
 from pathlib import Path
@@ -29,6 +30,7 @@ from ditto_screener.probe_review.sandbox import ProbeRecord, Session
 
 _MAX_FILE_LINES = 400
 _MAX_SEARCH_HITS = 60
+_MAX_EXTRACT_BYTES = 256 * 1024 * 1024
 
 
 # Only dictated model or tool output is flipped; rule metadata such as
@@ -436,10 +438,16 @@ def diff(session: Session, probe_a: str, probe_b: str) -> dict[str, Any]:
 def extract_source(archive: Path, dest: Path) -> int:
     dest.mkdir(parents=True, exist_ok=True)
     count = 0
+    total = 0
     with tarfile.open(archive, "r:gz") as tar:
         for member in tar:
             if not member.isfile() or member.size > 4 * 1024 * 1024:
                 continue
+            total += member.size
+            if total > _MAX_EXTRACT_BYTES:
+                raise ValueError(
+                    f"source archive exceeds {_MAX_EXTRACT_BYTES} extracted bytes"
+                )
             name = member.name.removeprefix("./")
             if name.startswith("/") or ".." in Path(name).parts:
                 continue
@@ -474,24 +482,65 @@ def read_file(
     }
 
 
+_SEARCH_TIMEOUT_S = 20.0
+# Runs in a child interpreter so a catastrophic-backtracking pattern can be
+# killed at a hard deadline instead of blocking the reviewer process.
+_SEARCH_SCRIPT = """
+import fnmatch, json, re, sys
+from pathlib import Path
+root, pattern, glob = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+limit = int(sys.argv[4])
+regex = re.compile(pattern)
+hits = []
+for file in sorted(root.rglob("*")):
+    rel = str(file.relative_to(root))
+    if not file.is_file() or not fnmatch.fnmatch(rel, glob):
+        continue
+    try:
+        text = file.read_text(errors="replace")
+    except OSError:
+        continue
+    for number, line in enumerate(text.splitlines(), 1):
+        if regex.search(line):
+            line = line.strip()
+            hits.append(f"{rel}:{number}: {line[:200]}")
+            if len(hits) >= limit:
+                print(json.dumps({"hits": hits, "truncated": True}))
+                sys.exit(0)
+print(json.dumps({"hits": hits, "truncated": False}))
+"""
+
+
 def search(session: Session, pattern: str, glob: str = "*") -> dict[str, Any]:
+    re.compile(pattern)  # surface a malformed pattern as an ordinary error
     root = Path(session.root) / "src"
-    regex = re.compile(pattern)
-    hits = []
-    for file in sorted(root.rglob("*")):
-        rel = str(file.relative_to(root))
-        if not file.is_file() or not fnmatch.fnmatch(rel, glob):
-            continue
-        try:
-            text = file.read_text(errors="replace")
-        except OSError:
-            continue
-        for number, line in enumerate(text.splitlines(), 1):
-            if regex.search(line):
-                hits.append(f"{rel}:{number}: {_clip(line.strip(), 200)}")
-                if len(hits) >= _MAX_SEARCH_HITS:
-                    return {"hits": hits, "truncated": True}
-    return {"hits": hits, "truncated": False}
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                _SEARCH_SCRIPT,
+                str(root),
+                pattern,
+                glob,
+                str(_MAX_SEARCH_HITS),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_SEARCH_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "hits": [],
+            "truncated": True,
+            "error": f"search exceeded {_SEARCH_TIMEOUT_S:g}s; simplify the pattern",
+        }
+    if completed.returncode != 0:
+        return {"hits": [], "truncated": False, "error": completed.stderr[-300:]}
+    result: dict[str, Any] = json.loads(completed.stdout)
+    return result
 
 
 # -- verdict and deterministic replay ----------------------------------------------

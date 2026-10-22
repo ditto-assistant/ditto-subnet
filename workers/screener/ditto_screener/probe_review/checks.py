@@ -228,6 +228,14 @@ def evaluate(record: ProbeRecord, check: Check) -> tuple[bool, str]:
             _any_request(record, check.get("where") or {})
         ),
         "last_model_request": lambda: _last_request(record, check.get("where") or {}),
+        "model_requests_matching": lambda: (
+            _compare(
+                _count_matching(record, check.get("where") or {}),
+                check["cmp"],
+                check["n"],
+            ),
+            f"matching_requests={_count_matching(record, check.get('where') or {})}",
+        ),
         "model_request_after_tool": lambda: _model_request_after_tool(
             record, check.get("name")
         ),
@@ -265,6 +273,12 @@ def _reported(record: ProbeRecord) -> list[dict[str, Any]]:
         for c in calls
         if isinstance(c, dict)
     ]
+
+
+def _count_matching(record: ProbeRecord, where: Mapping[str, Any]) -> int:
+    return sum(
+        _request_matches(_model_request_view(e), where) for e in record.model_requests
+    )
 
 
 def _model_request_after_tool(

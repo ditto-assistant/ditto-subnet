@@ -524,6 +524,49 @@ def test_ledger_charges_a_fallback_price_without_reported_cost() -> None:
     assert not ledger.admit()
 
 
+def test_search_survives_catastrophic_patterns_and_extract_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = Session(
+        root=str(tmp_path), image="i", artifact_sha256="0" * 64, bench_version=13
+    )
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("a" * 40 + "b\nneedle here\n")
+    assert tools.search(session, "needle")["hits"] == ["a.py:2: needle here"]
+    monkeypatch.setattr(tools, "_SEARCH_TIMEOUT_S", 1.0)
+    slow = tools.search(session, "(a+)+$")
+    assert slow["hits"] == [] and "exceeded" in slow["error"]
+    archive = tmp_path / "big.tar.gz"
+    _fixture_archive(archive, "")
+    monkeypatch.setattr(tools, "_MAX_EXTRACT_BYTES", 10)
+    with pytest.raises(ValueError, match="extracted bytes"):
+        tools.extract_source(archive, tmp_path / "out")
+
+
+def test_report_cells_cannot_break_the_table() -> None:
+    import importlib.util
+
+    path = Path(__file__).parents[1] / "scripts" / "probe_review_report.py"
+    spec = importlib.util.spec_from_file_location("probe_review_report", path)
+    assert spec is not None and spec.loader is not None
+    report = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(report)
+    _cell = report._cell
+    assert _cell("a|b\nc") == "a\\|b<br>c"
+
+
+def test_requests_matching_counts_only_offering_requests() -> None:
+    record = _record({}, [_chat_entry(["search_web"]), _chat_entry([])])
+    check = {
+        "op": "model_requests_matching",
+        "where": {"offers_tool": "search_web"},
+        "cmp": ">=",
+        "n": 2,
+    }
+    assert not evaluate(record, check)[0]
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

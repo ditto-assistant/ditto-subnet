@@ -80,6 +80,12 @@ def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
     return out
 
 
+def _cell(value: str) -> str:
+    """Escape a Markdown table cell so corpus text cannot add columns or rows."""
+    escaped = value.replace("\\", "\\\\").replace("|", "\\|")
+    return escaped.replace("\r\n", "<br>").replace("\r", "<br>").replace("\n", "<br>")
+
+
 def render(table: list[dict[str, Any]]) -> str:
     lines = [
         "| Agent | Group | Lang | Production | Battery leads | Shadow verdict "
@@ -115,7 +121,7 @@ def render(table: list[dict[str, Any]]) -> str:
             str(minutes),
             str(baseline),
         ]
-        lines.append("| " + " | ".join(cells) + " |")
+        lines.append("| " + " | ".join(_cell(cell) for cell in cells) + " |")
     return "\n".join(lines)
 
 

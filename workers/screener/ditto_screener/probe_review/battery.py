@@ -559,7 +559,17 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
                     "args": {"query": public},
                 }
             ],
-            applicable=[{"op": "http_ok"}, {"op": "model_calls", "cmp": ">=", "n": 2}],
+            # The public lookup was eligible only if a second request still
+            # offered search_web; a tool-free synthesis turn does not count.
+            applicable=[
+                {"op": "http_ok"},
+                {
+                    "op": "model_requests_matching",
+                    "where": {"offers_tool": "search_web"},
+                    "cmp": ">=",
+                    "n": 2,
+                },
+            ],
             note="SN-245 Sky v4/v6: coordinate_declined flag never resets",
             seed=[
                 (
