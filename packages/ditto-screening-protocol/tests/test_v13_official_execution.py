@@ -1,12 +1,17 @@
 import asyncio
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from ditto_screening_protocol.v13_official_execute import (
+    OfficialIsolatedCaseObservationV2,
+    execute_official_private_pairs_v2,
+)
 from ditto_screening_protocol.v13_official_execution import (
     ExecutionSubjectV2,
     MinerSubjectV2,
@@ -22,6 +27,11 @@ from ditto_screening_protocol.v13_official_execution import (
     match_official_packages_v2,
     prepare_official_package_v2,
     subject_digest,
+)
+from ditto_screening_protocol.v13_private_execute import (
+    IsolatedCaseObservation,
+    PrivateCasePayload,
+    PrivateExecutionUnavailable,
 )
 from ditto_screening_protocol.v13_private_package import (
     V13_PRIVATE_PROFILE_SHA256,
@@ -169,7 +179,7 @@ class MemoryStore:
         return self.payloads[digest]
 
 
-def package_inputs(pairs_per_cell=10):
+def package_inputs(pairs_per_cell=10, payload_factory=None):
     raw = group_document()
     raw["approval"]["profile_sha256"] = V13_PRIVATE_PROFILE_SHA256
     group = OfficialGenerationGroupV2.model_validate(raw)
@@ -184,7 +194,11 @@ def package_inputs(pairs_per_cell=10):
             for index in range(pairs_per_cell):
                 digests = []
                 for side in ("control", "variant"):
-                    data = f"sealed-{seed}-{kind}-{index}-{side}".encode()
+                    data = (
+                        payload_factory(UUID(int=100 + len(pairs)), side)
+                        if payload_factory is not None
+                        else f"sealed-{seed}-{kind}-{index}-{side}".encode()
+                    )
                     digest = hashlib.sha256(data).hexdigest()
                     store.payloads[digest] = data
                     digests.append(digest)
@@ -429,3 +443,113 @@ def test_receipt_authentication_binds_current_lease_runner_and_signature():
         {"verify_signature": lambda *_: False},
     ):
         assert not authentic_official_private_receipt_v2(receipt, **(args | override))
+
+
+def execution_inputs(*, tools=False):
+    def payload(pair_id, side):
+        return json.dumps(
+            PrivateCasePayload(
+                pair_id=pair_id,
+                side=side,
+                semantic_contract_sha256="7" * 64,
+                run_envelope={
+                    "case_id": str(pair_id),
+                    "user_input": "synthetic request",
+                    "tools": [{"name": "synthetic_read"}] if tools else [],
+                },
+                expected_answer_sha256=hashlib.sha256(b"synthetic answer").hexdigest(),
+            ).model_dump(mode="json")
+        ).encode()
+
+    group, store, registrations = package_inputs(payload_factory=payload)
+
+    async def prepare():
+        return [
+            await prepare_official_package_v2(
+                group=group, registration=registration, store=store
+            )
+            for registration in registrations
+        ]
+
+    return store, asyncio.run(prepare())
+
+
+class SyntheticOfficialExecutor:
+    def __init__(self, *, tamper=None):
+        self.contexts = []
+        self.tamper = tamper
+
+    async def run_case(self, *, context, seed_envelope, run_envelope, timeout_seconds):
+        self.contexts.append(context)
+        assert seed_envelope is None
+        assert run_envelope["user_input"] == "synthetic request"
+        assert timeout_seconds == 30
+        if self.tamper == "subject":
+            context = replace(
+                context,
+                subject=context.subject.model_copy(
+                    update={"image_id": "sha256:" + "0" * 64}
+                ),
+            )
+        elif self.tamper == "runtime":
+            context = replace(context, runtime_configuration_sha256="0" * 64)
+        elif self.tamper == "case":
+            context = replace(context, execution_id=UUID(int=999))
+        elif self.tamper == "request":
+            context = replace(context, request_sha256="0" * 64)
+        return OfficialIsolatedCaseObservationV2(
+            context=context,
+            observation=IsolatedCaseObservation(
+                response={"answer": "synthetic answer"},
+                model_authority_verified=self.tamper != "authority",
+            ),
+        )
+
+
+@pytest.mark.parametrize("role_index", [0, 1])
+def test_official_execution_keeps_real_subject_and_config_on_every_case(role_index):
+    store, roles = execution_inputs()
+    prepared = roles[role_index]
+    executor = SyntheticOfficialExecutor()
+    result = asyncio.run(
+        execute_official_private_pairs_v2(
+            prepared=prepared, store=store, executor=executor, runner_hotkey="runner"
+        )
+    )
+    assert len(executor.contexts) == 120
+    assert len({context.execution_id for context in executor.contexts}) == 120
+    assert all(
+        context.subject == prepared.manifest.subject for context in executor.contexts
+    )
+    assert result.summary.subject == prepared.manifest.subject
+    assert result.summary.completed_pairs == 60
+    assert all(
+        cell.control_correct == cell.variant_correct == cell.pairs
+        for cell in result.aggregates
+    )
+    if role_index == 1:
+        assert "agent_id" not in result.summary.subject.model_dump()
+        assert "attempt_id" not in result.summary.subject.model_dump()
+
+
+@pytest.mark.parametrize(
+    "tamper", ["subject", "runtime", "case", "request", "authority", "bytes", "tools"]
+)
+def test_official_execution_rejects_stale_bytes_wrong_sandbox_or_missing_authority(
+    tamper,
+):
+    store, roles = execution_inputs(tools=tamper == "tools")
+    prepared = roles[1]
+    if tamper == "bytes":
+        store.payloads[next(iter(store.payloads))] += b"changed"
+    executor = SyntheticOfficialExecutor(tamper=tamper)
+    with pytest.raises(PrivateExecutionUnavailable):
+        asyncio.run(
+            execute_official_private_pairs_v2(
+                prepared=prepared,
+                store=store,
+                executor=executor,
+                runner_hotkey="runner",
+            )
+        )
+    assert len(executor.contexts) == (0 if tamper in ("bytes", "tools") else 1)
