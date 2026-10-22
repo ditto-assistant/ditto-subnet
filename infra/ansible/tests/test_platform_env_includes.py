@@ -8,7 +8,6 @@ from pathlib import Path
 from ansible.plugins.filter.core import FilterModule
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-
 TEMPLATES = Path(__file__).resolve().parents[1] / "roles/platform_app/templates"
 BEGIN = "# BEGIN ANSIBLE MANAGED GITHUB LINK"
 END = "# END ANSIBLE MANAGED GITHUB LINK"
@@ -31,7 +30,9 @@ class PlatformEnvironmentIncludesTest(unittest.TestCase):
                     rendered = env.from_string(block).render(
                         platform_github_link_enabled=enabled,
                         platform_github_link_client_id="synthetic-client",
-                        platform_secrets={"github_link_client_secret": "synthetic-secret"},
+                        platform_secrets={
+                            "github_link_client_secret": "synthetic-secret"
+                        },
                         platform_github_link_redirect_url="https://example.com/callback",
                         platform_github_link_timeout_seconds=10,
                     )
@@ -40,15 +41,22 @@ class PlatformEnvironmentIncludesTest(unittest.TestCase):
                         fixture.write_text(rendered)
                         result = subprocess.run(
                             [
-                                "bash", "--noprofile", "--norc", "-euc",
+                                "bash",
+                                "--noprofile",
+                                "--norc",
+                                "-euc",
                                 '. "$1"; test "$GITHUB_LINK_TIMEOUT_SECONDS" = 10; '
                                 'test "$GITHUB_LINK_ENABLED" = "$2"; '
                                 'test "$GITHUB_LINK_CLIENT_ID" = synthetic-client; '
                                 'test "$GITHUB_LINK_CLIENT_SECRET" = synthetic-secret; '
                                 'test "$GITHUB_LINK_REDIRECT_URL" = https://example.com/callback',
-                                "platform-env-test", str(fixture), str(enabled).lower(),
+                                "platform-env-test",
+                                str(fixture),
+                                str(enabled).lower(),
                             ],
-                            capture_output=True, text=True, timeout=5,
+                            capture_output=True,
+                            text=True,
+                            timeout=5,
                         )
                     self.assertEqual(result.returncode, 0, result.stderr)
 
