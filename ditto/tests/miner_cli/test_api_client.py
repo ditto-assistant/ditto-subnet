@@ -43,6 +43,7 @@ from ditto.miner_cli.errors import (
     LoginRequiredError,
     PaymentAmountMismatchError,
     PaymentRecoveryExpiredError,
+    PaymentReplayedError,
     PreCheckRejectedError,
     SubmissionCooldownError,
     TransientApiError,
@@ -357,6 +358,7 @@ class TestUploadCheck:
         ("error_code", "error_type"),
         [
             (3203, PaymentAmountMismatchError),
+            (3207, PaymentReplayedError),
             (3208, PaymentRecoveryExpiredError),
         ],
     )

@@ -275,6 +275,16 @@ class PaymentRecoveryExpiredError(PreCheckRejectedError):
     """Raised when a finalized receipt is outside its recovery window."""
 
 
+class PaymentReplayedError(PreCheckRejectedError):
+    """Raised when a finalized receipt can no longer fund this upload.
+
+    The platform answers 3207 when the proof already funded an upload with
+    other bytes, name or hotkey (often an earlier upload whose response was
+    lost), or when it belongs to another hotkey. Rerunning that earlier upload's
+    exact archive still recovers it; nothing makes the proof fund another.
+    """
+
+
 class TransientApiError(ApiResponseError):
     """Raised for transport faults and retryable HTTP responses.
 

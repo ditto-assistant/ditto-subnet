@@ -283,9 +283,12 @@ unused receipt tied to a reservation that was active at the fee-change cutover
 can qualify, and it must have finalized before that cutover. This is a
 receipt-scoped exception, not a coldkey-wide fee waiver.
 
-If a saved receipt is instead definitively rejected for an amount mismatch or
-because its 24-hour recovery window expired, the CLI prints the rejected proof
-and sends nothing. In an interactive terminal it asks whether to pay the
+If a saved receipt is instead definitively rejected for an amount mismatch,
+because its 24-hour recovery window expired, or because it already funded an
+upload (`3207`, typically an earlier upload whose response was lost, then
+retried with a different archive), the CLI prints the rejected proof and sends
+nothing. For an already-used proof, rerunning that earlier upload's exact
+archive returns its agent without paying again. In an interactive terminal it asks whether to pay the
 currently reserved TAO fee. For non-interactive recovery, opt in explicitly:
 
 ```sh
@@ -297,9 +300,11 @@ uv run ditto --network finney upload \
   --pay-again
 ```
 
-`--pay-again` is narrowly limited to those two definitive receipt failures.
+`--pay-again` is narrowly limited to those three definitive receipt failures.
 The CLI runs a fresh pre-check before retiring the rejected local proof or
-submitting a replacement transfer. It never overrides a signer, destination,
+submitting a replacement transfer. A rejected proof named with the
+`--payment-block-*` flags is retired from the saved list too, so a hotkey with
+several saved receipts is not asked for proof flags again. It never overrides a signer, destination,
 cooldown, archive, transport, or other validation failure, and `-y` alone does
 not authorize abandoning a finalized receipt.
 
