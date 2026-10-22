@@ -2177,6 +2177,31 @@ def test_timed_out_drain_signal_resumes_the_validator(
     assert not (state_dir / "transaction.env").exists()
 
 
+def test_run_resumes_a_validator_left_drained_without_a_transaction(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    # A late USR1 from an earlier timed-out drain landed after its USR2.
+    state = json.loads(state_path.read_text())
+    state["runtime_state"]["state"] = "drained"
+    state["channel_digest"] = OLD_STACK_DIGEST
+    state["calls"] = []
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    assert "drained outside any update transaction" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["runtime_state"]["state"] == "working"
+    assert ["kill", "--signal=USR2", "ditto-subnet-container"] in final["calls"]
+    assert not any(call[0] == "stop" for call in final["calls"])
+    assert not (state_dir / "transaction.env").exists()
+
+
 def test_stalled_registry_pull_times_out_before_drain(
     stack_updater_env: tuple[dict[str, str], Path, Path, Path],
 ) -> None:

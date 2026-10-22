@@ -638,6 +638,8 @@ request_drain() {
   # delivered, and the resume path needs this state to undo it.
   DRAINED_CONTAINER="$container"; DRAINED_RELEASE_DIR="$dir"
   if ! docker_bounded kill --signal=USR1 "$container" >/dev/null; then
+    # A USR1 still queued in a wedged daemon can land after this USR2; the
+    # next run tick's resume_stray_drain heals that late drain.
     resume_and_verify "$dir" "$ready_timeout" "$interval" || return 1
     return 1
   fi
@@ -905,6 +907,20 @@ rollback_to_previous() {
   resume_and_verify "$PREVIOUS_DIR" "$ready_timeout" "$check_seconds" || return 1
   promote_previous_after_rollback "$previous_ref" || return 1
   record_managed "$previous_ref"
+}
+
+# Only an update transaction may leave the managed validator drained, and a
+# completed or recovered transaction always resumes it. A drained validator
+# with no journal therefore lost its resume, for example to a timed-out USR1
+# that the daemon delivered after the compensating USR2.
+resume_stray_drain() {
+  local container
+  [ -f "$MANAGED_FILE" ] && [ ! -f "$TRANSACTION_FILE" ] && [ -d "$CURRENT_DIR" ] || return 0
+  container="$(service_container "$CURRENT_DIR" ditto-subnet)"; [ -n "$container" ] || return 0
+  state_drained "$(runtime_state "$container")" "$container" || return 0
+  log "validator is drained outside any update transaction; resuming it"
+  DRAINED_CONTAINER="$container"; DRAINED_RELEASE_DIR="$CURRENT_DIR"
+  resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "drained validator did not resume"
 }
 
 recover_transaction() {
@@ -1198,6 +1214,7 @@ if [ "$mode" = rollback ]; then
   perform_update "$rollback_ref" true; exit 0
 fi
 if ! is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE true)"; then log "disabled (set VALIDATOR_STACK_AUTO_UPDATE=true to opt back in)"; exit 0; fi
+resume_stray_drain
 candidate="$(resolve_channel_digest "$RELEASE_CHANNEL")"
 verify_descriptor_signature "$candidate" || die "candidate descriptor publisher identity is invalid"
 if failed_candidate_is_suppressed "$candidate"; then exit 0; fi
