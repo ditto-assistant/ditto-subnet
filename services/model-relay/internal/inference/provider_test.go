@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -406,6 +407,65 @@ func TestPublicProviderResponseKeepsEmptyToolCallsArray(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "tool_calls") {
 		t.Fatalf("absent tool_calls must not materialize a key: %s", raw)
+	}
+}
+
+// providerBodyReasoning is the provider body behind the shared golden relay
+// response in testdata/public_response_reasoning_usage.json. Platform's
+// Python mirror and the dittobench-api broker read the same file.
+const providerBodyReasoning = `{
+	"id":"gen-1","object":"chat.completion","created":1755000000,
+	"model":"openai/gpt-oss-20b",
+	"choices":[{"index":0,"finish_reason":"stop","logprobs":null,
+		"message":{"role":"assistant","content":"hi"}}],
+	"usage":{"prompt_tokens":10,"completion_tokens":1500,"cost":0.01,
+		"completion_tokens_details":{"reasoning_tokens":1200,"audio_tokens":0}}
+}`
+
+// #2972: the v13 cost ledger books answer tokens as completion minus
+// reasoning, so the relay passes the provider's reasoning count through. It is
+// optional, so a missing or invalid count is left out rather than failing the
+// call.
+func TestPublicProviderResponseCarriesBoundedReasoningTokens(t *testing.T) {
+	render := func(t *testing.T, body string) string {
+		t.Helper()
+		payload := decodeProviderBody(t, body)
+		public, herr := publicProviderResponse(payload, []byte(body))
+		if herr != nil {
+			t.Fatalf("unexpected error: %v", herr.message)
+		}
+		raw, err := compactJSON(public)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		return string(raw)
+	}
+	golden, err := os.ReadFile("testdata/public_response_reasoning_usage.json")
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if got, want := render(t, providerBodyReasoning), strings.TrimSpace(string(golden)); got != want {
+		t.Fatalf("relay response = %s\nwant %s", got, want)
+	}
+
+	const plain = `"usage":{"prompt_tokens":10,"completion_tokens":1500,"total_tokens":1510}}`
+	const reported = `"completion_tokens_details":{"reasoning_tokens":1200,"audio_tokens":0}`
+	for _, details := range []string{
+		`"no_details":true`,
+		`"completion_tokens_details":null`,
+		`"completion_tokens_details":{}`,
+		`"completion_tokens_details":{"reasoning_tokens":null}`,
+		`"completion_tokens_details":{"reasoning_tokens":-1}`,
+		`"completion_tokens_details":{"reasoning_tokens":1501}`,
+		`"completion_tokens_details":{"reasoning_tokens":12.0}`,
+		`"completion_tokens_details":{"reasoning_tokens":true}`,
+		`"completion_tokens_details":{"reasoning_tokens":"12"}`,
+		`"completion_tokens_details":[1200]`,
+	} {
+		body := strings.Replace(providerBodyReasoning, reported, details, 1)
+		if got := render(t, body); !strings.HasSuffix(got, plain) {
+			t.Fatalf("details %s: usage must stay plain, got %s", details, got)
+		}
 	}
 }
 

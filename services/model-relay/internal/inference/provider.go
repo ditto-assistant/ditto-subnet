@@ -702,6 +702,24 @@ func boundedUsage(payload map[string]any) (prompt, completion int64, ok bool) {
 	return p, c, true
 }
 
+// boundedReasoningTokens mirrors _bounded_reasoning_tokens: the provider's
+// usage.completion_tokens_details.reasoning_tokens when it is an integer in
+// [0, completion], else nil. Optional, so an invalid value is omitted, never a
+// 502.
+func boundedReasoningTokens(payload map[string]any, completion int64) *publicCompletionTokensDetails {
+	usage, _ := payload["usage"].(map[string]any)
+	details, _ := usage["completion_tokens_details"].(map[string]any)
+	n, ok := isIntLiteral(details["reasoning_tokens"])
+	if !ok {
+		return nil
+	}
+	reasoning, err := n.Int64()
+	if err != nil || reasoning < 0 || reasoning > completion {
+		return nil
+	}
+	return &publicCompletionTokensDetails{ReasoningTokens: reasoning}
+}
+
 // boundedProviderCost mirrors _bounded_provider_cost: usage.cost as bounded
 // integer micro-USD (finite, 0 <= cost <= 100 USD), banker's rounding like
 // Python round(). -1 means invalid.
@@ -884,6 +902,15 @@ type publicChatUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	TotalTokens      int64 `json:"total_tokens"`
+	// The v13 cost ledger books answer tokens as completion_tokens minus the
+	// reasoning tokens counted inside them (#2972). Optional: absent when the
+	// provider omitted it or reported anything but an integer in
+	// [0, completion_tokens].
+	CompletionTokensDetails *publicCompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+}
+
+type publicCompletionTokensDetails struct {
+	ReasoningTokens int64 `json:"reasoning_tokens"`
 }
 
 type publicChatResponse struct {
@@ -1010,9 +1037,10 @@ func publicProviderResponse(payload map[string]any, rawBody []byte) (*publicChat
 			Logprobs:     rawChoiceLogprobs(rawBody),
 		}},
 		Usage: publicChatUsage{
-			PromptTokens:     prompt,
-			CompletionTokens: completion,
-			TotalTokens:      prompt + completion,
+			PromptTokens:            prompt,
+			CompletionTokens:        completion,
+			TotalTokens:             prompt + completion,
+			CompletionTokensDetails: boundedReasoningTokens(payload, completion),
 		},
 	}, nil
 }
