@@ -64,7 +64,13 @@ class SandboxError(RuntimeError):
 def _docker_env() -> dict[str, str] | None:
     """One daemon builds and runs every probe image: PROBE_REVIEW_DOCKER_HOST."""
     host = os.environ.get("PROBE_REVIEW_DOCKER_HOST")
-    return {**os.environ, "DOCKER_HOST": host} if host else None
+    if not host:
+        return None
+    # A context would take precedence over DOCKER_HOST and could select
+    # another daemon, so the isolated host is the only daemon selector left.
+    env = {k: v for k, v in os.environ.items() if k != "DOCKER_CONTEXT"}
+    env["DOCKER_HOST"] = host
+    return env
 
 
 def _docker(args: list[str], *, timeout: float, stdin: Any = None) -> tuple[int, str]:

@@ -567,6 +567,19 @@ def test_requests_matching_counts_only_offering_requests() -> None:
     assert not evaluate(record, check)[0]
 
 
+def test_isolated_daemon_overrides_an_inherited_docker_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ditto_screener.probe_review import sandbox
+
+    monkeypatch.setenv("DOCKER_CONTEXT", "workstation")
+    monkeypatch.setenv("PROBE_REVIEW_DOCKER_HOST", "unix:///run/isolated.sock")
+    env = sandbox._docker_env()
+    assert env is not None
+    assert env["DOCKER_HOST"] == "unix:///run/isolated.sock"
+    assert "DOCKER_CONTEXT" not in env
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
