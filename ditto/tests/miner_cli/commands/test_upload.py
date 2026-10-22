@@ -1285,7 +1285,8 @@ class TestUploadFailurePaths:
         clear.assert_not_called()
         pay.assert_not_called()
         err = capsys.readouterr().err
-        assert "already funded an upload" in err
+        assert "cannot fund this upload" in err
+        assert "exact archive" in err
         assert "No second transfer has been sent" in err
         assert "--pay-again" in err
 

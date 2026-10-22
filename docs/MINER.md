@@ -284,11 +284,12 @@ can qualify, and it must have finalized before that cutover. This is a
 receipt-scoped exception, not a coldkey-wide fee waiver.
 
 If a saved receipt is instead definitively rejected for an amount mismatch,
-because its 24-hour recovery window expired, or because it already funded an
-upload (`3207`, typically an earlier upload whose response was lost, then
-retried with a different archive), the CLI prints the rejected proof and sends
-nothing. For an already-used proof, rerunning that earlier upload's exact
-archive returns its agent without paying again. In an interactive terminal it asks whether to pay the
+because its 24-hour recovery window expired, or because it cannot fund this
+upload (`3207`: it already funded another upload, typically an earlier one
+whose response was lost before a retry with a different archive, or it belongs
+to another hotkey or owner), the CLI prints the rejected proof and sends
+nothing. A proof that funded an earlier upload still returns that agent when
+you rerun its exact archive, without paying again. In an interactive terminal it asks whether to pay the
 currently reserved TAO fee. For non-interactive recovery, opt in explicitly:
 
 ```sh

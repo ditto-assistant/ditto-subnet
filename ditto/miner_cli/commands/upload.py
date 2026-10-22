@@ -1097,9 +1097,10 @@ def _authorize_replacement_payment(
         f"hash={receipt.block_hash}"
     )
     spent = (
-        "This proof already funded an upload, often an earlier one whose "
-        "response was lost; rerunning that upload's exact archive returns it "
-        "without paying again.\n"
+        "This proof cannot fund this upload: it already funded another one, "
+        "or it belongs to another hotkey or owner. If it funded an earlier "
+        "upload whose response was lost, rerunning that upload's exact archive "
+        "returns it without paying again.\n"
         if isinstance(error, PaymentReplayedError)
         else ""
     )
