@@ -175,6 +175,13 @@ appear; treat one as a pre-fix row or a bug to report.
 Search **both** reporters, then apply the same holding to the same pattern
 under the same applicable policy.
 
+Before a ruling, check Peyton's relevant miner DMs as well as the live and
+local reporters. Follow
+[miner-communication precedents](references/miner-communication-precedents.md)
+to verify context, reconcile prior assurances and preserve new precedents in
+the existing store. A DM clarification is not automatically a court action
+or clearance of every path in a submission.
+
 Live production holdings (for the same applicable policy and mechanism):
 
 ```

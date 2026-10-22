@@ -20,6 +20,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 import ditto
+from ditto.api_server.bounty_claims import SimulatedBountyFeeVerifier
+from ditto.api_server.bounty_deadlines import BountyDeadlineSweeper
+from ditto.api_server.bounty_settlement import SimulatedTransferExecutor
 from ditto.api_server.burn_settings import BurnSettingsResolver
 from ditto.api_server.coding_artifact_capabilities import (
     CodingArtifactCapabilityMinter,
@@ -122,6 +125,10 @@ from ditto.api_server.endpoints import (
     admin_validator_slot_settings_router,
     admin_validator_weights_router,
     attestation_router,
+    bounties_admin_router,
+    bounties_claims_router,
+    bounties_public_router,
+    contributor_cla_router,
     ditto_callback_challenge_router,
     feedback_track_router,
     health_router,
@@ -130,6 +137,7 @@ from ditto.api_server.endpoints import (
     miner_auth_router,
     miner_avatars_router,
     miner_ditto_link_router,
+    miner_github_link_router,
     miner_mcp_router,
     miner_me_router,
     name_claims_router,
@@ -164,6 +172,9 @@ from ditto.api_server.endpoints.admin_conversation import (
 from ditto.api_server.endpoints.screener_conversation import (
     router as screener_conversation_router,
 )
+from ditto.api_server.endpoints.v13_official_control import (
+    router as admin_v13_official_control_router,
+)
 from ditto.api_server.endpoints.validator_coding_hosted import HostedCodingControl
 from ditto.api_server.endpoints.validator_coding_hosted import (
     router as validator_coding_hosted_router,
@@ -178,6 +189,7 @@ from ditto.api_server.endpoints.verification_replay import (
     screener_router as screener_verification_replay_router,
 )
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
+from ditto.api_server.github_link import GithubLinkClient
 from ditto.api_server.inference_concurrency_settings import (
     InferenceConcurrencySettingsResolver,
 )
@@ -193,6 +205,7 @@ from ditto.api_server.middleware import (
 )
 from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
 from ditto.api_server.miner_avatar import MAX_AVATAR_BYTES
+from ditto.api_server.no_store import NoStoreMiddleware
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
@@ -494,6 +507,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await nonce_janitor.start()
             app.state.validator_nonce_janitor = nonce_janitor
 
+            # Records bounty deadlines no request has touched. Requests apply
+            # the same rule lazily, so only the platform role sweeps.
+            bounty_deadlines = BountyDeadlineSweeper(
+                session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(bounty_deadlines.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await bounty_deadlines.start()
+            app.state.bounty_deadline_sweeper = bounty_deadlines
+
             capacity_event_janitor = ScreenerCapacityEventJanitor(
                 session_maker=app.state.session_maker,
                 retention_days=config.screener_auth.capacity_event_retention_days,
@@ -555,6 +578,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
+            # Built with the app (tests swap it); its pooled public lookup
+            # client closes with the process.
+            stack.push_async_callback(app.state.github_link.aclose)
             if _process_role() == PLATFORM_ROLE:
                 await validator_names.start(app.state.session_maker)
 
@@ -647,6 +673,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Sign in with Ditto relying party. Inert (every route answers 503) until
     # DITTO_LINK_* names the DittoBench app; tests swap in a mock transport.
     app.state.ditto_link = DittoLinkClient(config.ditto_link)
+    app.state.github_link = GithubLinkClient(config.github_link)
+    # v1 bounties run in rehearsal funding only: fees are simulated, no funds
+    # move. A live verifier is a separately approved change (#2944).
+    app.state.bounty_fee_verifier = SimulatedBountyFeeVerifier()
+    app.state.bounty_transfer_executor = SimulatedTransferExecutor()
 
     # Starlette inserts each middleware at position 0, so the LAST
     # add_middleware call ends up outermost on the wire. RequestIDMiddleware
@@ -660,6 +691,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Gzip is inside the public cache: each identity/gzip representation is
     # built once and cached independently, so a 200KB operations cache HIT
     # does not burn CPU recompressing the same user-agnostic bytes.
+    # Innermost: a private route's no-store reaches gzip and the public cache.
+    app.add_middleware(NoStoreMiddleware)
     app.add_middleware(SizedGZipMiddleware, minimum_size=1000, compresslevel=6)
     # Opt-in per-client-IP limit on the unauthenticated expensive routes. Inside
     # the public cache so cache hits never spend a client's budget; absent
@@ -725,6 +758,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(miner_auth_router, prefix="/api/v1")
     app.include_router(miner_me_router, prefix="/api/v1")
     app.include_router(miner_ditto_link_router, prefix="/api/v1")
+    app.include_router(miner_github_link_router, prefix="/api/v1")
+    app.include_router(contributor_cla_router, prefix="/api/v1")
+    app.include_router(bounties_public_router, prefix="/api/v1")
+    app.include_router(bounties_admin_router, prefix="/api/v1")
+    app.include_router(bounties_claims_router, prefix="/api/v1")
     app.include_router(feedback_track_router, prefix="/api/v1")
     app.include_router(miner_mcp_router)
     # Root path (no /api/v1): Ditto fetches the challenge at the origin root.
@@ -757,6 +795,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_policy_activation_router, prefix="/api/v1")
     app.include_router(admin_v13_private_generation_router, prefix="/api/v1")
+    app.include_router(admin_v13_official_control_router, prefix="/api/v1")
     app.include_router(admin_inference_admission_router, prefix="/api/v1")
     app.include_router(admin_v13_scorer_cohort_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")

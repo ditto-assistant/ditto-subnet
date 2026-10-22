@@ -1,0 +1,213 @@
+{
+  "checked_at_utc": "2026-10-22",
+  "independent_rebuild_performed": false,
+  "artifact": {
+    "version": 482,
+    "source_commit": "8cf229f8ef969389d054a4c161b53ffd164a041f",
+    "size": 2665898,
+    "sha256": "4fd14869c13661c0ea29738a4bdf9181b9a3d7a7149b99c83f4a04e77bcef356",
+    "blake2b": "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62",
+    "url": "https://github.com/RaoFoundation/subtensor/releases/download/v482/subtensor.wasm",
+    "published_at": "2026-10-21T19:59:33Z",
+    "srtool": "0.18.3 rustc 1.89.0",
+    "transaction_version": 1
+  },
+  "upgrade": {
+    "first_block": 9334380,
+    "first_block_hash": "0xee4f9162ddd5a11cd332600a27f196cf11321f067b1c5eb1ae9419b640eb2c9e",
+    "parent_runtime_code_hash": "0x5fb504c1c793a3ddb5456f189ddef98b5146853aea6ff998501f1b6c6eb720bc"
+  },
+  "live_current": {
+    "block": 9336443,
+    "block_hash": "0x462f5051b205f26f487491fbd02fedc9128dd484110e11ba98ae2e1a9462e338",
+    "runtime_code_hash": "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62",
+    "spec_version": 482,
+    "surfaces": [
+      {
+        "surface": "source_emission",
+        "admitted_by": "interface",
+        "interface_digest": "1ef98cc80020ae30fd6db2c7ab1cb3d9be974facca18b51e88682ff434d518fe",
+        "nearest_audited_release": "v478",
+        "changed_entries": []
+      },
+      {
+        "surface": "treasury_receipt",
+        "admitted_by": null,
+        "interface_digest": "9e0d036eb8e9b4ab3d7b28aa28c66bd0ec3770c36769826cda8fd814b5dbaf5d",
+        "nearest_audited_release": "v478",
+        "changed_entries": [
+          "call:Proxy.proxy"
+        ]
+      }
+    ]
+  },
+  "proxy_type_appended": {
+    "Validate": 19,
+    "Weights": 20
+  },
+  "unchanged_encoding": {
+    "proxy_pallet_call": [
+      16,
+      0
+    ],
+    "transfer_stake": [
+      7,
+      86
+    ],
+    "register_limit": [
+      7,
+      134
+    ],
+    "force_proxy_type_transfer": "010a",
+    "amount_too_low_error": 82
+  },
+  "critical_source_sha256": [
+    {
+      "path": "runtime/src/proxy_filters/mod.rs",
+      "sha256": "dbe00743f6fda665b96afaba27406f8e5cd77fe119fd5c37e60f98ca57a1bd2b",
+      "changed": true
+    },
+    {
+      "path": "runtime/src/proxy_filters/call_groups.rs",
+      "sha256": "a80e24cbbf6c06ba6b848c0667882e1b6136077347472b61ebfb94c0806ea380",
+      "changed": true
+    },
+    {
+      "path": "common/src/proxy.rs",
+      "sha256": "c44f7a4a91063a5899d839aeecb2dc56921ca46ccbc17e5f3b49a6e2f4651a1c",
+      "changed": true
+    },
+    {
+      "path": "pallets/proxy/src/lib.rs",
+      "sha256": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12",
+      "changed": false
+    },
+    {
+      "path": "pallets/subtensor/src/subnets/registration.rs",
+      "sha256": "0a621d453b01f7d44e8ebb44a585520a793cb05fc51d4cb906b8fd27f685ca52",
+      "changed": false
+    },
+    {
+      "path": "pallets/subtensor/src/staking/move_stake.rs",
+      "sha256": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b",
+      "changed": false
+    },
+    {
+      "path": "pallets/subtensor/src/coinbase/run_coinbase.rs",
+      "sha256": "60dbf8a8866962c96ced8bbad08893323a289f31bc12f0367ab26adefba9ac1f",
+      "changed": true
+    },
+    {
+      "path": "pallets/subtensor/src/rpc_info/stake_info.rs",
+      "sha256": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917",
+      "changed": false
+    },
+    {
+      "path": "pallets/subtensor/src/staking/account.rs",
+      "sha256": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9",
+      "changed": false
+    },
+    {
+      "path": "pallets/subtensor/src/staking/lock.rs",
+      "sha256": "1fc13ea4d141250df4d51b36f4167b42e2a77cc1f7814c3183c24c684684a323",
+      "changed": true
+    },
+    {
+      "path": "pallets/subtensor/src/staking/stake_utils.rs",
+      "sha256": "f92ad0b7166d4f098c9de79782f8aeabbd00ffb9693cdaec8124e1384f69bd4a",
+      "changed": true
+    },
+    {
+      "path": "pallets/subtensor/src/subnets/collateral.rs",
+      "sha256": "e13e4d5a5713083e23230dbe928a8f4360db1ff0753b9b0192553467096ef300",
+      "changed": false
+    },
+    {
+      "path": "pallets/subtensor/src/macros/events.rs",
+      "sha256": "b01d1f64fc3a2a1448688bb9642b63edf3678f9bae5ab016f19b8bba42b3ff17",
+      "changed": false
+    },
+    {
+      "path": "pallets/subtensor/src/macros/dispatches.rs",
+      "sha256": "1bf7d98f9e85aebf450a202e85b32635275e5a49b9427fb2324af88390c89f4c",
+      "changed": true
+    },
+    {
+      "path": "primitives/share-pool/src/lib.rs",
+      "sha256": "c099bcfa982175631482a8144970e70af52a6697ab0dff9aa9c1f25966905b26",
+      "changed": false
+    },
+    {
+      "path": "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs",
+      "sha256": "da47da584ae0590e218a4ef66cbcd74941e729519073e8f0687720793f85616b",
+      "changed": false
+    },
+    {
+      "path": "pallets/subtensor/src/subnets/emission_weights.rs",
+      "sha256": "678bc95e4ff11088160541a98f8fb9bc1f1c122fe8781e570ee8e09b68f74683",
+      "changed": false
+    },
+    {
+      "path": "pallets/subtensor/src/migrations/migrate_seed_subnet_emission_weights.rs",
+      "sha256": "c79b24b8e7b8b8cec839dbb5fdeb097436d2ddb27c43ff1a1400f37f890381c4",
+      "changed": false
+    },
+    {
+      "path": "runtime/src/transaction_payment_wrapper.rs",
+      "sha256": "2326c78fd3a0e28b8f728a491130c9d58a3962afccca8fc3dd8d40a0d822fa91",
+      "changed": true
+    },
+    {
+      "path": "pallets/subtensor/src/epoch/run_epoch.rs",
+      "sha256": "9bca5c03ebbbcab33ddc95918179316dfa5d3df40256694f5214191f652af111",
+      "changed": true
+    },
+    {
+      "path": "pallets/subtensor/src/swap/swap_coldkey.rs",
+      "sha256": "f708cb6d9807e5f5e13451ec1e2fb88deb90313ba868c8691fd68ee3ac25282d",
+      "changed": true
+    },
+    {
+      "path": "pallets/subtensor/src/staking/helpers.rs",
+      "sha256": "0d1bb97e875ff1dd750f3a36c643e0968dad264b22b504075fd3ffcc636e650f",
+      "changed": true
+    },
+    {
+      "path": "pallets/subtensor/src/macros/errors.rs",
+      "sha256": "f2a1d499f5a49087bc24ec422749342c899c6dae55a3aabb282eaa8e0dc893d1",
+      "changed": true
+    }
+  ],
+  "native_transfer_and_registration": {
+    "transfer": [
+      "Balances.transfer_keep_alive",
+      "Balances.transfer_allow_death",
+      "Balances.transfer_all",
+      "SubtensorModule.transfer_stake",
+      "SubtensorModule.transfer_stake_and_hotkey"
+    ],
+    "registration": [
+      "SubtensorModule.register",
+      "SubtensorModule.register_limit",
+      "SubtensorModule.burned_register",
+      "SubtensorModule.pow_register"
+    ],
+    "changed": false
+  },
+  "collector_observation": {
+    "consensus": "Yuma",
+    "uid": 21,
+    "proxies": [
+      "Registration",
+      "Transfer"
+    ],
+    "coldkey_swap_reservation": null,
+    "staking_hotkeys": "collector hotkey only"
+  },
+  "financial_policy_diff": [
+    "revision:7->8",
+    "runtime_code_hash:v481->v482"
+  ],
+  "manual_max_alpha": 2500,
+  "recurring_enabled": false
+}

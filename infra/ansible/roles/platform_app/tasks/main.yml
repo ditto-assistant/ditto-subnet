@@ -630,6 +630,9 @@
   no_log: true
   when: platform_coding_hippius_evidence_enabled | bool
 
+- name: Load and validate GitHub linking configuration
+  ansible.builtin.import_tasks: github-link-config.yml
+
 - name: Render .env
   ansible.builtin.template:
     src: platform.env.j2

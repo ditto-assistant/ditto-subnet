@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
+from ditto.api_server.cla import CLA_REQUIRED_ERROR_CODE, ClaConsentRequired
 from ditto.api_server.endpoints.inference import InferenceDeclinedError
 from ditto.api_server.endpoints.retrieval import (
     AgentNotFoundError,
@@ -228,6 +229,13 @@ def envelope_response(
     rid = request_id_var.get()
     response_headers = dict(headers or {})
     response_headers[REQUEST_ID_HEADER] = rid
+    # No error is cacheable: it can carry a request id, an auth answer or a
+    # transient refusal. Every error path (route exceptions, validation and
+    # routing failures, 413/429 middleware and the 500 handler) builds its
+    # response here, so this one default covers them all. A handler that
+    # declares its own Cache-Control keeps it.
+    if not any(name.lower() == "cache-control" for name in response_headers):
+        response_headers["Cache-Control"] = "no-store"
     return JSONResponse(
         status_code=status_code,
         content=_envelope(error_code, message),
@@ -237,6 +245,10 @@ def envelope_response(
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach the three envelope handlers to ``app``."""
+
+    @app.exception_handler(ClaConsentRequired)
+    async def _cla_required(_request: Request, exc: ClaConsentRequired) -> JSONResponse:
+        return envelope_response(403, CLA_REQUIRED_ERROR_CODE, str(exc))
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_exception_handler(

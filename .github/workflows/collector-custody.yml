@@ -1,30 +1,8 @@
 name: Collector custody refusal controls
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'scripts/collector_delegate_key.py'
-      - 'scripts/check-treasury-manual-mode.sh'
-      - 'scripts/test-treasury-manual-systemd.sh'
-      - 'infra/systemd/sn118-treasury-manual.service'
-      - 'infra/systemd/sn118-collector@.timer'
-      - 'scripts/manual-mailbox-input.py'
-      - 'scripts/test-collector-custody.sh'
-      - 'ditto/tests/test_collector_delegate_ceremony.py'
-      - 'infra/terraform/stacks/gcp-collector-custody/**'
-      - 'infra/terraform/stacks/gcp-gamma-custody/**'
-      - 'infra/terraform/stacks/gcp-gamma-custody-bootstrap/**'
-      - 'ditto/tests/test_gamma_custody_isolation.py'
-      - 'scripts/collector-custody-phase-input.py'
-      - 'ditto/tests/test_collector_custody_phase_input.py'
-      - 'scripts/check-collector-custody-plan.py'
-      - 'ditto/tests/test_collector_custody_scope.py'
-      - '.github/workflows/infra-plan-apply.yml'
-      - 'infra/terraform/tests/collector-custody/**'
-      - 'infra/terraform/tests/gamma-custody/**'
-      - 'infra/terraform/tests/collector-backend/**'
-      - 'infra/terraform/stacks/gcp-preview/**'
-      - '.github/workflows/collector-custody.yml'
 permissions:
   contents: read
 jobs:

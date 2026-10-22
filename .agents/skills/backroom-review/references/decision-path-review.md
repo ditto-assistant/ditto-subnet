@@ -29,6 +29,27 @@ input, lost material alternative and live reachability for the exact artifact.
 Meaning-preserving projection and compatible added guidance remain allowed;
 neither substring absence nor byte inequality alone proves instruction loss.
 
+SEED AND EVIDENCE SCOPE (I2/I4/S1).
+The `/seed` request has no `/run` system_prompt. Its absence during seeding
+cannot discard a trusted instruction that was never supplied. Seed-time model
+notes, local parsing, NER, coreference and advisory derived values are permitted
+when original user-scoped records remain available with provenance and the
+deciding model can inspect them, disagree with the notes and author the result.
+Do not treat a predecision note or candidate as a finalized answer rewrite.
+This does not authorize another substantive answering model, a host correctness
+gate, replacement of protected evidence, or rewriting a final model field.
+
+For evidence loss, distinguish candidate retrieval/indexing from protected
+applicable evidence already admitted to a deciding turn. A retrieval miss or
+index-row collision alone proves neither I2 nor S1. Trace the original store,
+user-scoped reads, and actual deciding inputs. For S1 cross-user access, prove
+that another principal's data reaches an unauthorized read, model, tool or
+response; a collision that loses an index row without exposing another user's
+content is not that proof. A separate availability allegation still needs its
+published materiality and reachable effect. Preserve genuine evidence-loss or
+cross-user findings when those paths are established. An unresolved trace is a
+review limitation, not a breach or permission to clear unread source.
+
 I3 / W7: enumerate predicates that retry, select or replace a valid output and
 trace their results to the served writer. Compare well-formed refusal,
 uncertainty, no-call and zero-valued answers with a positive answer. Treating

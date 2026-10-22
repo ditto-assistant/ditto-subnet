@@ -57,6 +57,9 @@ platform_inference_relay_ports: [8010, 8011]
 # Per-env Secret Manager secret ids (shared ones are in the platform_app role).
 # Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
 secret_pylon_token: platform-prod-pylon-open-access-token
+# Payload version 1 exists. The protected Terraform apply grants runtime read
+# access before the managed app role consumes this shared proof binding.
+secret_backroom_platform_operator_proof: backroom-platform-operator-proof
 
 # Platform-operated screener auth: allowlist the dedicated prod screener hotkey
 # and share its bearer token (the same SCREENER_API_TOKEN configured on
@@ -83,3 +86,9 @@ platform_treasury_manual_report_subscription: sn118-manual-reports
 
 # SN-49: separate read-only backup credentials; dev retains the disabled default.
 platform_database_backup_reader_enabled: true
+
+# Dedicated public-profile-only OAuth app, owned by ditto-assistant.
+platform_github_link_enabled: true
+platform_github_link_client_id: "Ov23lilTsAripA4MWrWS"
+platform_github_link_redirect_url: "https://dittobench.ai/api/v1/miner-auth/github/callback"
+secret_github_link_client_secret: "platform-github-link-client-secret"

@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from pylon_client.artanis import AsyncPylonClient
 
     from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
+    from ditto.api_models.treasury_movement import TreasuryMovementSelector
     from ditto.chain.runtime_interface_report import RuntimeInterfaceReport
     from ditto.chain.treasury_receipts import TreasuryChainProof
 
@@ -190,11 +191,26 @@ class ChainClient:
         self._recent_neurons_flights: dict[int, asyncio.Task[list[NeuronInfo]]] = {}
         self._clock = time.monotonic
 
-    def _new_treasury_substrate(self) -> Any:
+    def _new_treasury_substrate(
+        self, *, archive: bool = False, url: str | None = None
+    ) -> Any:
         cache = getattr(self, "_treasury_runtime_cache", None)
         if cache is None:
             cache = self._treasury_runtime_cache = TreasuryRuntimeCache()
-        return _treasury_substrate(self._substrate_url(), runtime_cache=cache)
+        # Use the same configured/archive transport order as finalized receipt
+        # reads. The public live entrypoint can refuse websocket handshakes with
+        # HTTP 429 while these existing providers still serve current finalized
+        # identity and permission evidence. This selects transport only: each
+        # request retains its exact-hash reads, genesis/identity validation and
+        # existing eight-second windows; no observed authority is cached.
+        # Epoch scheduling passes each provider of its own failover order.
+        if url is None:
+            url = (
+                self._historical_substrate_urls()[0]
+                if archive
+                else self._substrate_url()
+            )
+        return _treasury_substrate(url, runtime_cache=cache)
 
     async def __aenter__(self) -> ChainClient:
         """Open the underlying Pylon client connection."""
@@ -392,21 +408,49 @@ class ChainClient:
         Payment proofs carry both identifiers because Pylon reads extrinsics by
         number while historical events and storage are read by hash. Callers
         must bind the pair before combining those two data sources.
+
+        Tries the archive providers before the public live entrypoint, which
+        refuses websocket handshakes with HTTP 429 under load; every upload
+        payment proof passes through here, so one rate-limited endpoint must
+        not 503 every upload. Not-found is reported only when every provider
+        answered and none knows the height.
         """
-        try:
-            async with header_substrate(self._substrate_url()) as substrate:
-                block_hash = await substrate.get_block_hash(block_number)
-        except TimeoutError as e:
-            raise ChainTimeoutError(f"get_block_hash({block_number}) timed out") from e
-        except Exception as e:
-            raise ChainConnectionError(
-                f"get_block_hash({block_number}) failed: {self._safe_rpc_error(e)}"
-            ) from e
-        if not block_hash:
+        failures: list[tuple[str, Exception]] = []
+        urls = tuple(
+            dict.fromkeys((*self._historical_substrate_urls(), self._substrate_url()))
+        )
+        for url in urls:
+            provider = urlsplit(url).hostname or "configured archive"
+            try:
+                async with (
+                    asyncio.timeout(self._config.archive_rpc_timeout_seconds),
+                    header_substrate(url) as substrate,
+                ):
+                    block_hash = await substrate.get_block_hash(block_number)
+            except Exception as error:
+                failures.append((provider, error))
+                logger.warning(
+                    "block hash read failed provider=%s block=%s error=%s",
+                    provider,
+                    block_number,
+                    self._safe_rpc_error(error),
+                )
+                continue
+            if block_hash:
+                return str(block_hash).lower()
+
+        if not failures:
             raise ExtrinsicNotFoundError(
                 f"no block hash found for block number {block_number}"
             )
-        return str(block_hash).lower()
+        summary = "; ".join(
+            f"{provider}: {self._safe_rpc_error(error)}" for provider, error in failures
+        )
+        if all(isinstance(error, TimeoutError) for _, error in failures):
+            raise ChainTimeoutError(
+                f"get_block_hash({block_number}) timed out: {summary}"
+            )
+        raise ChainConnectionError(f"get_block_hash({block_number}) failed: {summary}")
 
     @asynccontextmanager
     async def _treasury_reader(self, *, setters: bool = False):
@@ -414,7 +458,7 @@ class ChainClient:
         try:
             async with (
                 asyncio.timeout(8),
-                self._new_treasury_substrate() as substrate,
+                self._new_treasury_substrate(archive=True) as substrate,
             ):
                 trace.client = substrate
                 yield trace
@@ -524,7 +568,7 @@ class ChainClient:
         try:
             async with (
                 asyncio.timeout(8) as deadline,
-                self._new_treasury_substrate() as substrate,
+                self._new_treasury_substrate(archive=True) as substrate,
             ):
                 trace.client = substrate
                 observed = await read_treasury_dispatch_observation(trace, policy)
@@ -571,7 +615,7 @@ class ChainClient:
 
     async def get_treasury_receipt_proof(
         self,
-        selector: TreasuryReceiptSelector,
+        selector: TreasuryReceiptSelector | TreasuryMovementSelector,
         policy: TreasuryEmissionPolicy,
         *,
         sender: str,
@@ -1207,43 +1251,75 @@ class ChainClient:
         it fails loud: a pin taken against a half-read schedule would be worse
         than no pin. It deliberately does not read the timelocked commit map
         (``read_weight_diagnostics`` does; that is a diagnostic, not a clock).
+
+        Every ledger response is gated on this read, so it tries the archive
+        providers before the public live entrypoint, which refuses websocket
+        handshakes with HTTP 429 under load. Each provider reads its own
+        finalized head; nothing is mixed across providers.
         """
+        failures: list[tuple[str, Exception]] = []
+        urls = tuple(
+            dict.fromkeys((*self._historical_substrate_urls(), self._substrate_url()))
+        )
+        for url in urls:
+            provider = urlsplit(url).hostname or "configured archive"
+            try:
+                async with asyncio.timeout(self._config.archive_rpc_timeout_seconds):
+                    return await self._read_epoch_schedule_from(url, netuid)
+            except Exception as error:
+                failures.append((provider, error))
+                logger.warning(
+                    "epoch schedule read failed provider=%s error=%s",
+                    provider,
+                    self._safe_rpc_error(error),
+                )
+        summary = "; ".join(
+            f"{provider}: {self._safe_rpc_error(error)}" for provider, error in failures
+        )
+        if all(
+            isinstance(error, (TimeoutError, ChainTimeoutError))
+            for _, error in failures
+        ):
+            raise ChainTimeoutError(
+                f"read_epoch_schedule({netuid}) timed out: {summary}"
+            )
+        # One provider's typed refusal (a rejected archive key) still fails over;
+        # only a type every provider agreed on reaches the caller unchanged. Each
+        # provider's failure is already logged above.
+        last = failures[-1][1]
+        if isinstance(last, ChainError) and all(
+            type(error) is type(last) for _, error in failures
+        ):
+            raise last
+        raise ChainConnectionError(f"read_epoch_schedule({netuid}) failed: {summary}")
+
+    async def _read_epoch_schedule_from(self, url: str, netuid: int) -> EpochSchedule:
+        """Read one provider's epoch schedule at its own finalized head."""
         from ditto.chain.weight_diagnostics import predict_next_epoch_block
 
-        try:
-            async with self._new_treasury_substrate() as substrate:
-                block_hash = await substrate.get_chain_finalised_head()
-                header = await substrate.get_block_header(block_hash=block_hash)
-                block = _block_number_from_header(header)
+        async with self._new_treasury_substrate(url=url) as substrate:
+            block_hash = await substrate.get_chain_finalised_head()
+            header = await substrate.get_block_header(block_hash=block_hash)
+            block = _block_number_from_header(header)
 
-                async def read(name: str) -> int | None:
-                    return _as_int(
-                        await substrate.query(
-                            module=_SUBTENSOR_MODULE,
-                            storage_function=name,
-                            params=[netuid],
-                            block_hash=block_hash,
-                        )
+            async def read(name: str) -> int | None:
+                return _as_int(
+                    await substrate.query(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=name,
+                        params=[netuid],
+                        block_hash=block_hash,
                     )
+                )
 
-                last_epoch, pending_at, index, tempo, since = await asyncio.gather(
-                    read(_LAST_EPOCH_BLOCK_STORAGE),
-                    read(_PENDING_EPOCH_AT_STORAGE),
-                    read(_SUBNET_EPOCH_INDEX_STORAGE),
-                    read(_TEMPO_STORAGE),
-                    read(_BLOCKS_SINCE_STEP_STORAGE),
-                )
-                block_timestamp = await self._read_block_timestamp(
-                    substrate, block_hash
-                )
-        except TimeoutError as e:
-            raise ChainTimeoutError(f"read_epoch_schedule({netuid}) timed out") from e
-        except ChainError:
-            raise
-        except Exception as e:
-            raise ChainConnectionError(
-                f"read_epoch_schedule({netuid}) failed: {e}"
-            ) from e
+            last_epoch, pending_at, index, tempo, since = await asyncio.gather(
+                read(_LAST_EPOCH_BLOCK_STORAGE),
+                read(_PENDING_EPOCH_AT_STORAGE),
+                read(_SUBNET_EPOCH_INDEX_STORAGE),
+                read(_TEMPO_STORAGE),
+                read(_BLOCKS_SINCE_STEP_STORAGE),
+            )
+            block_timestamp = await self._read_block_timestamp(substrate, block_hash)
         if (
             last_epoch is None
             or pending_at is None

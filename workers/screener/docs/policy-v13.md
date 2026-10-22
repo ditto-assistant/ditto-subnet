@@ -21,11 +21,11 @@ does not silently become a prerequisite for every submission. The activation
 record must include the revised built-in manifest digest and release revision;
 historical decisions retain their original policy digest.
 
-Policy v13 is a strict two-outcome policy. Every completed review ends in
-`CLEAR` or `REJECT`. When verification cannot be completed the result is
-`REJECT` with `violation_proven: false` and an explicit failure domain; such a
-rejection is a certification failure and must never be described as cheating,
-fraud, or deliberate evasion.
+A completed eligibility decision is `CLEAR` or `REJECT`. A reviewer, platform
+or provider failure leaves verification incomplete and the attempt parked for
+operator review or manual retry; it does not establish rejection evidence.
+An artifact-controlled certification rejection records `violation_proven:
+false` and must never be described as cheating, fraud, or deliberate evasion.
 
 ## Final outcomes
 
@@ -36,12 +36,13 @@ CLEAR
 REJECT
 ```
 
-Queued, building, screening, retrying, and adjudicating are temporary
-processing states. They must resolve to `CLEAR` or `REJECT` by the published
-deadline.
-
-There is no `REVIEW_INCOMPLETE`, `INCONCLUSIVE`, implied clearance, or
-indefinite hold outcome.
+Queued, building, screening, retrying, and adjudicating are processing states.
+A completed eligibility decision is `CLEAR` or `REJECT`. When screening cannot
+complete, the attempt ends once and the submission stays `screening_failed`
+for explicit operator review or manual retry. That state confers no clearance.
+Repeated inconclusive reviews and platform/provider failures are evidence of
+verification problems, never grounds for automatic rejection or misconduct.
+There are no automatic cost-bearing retries; see `docs/no-automatic-retries.md`.
 
 ## Exact-artifact scope
 
@@ -549,6 +550,45 @@ The proof also names the reachable path. Ordinary relevance ranking, an
 isolated miss, or a hypothetical retrieval miss is insufficient. A controlled
 exact-artifact reproduction is sufficient.
 
+#### Clarification: which instructions I2 protects (2026-10-19)
+
+I2 protects instructions that the served request actually carries. It is
+not a requirement that every model call repeat the system prompt.
+
+- **Name the instruction.** An I2 trusted-instruction finding quotes the exact
+  instruction text from the request being served and shows why it applies to
+  the stage that lost it. Naming a category of instruction that a request
+  could carry ("scope, disclosure, temporal, authorization or output") is
+  hypothetical, the same as a hypothetical retrieval miss, and is
+  insufficient.
+- **The deciding input decides the question.** W2 requires the instruction at
+  every deciding answer-producing call. A model stage before that call (a
+  draft, reading, ordering, extraction or lookup pass) whose output reaches a
+  deciding call that still carries the instruction breaches I2 only when the
+  proof shows a material alternative that the deciding call can no longer
+  evaluate. Show that the named instruction would have changed that stage's
+  output, or reproduce the change on the exact artifact. Labelling the stage
+  "advisory" is neither a defense nor a breach.
+- **What the request carries.** In Bench v13, every scored `/run` carries the
+  validator-authored system prompt "You are Ditto, a helpful assistant with
+  access to tools. Call a tool only when it is the right action for the
+  user's request." A tool-less model stage cannot breach that instruction's
+  tool rule. Confirmation lanes can carry other system prompts, such as the
+  LongMemEval current date. Cite the lane and text that apply.
+- **`/seed` is out of scope for this clause.** The seed request carries no
+  system prompt, so seed-time processing cannot lose a trusted instruction.
+  Model-written notes, extraction, indexing and summaries built during
+  `/seed` are permitted on this axis. They remain subject to I2's evidence
+  bullets (a derived interpretation shown while its support or contradiction
+  is removed), W3, I5 and the other conditions.
+
+Passing the request system prompt to every `/run`-time model stage remains
+good practice. Omitting it is a lead to examine, not a finding.
+
+The 2026-10 board holdings that charged I2 for a preliminary model stage
+without naming an applicable instruction from the served request do not meet
+this standard. They are withdrawn as precedent.
+
 ### I3: model-dissent suppression
 
 Reject when host processing semantically chooses, retries, replaces, or
@@ -734,31 +774,20 @@ exact accepted component path and digest.
 
 This is a certification failure, not proof of misconduct.
 
-### V2: platform verification not completed
+### Platform and provider verification not completed
 
-- A predefined mandatory verification remains incomplete after the published
-  retries and deadline because the platform could not complete it.
-- The missing verification and failure domain are recorded.
-- Platform failure is not represented as artifact misconduct.
-- Suspicion is not converted into an unpublished requirement.
-- Screening runs no separate private behavioral test. When two complete source
-  reviews of the exact artifact both end without a source-proven decision
-  (`insufficient_static_evidence`), source verification is incomplete and the
-  outcome is V2, reported as `verification-incomplete-unreviewable`. Reviews
-  stopped by a budget, time limit, provider or infrastructure failure do not
-  count toward the two; those follow the re-review treatment for their
-  failure domain.
-- The miner may resubmit. A V2 reject is not a ban and is not a precedent
-  about the artifact's behavior.
+Historical V2/V3 rejections and the reason code
+`verification-incomplete-unreviewable` remain readable for audit. Do not issue
+new rejections from repeated incomplete reviews or infrastructure/provider
+failures. Counting reviews does not supply missing evidence or prove that the
+artifact violates a requirement.
 
-### V3: provider verification not completed
-
-- A provider failure prevents mandatory verification after the published retry
-  procedure.
-- The missing verification and failure domain are recorded.
-- Provider failure is not represented as artifact misconduct.
-
-V1, V2, and V3 rejections record `violation_proven: false`.
+- Record the exact missing verification, failure domain and retained evidence.
+- End the dispatched attempt and park it for operator review or manual retry.
+- Do not infer an unpublished submission requirement from reviewer difficulty.
+- Do not pass unread source or automatically schedule another billed review.
+- A rejection still requires independently supported artifact-controlled
+  contract failure (V1) or a proven integrity/security breach.
 
 ## Evidence standards
 
@@ -789,7 +818,8 @@ observed incident.
 A null or omitted field in a score, leaderboard, or other compact projection
 proves only that the projection did not supply the field. It does not prove
 that an artifact-bound screening or challenge record is absent. Check the
-authoritative evidence store before assigning V1, V2, or V3.
+authoritative evidence store before assigning V1; V2/V3 are historical readback
+only.
 
 ## Mandatory verification
 
@@ -904,13 +934,9 @@ violation_proven: false
 failure_domain: platform
 ```
 
-The platform fails to complete mandatory verification after the published
-retry budget and deadline.
-
-This rejection does not allege a policy violation, does not establish
-malicious intent, cannot be cited against siblings, owners, or hotkeys,
-receives priority rescreen after platform recovery, and may be superseded by a
-later `CLEAR`.
+Platform verification did not complete. The failed attempt stays parked for
+operator review or explicit manual retry. It is neither clearance nor rejection
+evidence and cannot be cited against siblings, owners or hotkeys.
 
 #### D. Provider verification failure
 
@@ -919,9 +945,8 @@ violation_proven: false
 failure_domain: provider
 ```
 
-Provider failure prevents mandatory verification after the published retry
-procedure. It has the same evidentiary limitations as a platform-failure
-rejection.
+Provider verification did not complete. Record that failure, end the attempt,
+and retain evidence for the same manual review/retry treatment.
 
 ### Non-decisive results
 
@@ -939,14 +964,10 @@ may produce `CLEAR`, and none of them may submit a passing verdict:
   required targeted behavioral audit produced no usable observation; and
 - `source-review-unavailable` — review infrastructure was unreachable.
 
-Each resolves through the retry and deadline procedure and then terminates as:
-
-- `REJECT` / `V1` / `failure_domain: submission`, when the artifact itself
-  prevents a decision;
-- `REJECT` / `V2` / `failure_domain: platform`, when the screener or platform
-  could not complete the check; or
-- `REJECT` / `V3` / `failure_domain: provider`, when an upstream provider
-  could not complete the check.
+Each ends the dispatched attempt and remains parked without admission or
+rejection until an operator resolves it or issues a manual retry. A later
+artifact-controlled contract failure or proven breach must have its own
+supporting evidence; incompleteness alone cannot become one by repetition.
 
 An adjudicator that fails without a finding records only that adjudication did
 not complete. It is neither clearance evidence nor rejection evidence, and it
@@ -968,26 +989,23 @@ exact reason codes and distinguishes proven violations from verification
 failures. No owner, hotkey, sibling, or lineage penalty follows automatically.
 Appeals produce a new recorded `CLEAR` or `REJECT` without erasing history.
 
-## Retry and deadline procedure
+## Manual retry and deadline procedure
 
-Before a verification-failure `REJECT`:
+A failure ends the dispatched attempt once. A retry requires an explicit
+Backroom authorization bound to the exact artifact and latest terminal attempt;
+classification as platform/provider failure is not retry authority.
 
-- attempt the published number of retries;
-- use at least one independent worker when available;
+For each manually authorized retry:
+
 - distinguish artifact, platform, and provider failures;
-- preserve bounded diagnostics;
-- verify the artifact SHA remains unchanged;
-- apply the published deadline;
-- record every attempt; and
-- avoid duplicate paid work when a valid artifact-bound result already exists.
+- preserve bounded diagnostics and every attempt;
+- verify the artifact SHA remains unchanged; and
+- avoid duplicate paid work when a valid conclusive artifact-bound result exists.
 
-Recommended defaults:
+The following is a recommendation for a future explicitly activated review
+window, not an active failure-to-rejection rule:
 
 ```text
-artifact-controlled failure retries: 1
-provider failure retries: 2
-platform failure retries: 2
-independent worker required for platform/provider failure: yes
 maximum verification window: 24 hours
 ```
 
@@ -1003,7 +1021,9 @@ window from a later activation. Its transition requires a separate published
 rule and exact-artifact review. A deadline alone never supplies evidence for
 `CLEAR` or a verification-failure `REJECT`.
 
-At the end of the window, the result must be `CLEAR` or `REJECT`.
+At the end of a review window, unfinished attempts remain parked for an
+operator. Elapsed time and repeated inconclusive reviews supply neither
+clearance nor rejection authority.
 
 ## Required reason codes
 
@@ -1132,11 +1152,11 @@ An operator override is an administrative action, not a third review outcome.
   `pass_inconclusive` and transports bounded review exhaustion as the
   non-passing `inconclusive` processing state. Historical v10-v12 attempts
   retain their signed compatibility behavior.
-- Implement the deadline finalizer that converts unresolved v13 processing
-  states into `REJECT` with V1, V2, or V3, the correct failure domain, complete
-  retry evidence, and no misconduct allegation.
+- Expire unresolved attempts into a parked failure with its actual failure
+  domain and retained evidence. Do not turn a reviewer/provider failure or a
+  count of inconclusive reviews into rejection.
 - Raise the separately enforced screening-policy activation ceiling from v12
-  only after the deadline finalizer and every other prerequisite above are
+  only after the attempt finalizer and every other prerequisite above are
   released and verified. Record: the ceiling moved to v13 on 2026-09-14, after
   #1801 shipped the strict two-outcome contract and both production screeners
   reported builtin policy 13 on release 0.264.0. Raising the ceiling makes v13
@@ -1178,9 +1198,6 @@ An operator override is an administrative action, not a third review outcome.
 
 ### REJECT without violation proven
 
-- The platform cannot complete mandatory testing after two retries and 24
-  hours.
-- A provider remains unavailable after the published retry procedure.
 - The submission omits mandatory opaque-component declarations.
 - Required endpoint or archive verification cannot complete for
   submission-controlled reasons.

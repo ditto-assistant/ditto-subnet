@@ -16,6 +16,7 @@ Invariants pinned:
 
 from __future__ import annotations
 
+import gzip
 import io
 import json
 from datetime import UTC, datetime
@@ -76,6 +77,204 @@ def _envelope_response(
         },
         headers=headers,
     )
+
+
+class TestContributorAuthenticationErrors:
+    def test_tokenless_cla_401_keeps_endpoint_error(self) -> None:
+        with (
+            make_client(
+                lambda _request: httpx.Response(
+                    401, json={"detail": "endpoint unauthorized"}
+                )
+            ) as client,
+            pytest.raises(ApiResponseError) as caught,
+        ):
+            client.get_cla_version(version=1)
+        assert not isinstance(caught.value, LoginRequiredError)
+        assert "ditto login" not in str(caught.value)
+
+    def test_token_bearing_github_401_requests_login(self) -> None:
+        with (
+            make_client(
+                lambda _request: httpx.Response(
+                    401, json={"detail": "endpoint unauthorized"}
+                )
+            ) as client,
+            pytest.raises(LoginRequiredError, match="ditto login"),
+        ):
+            client.get_github_link(token="fixture-token")
+
+
+class TestContributorAvailabilityErrors:
+    @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+    def test_polling_status_failures_are_transient(self, status):
+        with (
+            make_client(
+                lambda _request: httpx.Response(status, json={"message": "temporary"})
+            ) as client,
+            pytest.raises(TransientApiError),
+        ):
+            client.get_github_link_attempt(
+                token="fixture-token", attempt_id=UUID(int=1)
+            )
+
+    @pytest.mark.parametrize("operation", ["status", "start"])
+    @pytest.mark.parametrize(
+        "body", [{"detail": "Not Found"}, {"error_code": 3002, "message": "Not Found"}]
+    )
+    def test_missing_github_routes_explain_platform_upgrade(
+        self, operation, body
+    ) -> None:
+        with (
+            make_client(lambda _request: httpx.Response(404, json=body)) as client,
+            pytest.raises(ApiResponseError, match="upgrade Platform"),
+        ):
+            if operation == "status":
+                client.get_github_link(token="fixture-token")
+            elif operation == "start":
+                client.start_github_link(token="fixture-token")
+
+    @pytest.mark.parametrize(
+        "suffix", ["/attempts/" + str(UUID(int=1)), "/confirm", "/unlink"]
+    )
+    @pytest.mark.parametrize(
+        "body",
+        [None, {"detail": "Not Found"}, {"error_code": 3002, "message": "Not Found"}],
+    )
+    def test_generic_action_not_found_does_not_claim_platform_upgrade(
+        self, suffix, body
+    ):
+        with (
+            make_client(
+                lambda _: (
+                    httpx.Response(404, json=body)
+                    if body is not None
+                    else httpx.Response(404)
+                )
+            ) as client,
+            pytest.raises(ApiResponseError) as caught,
+        ):
+            client._contributor_response(
+                "GET" if suffix.startswith("/attempts/") else "POST",
+                "/api/v1/me/github-link" + suffix,
+                token="fixture-token",
+            )
+        assert "HTTP 404" in str(caught.value)
+        assert "upgrade Platform" not in str(caught.value)
+
+    @pytest.mark.parametrize("field", ["detail", "message"])
+    def test_unknown_attempt_preserves_endpoint_error(self, field) -> None:
+        with (
+            make_client(
+                lambda _request: httpx.Response(
+                    404, json={field: "unknown GitHub link attempt"}
+                )
+            ) as client,
+            pytest.raises(
+                ApiResponseError, match="unknown GitHub link attempt"
+            ) as caught,
+        ):
+            client.get_github_link_attempt(
+                token="fixture-token", attempt_id=UUID(int=1)
+            )
+        assert "upgrade Platform" not in str(caught.value)
+
+    def test_empty_missing_route_explains_platform_upgrade(self) -> None:
+        with (
+            make_client(lambda _request: httpx.Response(404)) as client,
+            pytest.raises(ApiResponseError, match="upgrade Platform"),
+        ):
+            client.get_github_link(token="fixture-token")
+
+    def test_missing_cla_status_keeps_default_off_compatibility(self) -> None:
+        with make_client(
+            lambda _request: httpx.Response(404, json={"detail": "Not Found"})
+        ) as client:
+            assert client.get_cla_status() is None
+
+    def test_cla_status_routes_hotkey_lookup_and_rejects_empty_hotkey(self) -> None:
+        paths: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            paths.append(request.url.path)
+            return httpx.Response(200, json={"netuid": 118, "mode": "off"})
+
+        with make_client(handler) as client:
+            client.get_cla_status(hotkey="5Fixture")
+            client.get_cla_status()
+            with pytest.raises(ValueError, match="non-empty"):
+                client.get_cla_status(hotkey="")
+        assert paths == ["/api/v1/public/cla/status/5Fixture", "/api/v1/public/cla"]
+
+    def test_unknown_cla_version_preserves_endpoint_error(self) -> None:
+        with (
+            make_client(
+                lambda _request: httpx.Response(
+                    404, json={"detail": "unknown CLA version"}
+                )
+            ) as client,
+            pytest.raises(ApiResponseError, match="unknown CLA version") as caught,
+        ):
+            client.get_cla_version(version=1)
+        assert "upgrade Platform" not in str(caught.value)
+
+
+class TestClaTextStreaming:
+    @pytest.mark.parametrize("status", [200, 503])
+    def test_oversized_response_stops_transfer_and_closes(self, status):
+        class Chunks(httpx.SyncByteStream):
+            consumed = 0
+            closed = False
+
+            def __iter__(self):
+                for _ in range(1000):
+                    self.consumed += 1
+                    yield b"x" * 8192
+
+            def close(self):
+                self.closed = True
+
+        stream = Chunks()
+        with (
+            make_client(lambda _: httpx.Response(status, stream=stream)) as client,
+            pytest.raises(ApiResponseError, match="size limit") as caught,
+        ):
+            client.get_cla_text(version=1)
+        assert stream.consumed == 33
+        assert stream.closed
+        assert f"HTTP {status}" in str(caught.value)
+
+    def test_gzip_text_is_decoded_once(self):
+        document = "TEST FIXTURE ONLY. No legal terms. é\n".encode()
+        with make_client(
+            lambda _: httpx.Response(
+                200,
+                headers={"content-encoding": "gzip"},
+                stream=httpx.ByteStream(gzip.compress(document)),
+            )
+        ) as client:
+            assert client.get_cla_text(version=1) == document
+
+    def test_small_error_response_keeps_endpoint_message(self):
+        with (
+            make_client(
+                lambda _: httpx.Response(403, json={"detail": "fixture refusal"})
+            ) as client,
+            pytest.raises(ApiResponseError, match="fixture refusal"),
+        ):
+            client.get_cla_text(version=1)
+
+    def test_stream_timeout_becomes_transient_api_error(self):
+        class Timeout(httpx.SyncByteStream):
+            def __iter__(self):
+                yield b"fixture"
+                raise httpx.ReadTimeout("fixture timeout")
+
+        with (
+            make_client(lambda _: httpx.Response(200, stream=Timeout())) as client,
+            pytest.raises(TransientApiError, match="timed out"),
+        ):
+            client.get_cla_text(version=1)
 
 
 class TestEvalPricing:

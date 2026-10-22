@@ -606,6 +606,8 @@ export const canonicalStarterPreflightSchema = z.object({
   fixture: l2ReportCanaryViewSchema.nullable(),
   stored_object_matches: z.boolean(),
   fixture_capable_worker_ready: z.boolean(),
+  // An older Platform does not report this. Absence remains unknown.
+  operator_proof_configured: z.boolean().nullable().optional().default(null),
   can_schedule: z.boolean(),
 })
 
@@ -1188,6 +1190,45 @@ export const artifactReleaseRevisionSchema = z.object({
   created_at: z.string().nullable(),
 })
 
+// Shadow comparison of the reveal-anchored range planner. `missed` > 0 is a
+// correctness failure: that planner must not be promoted.
+export const revealPlanShadowSchema = z.object({
+  mode: z.string(),
+  ranges: z.number().int().nonnegative().default(0),
+  agreed: z.number().int().nonnegative().default(0),
+  missed: z.number().int().nonnegative().default(0),
+  fallback: z.number().int().nonnegative().default(0),
+  error: z.number().int().nonnegative().default(0),
+  blocks: z.number().int().nonnegative().default(0),
+  calls: z.number().int().nonnegative().default(0),
+  last_range: z.array(z.number().int()).nullish().default(null),
+  last_outcome: z.string().nullish().default(null),
+  last_error: z.string().nullish().default(null),
+  recent_misses: z.array(z.object({
+    first_block: z.number().int(),
+    last_block: z.number().int(),
+    blocks: z.array(z.number().int()).max(720).default([]),
+  })).max(5).default([]),
+  updated_at: z.string().nullish().default(null),
+})
+
+// How the collector replays deep catch-up ranges. A full_scan fallback costs
+// throughput, never correctness; full_scan_reasons counts each planner reason.
+export const catchUpSchema = z.object({
+  planner: z.string(),
+  ranges: z.number().int().nonnegative().default(0),
+  sparse: z.number().int().nonnegative().default(0),
+  full_scan: z.number().int().nonnegative().default(0),
+  error: z.number().int().nonnegative().default(0),
+  blocks_read: z.number().int().nonnegative().default(0),
+  blocks_skipped: z.number().int().nonnegative().default(0),
+  full_scan_reasons: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  last_range: z.array(z.number().int()).nullish().default(null),
+  last_outcome: z.string().nullish().default(null),
+  last_error: z.string().nullish().default(null),
+  updated_at: z.string().nullish().default(null),
+})
+
 export const sourceReleaseGateSchema = z.object({
   version: z.string(),
   automatic_confirmation_enabled: z.boolean(),
@@ -1201,6 +1242,8 @@ export const sourceReleaseGateSchema = z.object({
   collector_cursor_hash: z.string().nullable().optional(),
   collector_runtime_code_hash: z.string().nullable().optional(),
   collector_blocked_reason: z.string().nullable().optional(),
+  reveal_plan_shadow: revealPlanShadowSchema.nullish(),
+  catch_up: catchUpSchema.nullish(),
   last_payout_block: z.number().nullable().optional(),
   last_payout_blocked_reason: z.string().nullable().optional(),
   last_payout_attributed: z.boolean().optional(),
@@ -2864,6 +2907,9 @@ export const MAX_EMBEDDING_CONCURRENCY = 512
 export const MAX_REQUESTS_PER_MINUTE = 100_000
 export const MAX_BENCHMARK_CASE_CONCURRENCY = 64
 export const MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
+export const MIN_SANDBOX_MEMORY_LIMIT_MIB = 512
+export const MAX_SANDBOX_MEMORY_LIMIT_MIB = 32_768
+export const DEFAULT_SANDBOX_MEMORY_LIMIT_MIB = 6_144
 
 export const benchmarkRuntimeSettingsSchema = z
   .object({
@@ -2871,6 +2917,14 @@ export const benchmarkRuntimeSettingsSchema = z
     relay_delay_fingerprint_mode: z.enum(['off', 'shadow']),
     relay_delay_fingerprint_min_ms: z.number().int().min(0).max(MAX_RELAY_DELAY_FINGERPRINT_MS),
     relay_delay_fingerprint_max_ms: z.number().int().min(0).max(MAX_RELAY_DELAY_FINGERPRINT_MS),
+    // The harness memory cap every validator applies. Defaults so a Platform
+    // that predates the field still parses.
+    sandbox_memory_limit_mib: z
+      .number()
+      .int()
+      .min(MIN_SANDBOX_MEMORY_LIMIT_MIB)
+      .max(MAX_SANDBOX_MEMORY_LIMIT_MIB)
+      .default(DEFAULT_SANDBOX_MEMORY_LIMIT_MIB),
   })
   .refine(
     (value) => value.relay_delay_fingerprint_min_ms <= value.relay_delay_fingerprint_max_ms,
@@ -2885,6 +2939,7 @@ export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
   relay_delay_fingerprint_mode: 'off' as const,
   relay_delay_fingerprint_min_ms: 25,
   relay_delay_fingerprint_max_ms: 250,
+  sandbox_memory_limit_mib: DEFAULT_SANDBOX_MEMORY_LIMIT_MIB,
 }
 
 const inferenceConcurrencySettingsBaseSchema = z.object({
@@ -5588,6 +5643,7 @@ export const quarantineAgentContextSchema = z.object({
   submitted_at: z.string(),
   screening_policy_version: z.number().int().nonnegative(),
   screening_reason: z.string().nullable(),
+  score_count: z.number().int().nonnegative().nullable().optional(),
 })
 
 export const minerQuarantineSummarySchema = z.object({
@@ -5693,6 +5749,8 @@ export const screeningQuarantineBatchDecisionSchema = z.object({
   quarantineId: z.string().uuid(),
   expectedAgentId: z.string().uuid(),
   expectedArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedAttemptId: z.string().uuid().optional(),
+  expectedScoreCount: z.number().int().nonnegative().optional(),
   resolution: quarantineResolutionSchema,
   reason: auditReasonSchema(3),
 })
@@ -6205,6 +6263,7 @@ export const retryValidationInputSchema = z.object({
   agentId: z.string().uuid(),
   expectedSnapshot: z.string().regex(/^[0-9a-f]{64}$/),
   reason: auditReasonSchema(3),
+  targetValidatorHotkey: z.string().trim().min(1).max(64).optional(),
   // Required to grant while provider_outage_blocks_retry is true: the
   // provider-wide circuit is open, so every restored lease is parked again.
   acknowledgeProviderOutage: z.boolean().default(false),
@@ -7695,6 +7754,17 @@ export const copyReviewSimilaritySchema = z.object({
   decision_role: z.string(),
 })
 
+// Private per-artifact language mix of the fingerprinted members (#436):
+// counts keyed by a fixed language label, never a path or content. Null when
+// the row was fingerprinted before Platform recorded it. Provenance only.
+export const copyReviewLanguageInventorySchema = z.object({
+  version: z.string(),
+  files: z.record(z.string(), z.number().int().nonnegative()),
+  bytes: z.record(z.string(), z.number().int().nonnegative()),
+  excluded_files: z.number().int().nonnegative().nullish().default(null),
+  excluded_bytes: z.number().int().nonnegative().nullish().default(null),
+})
+
 export const availableCopyReviewComparisonSchema = z.object({
   availability: z.literal('available'),
   bulk_eligible: z.boolean(),
@@ -7719,6 +7789,8 @@ export const availableCopyReviewComparisonSchema = z.object({
   triggered: z.boolean(),
   triggered_signal: z.string().nullable(),
   current_decision: z.string(),
+  candidate_languages: copyReviewLanguageInventorySchema.nullish().default(null),
+  reference_languages: copyReviewLanguageInventorySchema.nullish().default(null),
 })
 
 export const unavailableCopyReviewComparisonSchema = z.object({
@@ -8492,6 +8564,7 @@ export type CopyReviewItem = z.infer<typeof copyReviewItemSchema>
 export type CopyReviewGeneration = z.infer<typeof copyReviewGenerationSchema>
 export type CopyReviewConsoleItem = z.infer<typeof copyReviewConsoleItemSchema>
 export type CopyReviewCurrentComparison = z.infer<typeof copyReviewCurrentComparisonSchema>
+export type CopyReviewLanguageInventory = z.infer<typeof copyReviewLanguageInventorySchema>
 export type CopyReviewResolution = z.infer<typeof copyReviewResolutionSchema>
 export type AthReviewAudit = z.infer<typeof athReviewAuditSchema>
 export type OpenAthReviewInput = z.infer<typeof openAthReviewInputSchema>
@@ -9752,6 +9825,8 @@ type GeneratedOutlierEscalationSources =
   PlatformComponents['schemas']['OutlierEscalationSettingSourcesView']
 type GeneratedOutlierEscalationEvidence =
   PlatformComponents['schemas']['OutlierEscalationEvidence']
+type GeneratedOutlierEscalationAxisEvidence =
+  PlatformComponents['schemas']['OutlierEscalationAxisEvidence']
 type GeneratedOutlierEscalationEntry =
   PlatformComponents['schemas']['OutlierEscalationEntryView']
 type GeneratedOutlierEscalationActivity =
@@ -9765,6 +9840,7 @@ const outlierSettingFieldSchema = z.enum([
   'min_cohort_size',
   'modified_z_threshold',
   'min_composite_floor',
+  'per_axis_enforce',
 ])
 const outlierSettingSourceSchema = z.enum(['env', 'default', 'default_invalid_env'])
 
@@ -9775,6 +9851,9 @@ const outlierEscalationSettingsSchema = z.object({
   // Null only for a non-finite env value (nan/inf) that scoring IS using.
   modified_z_threshold: z.number().nullable(),
   min_composite_floor: z.number().nullable(),
+  // Off by default: a single-axis outlier is evidence only. Defaulted so a
+  // Platform that predates the setting still parses.
+  per_axis_enforce: z.boolean().default(false),
 } satisfies PlatformResponseShape<GeneratedOutlierEscalationSettings>)
 
 const outlierEscalationSourcesSchema = z.object({
@@ -9783,7 +9862,22 @@ const outlierEscalationSourcesSchema = z.object({
   min_cohort_size: outlierSettingSourceSchema,
   modified_z_threshold: outlierSettingSourceSchema,
   min_composite_floor: outlierSettingSourceSchema,
+  per_axis_enforce: outlierSettingSourceSchema.default('default'),
 } satisfies PlatformResponseShape<GeneratedOutlierEscalationSources>)
+
+// Audit-chain entries are public, so they carry only axis + outlier; the
+// statistics are null there and present only in the dry-run replay.
+const outlierEscalationAxisEvidenceSchema = z.object({
+  axis: z.string(),
+  value: z.number().nullish(),
+  cohort_size: z.number().int().nullish(),
+  cohort_median: z.number().nullish(),
+  cohort_mad: z.number().nullish(),
+  modified_z: z.number().nullish(),
+  upward: z.boolean().nullish(),
+  outlier: z.boolean().nullish(),
+  anomaly_unavailable: z.string().nullish(),
+} satisfies PlatformResponseShape<GeneratedOutlierEscalationAxisEvidence>)
 
 const outlierEscalationEvidenceSchema = z.object({
   composite: z.number().nullish(),
@@ -9796,6 +9890,10 @@ const outlierEscalationEvidenceSchema = z.object({
   min_composite_floor: z.number().nullish(),
   upward: z.boolean().nullish(),
   above_floor: z.boolean().nullish(),
+  per_axis: z.array(outlierEscalationAxisEvidenceSchema).max(8).nullish(),
+  per_axis_outlier_axes: z.array(z.string()).max(8).nullish(),
+  per_axis_enforce: z.boolean().nullish(),
+  trigger: z.enum(['composite', 'per_axis']).nullish(),
 } satisfies PlatformResponseShape<GeneratedOutlierEscalationEvidence>)
 
 const outlierEscalationEntrySchema = z.object({
@@ -9815,10 +9913,14 @@ const outlierEscalationActivitySchema = z.object({
   enforced_total: z.number().int().nonnegative(),
   observed_in_window: z.number().int().nonnegative(),
   enforced_in_window: z.number().int().nonnegative(),
+  axis_evidence_total: z.number().int().nonnegative().default(0),
+  axis_evidence_in_window: z.number().int().nonnegative().default(0),
   latest_recorded_at: z.string().nullish(),
   recent_limit: z.number().int().positive(),
   recent: z.array(outlierEscalationEntrySchema).max(100),
   recent_truncated: z.boolean(),
+  recent_axis_evidence: z.array(outlierEscalationEntrySchema).max(100).default([]),
+  recent_axis_evidence_truncated: z.boolean().default(false),
 } satisfies PlatformResponseShape<GeneratedOutlierEscalationActivity>)
 
 export const outlierEscalationSchema = z.object({
@@ -9828,7 +9930,7 @@ export const outlierEscalationSchema = z.object({
   defaults: outlierEscalationSettingsSchema,
   sources: outlierEscalationSourcesSchema,
   env_vars: z.record(z.string(), z.string()),
-  invalid_env_fields: z.array(outlierSettingFieldSchema).max(5),
+  invalid_env_fields: z.array(outlierSettingFieldSchema).max(6),
   review_kind: z.string(),
   algorithm_version: z.string(),
   pending_review_count: z.number().int().nonnegative(),
@@ -9981,7 +10083,7 @@ export const outlierEscalationDryRunSchema = z.object({
   bench_version: z.number().int(),
   bench_version_in_scope: z.boolean(),
   settings: outlierEscalationSettingsSchema,
-  overridden_fields: z.array(outlierSettingFieldSchema).max(5),
+  overridden_fields: z.array(outlierSettingFieldSchema).max(6),
   ledger_size: z.number().int().nonnegative(),
   cohort_size: z.number().int().nonnegative(),
   cohort_too_small: z.boolean(),
@@ -9991,6 +10093,9 @@ export const outlierEscalationDryRunSchema = z.object({
   limit: z.number().int().positive(),
   would_trigger: z.array(outlierEscalationDryRunEntrySchema).max(100),
   truncated: z.boolean(),
+  axis_evidence_count: z.number().int().nonnegative().default(0),
+  axis_evidence: z.array(outlierEscalationDryRunEntrySchema).max(100).default([]),
+  axis_evidence_truncated: z.boolean().default(false),
 } satisfies PlatformResponseShape<GeneratedOutlierEscalationDryRunResponse>)
 
 export const outlierEscalationDryRunInputSchema = z.object({
@@ -9998,6 +10103,7 @@ export const outlierEscalationDryRunInputSchema = z.object({
   minCohortSize: z.number().int().min(1).max(1000).optional(),
   modifiedZThreshold: z.number().positive().max(1000).optional(),
   minCompositeFloor: z.number().min(0).max(1).optional(),
+  perAxisEnforce: z.boolean().optional(),
   limit: z.number().int().min(1).max(100).default(20),
 })
 

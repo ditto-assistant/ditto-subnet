@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.artifact_release_settings import (
     AdminArtifactReleaseSettingsRequest,
     AdminArtifactReleaseSettingsResponse,
+    CatchUpStatus,
     ReceiptDiagnosticRow,
+    RevealPlanShadowStatus,
     SourceArchiveProviderStatus,
     SourceReleaseEligibilityRow,
     SourceReleaseGateStatus,
@@ -70,6 +72,30 @@ def _default_revision() -> RevisionModel:
         actor="platform",
         created_at=None,
     )
+
+
+def _reveal_plan_shadow(cursor: Any) -> RevealPlanShadowStatus | None:
+    """The collector's shadow summary, or None before the first comparison."""
+    from ditto.api_server.source_emission_collector import _REVEAL_PLAN_MODE
+
+    summary = getattr(cursor, "reveal_plan_shadow", None) if cursor else None
+    if not summary:
+        # No comparison has run: zero counters would read as zero misses.
+        return None
+    return RevealPlanShadowStatus.model_validate({**summary, "mode": _REVEAL_PLAN_MODE})
+
+
+def _catch_up(cursor: Any) -> CatchUpStatus | None:
+    """The collector's catch-up summary, or None before the first planned range."""
+    from ditto.api_server.source_emission_collector import _REVEAL_PLAN_MODE
+
+    summary = getattr(cursor, "catch_up", None) if cursor else None
+    if not summary:
+        return None
+    # A summary names the planner it counts; one written before it did is
+    # labelled with the planner running now.
+    planner = "reveal" if _REVEAL_PLAN_MODE == "primary" else "event"
+    return CatchUpStatus.model_validate({"planner": planner, **summary})
 
 
 @router.get("", response_model=AdminArtifactReleaseSettingsResponse)
@@ -194,6 +220,8 @@ async def get_settings(
             collector_cursor_hash=cursor.block_hash if cursor else None,
             collector_runtime_code_hash=cursor.runtime_code_hash if cursor else None,
             collector_blocked_reason=cursor.last_blocked_reason if cursor else None,
+            reveal_plan_shadow=_reveal_plan_shadow(cursor),
+            catch_up=_catch_up(cursor),
             last_payout_block=last_payout.block if last_payout else None,
             last_payout_blocked_reason=last_payout.blocked_reason
             if last_payout

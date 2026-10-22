@@ -16,7 +16,7 @@ import asyncio
 import functools
 import hashlib
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -120,6 +120,35 @@ async def admit_runtime(substrate: Any, *, code_hash: Any, at: Any) -> RuntimeAd
     )
     _INTERFACE_ADMISSIONS[code_hash] = admitted
     return admitted
+
+
+async def _code_hash_at(substrate: Any, at: str) -> Any:
+    result = await substrate.rpc_request("state_getStorageHash", ["0x3a636f6465", at])
+    return result.get("result") if isinstance(result, dict) else None
+
+
+async def _epoch_consensus_at(
+    substrate: Any, *, netuid: int, at: str, writer: RuntimeAdmission
+) -> Any:
+    """``SubnetEpochConsensus`` in the state at ``at``.
+
+    ``writer`` is the admission of the runtime stored at ``at``'s parent, the
+    one that executed ``at``. The first block that stores an upgrade's code
+    was still executed, and its state written, by the previous runtime; the
+    new one's migrations run in the next block. A writer without the item
+    (before v475) runs Yuma only, and the library decodes that state with the
+    writer's metadata, where reading the item fails as "not found".
+    """
+    if not writer.epoch_consensus_gated:
+        return "Yuma"
+    return _unwrap(
+        await substrate.query(
+            module="SubtensorModule",
+            storage_function="SubnetEpochConsensus",
+            params=[netuid],
+            block_hash=at,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -302,18 +331,36 @@ class SourceEmissionReadCache:
 
     def __init__(self, limit: int = 64) -> None:
         self._values: dict[tuple[Any, ...], Any] = {}
+        self._loading: dict[tuple[Any, ...], asyncio.Future[None]] = {}
         self._limit = limit
 
     async def get(
         self, key: tuple[Any, ...], load: Callable[[], Awaitable[Any]]
     ) -> Any:
-        if key in self._values:
-            return self._values[key]
-        value = await load()
-        if len(self._values) >= self._limit:
-            self._values.pop(next(iter(self._values)))
-        self._values[key] = value
-        return value
+        # Concurrent block reads share one cache: a key already being loaded
+        # is awaited, not fetched again. If that load fails, a waiter retries
+        # it itself; a waiter's own cancellation never cancels the load.
+        while key not in self._values:
+            loading = self._loading.get(key)
+            if loading is None:
+                return await self._load(key, load)
+            await asyncio.shield(loading)
+        return self._values[key]
+
+    async def _load(
+        self, key: tuple[Any, ...], load: Callable[[], Awaitable[Any]]
+    ) -> Any:
+        done = asyncio.get_running_loop().create_future()
+        self._loading[key] = done
+        try:
+            value = await load()
+            if len(self._values) >= self._limit:
+                self._values.pop(next(iter(self._values)))
+            self._values[key] = value
+            return value
+        finally:
+            del self._loading[key]
+            done.set_result(None)
 
 
 async def read_source_emission_block(
@@ -433,13 +480,41 @@ async def read_source_emission_block(
     if controls[1] is not True or controls[3] is not True:
         raise ValueError("unsupported direct/manual weights mode")
     if admissions[1].epoch_consensus_gated:
+        # Each state is gated by the runtime that wrote it: the parent's state
+        # by the code stored at the grandparent (see _epoch_consensus_at).
+        grandparent = await hash_at(block - 2) if block > 1 else None
+        if not grandparent:
+            raise ValueError("missing historical block")
+        # Shares the ("code", at) entry the code-hash reads above fill, so a
+        # consecutive scan already has it from the previous block.
+        writer_response = await cache.get(
+            ("code", grandparent),
+            functools.partial(
+                substrate.rpc_request,
+                "state_getStorageHash",
+                ["0x3a636f6465", grandparent],
+            ),
+        )
+        writer_code = (
+            writer_response.get("result") if isinstance(writer_response, dict) else None
+        )
+        writers = (
+            await admit_runtime(substrate, code_hash=writer_code, at=grandparent),
+            admissions[0],
+        )
         modes = await asyncio.gather(
             *(
                 cache.get(
                     (netuid, "SubnetEpochConsensus", at),
-                    functools.partial(read, "SubnetEpochConsensus", at, [netuid]),
+                    functools.partial(
+                        _epoch_consensus_at,
+                        substrate,
+                        netuid=netuid,
+                        at=at,
+                        writer=writer,
+                    ),
                 )
-                for at in (parent_hash, block_hash)
+                for at, writer in zip((parent_hash, block_hash), writers, strict=True)
             )
         )
         if any(mode != "Yuma" for mode in modes):
@@ -699,6 +774,8 @@ class SourceEmissionRangePlan:
     interesting: tuple[int, ...]
     full_scan: bool
     runtime_code_hash: str | None
+    # Which check sent the range to the full scan, for operators.
+    full_scan_reason: str | None = None
 
 
 def _valid_uid_mapping(rows: list[tuple[Any, Any]]) -> dict[int, str] | None:
@@ -740,23 +817,99 @@ def _quiet_block_events(events: Any, netuid: int) -> bool:
     return True
 
 
-async def plan_source_emission_range(
-    substrate: Any,
-    *,
-    netuid: int,
-    first_block: int,
-    last_block: int,
-    concurrency: int = 8,
-) -> SourceEmissionRangePlan:
-    """Find the blocks of ``[first_block, last_block]`` that need a full read.
+@dataclass(frozen=True)
+class _RangeEndpoints:
+    """A range whose endpoint invariants hold, ready for a quiet-block filter."""
 
-    Endpoint invariants first: if the runtime code, the mode controls or the
-    ``Keys`` map differ between ``first_block - 1`` and ``last_block``, or are
-    not valid at either end, the plan requests the unchanged full scan. Equal
-    endpoints rule out a net change; a code change and revert inside the range
-    is caught by ``System.CodeUpdated`` and an identity flip-flop is caught by
-    the structural event markers. Each block's events and payout marker are
-    then read with one ``state_queryStorageAt`` call.
+    first_block: int
+    last_block: int
+    hashes: dict[int, str]
+    runtime_code_hash: str
+    # Blocks that changed a UID's hotkey inside the range. Always read in
+    # full: the reader resets provenance there (uid_mapping_changed).
+    identity_changes: tuple[int, ...] = ()
+
+    def plan(self, interesting: Iterable[int]) -> SourceEmissionRangePlan:
+        return SourceEmissionRangePlan(
+            self.first_block,
+            self.last_block,
+            self.hashes,
+            tuple(sorted({*interesting, *self.identity_changes})),
+            False,
+            self.runtime_code_hash,
+        )
+
+
+# More changed UIDs than this in one range: plan the range in full instead.
+_MAX_IDENTITY_CHANGES = 16
+
+
+async def _gather_or_cancel(*coroutines: Awaitable[Any]) -> list[Any]:
+    """``asyncio.gather``, but a failure cancels and awaits the siblings."""
+    tasks = [asyncio.ensure_future(c) for c in coroutines]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
+async def _storage_change_blocks(
+    substrate: Any,
+    key_hex: str,
+    hashes: dict[int, str],
+    low: int,
+    high: int,
+    gate: asyncio.Semaphore,
+) -> list[int]:
+    """Blocks in ``(low, high]`` where ``key_hex``'s storage hash changed.
+
+    Exact only for a value that never returns to an earlier one inside the
+    interval (bisection cannot see A -> B -> A); callers argue that per key.
+    """
+    memo: dict[int, Any] = {}
+
+    async def at(block: int) -> Any:
+        if block not in memo:
+            async with gate:
+                result = await substrate.rpc_request(
+                    "state_getStorageHash", [key_hex, hashes[block]]
+                )
+            # ``result: null`` is absent storage, a valid answer; a response
+            # without it is not, and must not read as "unchanged".
+            if not isinstance(result, dict) or "result" not in result:
+                raise ValueError(f"missing storage hash at block {block}")
+            memo[block] = result["result"]
+        return memo[block]
+
+    async def changes(lo: int, hi: int) -> list[int]:
+        lo_hash, hi_hash = await _gather_or_cancel(at(lo), at(hi))
+        if lo_hash == hi_hash:
+            return []
+        if hi - lo == 1:
+            return [hi]
+        mid = (lo + hi) // 2
+        left, right = await _gather_or_cancel(changes(lo, mid), changes(mid, hi))
+        return left + right
+
+    return await changes(low, high)
+
+
+async def _range_endpoints(
+    substrate: Any, *, netuid: int, first_block: int, last_block: int
+) -> _RangeEndpoints | SourceEmissionRangePlan:
+    """Shared endpoint checks; a ``full_scan`` plan when any of them fails.
+
+    If the runtime code or the mode controls differ between ``first_block - 1``
+    and ``last_block``, or any of them (or the ``Keys`` map) is invalid at
+    either end, the caller must run the unchanged per-block scan. A runtime
+    upgrade cannot revert inside a range (spec versions only increase). Every
+    hotkey swap inside the range is read from ``LastHotkeySwapOnNetuid``, and
+    a UID whose hotkey or ``BlockAtRegistration`` differs at the ends is
+    located by bisection; those blocks are returned as ``identity_changes``.
+    See the comments below for why that finds every identity change.
     """
     if not 0 < first_block <= last_block:
         raise ValueError("invalid source-emission range")
@@ -772,9 +925,9 @@ async def plan_source_emission_range(
     hashes = dict(zip(numbers, raw_hashes, strict=True))
     start, end = hashes[first_block - 1], hashes[last_block]
 
-    def full(code_hash: str | None = None) -> SourceEmissionRangePlan:
+    def full(reason: str, code_hash: str | None = None) -> SourceEmissionRangePlan:
         return SourceEmissionRangePlan(
-            first_block, last_block, hashes, (), True, code_hash
+            first_block, last_block, hashes, (), True, code_hash, reason
         )
 
     async def read(name: str, at: str) -> Any:
@@ -787,15 +940,18 @@ async def plan_source_emission_range(
             )
         )
 
-    async def keys_at(at: str) -> list[tuple[Any, Any]]:
+    async def mapping_at(name: str, at: str) -> list[tuple[Any, Any]]:
         rows = await substrate.query_map(
             module="SubtensorModule",
-            storage_function="Keys",
+            storage_function=name,
             params=[netuid],
             block_hash=at,
             fully_exhaust=True,
         )
         return [(_unwrap(k), _unwrap(v)) async for k, v in rows]
+
+    async def keys_at(at: str) -> list[tuple[Any, Any]]:
+        return await mapping_at("Keys", at)
 
     code = []
     for at in (start, end):
@@ -804,29 +960,160 @@ async def plan_source_emission_range(
         )
         code.append(result.get("result") if isinstance(result, dict) else None)
     if code[0] != code[1]:
-        return full()
+        return full("runtime_changed")
     try:
         admission = await admit_runtime(substrate, code_hash=code[0], at=start)
     except (ValueError, ChainConnectionError):
         # The full scan admits the same fingerprint and reports why it stopped.
-        return full()
+        return full("runtime_not_admitted")
+    # The end's state was written by the range's runtime; the start's by the
+    # code stored before it (see _epoch_consensus_at).
+    writers = {end: admission}
+    if admission.epoch_consensus_gated:
+        if first_block < 2:
+            return full("epoch_consensus_unreadable", code[0])
+        before = await substrate.rpc_request("chain_getBlockHash", [[first_block - 2]])
+        rows = before.get("result") if isinstance(before, dict) else None
+        before_hash = rows[0] if isinstance(rows, list) and len(rows) == 1 else None
+        if not isinstance(before_hash, str):
+            return full("epoch_consensus_unreadable", code[0])
+        try:
+            writers[start] = await admit_runtime(
+                substrate,
+                code_hash=await _code_hash_at(substrate, before_hash),
+                at=before_hash,
+            )
+        except (ValueError, ChainConnectionError):
+            return full("epoch_consensus_unreadable", code[0])
     for at in (start, end):
         if await read("MechanismCountCurrent", at) != 1:
-            return full(code[0])
+            return full("mechanism_count", code[0])
         if await read("CommitRevealWeightsEnabled", at) is not True:
-            return full(code[0])
+            return full("commit_reveal_off", code[0])
         if (
             admission.epoch_consensus_gated
-            and await read("SubnetEpochConsensus", at) != "Yuma"
+            and await _epoch_consensus_at(
+                substrate, netuid=netuid, at=at, writer=writers[at]
+            )
+            != "Yuma"
         ):
-            return full(code[0])
+            return full("epoch_consensus", code[0])
     start_keys, end_keys = await keys_at(start), await keys_at(end)
-    if (
-        _valid_uid_mapping(start_keys) is None
-        or _valid_uid_mapping(end_keys) is None
-        or dict(start_keys) != dict(end_keys)
+    start_map, end_map = _valid_uid_mapping(start_keys), _valid_uid_mapping(end_keys)
+    if start_map is None or end_map is None or set(start_map) != set(end_map):
+        return full("uid_mapping", code[0])
+    # Hotkey swaps, found from the cooldown the runtime records for them. A
+    # swap that moves a hotkey on the subnet, on its own or on all subnets,
+    # sets LastHotkeySwapOnNetuid(netuid, coldkey) to its block, and only a
+    # dissolution or the prune of records older than
+    # HotkeySwapOnSubnetInterval removes one (subtensor v448-v481). The
+    # cooldown is per coldkey and a coldkey swap carries none over, so one
+    # UID's hotkey can go A -> B -> A inside a range under two coldkeys, with
+    # Keys and BlockAtRegistration equal at both ends. While the interval is
+    # longer than the range, no coldkey swaps twice in it and none of its
+    # records is pruned, so the records at the end name every swap inside it.
+    interval = _unwrap(
+        await substrate.get_constant(
+            "SubtensorModule", "HotkeySwapOnSubnetInterval", block_hash=end
+        )
+    )
+    if not isinstance(interval, int) or interval <= last_block - first_block:
+        return full("hotkey_swap_interval", code[0])
+    swaps = {
+        block
+        for _coldkey, swapped in await mapping_at("LastHotkeySwapOnNetuid", end)
+        if first_block <= (block := _uint(swapped)) <= last_block
+    }
+    # UIDs re-registered inside the range, found by BlockAtRegistration: every
+    # registration sets it to the current block, so per UID it only increases
+    # and never repeats. That catches A -> B -> A, which equal Keys at the
+    # ends would hide (SN118's 300-block immunity is shorter than a range),
+    # and bisecting it finds every registration exactly. Keys is bisected too,
+    # between registrations: a registration can restore the hotkey a swap
+    # moved away, or a swap the hotkey a registration replaced. That finds a
+    # UID's swaps only where Keys differs across a stretch; the swap records
+    # above find the rest.
+    registered = await _gather_or_cancel(
+        *(mapping_at("BlockAtRegistration", at) for at in (start, end))
+    )
+    if any(set(dict(rows)) != set(start_map) for rows in registered):
+        return full("uid_mapping", code[0])
+    first_reg, last_reg = (dict(rows) for rows in registered)
+    changed = sorted(
+        uid
+        for uid in start_map
+        if start_map[uid] != end_map[uid] or first_reg[uid] != last_reg[uid]
+    )
+    if max(len(changed), len(swaps)) > _MAX_IDENTITY_CHANGES:
+        return full("identity_changes", code[0])
+    gate = asyncio.Semaphore(8)
+
+    async def identity_change_blocks(uid: int) -> set[int]:
+        registration_key, keys_key = [
+            (
+                await substrate.create_storage_key(
+                    "SubtensorModule", storage, [netuid, uid], block_hash=end
+                )
+            ).to_hex()
+            for storage in ("BlockAtRegistration", "Keys")
+        ]
+        registrations = await _storage_change_blocks(
+            substrate, registration_key, hashes, first_block - 1, last_block, gate
+        )
+        # Keys is bisected in each stretch that ends before a registration.
+        stretches = zip(
+            [first_block - 1, *registrations],
+            [*(block - 1 for block in registrations), last_block],
+            strict=True,
+        )
+        swaps = await _gather_or_cancel(
+            *(
+                _storage_change_blocks(substrate, keys_key, hashes, low, high, gate)
+                for low, high in stretches
+                if high > low
+            )
+        )
+        return {*registrations, *(block for found in swaps for block in found)}
+
+    identity_changes = set(swaps)
+    for blocks in await _gather_or_cancel(
+        *(identity_change_blocks(uid) for uid in changed)
     ):
-        return full(code[0])
+        if not blocks:
+            # The endpoints disagree but no change was found.
+            return full("identity_change_not_found", code[0])
+        identity_changes.update(blocks)
+    return _RangeEndpoints(
+        first_block,
+        last_block,
+        hashes,
+        admission.code_hash,
+        tuple(sorted(identity_changes)),
+    )
+
+
+async def plan_source_emission_range(
+    substrate: Any,
+    *,
+    netuid: int,
+    first_block: int,
+    last_block: int,
+    concurrency: int = 8,
+) -> SourceEmissionRangePlan:
+    """Find the blocks of ``[first_block, last_block]`` that need a full read.
+
+    After the shared endpoint checks (``_range_endpoints``), a code change and
+    revert inside the range is caught by ``System.CodeUpdated`` and an identity
+    flip-flop by the structural event markers. Each block's events and payout
+    marker are then read with one ``state_queryStorageAt`` call.
+    """
+    endpoints = await _range_endpoints(
+        substrate, netuid=netuid, first_block=first_block, last_block=last_block
+    )
+    if isinstance(endpoints, SourceEmissionRangePlan):
+        return endpoints
+    hashes = endpoints.hashes
+    end = hashes[last_block]
 
     events_key = await substrate.create_storage_key(
         "System", "Events", [], block_hash=end
@@ -877,14 +1164,159 @@ async def plan_source_emission_range(
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
-    return SourceEmissionRangePlan(
-        first_block,
-        last_block,
-        hashes,
-        tuple(block for block, flag in zip(blocks, flags, strict=True) if flag),
-        False,
-        code[0],
+    return endpoints.plan(
+        block for block, flag in zip(blocks, flags, strict=True) if flag
     )
+
+
+async def plan_source_emission_range_by_reveals(
+    substrate: Any,
+    *,
+    netuid: int,
+    first_block: int,
+    last_block: int,
+    concurrency: int = 8,
+) -> SourceEmissionRangePlan:
+    """Plan a range from payouts and reveal-queue changes, without event reads.
+
+    Under the shared endpoint checks, the only blocks the full reader can act
+    on are payouts and SN118 weight writes. With commit-reveal enabled every
+    write comes from a commit-reveal v3 reveal (direct ``set_weights`` is
+    rejected) or a v2 ``reveal_weights``, refused here by requiring an empty
+    v2 commit store at every probed block.
+
+    * **Payouts** are found by hopping ``LastMechansimStepBlock`` back from
+      the range end, one read per payout.
+    * **Reveals** pop entries off ``TimelockedWeightCommits(netuid, e)``, where
+      ``e`` is the epoch before the current one. Within one epoch that key
+      only shrinks (commits go to the current epoch's key, and a taken entry
+      never comes back), so bisecting its storage hash between payouts finds
+      every block that revealed, exactly and with tiny reads.
+
+    Any other shape (epoch moving without a payout, a changed reveal period,
+    controls changing between payouts) returns the full-scan plan. Shadowed
+    against ``plan_source_emission_range`` before it is trusted: a reveal
+    path this misses shows up there as a disagreement.
+    """
+    endpoints = await _range_endpoints(
+        substrate, netuid=netuid, first_block=first_block, last_block=last_block
+    )
+    if isinstance(endpoints, SourceEmissionRangePlan):
+        return endpoints
+    hashes = endpoints.hashes
+    end = hashes[last_block]
+    gate = asyncio.Semaphore(concurrency)
+
+    def full(reason: str) -> SourceEmissionRangePlan:
+        return SourceEmissionRangePlan(
+            first_block,
+            last_block,
+            hashes,
+            (),
+            True,
+            endpoints.runtime_code_hash,
+            reason,
+        )
+
+    async def read(name: str, block: int) -> Any:
+        async with gate:
+            return _unwrap(
+                await substrate.query(
+                    module="SubtensorModule",
+                    storage_function=name,
+                    params=[netuid],
+                    block_hash=hashes[block],
+                )
+            )
+
+    async def v2_commits(block: int) -> int:
+        async with gate:
+            rows = await substrate.query_map(
+                module="SubtensorModule",
+                storage_function="WeightCommits",
+                params=[netuid],
+                block_hash=hashes[block],
+                fully_exhaust=True,
+            )
+            return len([row async for row in rows])
+
+    reveal_periods = {
+        _uint(await read("RevealPeriodEpochs", block))
+        for block in (first_block - 1, last_block)
+    }
+    if len(reveal_periods) != 1 or 0 in reveal_periods:
+        return full("reveal_period")
+    reveal_period = reveal_periods.pop()
+
+    # The controls are read at the ends and at every payout, not every block.
+    # A subnet owner cannot switch commit-reveal or the mechanism count off and
+    # back on between them: each change is rate-limited to one per
+    # tempo * OwnerHyperparamRateLimit blocks, longer than the range. Only root
+    # can, and root can also change that limit, so it must hold at both ends.
+    async def owner_change_interval(block: int) -> int:
+        async with gate:
+            limit = _unwrap(
+                await substrate.query(
+                    module="SubtensorModule",
+                    storage_function="OwnerHyperparamRateLimit",
+                    params=[],
+                    block_hash=hashes[block],
+                )
+            )
+        return _uint(await read("Tempo", block)) * _uint(limit)
+
+    intervals = {
+        await owner_change_interval(block) for block in (first_block - 1, last_block)
+    }
+    if len(intervals) != 1 or intervals.pop() <= last_block - first_block:
+        return full("owner_rate_limit")
+
+    # Payouts, newest first: each payout's parent state names the previous one.
+    payouts: list[int] = []
+    step = _uint(await read("LastMechansimStepBlock", last_block))
+    while step >= first_block:
+        payouts.append(step)
+        previous = _uint(await read("LastMechansimStepBlock", step - 1))
+        if previous >= step:
+            raise ValueError("payout markers do not move backwards")
+        step = previous
+    payouts.reverse()
+
+    # One segment per epoch: (state before, last block, epoch it reveals for).
+    starts = [first_block - 1, *payouts]
+    segments: list[tuple[int, int, int]] = []
+    for index, start in enumerate(starts):
+        last = payouts[index] - 1 if index < len(payouts) else last_block
+        epoch = _uint(await read("SubnetEpochIndex", start))
+        if _uint(await read("SubnetEpochIndex", last)) != epoch:
+            return full("epoch_without_payout")
+        if epoch < reveal_period:
+            return full("reveal_period")
+        # A payout's own block reveals too, so its segment starts before it.
+        before = start if index == 0 else start - 1
+        segments.append((before, last, epoch - reveal_period))
+    for block in {first_block - 1, last_block, *payouts}:
+        if await read("CommitRevealWeightsEnabled", block) is not True:
+            return full("commit_reveal_off")
+        if await read("MechanismCountCurrent", block) != 1:
+            return full("mechanism_count")
+        if await v2_commits(block):
+            return full("v2_commits")
+
+    interesting = set(payouts)
+    for before, last, reveal_epoch in segments:
+        key = await substrate.create_storage_key(
+            "SubtensorModule",
+            "TimelockedWeightCommits",
+            [netuid, reveal_epoch],
+            block_hash=end,
+        )
+        interesting.update(
+            await _storage_change_blocks(
+                substrate, key.to_hex(), hashes, before, last, gate
+            )
+        )
+    return endpoints.plan(interesting)
 
 
 async def verify_finalized_weight_commit(substrate: Any, receipt: Any) -> None:
@@ -914,30 +1346,41 @@ async def verify_finalized_weight_commit(substrate: Any, receipt: Any) -> None:
         raise ChainConnectionError("missing canonical commit block")
     if canonical != attempt.commit_block_hash:
         raise ValueError("commit block is not canonical")
-    for at in (await substrate.get_block_hash(attempt.commit_block - 1), canonical):
+
+    async def admitted_at(at: Any) -> RuntimeAdmission:
         if not at:
             raise ChainConnectionError("missing commit parent block")
         code = await substrate.rpc_request("state_getStorageHash", ["0x3a636f6465", at])
         if not isinstance(code, dict) or not code.get("result"):
             raise ChainConnectionError("missing historical commit runtime")
         try:
-            admission = await admit_runtime(substrate, code_hash=code["result"], at=at)
+            return await admit_runtime(substrate, code_hash=code["result"], at=at)
         except ValueError as error:
             raise ValueError("commit runtime is not audited") from error
-        if admission.epoch_consensus_gated:
-            # Null consensus queues commits differently; only Yuma is audited.
-            mode = _unwrap(
-                await substrate.query(
-                    module="SubtensorModule",
-                    storage_function="SubnetEpochConsensus",
-                    params=[receipt.netuid],
-                    block_hash=at,
-                )
+
+    parent = await substrate.get_block_hash(attempt.commit_block - 1)
+    parent_admission = await admitted_at(parent)
+    canonical_admission = await admitted_at(canonical)
+    for at, admission in ((parent, parent_admission), (canonical, canonical_admission)):
+        if not admission.epoch_consensus_gated:
+            continue
+        # Each state is gated by the runtime that wrote it, the one stored at
+        # its parent (_epoch_consensus_at).
+        writer = (
+            parent_admission
+            if at == canonical
+            else await admitted_at(
+                await substrate.get_block_hash(attempt.commit_block - 2)
             )
-            if mode is None:
-                raise ChainConnectionError("missing historical epoch consensus")
-            if mode != "Yuma":
-                raise ValueError("commit epoch consensus is not audited")
+        )
+        # Null consensus queues commits differently; only Yuma is audited.
+        mode = await _epoch_consensus_at(
+            substrate, netuid=receipt.netuid, at=at, writer=writer
+        )
+        if mode is None:
+            raise ChainConnectionError("missing historical epoch consensus")
+        if mode != "Yuma":
+            raise ValueError("commit epoch consensus is not audited")
     raw, decoded, events = await asyncio.gather(
         substrate.rpc_request("chain_getBlock", [canonical]),
         substrate.get_block(block_hash=canonical),

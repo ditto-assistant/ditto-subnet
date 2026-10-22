@@ -432,3 +432,109 @@ async def test_release_gate_reports_real_receipts_and_bounded_pending_rows(
     assert gate["rows"][0]["emission_block"] == 9000000
     assert "private_raw_payload" not in response.text
     assert all(row["emission_confirmed_at"] is None for row in gate["rows"][1:])
+
+
+async def test_release_gate_reports_the_reveal_plan_shadow(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.api_server import source_emission_collector
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    _install(app, session_maker)
+    for mode in ("shadow", "primary"):
+        # No comparison yet: no status, never a zero-miss summary.
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(source_emission_collector, "_REVEAL_PLAN_MODE", mode)
+            response = await client.get(
+                "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+            )
+        assert response.json()["release_gate"]["reveal_plan_shadow"] is None
+    async with session_maker() as session, session.begin():
+        session.add(
+            SourceEmissionCollectorCursor(
+                netuid=app.state.config.chain.netuid,
+                block=9200000,
+                block_hash="0x" + "ab" * 32,
+                updated_at=datetime(2026, 10, 18, tzinfo=UTC),
+                reveal_plan_shadow={
+                    "ranges": 3,
+                    "agreed": 2,
+                    "missed": 1,
+                    "blocks": 2160,
+                    "calls": 240,
+                    "last_outcome": "agreed",
+                    "recent_misses": [
+                        {"first_block": 1, "last_block": 720, "blocks": [42]}
+                    ],
+                    "updated_at": "2026-10-18T03:00:00+00:00",
+                },
+            )
+        )
+    response = await client.get(
+        "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+    )
+    shadow = response.json()["release_gate"]["reveal_plan_shadow"]
+    assert shadow["mode"] == "primary"
+    assert (shadow["ranges"], shadow["agreed"], shadow["missed"]) == (3, 2, 1)
+    assert shadow["recent_misses"] == [
+        {"first_block": 1, "last_block": 720, "blocks": [42]}
+    ]
+
+
+async def test_release_gate_reports_how_catch_up_ranges_replayed(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    _install(app, session_maker)
+    response = await client.get(
+        "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+    )
+    # No planned range yet: no summary, never a zero-fallback one.
+    assert response.json()["release_gate"]["catch_up"] is None
+    async with session_maker() as session, session.begin():
+        session.add(
+            SourceEmissionCollectorCursor(
+                netuid=app.state.config.chain.netuid,
+                block=9200000,
+                block_hash="0x" + "ab" * 32,
+                updated_at=datetime(2026, 10, 20, tzinfo=UTC),
+                catch_up={
+                    "ranges": 4,
+                    "sparse": 2,
+                    "full_scan": 1,
+                    "error": 1,
+                    "blocks_read": 9,
+                    "blocks_skipped": 1431,
+                    "full_scan_reasons": {"uid_mapping": 1},
+                    "last_range": [9199281, 9200000],
+                    "last_outcome": "sparse",
+                    "last_error": "RPC call is unsafe",
+                    "updated_at": "2026-10-20T03:00:00+00:00",
+                },
+            )
+        )
+    response = await client.get(
+        "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+    )
+    catch_up = response.json()["release_gate"]["catch_up"]
+    # Recorded before planners were named: the planner running now.
+    assert catch_up["planner"] == "reveal"
+    assert (catch_up["sparse"], catch_up["full_scan"], catch_up["error"]) == (2, 1, 1)
+    assert catch_up["full_scan_reasons"] == {"uid_mapping": 1}
+    assert (catch_up["blocks_read"], catch_up["blocks_skipped"]) == (9, 1431)
+    # A summary names the planner that replayed its ranges, whatever runs now.
+    async with session_maker() as session, session.begin():
+        cursor = await session.get(
+            SourceEmissionCollectorCursor, app.state.config.chain.netuid
+        )
+        assert cursor is not None and cursor.catch_up is not None
+        cursor.catch_up = {**cursor.catch_up, "planner": "event"}
+    response = await client.get(
+        "/api/v1/admin/artifact-release-settings", headers=_HEADERS
+    )
+    assert response.json()["release_gate"]["catch_up"]["planner"] == "event"

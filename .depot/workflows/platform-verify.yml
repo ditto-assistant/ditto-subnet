@@ -103,7 +103,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --locked --group dev --python 3.12
+        run: uv sync --locked --group dev --group browser --python 3.12
 
       - name: ruff format check
         run: uv run ruff format --check .
@@ -123,7 +123,7 @@ jobs:
       # validate the previous contract instead of this commit's.
       - name: Rebuild the screening protocol path dependency
         run: >-
-          uv sync --locked --group dev --python 3.12
+          uv sync --locked --group dev --group browser --python 3.12
           --reinstall-package ditto-screening-protocol
 
       # Run from apps/platform: the script bootstraps sys.path itself but
@@ -195,7 +195,8 @@ jobs:
               --ignore=ditto/tests/api_server/endpoints/test_admin_validator_slot_settings.py
               --ignore=ditto/tests/api_server/endpoints/test_admin_confirmation_bundles.py
               --ignore=ditto/tests/api_server/endpoints/test_gate_notes.py
-            object_storage: false
+            # Official-control uploads hash and seal real S3 objects.
+            object_storage: true
           - suite: api-server
             pytest_args: ditto/tests/api_server --ignore=ditto/tests/api_server/endpoints
             object_storage: false
@@ -236,7 +237,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --locked --group dev --python 3.12
+        run: uv sync --locked --group dev --group browser --python 3.12
 
       - name: Set up Go for hosted start integration
         if: matrix.suite == 'api-server'
@@ -245,6 +246,10 @@ jobs:
           go-version: "1.26.6"
           cache: true
           cache-dependency-path: services/dittobench-api/go.sum
+
+      - name: Install Chromium for the GitHub OAuth browser regression
+        if: matrix.suite == 'other-endpoints-remaining'
+        run: uv run --group browser playwright install --with-deps chromium
 
       - name: Tune disposable Postgres
         # Match the local test harness: these databases are rebuilt from the
@@ -292,8 +297,8 @@ jobs:
           asyncio.run(main())
           PY
 
-      # Only integration tests request the object_storage fixture. Keeping
-      # MinIO out of the other shards avoids image pulls and startup loops
+      # Integration and official-control endpoint tests request object_storage.
+      # Keeping MinIO out of other shards avoids image pulls and startup loops
       # without weakening the hard requirement in the shard that uses it.
       - name: Start MinIO
         if: matrix.object_storage
@@ -323,6 +328,9 @@ jobs:
           # The integration shard must fail rather than skip if MinIO is down.
           # The other shards never request the fixture, so this remains inert.
           DITTO_REQUIRE_OBJECT_STORAGE: "1"
+          # The browser shard installs Chromium above; a missing browser must
+          # fail the OAuth regression rather than skip it.
+          DITTO_REQUIRE_BROWSER: "1"
           DITTO_UPLOAD_PAYMENT_ADDRESS: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
           PYLON_URL: http://127.0.0.1:1
           PYLON_OPEN_ACCESS_TOKEN: ci-no-chain
@@ -332,7 +340,7 @@ jobs:
           STORAGE_BUCKET: ditto-agents
           STORAGE_REGION: us-east-1
           STORAGE_USE_TLS: "false"
-        run: uv run pytest ${{ matrix.pytest_args }}
+        run: uv run --group browser pytest ${{ matrix.pytest_args }}
 
   dashboard:
     needs: validate

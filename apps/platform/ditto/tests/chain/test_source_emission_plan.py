@@ -100,7 +100,12 @@ class FakeChain:
     ) -> Any:
         del module, params
         if storage_function == "SubnetEpochConsensus":
-            return self.consensus.get(self.block_of(block_hash), "Yuma")
+            block = self.block_of(block_hash)
+            # Like the library: a state is decoded with the metadata of the
+            # runtime stored at its parent, which before v475 has no item.
+            if self.code.get(block - 1, CODE) != _V475:
+                raise ValueError('Storage function "SubnetEpochConsensus" not found')
+            return self.consensus.get(block, "Yuma")
         mechanisms, commit_reveal = self.controls.get(
             self.block_of(block_hash), (1, True)
         )
@@ -110,8 +115,17 @@ class FakeChain:
             else (commit_reveal)
         )
 
+    async def get_constant(self, module_name: str, constant_name: str, **_: Any):
+        assert (module_name, constant_name) == (
+            "SubtensorModule",
+            "HotkeySwapOnSubnetInterval",
+        )
+        return 7200
+
     async def query_map(self, **kwargs: Any) -> Any:
         rows = self.keys.get(self.block_of(kwargs["block_hash"]), KEYS)
+        if kwargs["storage_function"] == "LastHotkeySwapOnNetuid":
+            rows = []
 
         async def iterate():
             for row in rows:
@@ -176,14 +190,20 @@ async def test_only_blocks_the_reader_acts_on_are_interesting() -> None:
 
 
 @pytest.mark.parametrize(
-    "mutate",
+    ("mutate", "reason"),
     [
-        lambda c: c.code.__setitem__(120, "0x" + "ab" * 32),
-        lambda c: [c.code.__setitem__(b, "0x" + "cd" * 32) for b in (100, 120)],
-        lambda c: c.keys.__setitem__(120, [*KEYS, (3, "newcomer")]),
-        lambda c: c.keys.__setitem__(100, [(0, "owner"), (2, "miner")]),
-        lambda c: c.controls.__setitem__(100, (2, True)),
-        lambda c: c.controls.__setitem__(120, (1, False)),
+        (lambda c: c.code.__setitem__(120, "0x" + "ab" * 32), "runtime_changed"),
+        (
+            lambda c: [c.code.__setitem__(b, "0x" + "cd" * 32) for b in (100, 120)],
+            "runtime_not_admitted",
+        ),
+        (lambda c: c.keys.__setitem__(120, [*KEYS, (3, "newcomer")]), "uid_mapping"),
+        (
+            lambda c: c.keys.__setitem__(100, [(0, "owner"), (2, "miner")]),
+            "uid_mapping",
+        ),
+        (lambda c: c.controls.__setitem__(100, (2, True)), "mechanism_count"),
+        (lambda c: c.controls.__setitem__(120, (1, False)), "commit_reveal_off"),
     ],
     ids=[
         "runtime-changed",
@@ -195,7 +215,7 @@ async def test_only_blocks_the_reader_acts_on_are_interesting() -> None:
     ],
 )
 async def test_structural_change_or_invalid_endpoint_requests_full_scan(
-    mutate,
+    mutate, reason
 ) -> None:
     chain = FakeChain(first=101, last=120)
     mutate(chain)
@@ -203,6 +223,7 @@ async def test_structural_change_or_invalid_endpoint_requests_full_scan(
     plan = await _plan(chain)
 
     assert plan.full_scan is True
+    assert plan.full_scan_reason == reason
     assert plan.interesting == ()
     assert chain.storage_reads == []
 
@@ -263,7 +284,7 @@ _V475 = "0x557634c8c31bc639ea6552e297dcfb781cd7d9bdd491a5352c151305db33d3a0"
 )
 async def test_v475_endpoints_require_yuma(consensus, full_scan) -> None:
     chain = FakeChain(first=101, last=120)
-    chain.code = {100: _V475, 120: _V475}
+    chain.code = {99: _V475, 100: _V475, 119: _V475, 120: _V475}
     chain.consensus = consensus
     chain.events = {
         110: [_event("SubtensorModule", "EpochConsensusSet", (NETUID, "Null"))]
@@ -275,3 +296,14 @@ async def test_v475_endpoints_require_yuma(consensus, full_scan) -> None:
     if not full_scan:
         # A consensus switch inside the range gets the full (fail-closed) read.
         assert plan.interesting == (110,)
+
+
+async def test_v475_range_starting_on_its_upgrade_block_is_planned() -> None:
+    # Block 100 stores v475's code but was written by the previous runtime,
+    # whose metadata has no SubnetEpochConsensus (Finney block 9233781).
+    chain = FakeChain(first=101, last=120)
+    chain.code = dict.fromkeys(range(100, 121), _V475)
+
+    plan = await _plan(chain)
+
+    assert not plan.full_scan

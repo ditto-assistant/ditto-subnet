@@ -51,7 +51,7 @@ export const manualTransferSchema = z.object({
   status: z.enum(['queued', 'dispatched', 'pending', 'audit_pending', 'published', 'failed', 'refused']),
   actor: z.string(), created_at: z.string(), updated_at: z.string(),
   last_error: z.string().nullable(),
-  receipt: z.object({ receipt_id: digest, extrinsic_hash: z.string(), published: z.boolean() }).nullable(),
+  receipt: z.object({ receipt_id: digest, extrinsic_hash: z.string(), published: z.boolean(), source_attribution: z.literal("incomplete").optional() }).nullable(),
 })
 export const manualControlSchema = z.object({
   enabled: z.boolean(), blocked_reason: z.string().nullable(), bridge_error: z.string().nullable(),

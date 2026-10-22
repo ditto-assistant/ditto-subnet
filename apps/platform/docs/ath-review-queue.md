@@ -21,13 +21,32 @@ parameter:
 | `copy` | the anti-copy gate at quorum, or a manual operator hold |
 | `benchmark_overfit` | the transform audit |
 | `deferred_source_review` | the score-qualified source review, in enforce mode, or the top-five integrity double-check (`algorithm_provenance.trigger = integrity_double_check`) |
-| `anomalous_score` | the out-of-band composite escalation at finalization (bench v12+), in enforce mode |
+| `anomalous_score` | the out-of-band composite escalation at finalization (bench v12+), in enforce mode; or, only with `DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE` on, a single-axis (`tool_mean` / `memory_mean`) outlier whose composite clears the floor (`original_evidence.trigger = per_axis`). A per-axis outlier that does not hold is recorded as evidence only, on audit kind `anomalous_score_axis`. The audit chain is public, so its per-axis evidence is only the axis name and outlier flag; per-axis statistics live on the hold's `original_evidence` and in the admin dry-run |
 
 `review_kind` postdates the holds it describes, so the oldest rows carry no key
 at all and both the projection and the filter treat a missing or unrecognized
 value as `copy`. Those two rules must stay in step: a filter matching only the
 literal string would drop legacy rows while every row it returned still said
 `copy`, which is an omission with nothing on its face to reveal it.
+
+### Per-axis outlier evidence
+
+- **What observe mode keeps.** Each per-axis entry on the public audit chain
+  (an `observe` would-be hold, or an `anomalous_score_axis` record) stores
+  only `{axis, outlier}`. The axis value, cohort median/MAD and modified z are
+  persisted only on an enforced hold's `original_evidence`, so observe mode
+  shows which axes were out of band, not their z distribution. Use the admin
+  dry-run (`GET /admin/outlier-escalation/dry-run`, or the Backroom
+  `get_outlier_escalation_dry_run` tool) to see those statistics for today's
+  ledger. A private store for observe-mode statistics is a follow-up.
+- **Zero-MAD cohorts.** When every peer on an axis has the same value, the MAD
+  is 0. The gate has no scale, so any value above that median counts as an
+  outlier on that axis, however small the gap. This is most likely early in a
+  benchmark version, when many agents saturate the same axis.
+- **Before enabling per-axis enforcement.** Run the dry-run with
+  `per_axis_enforce=true` (Backroom `perAxisEnforce: true`) and check every
+  row it would hold, especially rows with `cohort_mad: 0`. Only then set
+  `DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE`.
 
 ## The top-five integrity double-check
 

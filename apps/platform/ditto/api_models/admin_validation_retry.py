@@ -309,11 +309,21 @@ class AdminValidationRetryRequest(BaseModel):
         str,
         StringConstraints(strip_whitespace=True, min_length=3),
     ]
+    target_validator_hotkey: (
+        Annotated[str, StringConstraints(min_length=1, max_length=64)] | None
+    ) = None
+    """Choose an exhausted validator ticket when exactly one score is missing."""
     acknowledge_provider_outage: bool = False
     """Grant even though the provider-wide outage circuit is still open.
 
     Without it the grant is refused: while the circuit is open every scoring
     lease is parked, so the restored slot would be parked again."""
+
+
+class AdminTargetedValidationRetryRequest(AdminValidationRetryRequest):
+    target_validator_hotkey: Annotated[
+        str, StringConstraints(min_length=1, max_length=64)
+    ]
 
 
 class AdminValidationRetryResponse(BaseModel):

@@ -33,6 +33,7 @@ from ditto.api_models.admin_validation_retry import (
     AdminScoreOutlierScore,
     AdminStuckSubmission,
     AdminStuckSubmissionsResponse,
+    AdminTargetedValidationRetryRequest,
     AdminV9ContractRetestItem,
     AdminV9ContractRetestList,
     AdminValidationQueueEviction,
@@ -875,6 +876,7 @@ async def _apply_recovery(
     expected_snapshot: str,
     now: datetime,
     acknowledge_provider_outage: bool = False,
+    target_validator_hotkey: str | None = None,
 ) -> tuple[str, str | None, ValidatorRetryRecovery | None]:
     """Grant one audited recovery inside the caller's transaction.
 
@@ -899,6 +901,7 @@ async def _apply_recovery(
             or existing.actor != actor
             or existing.reason != reason
             or existing.expected_snapshot != expected_snapshot
+            or existing.target_validator_hotkey != target_validator_hotkey
         ):
             return "skipped", "request id already used", None
         return "idempotent", None, existing
@@ -935,6 +938,7 @@ async def _apply_recovery(
         bench_version=bench_version,
         rollout_qualification=rollout_qualification,
         work_available_hotkeys=await work_available_validator_hotkeys(session, now=now),
+        target_validator_hotkey=target_validator_hotkey,
     )
     if not allowed:
         return "skipped", gate_reason or "retry unavailable", None
@@ -974,6 +978,7 @@ async def _apply_recovery(
         score_count=len(scores),
         bench_version=bench_version,
         ticket_snapshot=ticket_snapshot,
+        target_validator_hotkey=target_validator_hotkey,
         granted_validator_hotkeys=[ticket.validator_hotkey for ticket in selected],
         created_at=now,
     )
@@ -1454,6 +1459,7 @@ async def retry_validation_after_infrastructure_failure(
             expected_snapshot=payload.expected_snapshot,
             now=datetime.now(UTC),
             acknowledge_provider_outage=payload.acknowledge_provider_outage,
+            target_validator_hotkey=payload.target_validator_hotkey,
         )
         if status == "skipped":
             code = 404 if detail == "agent not found" else 409
@@ -1462,6 +1468,24 @@ async def retry_validation_after_infrastructure_failure(
         return AdminValidationRetryResponse(
             recovery=_recovery_item(recovery), idempotent=status == "idempotent"
         )
+
+
+@router.post(
+    "/validation-retries/{agent_id}/retry-targeted",
+    response_model=AdminValidationRetryResponse,
+)
+async def retry_targeted_validation_after_infrastructure_failure(
+    agent_id: UUID,
+    payload: AdminTargetedValidationRetryRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminValidationRetryResponse:
+    # A distinct route makes old Platform versions refuse targeted requests
+    # rather than silently ignoring the new selector during a rolling deploy.
+    return await retry_validation_after_infrastructure_failure(
+        agent_id, payload, _admin, session, x_admin_actor
+    )
 
 
 @router.post(

@@ -1125,15 +1125,23 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 		return false
 	}
 	if embedding {
+		// The chat and embedding lanes share one grant status. Once the
+		// harness's own chat spend marks the grant exhausted, the relay refuses
+		// every later embedding with 4102 even though the embedding lane is
+		// untouched (ditto-subnet#2970). Chat evidence that proves that wall
+		// confirms the decline; without it a chat-heavy harness whose later
+		// calls are embeddings was booked as relay infrastructure and re-leased.
 		switch code {
 		case platformDeclineBudgetExhausted:
 			// embeddingRequests increments once per handle, including this call,
 			// before the platform is contacted. It is the reservation lower
 			// bound we have: the 1B-token / 100k-request embedding grant is
 			// not crossed by a body-byte sum the way chat is.
-			return session.embeddingRequests >= session.embeddingRequestBudget
+			return session.embeddingRequests >= session.embeddingRequestBudget ||
+				chatAllowanceSpentLocked(session)
 		case platformDeclineTokenBudgetExhausted:
-			return session.embeddingTokens >= session.embeddingTokenBudget
+			return session.embeddingTokens >= session.embeddingTokenBudget ||
+				chatAllowanceSpentLocked(session)
 		case platformDeclineReservationTooLarge:
 			return false
 		default:
@@ -1156,6 +1164,19 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 	default:
 		return false
 	}
+}
+
+// chatAllowanceSpentLocked reports whether this broker's own chat evidence
+// proves the shared grant was exhausted by the harness: settled receipted
+// tokens at or past the token wall, or completed calls at the request wall.
+// It uses the same settled-only bounds as the chat branch above, never a
+// body-byte ceiling, and requires authenticated chat budgets.
+func chatAllowanceSpentLocked(session *brokerSession) bool {
+	if !sessionHasBudgetEvidenceLocked(session, false) {
+		return false
+	}
+	return session.promptTokens+session.completionTokens >= session.tokenBudget ||
+		session.successes >= session.requestBudget
 }
 
 // platformChatChargeUpperBound mirrors the Platform's tokenizer-independent
@@ -5232,7 +5253,20 @@ func normalizeChatRequest(body []byte, model string, benchVersion int) ([]byte, 
 	flatEffort := ""
 	if nestedPresent {
 		nested, ok := nestedRaw.(map[string]any)
-		if !ok || len(nested) != 1 {
+		if !ok {
+			return nil, fmt.Errorf("invalid reasoning")
+		}
+		// Match Platform's accepted shapes. Repeating the trusted privacy
+		// value is harmless; the normalized body below still owns exclude.
+		_, hasEffort := nested["effort"]
+		excludeRaw, hasExclude := nested["exclude"]
+		switch {
+		case hasEffort && len(nested) == 1:
+		case hasEffort && hasExclude && len(nested) == 2:
+			if exclude, ok := excludeRaw.(bool); !ok || !exclude {
+				return nil, fmt.Errorf("invalid reasoning")
+			}
+		default:
 			return nil, fmt.Errorf("invalid reasoning")
 		}
 		candidate, ok := nested["effort"].(string)

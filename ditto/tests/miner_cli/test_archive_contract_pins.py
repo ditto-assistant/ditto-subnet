@@ -10,8 +10,10 @@ either side alone.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
+from ditto.miner_cli import tar_validator
 from ditto.miner_cli.tar_validator import MAX_ARCHIVE_MEMBERS, MAX_UNPACKED_BYTES
 
 SCREENER_GATE = (
@@ -42,3 +44,35 @@ def _screener_constant(name: str) -> object:
 def test_cli_archive_limits_match_the_screener() -> None:
     assert _screener_constant("_MAX_ARCHIVE_MEMBERS") == MAX_ARCHIVE_MEMBERS
     assert _screener_constant("_MAX_UNPACKED_BYTES") == MAX_UNPACKED_BYTES
+
+
+_SCR_CODE = re.compile(r'"(SCR-[A-Z]+-\d+)"')
+
+
+def test_cli_emits_every_screener_contract_code() -> None:
+    # ditto-subnet#2968: SCR-CONTRACT-004 was left out of the port, so
+    # `ditto verify` passed archives the screener rejected after the fee.
+    screener_codes = set(_SCR_CODE.findall(SCREENER_GATE.read_text()))
+    cli_codes = set(_SCR_CODE.findall(Path(tar_validator.__file__).read_text()))
+    assert "SCR-CONTRACT-004" in screener_codes
+    assert screener_codes <= cli_codes, sorted(screener_codes - cli_codes)
+
+
+def _function_body(source: str, name: str) -> str:
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+            ):
+                body = body[1:]  # docstrings may differ
+            return "\n".join(ast.dump(statement) for statement in body)
+    raise AssertionError(f"{name} not found")
+
+
+def test_cli_parses_the_dockerfile_exactly_as_the_screener() -> None:
+    assert _function_body(
+        Path(tar_validator.__file__).read_text(), "_dockerfile_instructions"
+    ) == _function_body(SCREENER_GATE.read_text(), "_dockerfile_instructions")

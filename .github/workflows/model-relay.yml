@@ -1,17 +1,9 @@
 name: Model Relay
 
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - services/model-relay/**
-      - .github/workflows/model-relay.yml
-      # The relay's db/schema.sql is a generated mirror of the Alembic chain;
-      # a migration must re-run the drift guard below.
-      - apps/platform/alembic/**
-      # schema_test.go asserts the request-field fates against this table.
-      - docs/inference-request-fields.json
-
 concurrency:
   group: model-relay-${{ github.ref }}
   cancel-in-progress: true

@@ -12970,6 +12970,8 @@ def _scorer_capable_capabilities(
         **_V7_CAPABILITIES,
         "ticket_inference": True,
         "signed_score_quorum": True,
+        # v13+ work also requires the Platform-issued sandbox memory cap.
+        "sandbox_memory_limit": True,
         "scorer_benchmarks": {
             "status": "fresh_verified",
             "supported_bench_versions": list(versions),

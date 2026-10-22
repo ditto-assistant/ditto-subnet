@@ -297,6 +297,11 @@ def _inference_budget_evidence(response: httpx.Response) -> dict[str, int]:
     return evidence
 
 
+def _is_transient_platform_status(status_code: int) -> bool:
+    """Request timeout, rate limit, or server error: retry later, blame nobody."""
+    return status_code in (408, 429) or status_code >= 500
+
+
 def _weight_receipt_conflict_code(response: httpx.Response) -> str:
     """Platform's bounded ``<code>: ...`` 409 category; never echo the rest."""
     try:
@@ -2098,8 +2103,17 @@ class PlatformClient:
             async with self._client.stream(
                 "POST", url, headers=self._headers, json=payload.model_dump(mode="json")
             ) as response:
+                if _is_transient_platform_status(response.status_code):
+                    # A Platform or database blip says nothing about the agent;
+                    # handing it back as scoring_error would spend the miner's
+                    # base attempt and let this slot fail every lease it claims.
+                    raise PlatformInfrastructureError(
+                        f"private dataset download unavailable ({response.status_code})"
+                    )
                 if response.status_code != 200:
-                    raise PlatformError("private dataset download rejected")
+                    raise PlatformError(
+                        f"private dataset download rejected ({response.status_code})"
+                    )
                 parts = []
                 total = 0
                 async for chunk in response.aiter_bytes(65536):
@@ -2109,7 +2123,9 @@ class PlatformClient:
                     parts.append(chunk)
                 body = b"".join(parts)
         except httpx.HTTPError:
-            raise PlatformError("private dataset transport failed") from None
+            raise PlatformInfrastructureError(
+                "private dataset transport failed"
+            ) from None
         if not body or hashlib.sha256(body).hexdigest() != dataset_sha256:
             raise PlatformError("private dataset digest mismatch")
         return body

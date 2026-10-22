@@ -1029,6 +1029,108 @@ async def get_quarantine_batch_context(
     return AdminQuarantineBatchContextResponse(items=items, count=len(items))
 
 
+async def _failed_release_conflict(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    quarantine: ScreeningQuarantine,
+    decision: AdminQuarantineBatchDecision,
+) -> str | None:
+    """Shared preview/write fence for manually approving a parked failure.
+
+    The caller holds the agent row lock on writes, as screening claims do.
+    Attempt and quarantine evidence are retained verbatim; release authorizes
+    scoring through the ordinary build/health gates, never fabricates a pass.
+    """
+    if decision.expected_attempt_id is None or decision.expected_score_count is None:
+        return "failed release requires latest attempt and score count guards"
+    latest_attempts = list(
+        await session.scalars(
+            select(ScreeningAttempt)
+            .where(ScreeningAttempt.agent_id == agent.agent_id)
+            .order_by(ScreeningAttempt.started_at.desc())
+            .limit(2)
+        )
+    )
+    # UUIDs do not encode chronology. A tied timestamp cannot establish the
+    # latest attempt, so refuse rather than silently choosing an older one.
+    if (
+        len(latest_attempts) > 1
+        and latest_attempts[0].started_at == latest_attempts[1].started_at
+    ):
+        return "latest screening attempt order is ambiguous"
+    latest = latest_attempts[0] if latest_attempts else None
+    if (
+        latest is None
+        or latest.attempt_id != decision.expected_attempt_id
+        or quarantine.attempt_id != latest.attempt_id
+        or latest.artifact_sha256 != agent.sha256
+        or latest.status not in {"failed", "expired"}
+    ):
+        return "latest failed screening attempt changed"
+    pending_retry = await session.scalar(
+        select(ScreeningRetryOverride.override_id).where(
+            ScreeningRetryOverride.agent_id == agent.agent_id,
+            ScreeningRetryOverride.attempt_id == latest.attempt_id,
+        )
+    )
+    if pending_retry is not None:
+        return "screening retry is pending"
+    score_count = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Score)
+            .where(Score.agent_id == agent.agent_id)
+        )
+        or 0
+    )
+    if score_count != decision.expected_score_count:
+        return "score count changed"
+    running = await session.scalar(
+        select(ScreeningAttempt.attempt_id)
+        .where(
+            ScreeningAttempt.agent_id == agent.agent_id,
+            ScreeningAttempt.status == "running",
+        )
+        .limit(1)
+    )
+    build = await session.scalar(
+        select(SubmissionImageBuild.build_id)
+        .where(
+            SubmissionImageBuild.agent_id == agent.agent_id,
+            or_(
+                SubmissionImageBuild.status.in_(("queued", "leased", "running")),
+                SubmissionImageBuild.runtime_status.in_(("pending", "running")),
+            ),
+        )
+        .limit(1)
+    )
+    review = await session.scalar(
+        select(SubmissionSourceReview.review_id)
+        .where(
+            SubmissionSourceReview.agent_id == agent.agent_id,
+            SubmissionSourceReview.status.in_(("queued", "leased", "running")),
+        )
+        .limit(1)
+    )
+    if running is not None or build is not None or review is not None:
+        return "screening work is active"
+    return None
+
+
+def _is_failed_release(
+    quarantine: ScreeningQuarantine,
+    agent: Agent,
+    decision: AdminQuarantineBatchDecision,
+) -> bool:
+    return (
+        quarantine.status == "resolved"
+        and quarantine.resolution == "rescreen"
+        and agent.status == AgentStatus.SCREENING_FAILED
+        and decision.resolution == "release"
+    )
+
+
 async def _preview_batch_decision(
     session: AsyncSession,
     decision: AdminQuarantineBatchDecision,
@@ -1112,7 +1214,25 @@ async def _preview_batch_decision(
         and agent.status == AgentStatus.REJECTED
         and decision.resolution == "release"
     )
-    if not is_initial and not is_correction:
+    is_failed_release = _is_failed_release(quarantine, agent, decision)
+    if (
+        decision.expected_attempt_id is not None
+        or decision.expected_score_count is not None
+    ) and not is_failed_release:
+        return AdminQuarantineBatchPreviewItem(
+            **base,
+            disposition="conflict",
+            message="failed release submission state changed",
+        )
+    if is_failed_release:
+        conflict = await _failed_release_conflict(
+            session, agent=agent, quarantine=quarantine, decision=decision
+        )
+        if conflict is not None:
+            return AdminQuarantineBatchPreviewItem(
+                **base, disposition="conflict", message=conflict
+            )
+    if not is_initial and not is_correction and not is_failed_release:
         return AdminQuarantineBatchPreviewItem(
             **base,
             disposition="conflict",
@@ -1282,6 +1402,11 @@ async def _apply_batch_resolution(
     }[decision.resolution]
     now = datetime.now(UTC)
     agent.status = target
+    if (
+        prior_agent_status == AgentStatus.SCREENING_FAILED
+        and decision.resolution == "release"
+    ):
+        agent.screening_policy_version = effective_screening_policy_version()
     agent.screening_reason = decision.reason
     agent.screening_reason_code = resolution_reason_code(decision.resolution)
     await _apply_dataset(session, agent, new_dataset)
@@ -1425,6 +1550,7 @@ async def execute_quarantine_batch(
                     select(ScreeningQuarantine)
                     .where(ScreeningQuarantine.quarantine_id == decision.quarantine_id)
                     .with_for_update()
+                    .execution_options(populate_existing=True)
                 )
                 if quarantine is None:
                     raise HTTPException(status_code=404, detail="quarantine not found")
@@ -1432,6 +1558,7 @@ async def execute_quarantine_batch(
                     select(Agent)
                     .where(Agent.agent_id == quarantine.agent_id)
                     .with_for_update()
+                    .execution_options(populate_existing=True)
                 )
                 if agent is None:
                     raise HTTPException(status_code=404, detail="agent not found")
@@ -1452,6 +1579,21 @@ async def execute_quarantine_batch(
                     and agent.status == AgentStatus.REJECTED
                     and decision.resolution == "release"
                 )
+                is_failed_release = _is_failed_release(quarantine, agent, decision)
+                if (
+                    decision.expected_attempt_id is not None
+                    or decision.expected_score_count is not None
+                ) and not is_failed_release:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="failed release submission state changed",
+                    )
+                if is_failed_release:
+                    conflict = await _failed_release_conflict(
+                        session, agent=agent, quarantine=quarantine, decision=decision
+                    )
+                    if conflict is not None:
+                        raise HTTPException(status_code=409, detail=conflict)
                 # Fence the previewed terminal state under both row locks
                 # (ditto-subnet#2038): the same classification, and for a
                 # reconciliation the same ruling on the same artifact.
@@ -1496,7 +1638,7 @@ async def execute_quarantine_batch(
                         ruling=locked_ruling,
                     )
                     target = agent.status
-                elif not is_initial and not is_correction:
+                elif not is_initial and not is_correction and not is_failed_release:
                     raise HTTPException(
                         status_code=409,
                         detail="quarantine changed after preview",
@@ -1822,6 +1964,14 @@ async def _build_quarantine_context(
             submitted_at=agent.created_at,
             screening_policy_version=agent.screening_policy_version,
             screening_reason=agent.screening_reason,
+            score_count=int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Score)
+                    .where(Score.agent_id == agent.agent_id)
+                )
+                or 0
+            ),
         ),
         attempts=[
             AdminScreeningAttempt(

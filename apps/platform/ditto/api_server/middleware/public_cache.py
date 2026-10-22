@@ -31,10 +31,9 @@ import asyncio
 import hashlib
 import logging
 import os
-import re
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from starlette.datastructures import Headers
@@ -47,13 +46,39 @@ if TYPE_CHECKING:
 
 _PREFIX = "/api/v1/public/"
 _MAX_ENTRIES = 512
-_MAX_AGE = re.compile(r"max-age=(\d+)")
-_STALE_WHILE_REVALIDATE = re.compile(r"stale-while-revalidate=(\d+)")
 _REFRESH_FAILURE_BACKOFF_SECONDS = 5.0
 
-_CACHEABLE_HEADERS = ("cache-control", "content-encoding", "content-type", "vary")
+_CACHEABLE_HEADERS = (
+    "cache-control",
+    "content-encoding",
+    "content-type",
+    "vary",
+    "x-content-type-options",
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _declared_etag(headers: Mapping[str, str]) -> str | None:
+    """The endpoint's own validator, as it applies to this representation.
+
+    Content-addressed endpoints (pinned CLA text, avatars) publish a digest
+    ETag that clients pin in If-None-Match; replacing it would turn every
+    revalidation into a full 200. A declared strong ETag names the identity
+    bytes, so an encoded representation carries it in weak form: distinct
+    bytes never share a strong validator, and weak revalidation still answers
+    a pinned digest with a 304. Every path that serves a declared ETag
+    through this cache, stored or passed through, uses this one rule.
+    """
+    declared = headers.get("etag")
+    if declared and headers.get("content-encoding") and not declared.startswith("W/"):
+        return "W/" + declared
+    return declared
+
+
+def _entry_etag(headers: Mapping[str, str], body: bytes) -> str:
+    """Keep an endpoint's own validator; otherwise derive one from the body."""
+    return _declared_etag(headers) or compute_etag(body)
 
 
 def compute_etag(body: bytes) -> str:
@@ -71,18 +96,18 @@ def if_none_match(header: str | None, etag: str) -> bool:
     """Return ``True`` when ``If-None-Match`` matches ``etag`` (so serve 304).
 
     Accepts the comma-separated list form, the ``*`` wildcard, and weak
-    validators (``W/"..."``); we compare ignoring the weak prefix since our
-    strong ETag is byte-stable.
+    validators (``W/"..."``). If-None-Match uses weak comparison (RFC 9110
+    13.1.2), so the prefix is ignored on both sides: an endpoint may declare a
+    weak ETag of its own.
     """
     if not header:
         return False
+    current = etag.removeprefix("W/")
     for raw in header.split(","):
         token = raw.strip()
         if token == "*":
             return True
-        if token.startswith("W/"):
-            token = token[2:]
-        if token == etag:
+        if token.removeprefix("W/") == current:
             return True
     return False
 
@@ -107,18 +132,42 @@ class _Entry:
         self.stale_until = stale_until
 
 
+def _cache_control(headers: Headers) -> str:
+    """Every Cache-Control field, so a later ``no-store`` is never missed."""
+    return ", ".join(headers.getlist("cache-control"))
+
+
+def _stored_headers(headers: Headers) -> dict[str, str]:
+    """The cacheable headers, keeping every field of a split header."""
+    stored = {
+        name: ", ".join(headers.getlist(name))
+        for name in _CACHEABLE_HEADERS
+        if name in headers
+    }
+    stored.setdefault("vary", "Accept-Encoding")
+    return stored
+
+
 def _policy_from_cache_control(value: str | None) -> tuple[float, float]:
     if not value:
         return 0.0, 0.0
-    lowered = value.lower()
-    if "no-store" in lowered or "private" in lowered:
+    # Directives by name, so an extension such as x-no-cache-hint=1 or
+    # x-max-age=60 is neither a refusal nor a lifetime.
+    directives = {
+        name.strip(): argument.strip()
+        for name, _, argument in (
+            directive.partition("=") for directive in value.lower().split(",")
+        )
+    }
+    # no-cache forbids serving without revalidation, which this cache never does.
+    if directives.keys() & {"no-store", "private", "no-cache"}:
         return 0.0, 0.0
-    max_age = _MAX_AGE.search(lowered)
-    stale = _STALE_WHILE_REVALIDATE.search(lowered)
-    return (
-        float(max_age.group(1)) if max_age else 0.0,
-        float(stale.group(1)) if stale else 0.0,
-    )
+
+    def seconds(name: str) -> float:
+        argument = directives.get(name, "")
+        return float(argument) if argument.isdigit() else 0.0
+
+    return seconds("max-age"), seconds("stale-while-revalidate")
 
 
 class PublicCacheMiddleware(BaseHTTPMiddleware):
@@ -197,21 +246,41 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
     async def _fetch(
         self, request: Request, call_next
     ) -> tuple[Response, _Entry | None]:
-        """Run the downstream app and capture the body when cacheable."""
+        """Run the downstream app and capture the body when cacheable.
+
+        The validator is dropped downstream, as on a background refresh, so the
+        endpoint always returns the 200 this cache stores and every 304 for a
+        cacheable entry is built here with the entry's own ETag and Vary.
+        """
+        inm = request.headers.get("if-none-match")
+        request.scope["headers"] = [
+            (name, value)
+            for name, value in request.scope["headers"]
+            if name.lower() != b"if-none-match"
+        ]
         response = await call_next(request)
-        ttl, stale_ttl = _policy_from_cache_control(
-            response.headers.get("cache-control")
-        )
+        ttl, stale_ttl = _policy_from_cache_control(_cache_control(response.headers))
         if response.status_code != 200 or ttl <= 0:
+            etag = _declared_etag(response.headers)
+            if response.status_code == 200 and etag:
+                response.headers["etag"] = etag
+            if response.status_code == 200 and etag and if_none_match(inm, etag):
+                # Not cacheable, but the client's validator still matches.
+                async for _chunk in response.body_iterator:
+                    pass
+                return Response(
+                    status_code=304,
+                    headers={
+                        name: value
+                        for name, value in _stored_headers(response.headers).items()
+                        if name in ("cache-control", "vary")
+                    }
+                    | {"ETag": etag},
+                ), None
             return response, None
         body = b"".join([chunk async for chunk in response.body_iterator])
-        headers = {
-            name: value
-            for name, value in response.headers.items()
-            if name.lower() in _CACHEABLE_HEADERS
-        }
-        headers.setdefault("vary", "Accept-Encoding")
-        etag = compute_etag(body)
+        headers = _stored_headers(response.headers)
+        etag = _entry_etag(response.headers, body)
         expires_at = self._now() + ttl
         entry = _Entry(
             response.status_code,
@@ -265,7 +334,11 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
             if not started:
                 started = True
                 return {"type": "http.request", "body": b"", "more_body": False}
-            return {"type": "http.disconnect"}
+            # This internal refresh has no client to disconnect. Advertising
+            # one here cancels StreamingResponse after its first chunk, then
+            # caches a truncated body as a successful 200 response.
+            await asyncio.Future()
+            raise AssertionError("unreachable")
 
         async def send(message: Message) -> None:
             nonlocal status, raw_headers
@@ -278,9 +351,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
         try:
             await self.app(inner_scope, receive, send)
             headers_obj = Headers(raw=raw_headers)
-            ttl, stale_ttl = _policy_from_cache_control(
-                headers_obj.get("cache-control")
-            )
+            ttl, stale_ttl = _policy_from_cache_control(_cache_control(headers_obj))
             if status != 200 or ttl <= 0:
                 self._backoff_stale(key)
                 logger.warning(
@@ -290,12 +361,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
                 )
                 return
             body = b"".join(body_parts)
-            headers = {
-                name: value
-                for name, value in headers_obj.items()
-                if name.lower() in _CACHEABLE_HEADERS
-            }
-            headers.setdefault("vary", "Accept-Encoding")
+            headers = _stored_headers(headers_obj)
             expires_at = self._now() + ttl
             self._store(
                 key,
@@ -303,7 +369,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
                     status,
                     headers,
                     body,
-                    compute_etag(body),
+                    _entry_etag(headers_obj, body),
                     expires_at,
                     expires_at + stale_ttl,
                 ),

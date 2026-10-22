@@ -63,6 +63,71 @@ class SourceArchiveProviderStatus(BaseModel):
     credential_configured: bool
 
 
+class RevealPlanShadowMiss(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    first_block: int
+    last_block: int
+    blocks: list[int] = Field(default_factory=list, max_length=720)
+
+
+class RevealPlanShadowStatus(BaseModel):
+    """Running check of the reveal-anchored range planner, before it is trusted.
+
+    ``agreed`` ranges planned every block the full reader acted on; ``missed``
+    ranges did not (a correctness failure: do not promote); ``fallback``
+    ranges asked for the full scan; ``error`` ranges could not be planned.
+    ``calls`` / ``blocks`` is its chain cost per block; the event planner makes
+    at least one call per block.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    mode: str
+    ranges: int = 0
+    agreed: int = 0
+    missed: int = 0
+    fallback: int = 0
+    error: int = 0
+    blocks: int = 0
+    calls: int = 0
+    last_range: list[int] | None = None
+    last_outcome: str | None = None
+    last_error: str | None = None
+    recent_misses: list[RevealPlanShadowMiss] = Field(
+        default_factory=list, max_length=5
+    )
+    updated_at: datetime | None = None
+
+
+class CatchUpStatus(BaseModel):
+    """How the collector replays deep catch-up ranges with ``planner``.
+
+    ``sparse`` ranges read ``blocks_read`` blocks in full and committed
+    ``blocks_skipped`` as quiet; ``full_scan`` ranges fell back to the per-block
+    scan, counted by the planner's reason in ``full_scan_reasons``; ``error``
+    ranges could not be planned (``last_error``). A fallback costs throughput,
+    never correctness. The counts cover ``planner`` only: switching planner
+    starts a new summary. Each planning attempt counts, so a range retried
+    after an error counts again.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    planner: str
+    ranges: int = 0
+    sparse: int = 0
+    full_scan: int = 0
+    error: int = 0
+    blocks_read: int = 0
+    blocks_skipped: int = 0
+    full_scan_reasons: dict[str, int] = Field(default_factory=dict)
+    last_range: list[int] | None = None
+    last_outcome: str | None = None
+    last_error: str | None = None
+    updated_at: datetime | None = None
+
+
 class SourceReleaseGateStatus(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -73,6 +138,8 @@ class SourceReleaseGateStatus(BaseModel):
     collector_cursor_hash: str | None = None
     collector_runtime_code_hash: str | None = None
     collector_blocked_reason: str | None = None
+    reveal_plan_shadow: RevealPlanShadowStatus | None = None
+    catch_up: CatchUpStatus | None = None
     last_payout_block: int | None = None
     last_payout_blocked_reason: str | None = None
     last_payout_attributed: bool = False

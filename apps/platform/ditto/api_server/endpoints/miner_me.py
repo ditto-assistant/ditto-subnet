@@ -62,6 +62,7 @@ from ditto.api_server.miner_session import (
     parse_scopes,
 )
 from ditto.api_server.name_claim import expected_netuid
+from ditto.api_server.no_store import no_store
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.storage.errors import ObjectUploadFailedError
 from ditto.db.models import AthReview
@@ -79,11 +80,6 @@ from ditto.db.queries.miner_sessions import (
     upsert_profile,
 )
 from ditto.db.queries.name_claims import active_handle_claims
-
-
-def no_store(response: Response) -> None:
-    response.headers["Cache-Control"] = "no-store"
-
 
 router = APIRouter(prefix="/me", tags=["miner-me"], dependencies=[Depends(no_store)])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]

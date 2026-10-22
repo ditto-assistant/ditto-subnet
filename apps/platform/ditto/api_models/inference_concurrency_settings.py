@@ -159,6 +159,13 @@ MAX_BENCHMARK_CASE_CONCURRENCY = 64
 DEFAULT_RELAY_DELAY_FINGERPRINT_MIN_MS = 25
 DEFAULT_RELAY_DELAY_FINGERPRINT_MAX_MS = 250
 MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
+# The harness memory cap every validator applies, issued on the lease so one
+# host's DITTOBENCH_SANDBOX_MEMORY_LIMIT can no longer decide whether an agent
+# scores. 6 GiB clears the v13 retrieval agents that were OOM-killed at the
+# historical 3 GiB host default on two validators and scored on a third.
+DEFAULT_SANDBOX_MEMORY_LIMIT_MIB = 6_144
+MIN_SANDBOX_MEMORY_LIMIT_MIB = 512
+MAX_SANDBOX_MEMORY_LIMIT_MIB = 32_768
 
 
 class BenchmarkRuntimeSettings(BaseModel):
@@ -166,7 +173,8 @@ class BenchmarkRuntimeSettings(BaseModel):
 
     These defaults overlap four /run calls per ticket. Relay delay fingerprinting
     stays off. The object is additive on both the settings JSON and validator
-    job wire. Backroom can raise case_concurrency up to 64.
+    job wire. Backroom can raise case_concurrency up to 64 and sets the harness
+    memory cap every validator applies (sandbox_memory_limit_mib).
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
@@ -181,6 +189,10 @@ class BenchmarkRuntimeSettings(BaseModel):
     relay_delay_fingerprint_max_ms: Annotated[
         int, Field(ge=0, le=MAX_RELAY_DELAY_FINGERPRINT_MS)
     ] = DEFAULT_RELAY_DELAY_FINGERPRINT_MAX_MS
+    sandbox_memory_limit_mib: Annotated[
+        int,
+        Field(ge=MIN_SANDBOX_MEMORY_LIMIT_MIB, le=MAX_SANDBOX_MEMORY_LIMIT_MIB),
+    ] = DEFAULT_SANDBOX_MEMORY_LIMIT_MIB
 
     @model_validator(mode="after")
     def _delay_range_is_ordered(self) -> BenchmarkRuntimeSettings:

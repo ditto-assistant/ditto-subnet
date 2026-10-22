@@ -93,8 +93,14 @@ func TestSandboxStartInfraFailure(t *testing.T) {
 	if failure == nil {
 		t.Fatal("missing request-scoped image was not classified as infrastructure")
 	}
-	if failure.Kind != "validator_infrastructure" || !failure.Retryable || failure.Code != "sandbox_image_unavailable" {
+	// It rides the fleet-recognized screened_image_unavailable code, because a
+	// validator that predates a dedicated code would charge the miner
+	// (ditto-subnet#2959); the precise cause stays in diagnostics.
+	if failure.Kind != "validator_infrastructure" || !failure.Retryable || failure.Code != "screened_image_unavailable" {
 		t.Fatalf("unexpected missing-image classification: %+v", failure)
+	}
+	if failure.Diagnostics["sandbox_cause"] != "request_image_tag_missing" {
+		t.Fatalf("missing-image cause was not kept in diagnostics: %+v", failure.Diagnostics)
 	}
 	// An ordinary harness crash stays a submission failure (nil classifier).
 	if got := sandboxStartInfraFailure(errors.New("exit status 1: panic in harness")); got != nil {

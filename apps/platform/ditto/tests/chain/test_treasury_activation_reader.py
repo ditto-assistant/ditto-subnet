@@ -135,7 +135,9 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
 
     monkeypatch.setattr(async_substrate_interface, "AsyncSubstrateInterface", Reader)
     monkeypatch.setattr("ditto.chain.client.asyncio.timeout", Window)
-    chain = ChainClient(make_chain_config())
+    chain = ChainClient(
+        make_chain_config(public_archive_rpc_urls=("wss://archive.example",))
+    )
 
     async def invoke():
         if managed_scope:
@@ -153,6 +155,7 @@ async def test_combined_reader_keeps_hash_checks_all_permissions_and_deadlines(
             observed, keys = await invoke()
             assert observed.identity == p.identity
             assert keys == (p.fleet[0].validator_hotkey,)
+        assert calls[0][1]["url"] == "wss://archive.example"
         assert windows == [8, 8, 8, 8]
         assert sum(c[0] == "open" for c in calls) == 2
         assert sum(c[0] == "close" for c in calls) == 2

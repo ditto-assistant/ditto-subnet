@@ -33,6 +33,7 @@ from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.validator import LedgerResponse
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATOR_AUTH
+from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import EpochSchedule, NeuronInfo
 from ditto.db.models import (
@@ -48,6 +49,7 @@ from ditto.db.queries.confirmation_scores import (
 )
 from ditto.db.queries.score_ranking import EfficiencyFactorRequesterNotReady
 from ditto.db.queries.scores import upsert_score
+from ditto.db.queries.validator_auth import VALIDATOR_NONCE_EXPIRY_MARGIN
 
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _BOB = bittensor.Keypair.create_from_uri("//Bob")
@@ -1060,6 +1062,49 @@ class TestScoringLedger:
         replay = await client.get("/api/v1/scoring/scores", headers=headers)
         assert first.status_code == 200
         assert replay.status_code == 409
+
+    async def test_future_dated_ledger_nonce_survives_the_janitor(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A stamp at the future edge stays acceptable until requested_at +
+        # MAX_AGE. Sweep just after a wrongly anchored expiry (receipt +
+        # MAX_AGE + margin). That deletes a nonce stored from ``now`` and
+        # leaves one stored from ``requested_at``. The replay is still inside
+        # the signature window, so only the surviving row answers 409.
+        receipt = datetime(2026, 10, 16, 12, tzinfo=UTC)
+        clock = {"now": receipt}
+
+        class _Clock(datetime):
+            @classmethod
+            def now(cls, _tz: object = None) -> _Clock:
+                return cls.fromtimestamp(clock["now"].timestamp(), UTC)
+
+        monkeypatch.setattr(scoring_mod, "datetime", _Clock)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        requested_at = receipt + scoring_mod._LEDGER_REQUEST_MAX_AGE
+        headers = _ledger_headers(requested_at=requested_at)
+
+        first = await client.get("/api/v1/scoring/scores", headers=headers)
+        assert first.status_code == 200, first.text
+
+        clock["now"] = (
+            receipt
+            + scoring_mod._LEDGER_REQUEST_MAX_AGE
+            + VALIDATOR_NONCE_EXPIRY_MARGIN
+            + timedelta(seconds=1)
+        )
+        deleted = await ValidatorNonceJanitor(session_maker=session_maker).sweep(
+            now=clock["now"]
+        )
+        assert deleted == 0
+        replay = await client.get("/api/v1/scoring/scores", headers=headers)
+        assert replay.status_code == 409
+        assert "already been used" in replay.json()["message"]
 
     # The offset, not the timestamp. Parametrize arguments are evaluated once
     # at collection time, so a literal `datetime.now(UTC) + timedelta(minutes=3)`

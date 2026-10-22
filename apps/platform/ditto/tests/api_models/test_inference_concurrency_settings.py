@@ -177,6 +177,20 @@ class TestDefaults:
                 relay_delay_fingerprint_max_ms=100,
             )
 
+    def test_sandbox_memory_cap_defaults_to_six_gib(self) -> None:
+        runtime = InferenceConcurrencySettings().benchmark_runtime
+        assert runtime.sandbox_memory_limit_mib == 6_144
+
+    def test_stored_revision_without_the_cap_reads_the_default(self) -> None:
+        # Revisions written before the field existed must keep loading.
+        runtime = BenchmarkRuntimeSettings.model_validate({"case_concurrency": 8})
+        assert runtime.sandbox_memory_limit_mib == 6_144
+
+    @pytest.mark.parametrize("mib", [511, 32_769])
+    def test_sandbox_memory_cap_bounds_are_fail_closed(self, mib: int) -> None:
+        with pytest.raises(ValidationError):
+            BenchmarkRuntimeSettings(sandbox_memory_limit_mib=mib)
+
 
 class TestHierarchy:
     def test_chat_ticket_may_not_exceed_validator(self) -> None:

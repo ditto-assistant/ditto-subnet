@@ -722,6 +722,87 @@ class TestGetBlockHash:
             with pytest.raises(ChainTimeoutError):
                 await client.get_block_hash(123)
 
+    async def test_archives_are_tried_before_rate_limited_live_entrypoint(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        # 2026-10-20: the public live entrypoint refused every handshake with
+        # HTTP 429, so every upload payment proof 503'd as "chain unavailable".
+        install_substrate_module.get_block_hash.side_effect = [
+            RuntimeError("server rejected WebSocket connection: HTTP 429"),
+            "0xABCD",
+        ]
+        config = make_chain_config(
+            public_archive_rpc_urls=("wss://free-one.example",),
+            archive_rpc_url="wss://paid.example/archive",
+            archive_rpc_api_key="paid-key",
+        )
+
+        async with ChainClient(config) as client:
+            block_hash = await client.get_block_hash(123)
+
+        assert block_hash == "0xabcd"
+        substrate_factory = sys.modules[
+            "async_substrate_interface"
+        ].AsyncSubstrateInterface
+        assert [call.kwargs["url"] for call in substrate_factory.call_args_list] == [
+            "wss://paid.example/archive?authorization=paid-key",
+            "wss://free-one.example",
+        ]
+
+    async def test_live_entrypoint_is_last_resort(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_block_hash.side_effect = [
+            RuntimeError("archive down"),
+            "0xABCD",
+        ]
+        config = make_chain_config(public_archive_rpc_urls=("wss://free-one.example",))
+
+        async with ChainClient(config) as client:
+            assert await client.get_block_hash(123) == "0xabcd"
+
+        substrate_factory = sys.modules[
+            "async_substrate_interface"
+        ].AsyncSubstrateInterface
+        assert [call.kwargs["url"] for call in substrate_factory.call_args_list] == [
+            "wss://free-one.example",
+            "wss://entrypoint-finney.opentensor.ai:443",
+        ]
+
+    async def test_unknown_height_on_one_provider_tries_the_next(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_block_hash.side_effect = [None, "0xABCD"]
+        config = make_chain_config(public_archive_rpc_urls=("wss://free-one.example",))
+
+        async with ChainClient(config) as client:
+            assert await client.get_block_hash(123) == "0xabcd"
+
+    async def test_provider_failure_is_not_reported_as_missing_block(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_block_hash.side_effect = [
+            None,
+            RuntimeError("server rejected WebSocket connection: HTTP 429"),
+        ]
+        config = make_chain_config(public_archive_rpc_urls=("wss://free-one.example",))
+
+        async with ChainClient(config) as client:
+            with pytest.raises(ChainConnectionError, match="HTTP 429"):
+                await client.get_block_hash(123)
+
+    async def test_every_provider_missing_height_raises_not_found(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_block_hash.return_value = None
+        config = make_chain_config(public_archive_rpc_urls=("wss://free-one.example",))
+
+        async with ChainClient(config) as client:
+            with pytest.raises(ExtrinsicNotFoundError):
+                await client.get_block_hash(123)
+
+        assert install_substrate_module.get_block_hash.await_count == 2
+
 
 @pytest.mark.usefixtures("install_pylon_module")
 class TestFinalizedBlocks:

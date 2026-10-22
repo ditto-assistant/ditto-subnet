@@ -10,12 +10,13 @@ from sqlalchemy import select
 
 from ditto.api_server.treasury_ingress import ReceiptHistoryUnavailable
 from ditto.api_server.treasury_manual import (
-    ACTIVE,
+    UNSETTLED,
     InvalidManualReport,
     accept_report,
     lock_manual,
     publish_audit,
 )
+from ditto.api_server.treasury_manual_movement import publish_finalized_movement
 from ditto.api_server.treasury_runtime import lock_runtime, treasury_runtime
 from ditto.chain.errors import ChainError
 from ditto.db.models import TreasuryManualTransfer as Transfer
@@ -72,15 +73,15 @@ class TreasuryManualLoop:
         async with self.state.session_maker() as session, session.begin():
             await lock_runtime(session)
             await lock_manual(session)
+            # audit_pending rows already finalized; their audit continues below
+            # and must not hold a later, independently admitted request.
             row = await session.scalar(
                 select(Transfer)
-                .where(Transfer.status.in_(ACTIVE))
+                .where(Transfer.status.in_(UNSETTLED))
                 .order_by(Transfer.created_at)
                 .limit(1)
             )
-            if row is None:
-                return
-            if row.status == "queued":
+            if row is not None and row.status == "queued":
                 runtime = await treasury_runtime(session, self.state.config)
                 if not runtime.treasury_weight_enforcement or (
                     runtime.treasury_approved_collector_policy_digest
@@ -115,6 +116,28 @@ class TreasuryManualLoop:
                         await asyncio.to_thread(self.mailbox.publish, row.envelope)
                         row.status = "dispatched"
                     row.updated_at = datetime.now(UTC)
+        # A prior source-audit refusal must not prevent an independently
+        # verified wallet movement. Backfill only absent receipts, without
+        # changing that refusal or retrying custody/full source attribution.
+        async with self.state.session_maker() as session, session.begin():
+            row = await session.scalar(
+                select(Transfer)
+                .where(
+                    Transfer.status == "audit_pending",
+                    Transfer.receipt.is_(None),
+                )
+                .order_by(Transfer.created_at)
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
+            if row:
+                try:
+                    async with session.begin_nested():
+                        await publish_finalized_movement(session, self.state.chain, row)
+                except (ChainError, ReceiptHistoryUnavailable, ValueError):
+                    # Failed/contradictory reads cannot publish or erase the
+                    # existing source-audit refusal. A later read may recover.
+                    pass
         async with self.state.session_maker() as session, session.begin():
             row = await session.scalar(
                 select(Transfer)
@@ -131,6 +154,16 @@ class TreasuryManualLoop:
                 .limit(1)
             )
             if row:
+                # Commit independently verified delivery even when the source
+                # attribution audit below cannot finish. This never changes
+                # audit_pending, clears a spending fence or calls custody.
+                try:
+                    async with session.begin_nested():
+                        await publish_finalized_movement(session, self.state.chain, row)
+                except (ChainError, ReceiptHistoryUnavailable, ValueError):
+                    # The full ingress may still succeed for legacy requests.
+                    # Neither an unavailable nor contradictory read is a receipt.
+                    pass
                 try:
                     # A failed chain read rolls back only this attempt. Nothing
                     # invokes custody or resends funds to repair publication.
@@ -138,8 +171,8 @@ class TreasuryManualLoop:
                         await publish_audit(session, self.state.chain, row)
                 except (ChainError, ReceiptHistoryUnavailable):
                     row.last_error = (
-                        "Finalized receipt history temporarily unavailable; "
-                        "automatic audit retry pending"
+                        "Wallet transfer finalized; source attribution incomplete. "
+                        "Historical proof unavailable; automatic audit retry pending"
                     )
                 except ValueError:
                     row.last_error = (

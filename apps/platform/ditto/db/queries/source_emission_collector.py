@@ -183,3 +183,98 @@ async def record_source_emission_payout(
         )
     )
     return result.scalar_one_or_none() is not None
+
+
+# How many missed ranges the shadow summary keeps for diagnosis.
+_SHADOW_MISS_LIMIT = 5
+
+
+async def record_catch_up_range(
+    session: AsyncSession,
+    *,
+    netuid: int,
+    first_block: int,
+    last_block: int,
+    outcome: str,
+    planner: str,
+    read: int = 0,
+    skipped: int = 0,
+    detail: str | None = None,
+    now: datetime,
+) -> None:
+    """Fold one deep catch-up range into the cursor row's running summary.
+
+    ``outcome`` is ``sparse`` (``read`` blocks read in full, ``skipped``
+    committed as quiet), ``full_scan`` (the planner asked for the per-block
+    scan; ``detail`` is its reason) or ``error`` (no plan; ``detail`` is the
+    provider error). A fallback costs throughput, never correctness, so this
+    only makes it visible. The summary covers one ``planner``: a range planned
+    by another one starts a new summary. Each planning attempt counts, so a
+    range retried after an error counts again.
+    """
+    cursor = await session.get(
+        SourceEmissionCollectorCursor, netuid, with_for_update=True
+    )
+    if cursor is None:
+        return
+    summary = dict(cursor.catch_up or {})
+    if summary.get("planner") != planner:
+        summary = {"planner": planner}
+    summary["ranges"] = int(summary.get("ranges", 0)) + 1
+    summary[outcome] = int(summary.get(outcome, 0)) + 1
+    summary["blocks_read"] = int(summary.get("blocks_read", 0)) + read
+    summary["blocks_skipped"] = int(summary.get("blocks_skipped", 0)) + skipped
+    summary["last_range"] = [first_block, last_block]
+    summary["last_outcome"] = outcome
+    summary["updated_at"] = now.isoformat()
+    if outcome == "full_scan":
+        reasons = dict(summary.get("full_scan_reasons") or {})
+        reason = detail or "unknown"
+        reasons[reason] = int(reasons.get(reason, 0)) + 1
+        summary["full_scan_reasons"] = reasons
+    if outcome == "error":
+        summary["last_error"] = (detail or "")[:300]
+    cursor.catch_up = summary
+
+
+async def record_reveal_plan_shadow(
+    session: AsyncSession,
+    *,
+    netuid: int,
+    first_block: int,
+    last_block: int,
+    outcome: str,
+    missed: list[int],
+    calls: int,
+    detail: str | None,
+    now: datetime,
+) -> None:
+    """Fold one shadowed range into the cursor row's running summary.
+
+    ``outcome`` is ``agreed`` (every block the full reader acted on was
+    planned), ``missed`` (some were not), ``fallback`` (the planner asked for a
+    full scan) or ``error``. The event planner still drives the cursor; this
+    only records evidence for promoting the faster planner.
+    """
+    cursor = await session.get(
+        SourceEmissionCollectorCursor, netuid, with_for_update=True
+    )
+    if cursor is None:
+        return
+    summary = dict(cursor.reveal_plan_shadow or {})
+    summary["ranges"] = int(summary.get("ranges", 0)) + 1
+    summary[outcome] = int(summary.get(outcome, 0)) + 1
+    summary["blocks"] = int(summary.get("blocks", 0)) + (last_block - first_block + 1)
+    summary["calls"] = int(summary.get("calls", 0)) + calls
+    summary["last_range"] = [first_block, last_block]
+    summary["last_outcome"] = outcome
+    summary["updated_at"] = now.isoformat()
+    if outcome == "missed":
+        misses = list(summary.get("recent_misses") or [])
+        misses.append(
+            {"first_block": first_block, "last_block": last_block, "blocks": missed}
+        )
+        summary["recent_misses"] = misses[-_SHADOW_MISS_LIMIT:]
+    if outcome == "error":
+        summary["last_error"] = (detail or "")[:300]
+    cursor.reveal_plan_shadow = summary

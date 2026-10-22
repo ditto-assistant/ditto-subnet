@@ -934,6 +934,8 @@ class AdminQuarantineAgentContext(BaseModel):
     submitted_at: datetime
     screening_policy_version: int
     screening_reason: str | None
+    score_count: int | None = None
+    """Current score ledger count; null from an older Platform."""
 
 
 class AdminMinerQuarantineSummary(BaseModel):
@@ -1070,6 +1072,9 @@ class AdminQuarantineBatchDecision(BaseModel):
     quarantine_id: UUID
     expected_agent_id: UUID
     expected_artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    expected_attempt_id: UUID | None = None
+    expected_score_count: Annotated[int | None, Field(ge=0)] = None
+    """Both guards are required when releasing a parked screening failure."""
     resolution: QuarantineResolution
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3)]
 

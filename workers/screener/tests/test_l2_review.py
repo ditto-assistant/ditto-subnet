@@ -17,7 +17,7 @@ import sys
 import tarfile
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -458,9 +458,9 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "blocks the call before endpoint dispatch" in v13
     assert "external tool's actual name and argument schema" in v13
     assert "hypothetically use the same field name" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v53-policy-v13"
-    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v25-policy-v13"
-    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v28-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v54-policy-v13"
+    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v26-policy-v13"
+    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v29-policy-v13"
     assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
     assert "Use at most four targeted analyzer" not in (
         l2_review._V13_SAFETY_ADJUDICATOR_TASK
@@ -545,7 +545,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "validator mints `inference_base_url`" in v13
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v53-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v54-policy-v13"
     assert "v13" not in _benchmark_contract_capsule(12)
     assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
     assert (
@@ -3720,7 +3720,7 @@ async def test_signed_lease_must_match_exact_attempt_and_artifact_before_model(
         scored_runtime_evidence=delayed,
     )
     assert result.observation.error_code == "l2-model-inconclusive"
-    assert len(seen) == 2  # same exact packet may hit the isolated L2 cache
+    assert len(seen) == 3  # an inconclusive review is never a reusable final
 
     for wrong in (
         lease.model_copy(update={"attempt_id": UUID(int=1)}),
@@ -3738,7 +3738,7 @@ async def test_signed_lease_must_match_exact_attempt_and_artifact_before_model(
         )
         assert result.observation.error_code == "l2-runtime-evidence-unavailable"
         assert result.observation.failure_disposition == "pass_inconclusive"
-    assert len(seen) == 2
+    assert len(seen) == 3
 
 
 async def test_required_signed_lease_absence_holds_before_model(
@@ -4003,9 +4003,19 @@ async def test_partial_dossier_safe_consensus_cannot_clear(
 
     assert requests == 3
     assert not result.observation.ok
-    assert result.observation.failure_disposition == "retryable_infra"
+    # A truncated dossier recurs on every retry of the same bytes: it is an
+    # inconclusive hold naming the partial components, never an infra retry.
+    assert result.observation.failure_disposition == "inconclusive"
     assert result.observation.error_code == "l3-adjudicator-incomplete"
     assert not result.dossier_complete
+    assert result.dossier_incomplete_components
+    assert result.failure_subcode == "+".join(result.dossier_incomplete_components)
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.reason_code == "l3-adjudicator-incomplete"
+    assert audit.final_stage == "adjudicator"
+    assert audit.dossier_incomplete_components == list(
+        result.dossier_incomplete_components
+    )
 
 
 @pytest.mark.parametrize("deep_nesting", [False, True])
@@ -4049,7 +4059,11 @@ async def test_incomplete_dossier_components_are_signed_without_source(
 ) -> None:
     agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
 
+    reviews = 0
+
     async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
+        nonlocal reviews
+        reviews += 1
         return L2RunResult(
             observation=l2_review._failure(
                 "l2-only-clearance-unproven", "inconclusive"
@@ -4084,7 +4098,73 @@ async def test_incomplete_dossier_components_are_signed_without_source(
         assert audit.dossier_complete is False
         assert result.failure_subcode == "dossier-incomplete"
         assert not result.observation.clearance_certified
-    assert second.cache_hit
+    assert reviews == 2
+    assert not second.cache_hit
+
+
+@pytest.mark.parametrize("legacy_cached", [False, True])
+async def test_manual_retry_does_not_replay_inconclusive_final(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_cached: bool
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    reviews = 0
+    unsettled = L2RunResult(
+        observation=replace(
+            l2_review._failure("l2-model-inconclusive", "inconclusive"),
+            inconclusive_model_audit={
+                "categories": ["none"],
+                "evidence": [],
+                "causal_path": [],
+            },
+        ),
+        analyzed_files=(),
+        causal_path=(),
+        tools=(),
+        usage=L2Usage(),
+        cache_hit=False,
+        resolution_basis="insufficient_static_evidence",
+        dossier_complete=True,
+    )
+
+    async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
+        nonlocal reviews
+        reviews += 1
+        return unsettled
+
+    monkeypatch.setattr(agent, "_review_uncached", review_uncached)
+    artifact_sha = "ab" * 32
+    cache_key = agent._cache_key(artifact_sha, _l1())
+    if legacy_cached:
+        # Simulate a seven-day final written by a pre-fix worker, including
+        # its zero-evidence model disposition. Reading old cache must be safe.
+        agent._cache_dir.mkdir(parents=True, exist_ok=True)
+        (agent._cache_dir / f"{cache_key}.json").write_text(
+            json.dumps(asdict(unsettled))
+        )
+    first = await agent.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+    second = await agent.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256=artifact_sha,
+        attempt_id=UUID("96af45fd-65da-4f59-87f8-8ddf5d57f88d"),
+        l1_observation=_l1(),
+        deadline=None,
+    )
+    assert reviews == 2, "each manually issued attempt must review unfinished evidence"
+    for result in (first, second):
+        assert not result.cache_hit
+        assert not result.observation.ok
+        assert not result.observation.clearance_certified
+        assert result.observation.error_code == "l2-model-inconclusive"
+        audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+        assert audit.model_categories == ["none"]
+        assert audit.model_evidence_count == 0
+        assert audit.resolution_basis == "insufficient_static_evidence"
 
 
 async def test_dossier_component_labels_name_only_truncated_analyzers(
@@ -4143,7 +4223,9 @@ async def test_l3_no_tool_failure_reports_bounded_subcode(
     if recovers:
         assert requests == 4
         assert result.observation.error_code == "l3-adjudicator-incomplete"
-        assert result.failure_subcode is None
+        # The recovered tool-contract slug does not leak; only the partial
+        # dossier components name the hold.
+        assert result.failure_subcode == "+".join(result.dossier_incomplete_components)
         return
     assert requests == 5
     assert result.observation.error_code == "l3-adjudicator-model-tool-contract"
@@ -5155,9 +5237,10 @@ async def test_incomplete_inventory_allows_violation_but_never_clear(
         deadline=None,
     )
     assert not safe_result.observation.ok
-    assert safe_result.observation.failure_disposition == "retryable_infra"
+    assert safe_result.observation.failure_disposition == "inconclusive"
     assert safe_result.observation.error_code == "l3-adjudicator-incomplete"
     assert safe_result.clearance_path == "l3_adjudicator_incomplete"
+    assert safe_result.failure_subcode == "workspace_index"
     assert safe_requests == 6
 
 
@@ -7748,6 +7831,58 @@ async def test_integrity_scan_keeps_nul_bearing_large_source_incomplete(
     assert result["nontext_count"] == 0
 
 
+@pytest.mark.parametrize("edited", [False, True])
+async def test_integrity_scan_accounts_allowlisted_vendored_file_by_digest(
+    tmp_path: Path, edited: bool
+) -> None:
+    upstream = b"int model_answer;\n" + b"x" * (2 * 1024 * 1024)
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "vendored-upstream-allowlist.json").write_text(
+        json.dumps({"files": [{"sha256": hashlib.sha256(upstream).hexdigest()}]})
+    )
+    workspace = tmp_path / "src"
+    vendored = workspace / "third_party" / "quickjs" / "quickjs.c"
+    vendored.parent.mkdir(parents=True)
+    vendored.write_bytes(upstream + (b"//\n" if edited else b""))
+    harness = InProcessAnalyzerHarness()
+    harness._manifests = manifests
+    result = json.loads(await harness.run(workspace, "integrity_surfaces", {}))
+    if edited:
+        # Any edit makes it first-party source the analyzer cannot read.
+        assert result["truncated"] is True
+        assert result["omitted"] == [
+            {"path": "third_party/quickjs/quickjs.c", "reason": "read_cap"}
+        ]
+        return
+    assert result["truncated"] is False
+    assert result["nontext"] == [
+        {
+            "path": "third_party/quickjs/quickjs.c",
+            "bytes": len(upstream),
+            "sha256": hashlib.sha256(upstream).hexdigest(),
+            "provenance": "vendored_upstream_digest",
+        }
+    ]
+
+
+def test_vendored_allowlist_matches_the_shared_protocol_copy() -> None:
+    import ditto_screening_protocol
+
+    shared = (
+        Path(ditto_screening_protocol.__file__).parent
+        / "data"
+        / "vendored_upstream_allowlist.json"
+    )
+    screener = (
+        Path(__file__).resolve().parents[1]
+        / "ditto_screener"
+        / "data"
+        / "vendored-upstream-allowlist.json"
+    )
+    assert screener.read_bytes() == shared.read_bytes()
+
+
 async def test_integrity_scan_keeps_large_text_incomplete(tmp_path: Path) -> None:
     (tmp_path / "agent.py").write_text("model_answer\n" + "x" * (2 * 1024 * 1024))
     result = json.loads(
@@ -7764,6 +7899,32 @@ async def test_stock_kit_dossier_analyzers_are_complete() -> None:
     for command in l2_review._DOSSIER_ANALYZERS:
         output = await harness.run(starter, command, {})
         assert not l2_review._contains_truncation(json.loads(output)), command
+
+
+@pytest.mark.parametrize(
+    ("report", "requires_correction"),
+    [
+        ({"truncated": True, "counts_after_per_rule_file_bounds": True}, False),
+        ({"truncated": True}, True),
+        (
+            {
+                "truncated": True,
+                "counts_after_per_rule_file_bounds": True,
+                "analysis_failed": True,
+            },
+            True,
+        ),
+    ],
+)
+def test_lead_selection_omissions_are_not_retryable_scan_gaps(
+    report: dict[str, object], requires_correction: bool
+) -> None:
+    inventory = {"review_leads": {"fingerprint_selection": report}}
+    assert l2_review._analysis_requires_correction(json.dumps(inventory)) is (
+        requires_correction
+    )
+    inventory["review_leads"]["scan_truncated"] = True
+    assert l2_review._analysis_requires_correction(json.dumps(inventory)) is True
 
 
 async def test_stock_kit_dossier_is_complete_in_every_section(tmp_path: Path) -> None:

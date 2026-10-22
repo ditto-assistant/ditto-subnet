@@ -1,0 +1,375 @@
+{
+  "checked_at_utc": "2026-10-19",
+  "independent_rebuild_performed": false,
+  "artifact": {
+    "version": 481,
+    "source_commit": "6a972693ae9580541225bd37696ac2fee26b8ae9",
+    "size": 2652697,
+    "sha256": "48225f3199bf317966d0214588bc45fb49c28c3e7bd510293bb4da7d6aea224b",
+    "blake2b": "0x5fb504c1c793a3ddb5456f189ddef98b5146853aea6ff998501f1b6c6eb720bc",
+    "url": "https://github.com/RaoFoundation/subtensor/releases/download/v481/subtensor.wasm"
+  },
+  "live_current": {
+    "block": 9320932,
+    "block_hash": "0x160036a1abb30afe117ef965bbba5c3a55c3690b33bff1772e1c57e0a5f69e8e",
+    "runtime_code_hash": "0x5fb504c1c793a3ddb5456f189ddef98b5146853aea6ff998501f1b6c6eb720bc",
+    "spec_version": 481,
+    "surfaces": [
+      {
+        "surface": "source_emission",
+        "admitted_by": "interface",
+        "interface_digest": "31145be1ffd082d3d266128f56041ddae09311f507024bfef7cfc44f228d3291",
+        "nearest_audited_release": "v478",
+        "changed_entries": [],
+        "error": null
+      },
+      {
+        "surface": "treasury_receipt",
+        "admitted_by": "interface",
+        "interface_digest": "5d44ccf618519ace1ce8c2fb4c3652ea1f07950439e883281de922202bcb3ec4",
+        "nearest_audited_release": "v478",
+        "changed_entries": [],
+        "error": null
+      }
+    ],
+    "treasury_signer": {
+      "approved_runtime_code_hash": "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1",
+      "signs_on_this_runtime": false,
+      "call_baseline_release": "v478",
+      "changed_calls": [
+        "AdminUtils.sudo_set_subnet_emission_weights",
+        "SubtensorModule.set_reject_staking_hotkey_growth"
+      ],
+      "changed_calls_truncated": false,
+      "calls_error": null
+    }
+  },
+  "historical_v479_read_only": {
+    "block": 9305652,
+    "block_hash": "0xfdaadfafdcdf5be5a01c0b0ce9753cc253b11e55cb85abbd58665220154e3934",
+    "runtime_code_hash": "0x44e952fd1cebe9bd15c0c55cee6e1d7c6c97b44d941b79127343118dbbd342bc",
+    "spec_version": 479,
+    "surfaces": [
+      {
+        "surface": "source_emission",
+        "admitted_by": "interface",
+        "interface_digest": "31145be1ffd082d3d266128f56041ddae09311f507024bfef7cfc44f228d3291",
+        "nearest_audited_release": "v478",
+        "changed_entries": [],
+        "error": null
+      },
+      {
+        "surface": "treasury_receipt",
+        "admitted_by": "interface",
+        "interface_digest": "5d44ccf618519ace1ce8c2fb4c3652ea1f07950439e883281de922202bcb3ec4",
+        "nearest_audited_release": "v478",
+        "changed_entries": [],
+        "error": null
+      }
+    ],
+    "treasury_signer": {
+      "approved_runtime_code_hash": "0x7e722b3aa5c9192c98665a5d65fa91364bf9055e21fc90efce6d59bf4ef414e1",
+      "signs_on_this_runtime": false,
+      "call_baseline_release": "v478",
+      "changed_calls": [
+        "SubtensorModule.set_reject_staking_hotkey_growth"
+      ],
+      "changed_calls_truncated": false,
+      "calls_error": null
+    }
+  },
+  "v479_signing_allowed": false,
+  "critical_source_sha256": [
+    {
+      "path": "runtime/src/proxy_filters/mod.rs",
+      "sha256": "6b1eb13b7c2a77cfe834dbb0db320d59c9996bcf7cb2c04b89ed2d0c5c776737"
+    },
+    {
+      "path": "runtime/src/proxy_filters/call_groups.rs",
+      "sha256": "06a210bfc4dcace7778408f4efdb7b0810fdd540df382bf3d0db03253115f70e"
+    },
+    {
+      "path": "common/src/proxy.rs",
+      "sha256": "70357442f1c3eea5376034b23049c12c8fd04bbcf2f03ddf915887bec7496c05"
+    },
+    {
+      "path": "pallets/proxy/src/lib.rs",
+      "sha256": "6c7f5987504468166b1d5b005fc42a2277c70ac34d478915b364a3b637705b12"
+    },
+    {
+      "path": "pallets/subtensor/src/subnets/registration.rs",
+      "sha256": "0a621d453b01f7d44e8ebb44a585520a793cb05fc51d4cb906b8fd27f685ca52"
+    },
+    {
+      "path": "pallets/subtensor/src/staking/move_stake.rs",
+      "sha256": "49e395a8dfcf176ea5085ac2c5669ae47b577bb6766dbb8404f2854b7ed6fb5b"
+    },
+    {
+      "path": "pallets/subtensor/src/coinbase/run_coinbase.rs",
+      "sha256": "62f17ad9132495fb1d50f951d7b6cefc3ac5c08f2428f9e3150d77eef9251311"
+    },
+    {
+      "path": "pallets/subtensor/src/rpc_info/stake_info.rs",
+      "sha256": "82bc25c41c8ec1eb707cff3169ddf8c8064cfd7dcff6151afca83c8ea9523917"
+    },
+    {
+      "path": "pallets/subtensor/src/staking/account.rs",
+      "sha256": "77f4cc6f6ebb19a73f28842533d7507911fcca582bcace30d3dcedad8c9b99c9"
+    },
+    {
+      "path": "pallets/subtensor/src/staking/lock.rs",
+      "sha256": "fe7de79e1001b5375617c0679a652235e90576714189fb32a643935176606c49"
+    },
+    {
+      "path": "pallets/subtensor/src/staking/stake_utils.rs",
+      "sha256": "ddb9c25d7562870b0fee778e954674678f825524c2871b3b8251b5ee7013f37b"
+    },
+    {
+      "path": "pallets/subtensor/src/subnets/collateral.rs",
+      "sha256": "e13e4d5a5713083e23230dbe928a8f4360db1ff0753b9b0192553467096ef300"
+    },
+    {
+      "path": "pallets/subtensor/src/macros/events.rs",
+      "sha256": "b01d1f64fc3a2a1448688bb9642b63edf3678f9bae5ab016f19b8bba42b3ff17"
+    },
+    {
+      "path": "pallets/subtensor/src/macros/dispatches.rs",
+      "sha256": "5f3f996314a2e91414b5d6941226e5aac74cee41b58d020bda282406fedd07d0"
+    },
+    {
+      "path": "primitives/share-pool/src/lib.rs",
+      "sha256": "c099bcfa982175631482a8144970e70af52a6697ab0dff9aa9c1f25966905b26"
+    },
+    {
+      "path": "pallets/subtensor/src/migrations/migrate_restore_staking_hotkeys.rs",
+      "sha256": "da47da584ae0590e218a4ef66cbcd74941e729519073e8f0687720793f85616b"
+    },
+    {
+      "path": "pallets/subtensor/src/subnets/emission_weights.rs",
+      "sha256": "678bc95e4ff11088160541a98f8fb9bc1f1c122fe8781e570ee8e09b68f74683"
+    },
+    {
+      "path": "pallets/subtensor/src/migrations/migrate_seed_subnet_emission_weights.rs",
+      "sha256": "c79b24b8e7b8b8cec839dbb5fdeb097436d2ddb27c43ff1a1400f37f890381c4"
+    }
+  ],
+  "native_transfer_and_registration": {
+    "block": 9320935,
+    "block_hash": "0x2e901b83c976dcb9df00367444248a8caadf2bce9a2ec775105baa4d17f78721",
+    "runtime_code_hash": "0x5fb504c1c793a3ddb5456f189ddef98b5146853aea6ff998501f1b6c6eb720bc",
+    "proxy_filters": [
+      {
+        "proxy_type": 9,
+        "name": "Registration",
+        "deprecated": false,
+        "filter_mode": {
+          "Allow": [
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "pow_register",
+              "call_index": 152,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "register",
+              "call_index": 6,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "register_limit",
+              "call_index": 134,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "burned_register",
+              "call_index": 7,
+              "constraint": null
+            }
+          ]
+        }
+      },
+      {
+        "proxy_type": 10,
+        "name": "Transfer",
+        "deprecated": false,
+        "filter_mode": {
+          "Allow": [
+            {
+              "pallet_name": "Balances",
+              "pallet_index": 5,
+              "call_name": "transfer_keep_alive",
+              "call_index": 3,
+              "constraint": null
+            },
+            {
+              "pallet_name": "Balances",
+              "pallet_index": 5,
+              "call_name": "transfer_allow_death",
+              "call_index": 0,
+              "constraint": null
+            },
+            {
+              "pallet_name": "Balances",
+              "pallet_index": 5,
+              "call_name": "transfer_all",
+              "call_index": 4,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "transfer_stake",
+              "call_index": 86,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "transfer_stake_and_hotkey",
+              "call_index": 143,
+              "constraint": null
+            }
+          ]
+        }
+      }
+    ],
+    "reads": {
+      "SubnetEpochConsensus": "Yuma",
+      "Owner": "5Fhnko5TCPtR1hyD8aua6n23XRM8cxcBM6TgNEqqUhcxWs1t",
+      "Uids": 21,
+      "SubnetOwner": "5HGXqHbQjEmwnQsnnMa8pm13VUv9PP2jB4Vuv9nw7NwUYiAN",
+      "AutoStakeDestination": "5H93a8uVJC6ve2bNVZu9jAGEuBHDFspct3UbHRYGsxUNpA1e",
+      "SubnetEmissionWeights": [
+        0,
+        0,
+        3320329489486196244,
+        7563207292111677685,
+        7563207292111677686
+      ],
+      "AccountFlags": 0,
+      "StakingHotkeys": [
+        "5H93a8uVJC6ve2bNVZu9jAGEuBHDFspct3UbHRYGsxUNpA1e"
+      ]
+    }
+  },
+  "gamma_settings": {
+    "revision": 5,
+    "gm_bps": 0,
+    "reason": "Preserve separately authorized October14 burn/miner change; no inflow activation"
+  },
+  "financial_policy_diff": [
+    "revision:6->7",
+    "runtime_code_hash:v478->v481"
+  ],
+  "manual_max_alpha": 2500,
+  "recurring_enabled": false,
+  "native_historical_v479": {
+    "block": 9305652,
+    "block_hash": "0xfdaadfafdcdf5be5a01c0b0ce9753cc253b11e55cb85abbd58665220154e3934",
+    "runtime_code_hash": "0x44e952fd1cebe9bd15c0c55cee6e1d7c6c97b44d941b79127343118dbbd342bc",
+    "proxy_filters": [
+      {
+        "proxy_type": 9,
+        "name": "Registration",
+        "deprecated": false,
+        "filter_mode": {
+          "Allow": [
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "pow_register",
+              "call_index": 152,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "register",
+              "call_index": 6,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "register_limit",
+              "call_index": 134,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "burned_register",
+              "call_index": 7,
+              "constraint": null
+            }
+          ]
+        }
+      },
+      {
+        "proxy_type": 10,
+        "name": "Transfer",
+        "deprecated": false,
+        "filter_mode": {
+          "Allow": [
+            {
+              "pallet_name": "Balances",
+              "pallet_index": 5,
+              "call_name": "transfer_keep_alive",
+              "call_index": 3,
+              "constraint": null
+            },
+            {
+              "pallet_name": "Balances",
+              "pallet_index": 5,
+              "call_name": "transfer_allow_death",
+              "call_index": 0,
+              "constraint": null
+            },
+            {
+              "pallet_name": "Balances",
+              "pallet_index": 5,
+              "call_name": "transfer_all",
+              "call_index": 4,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "transfer_stake",
+              "call_index": 86,
+              "constraint": null
+            },
+            {
+              "pallet_name": "SubtensorModule",
+              "pallet_index": 7,
+              "call_name": "transfer_stake_and_hotkey",
+              "call_index": 143,
+              "constraint": null
+            }
+          ]
+        }
+      }
+    ],
+    "reads": {
+      "SubnetEpochConsensus": "Yuma",
+      "Owner": "5Fhnko5TCPtR1hyD8aua6n23XRM8cxcBM6TgNEqqUhcxWs1t",
+      "Uids": 21,
+      "SubnetOwner": "5HGXqHbQjEmwnQsnnMa8pm13VUv9PP2jB4Vuv9nw7NwUYiAN",
+      "AutoStakeDestination": "5H93a8uVJC6ve2bNVZu9jAGEuBHDFspct3UbHRYGsxUNpA1e",
+      "SubnetEmissionWeights": {
+        "error_type": "StorageFunctionNotFound"
+      },
+      "AccountFlags": 0,
+      "StakingHotkeys": [
+        "5H93a8uVJC6ve2bNVZu9jAGEuBHDFspct3UbHRYGsxUNpA1e"
+      ]
+    }
+  }
+}

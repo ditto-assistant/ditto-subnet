@@ -5,6 +5,7 @@ import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   SCREENING_SUBMISSION_AGENT_STATUSES,
+  retryValidationInputSchema,
   reinstatementRetryBudgetSchema,
   scoringLeaseConfirmation,
   scoringLeaseSettingsControlSchema,
@@ -158,6 +159,7 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_mode: 'off' as const,
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
       },
     }
     expect(MAX_CHAT_REQUEST_BUDGET).toBe(32768)
@@ -184,6 +186,7 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_mode: 'off' as const,
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
       },
     }
     expect(MAX_CHAT_TOKEN_BUDGET).toBe(200_000_000)
@@ -210,6 +213,7 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_mode: 'shadow' as const,
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
       },
     }
     expect(MAX_CHAT_CONCURRENCY).toBe(512)
@@ -239,6 +243,7 @@ describe('admin API schemas', () => {
       relay_delay_fingerprint_mode: 'off',
       relay_delay_fingerprint_min_ms: 25,
       relay_delay_fingerprint_max_ms: 250,
+      sandbox_memory_limit_mib: 6144,
     })
     expect(() =>
       setInferenceConcurrencySettingsInputSchema.parse({
@@ -5223,5 +5228,20 @@ describe('validator fleet host specs parity', () => {
     >
     type Parsed = NonNullable<ZodInput<typeof validatorFleetObservabilityMemberSchema>['host_specs']>
     expectTypeOf<Generated>().toMatchTypeOf<Parsed>()
+  })
+})
+
+
+describe('targeted validator retry input', () => {
+  const input = {
+    agentId: '3fab0521-a662-436f-8239-8fff9ff78150',
+    expectedSnapshot: 'a'.repeat(64),
+    reason: 'Recover the final score after resource correction',
+  }
+
+  it('rejects whitespace-only selectors and normalizes padded hotkeys', () => {
+    expect(retryValidationInputSchema.safeParse({ ...input, targetValidatorHotkey: '   ' }).success).toBe(false)
+    expect(retryValidationInputSchema.parse({ ...input, targetValidatorHotkey: '  validator-3  ' }).targetValidatorHotkey).toBe('validator-3')
+    expect(retryValidationInputSchema.parse(input).targetValidatorHotkey).toBeUndefined()
   })
 })

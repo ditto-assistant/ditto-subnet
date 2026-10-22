@@ -40,6 +40,7 @@ from ditto.db.queries.coding_task_leases import (
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+    nonce_expires_at,
 )
 
 router = APIRouter(prefix="/validator", tags=["validator"])
@@ -101,7 +102,11 @@ async def request_coding_harness_launch(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError:
             raise HTTPException(

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -148,6 +149,32 @@ func TestUploadConfigValidation(t *testing.T) {
 	env["DITTO_UPLOAD_PAYMENT_ADDRESS"] = "not-an-address"
 	if _, err := Load(MapLookup(env)); err == nil {
 		t.Fatal("invalid payment address must fail boot")
+	}
+}
+
+func TestNetuidValidation(t *testing.T) {
+	for _, value := range []string{"-1", "2147483648", "invalid"} {
+		t.Run("invalid_"+value, func(t *testing.T) {
+			env := minimalEnv()
+			env["NETUID"] = value
+			if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "NETUID") {
+				t.Fatalf("NETUID=%s must fail boot with an actionable error, got %v", value, err)
+			}
+		})
+	}
+	for _, value := range []string{"0", "118", "2147483647"} {
+		t.Run("valid_"+value, func(t *testing.T) {
+			env := minimalEnv()
+			env["NETUID"] = value
+			cfg, err := Load(MapLookup(env))
+			if err != nil {
+				t.Fatalf("NETUID=%s must be accepted: %v", value, err)
+			}
+			// The CLA gate's int4 parameter is converted once, never narrowed.
+			if got := cfg.Chain.NetuidInt32(); strconv.Itoa(int(got)) != value {
+				t.Fatalf("NetuidInt32() = %d for NETUID=%s", got, value)
+			}
+		})
 	}
 }
 

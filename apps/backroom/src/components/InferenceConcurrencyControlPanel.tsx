@@ -10,6 +10,9 @@ import {
   MAX_EMBEDDING_CONCURRENCY,
   MAX_REQUESTS_PER_MINUTE,
   MAX_RELAY_DELAY_FINGERPRINT_MS,
+  DEFAULT_SANDBOX_MEMORY_LIMIT_MIB,
+  MAX_SANDBOX_MEMORY_LIMIT_MIB,
+  MIN_SANDBOX_MEMORY_LIMIT_MIB,
   type InferenceConcurrencySettingsControl,
 } from '../lib/admin.schemas'
 import {
@@ -162,6 +165,9 @@ export function InferenceConcurrencyControlPanel({
   const [delayMaxMs, setDelayMaxMs] = useState(
     String(initialState.effective.settings.benchmark_runtime.relay_delay_fingerprint_max_ms),
   )
+  const [sandboxMemoryMib, setSandboxMemoryMib] = useState(
+    String(initialState.effective.settings.benchmark_runtime.sandbox_memory_limit_mib),
+  )
   const [reason, setReason] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [loading, setLoading] = useState(false)
@@ -195,7 +201,11 @@ export function InferenceConcurrencyControlPanel({
   const parsedCaseConcurrency = Number(caseConcurrency)
   const parsedDelayMinMs = Number(delayMinMs)
   const parsedDelayMaxMs = Number(delayMaxMs)
+  const parsedSandboxMemoryMib = Number(sandboxMemoryMib)
   const runtimeInvalid =
+    !Number.isInteger(parsedSandboxMemoryMib) ||
+    parsedSandboxMemoryMib < MIN_SANDBOX_MEMORY_LIMIT_MIB ||
+    parsedSandboxMemoryMib > MAX_SANDBOX_MEMORY_LIMIT_MIB ||
     !Number.isInteger(parsedCaseConcurrency) ||
     parsedCaseConcurrency < 1 ||
     parsedCaseConcurrency > MAX_BENCHMARK_CASE_CONCURRENCY ||
@@ -212,7 +222,8 @@ export function InferenceConcurrencyControlPanel({
     delayMode !== effective.settings.benchmark_runtime.relay_delay_fingerprint_mode ||
     parsedDelayMinMs !==
       effective.settings.benchmark_runtime.relay_delay_fingerprint_min_ms ||
-    parsedDelayMaxMs !== effective.settings.benchmark_runtime.relay_delay_fingerprint_max_ms
+    parsedDelayMaxMs !== effective.settings.benchmark_runtime.relay_delay_fingerprint_max_ms ||
+    parsedSandboxMemoryMib !== effective.settings.benchmark_runtime.sandbox_memory_limit_mib
   const ready =
     changed &&
     invalid.length === 0 &&
@@ -236,6 +247,9 @@ export function InferenceConcurrencyControlPanel({
     )
     setDelayMaxMs(
       String(next.effective.settings.benchmark_runtime.relay_delay_fingerprint_max_ms),
+    )
+    setSandboxMemoryMib(
+      String(next.effective.settings.benchmark_runtime.sandbox_memory_limit_mib),
     )
     setReason('')
     setConfirmation('')
@@ -289,6 +303,7 @@ export function InferenceConcurrencyControlPanel({
               relay_delay_fingerprint_mode: delayMode,
               relay_delay_fingerprint_min_ms: parsedDelayMinMs,
               relay_delay_fingerprint_max_ms: parsedDelayMaxMs,
+              sandbox_memory_limit_mib: parsedSandboxMemoryMib,
             },
           },
           reason,
@@ -495,11 +510,35 @@ export function InferenceConcurrencyControlPanel({
                 className="mt-2 block min-h-11 w-44 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 text-sm outline-none focus:border-[var(--cyan)] disabled:opacity-45"
               />
             </label>
+
+            <label className="text-xs font-medium text-[var(--muted-strong)]">
+              Sandbox memory cap (MiB){' '}
+              <span className="font-normal text-[var(--muted)]">
+                ({MIN_SANDBOX_MEMORY_LIMIT_MIB.toLocaleString()}–
+                {MAX_SANDBOX_MEMORY_LIMIT_MIB.toLocaleString()})
+              </span>
+              <input
+                type="number"
+                min={MIN_SANDBOX_MEMORY_LIMIT_MIB}
+                max={MAX_SANDBOX_MEMORY_LIMIT_MIB}
+                step={256}
+                value={sandboxMemoryMib}
+                disabled={readOnly || loading}
+                onChange={(event) => setSandboxMemoryMib(event.target.value)}
+                className="mt-2 block min-h-11 w-44 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 text-sm outline-none focus:border-[var(--cyan)] disabled:opacity-45"
+              />
+              <span className="mt-2 block text-[11px] font-normal leading-4 text-[var(--muted)]">
+                The harness memory limit every validator applies to a leased run, replacing each
+                host's own default. Default {DEFAULT_SANDBOX_MEMORY_LIMIT_MIB.toLocaleString()}.
+              </span>
+            </label>
           </div>
           {runtimeInvalid ? (
             <p className="mt-3 text-[11px] text-[var(--red)]">
               Case concurrency must be 1–{MAX_BENCHMARK_CASE_CONCURRENCY}; delays must satisfy
-              0 ≤ minimum ≤ maximum ≤ {MAX_RELAY_DELAY_FINGERPRINT_MS.toLocaleString()} ms.
+              0 ≤ minimum ≤ maximum ≤ {MAX_RELAY_DELAY_FINGERPRINT_MS.toLocaleString()} ms; the
+              sandbox memory cap must be {MIN_SANDBOX_MEMORY_LIMIT_MIB.toLocaleString()}–
+              {MAX_SANDBOX_MEMORY_LIMIT_MIB.toLocaleString()} MiB.
             </p>
           ) : null}
         </fieldset>

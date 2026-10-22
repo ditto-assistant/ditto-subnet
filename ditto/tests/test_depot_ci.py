@@ -42,14 +42,25 @@ def test_depot_keeps_the_current_executable_jobs(name: str) -> None:
     assert depot_jobs == github_jobs
 
 
-@pytest.mark.parametrize("name", ENTRYPOINTS + UTILITY_WORKFLOWS)
-def test_github_owns_pr_validation_and_depot_is_manual_only(name: str) -> None:
+@pytest.mark.parametrize("name", ENTRYPOINTS + ("preview.yml",))
+def test_standalone_checks_are_operator_dispatched_on_both_providers(
+    name: str,
+) -> None:
+    # Cost control (SN-120): release.yml and its reusable verifiers own the
+    # gates; standalone PR checks run only when an operator dispatches them.
     github = load(".github", name)
     depot = load(".depot", name)
-    assert "pull_request" in github["on"]
+    assert set(github["on"]) == {"workflow_dispatch"}
     assert set(depot["on"]) == {"workflow_dispatch"}
     for job in github["jobs"].values():
         assert "head.repo.full_name != github.repository" not in job.get("if", "")
+
+
+def test_migration_order_still_guards_every_pull_request() -> None:
+    github = load(".github", "platform-migration-order.yml")
+    depot = load(".depot", "platform-migration-order.yml")
+    assert "pull_request" in github["on"]
+    assert set(depot["on"]) == {"workflow_dispatch"}
 
 
 @pytest.mark.parametrize("name", REUSABLES)

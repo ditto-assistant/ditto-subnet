@@ -15,6 +15,7 @@ import io
 import logging
 import os
 import tarfile
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,10 @@ from ditto.miner_cli.models import PreflightCheckResult
 from ditto.miner_cli.tar_validator import (
     MAX_TARBALL_SIZE_BYTES,
     run_preflight,
+)
+from ditto_screening_protocol.source_limits import (
+    MAX_SOURCE_FILE_LINES,
+    SOURCE_LIMITS_EFFECTIVE_AT,
 )
 
 
@@ -44,6 +49,7 @@ class TestPreflight:
             "gzip_valid",
             "tar_opens",
             "archive_contract",
+            "source_limits",
         }
 
     @pytest.mark.parametrize(
@@ -184,6 +190,27 @@ class TestArchiveContract:
             ([_DOCKERFILE, ("/abs", b"x")], "SCR-ARCHIVE-001"),
             ([_DOCKERFILE, ("src//main.rs", b"x")], "SCR-ARCHIVE-001"),
             ([_DOCKERFILE, _DOCKERFILE], "SCR-ARCHIVE-002"),
+            (
+                [
+                    (
+                        "Dockerfile",
+                        b"FROM python:3.12\n"
+                        b"RUN --network=host pip install -r requirements.txt\n",
+                    )
+                ],
+                "SCR-CONTRACT-004",
+            ),
+            (
+                [
+                    (
+                        "Dockerfile",
+                        b"FROM rust:1.82\n"
+                        b"RUN --mount=type=cache,target=/root/.cargo \\\n"
+                        b"    --SECURITY=INSECURE cargo build --release\n",
+                    )
+                ],
+                "SCR-CONTRACT-004",
+            ),
         ],
         ids=[
             "no-dockerfile",
@@ -194,6 +221,8 @@ class TestArchiveContract:
             "absolute-path",
             "non-canonical-path",
             "duplicate-path",
+            "run-network-host",
+            "run-security-insecure-continued",
         ],
     )
     def test_screener_rejection_fails_before_upload(
@@ -222,6 +251,18 @@ class TestArchiveContract:
         assert self._contract(path).passed is True
         assert run_preflight(path).passed is True
 
+    def test_entitlement_outside_a_run_instruction_passes(self, tmp_path: Path) -> None:
+        # The screener only rejects the flags on RUN: a comment or a CMD
+        # argument mentioning them is not a build entitlement.
+        dockerfile = (
+            b"FROM scratch\n"
+            b"# never use RUN --network=host here\n"
+            b'CMD ["serve", "--network=host"]\n'
+        )
+        path = _archive(tmp_path, [("Dockerfile", dockerfile)])
+
+        assert self._contract(path).passed is True
+
     def test_member_and_unpacked_limits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -235,3 +276,49 @@ class TestArchiveContract:
     def test_unreadable_tar_skips_the_contract_check(self, bad_gzip_tar: Path) -> None:
         names = [c.name for c in run_preflight(bad_gzip_tar).checks]
         assert "archive_contract" not in names
+
+
+class TestSourceLimits:
+    """Platform's per-file source limits, warned before they are enforced."""
+
+    def _source_check(self, path: Path, *, enforced: bool) -> PreflightCheckResult:
+        now = SOURCE_LIMITS_EFFECTIVE_AT + (
+            timedelta(0) if enforced else -timedelta(days=1)
+        )
+        return next(
+            c for c in run_preflight(path, now=now).checks if c.name == "source_limits"
+        )
+
+    def test_oversized_source_file_blocks_once_enforced(self, tmp_path: Path) -> None:
+        big = b"x = 1\n" * (MAX_SOURCE_FILE_LINES + 1)
+        tar = _archive(tmp_path, [_DOCKERFILE, ("src/agent.py", big)])
+        check = self._source_check(tar, enforced=True)
+        assert check.passed is False
+        assert "src/agent.py: 10,001 lines (limit 10,000)" in check.detail
+
+    def test_oversized_source_file_only_warns_before_enforcement(
+        self, tmp_path: Path
+    ) -> None:
+        big = b"x = 1\n" * (MAX_SOURCE_FILE_LINES + 1)
+        tar = _archive(tmp_path, [_DOCKERFILE, ("src/agent.py", big)])
+        check = self._source_check(tar, enforced=False)
+        assert check.passed is True
+        assert check.detail.startswith("WARNING, enforced for uploads from")
+        assert "src/agent.py" in check.detail
+
+    def test_data_files_are_not_source(self, tmp_path: Path) -> None:
+        big = b"token\n" * (MAX_SOURCE_FILE_LINES + 1)
+        tar = _archive(tmp_path, [_DOCKERFILE, ("fixtures/vocab.txt", big)])
+        assert self._source_check(tar, enforced=True).passed is True
+
+    def test_broken_allowlist_is_a_failed_check_not_an_exception(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def missing() -> frozenset[str]:
+            raise OSError("allowlist missing")
+
+        monkeypatch.setattr(tar_validator, "vendored_upstream_digests", missing)
+        tar = _archive(tmp_path, [_DOCKERFILE, ("src/agent.py", b"x = 1\n")])
+        check = self._source_check(tar, enforced=True)
+        assert check.passed is False
+        assert "allowlist could not be loaded" in check.detail

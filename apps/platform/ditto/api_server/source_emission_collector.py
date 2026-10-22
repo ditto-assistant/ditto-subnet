@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from collections.abc import Awaitable, Mapping
 from contextlib import suppress
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -34,6 +35,7 @@ from ditto.chain.source_emission_verifier import (
     WinnerBacking,
     evaluate_winner_payout,
     plan_source_emission_range,
+    plan_source_emission_range_by_reveals,
     read_source_emission_block,
     vector_digest,
 )
@@ -49,6 +51,8 @@ from ditto.db.queries.king_reign import KingEmissionProof, record_emission_confi
 from ditto.db.queries.source_emission_collector import (
     advance_source_emission_cursor,
     list_source_emission_vector_bindings,
+    record_catch_up_range,
+    record_reveal_plan_shadow,
     record_source_emission_payout,
     skip_quiet_source_emission_blocks,
     upsert_source_emission_vector_binding,
@@ -70,11 +74,27 @@ _SWEEP_CATCHUP_MIN_BACKLOG = 1000
 # Each reopened payout re-reads a full historical receipt. Bound that work so a
 # rescan cannot consume the sweep deadline that also covers the block scan.
 _RECEIPT_REFETCH_LIMIT = 5
+# Range planner for catch-up. "shadow": the event planner drives the cursor and
+# the reveal-anchored planner is compared against what the full reader acted on
+# (Backroom release_gate.reveal_plan_shadow). "primary": the reveal-anchored
+# planner drives it. Promote only after a long run of shadowed ranges with no
+# miss; docs/source-runtime-interface.md has the criterion.
+_REVEAL_PLAN_MODE = "primary"
+# A shadow comparison must never starve the sweep that hosts it: it runs only
+# after the sweep (payouts included) has finished, in a window of its own.
+_REVEAL_PLAN_SHADOW_SECONDS = 90.0
+_REVEAL_PLAN_SHADOW_RESERVE_SECONDS = 15.0
+_REVEAL_PLAN_SHADOW_MIN_SECONDS = 10.0
 # Sparse replay reads one storage call per quiet block and the full reader only
 # for the few blocks that can matter, so a catch-up range can span two tempos.
 _SWEEP_SPARSE_BATCH_BLOCKS = 720
 # Quiet blocks re-read in full per sparse range; any disagreement fails closed.
 _SPARSE_AUDIT_SAMPLES = 2
+# Full block reads (and payout receipts) run this many at a time during a
+# sparse replay; commits still happen one block at a time, in order. Each read
+# took 1-1.7 minutes on Dwellir, run one after another, which was most of a
+# range's time.
+_SPARSE_READ_CONCURRENCY = 4
 
 
 def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
@@ -109,6 +129,62 @@ def _receipt_from_json(data: dict) -> ChainMinerEmissionReceipt:
     )
 
 
+# Payout resolution stops this long before the sweep budget expires: one row
+# can take several archive reads, and an expired budget fails the sweep.
+_RESOLUTION_RESERVE_SECONDS = 45.0
+# During catch-up, payout resolution after the replay gets at most this long.
+# It re-checks every pending row, oldest-checked first: ~6 s a row on Dwellir,
+# ~190 rows on 2026-10-18, so left unbounded it filled each 600 s sweep once
+# the replay itself took under two minutes. New rows have never been checked,
+# so they still go first.
+_CATCHUP_RESOLUTION_SECONDS = 90.0
+
+
+def _resolution_deadline(
+    budget: asyncio.Timeout | None, *, share: float | None = None
+) -> float | None:
+    """When payout resolution must stop inside ``budget``.
+
+    With ``share``, at most that fraction of the time left; otherwise the
+    budget's end less a reserve. None (no limit) without a budget.
+    """
+    if budget is None:
+        return None
+    try:
+        when = budget.when()
+    except RuntimeError:
+        # Some Python versions refuse when() once the timeout has fired: the
+        # budget is spent, so resolution must stop now rather than raise.
+        return asyncio.get_running_loop().time()
+    if when is None:
+        return None
+    now = asyncio.get_running_loop().time()
+    if share is not None:
+        return now + (when - now) * share
+    return when - _RESOLUTION_RESERVE_SECONDS
+
+
+class _CallCounter:
+    """Counts the chain calls a planner makes, for the shadow's cost figure."""
+
+    _COUNTED = frozenset({"rpc_request", "query", "query_map", "get_block_metadata"})
+
+    def __init__(self, substrate: Any) -> None:
+        self._substrate = substrate
+        self.calls = 0
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._substrate, name)
+        if name not in self._COUNTED:
+            return attr
+
+        async def counted(*args: Any, **kwargs: Any) -> Any:
+            self.calls += 1
+            return await attr(*args, **kwargs)
+
+        return counted
+
+
 class SourceEmissionCollector:
     """Collect while disclosure is paused; confirmation is independently gated.
 
@@ -136,6 +212,9 @@ class SourceEmissionCollector:
         # Set at the start of each provider sweep; a deep backlog widens the
         # scan batch and its timeout, then decays back to steady state.
         self._backlog_deep = False
+        # (first, last, blocks the full reader acted on) of the last sparse
+        # range, compared once payouts for the sweep have been resolved.
+        self._pending_shadow: tuple[int, int, list[int]] | None = None
 
     @property
     def netuid(self) -> int:
@@ -186,6 +265,16 @@ class SourceEmissionCollector:
                 async with asyncio.timeout(self._sweep_timeout_seconds()) as budget:
                     async with AsyncSubstrateInterface(url=url) as substrate:
                         await self._sweep_provider(substrate, budget=budget)
+                        # The sweep's work, payouts included, is done: the
+                        # optional comparison gets its own window instead of
+                        # whatever the replay left, which on a slow archive
+                        # was never enough for it to run.
+                        budget.reschedule(
+                            asyncio.get_running_loop().time()
+                            + _REVEAL_PLAN_SHADOW_SECONDS
+                            + _REVEAL_PLAN_SHADOW_RESERVE_SECONDS
+                        )
+                        await self._run_pending_shadow(substrate, budget)
                 return
             except Exception as error:
                 failures.append(self.state.chain._safe_rpc_error(error)[:200])
@@ -234,7 +323,10 @@ class SourceEmissionCollector:
         if not catchup:
             # Durable payouts must not wait for a full scan batch to succeed.
             # Keep archive verification and provider fallback on the same path.
-            await self.resolve_pending_payouts(substrate)
+            # Half the budget at most, so the scan still gets its turn.
+            await self.resolve_pending_payouts(
+                substrate, deadline=_resolution_deadline(budget, share=0.5)
+            )
         batch = _SWEEP_CATCHUP_BATCH_BLOCKS if catchup else _SWEEP_BATCH_BLOCKS
         reads = SourceEmissionReadCache()
         try:
@@ -256,11 +348,43 @@ class SourceEmissionCollector:
             # error would hide why the cursor stopped (an unaudited runtime
             # once read as a decoder error for weeks).
             try:
-                await self.resolve_pending_payouts(substrate)
+                await self.resolve_pending_payouts(
+                    substrate, deadline=_resolution_deadline(budget)
+                )
             except Exception:
                 logger.exception("source emission payout resolution failed")
             raise
-        await self.resolve_pending_payouts(substrate)
+        # Stop with time to spare rather than let the budget expire mid-row:
+        # an expired budget fails the whole sweep and sends the next one to
+        # the rate-limited fallback providers, though the replay succeeded.
+        deadline = _resolution_deadline(budget)
+        if catchup:
+            cap = asyncio.get_running_loop().time() + _CATCHUP_RESOLUTION_SECONDS
+            deadline = cap if deadline is None else min(deadline, cap)
+        await self.resolve_pending_payouts(substrate, deadline=deadline)
+
+    async def _run_pending_shadow(
+        self, substrate: Any, budget: asyncio.Timeout | None
+    ) -> None:
+        pending, self._pending_shadow = self._pending_shadow, None
+        if pending is None:
+            return
+        seconds = _REVEAL_PLAN_SHADOW_SECONDS
+        deadline = budget.when() if budget is not None else None
+        if deadline is not None:
+            remaining = deadline - asyncio.get_running_loop().time()
+            seconds = min(seconds, remaining - _REVEAL_PLAN_SHADOW_RESERVE_SECONDS)
+        if seconds < _REVEAL_PLAN_SHADOW_MIN_SECONDS:
+            logger.info("reveal plan shadow skipped: sweep budget exhausted")
+            return
+        first_block, last_block, acted = pending
+        await self._shadow_reveal_plan(
+            substrate,
+            first_block=first_block,
+            last_block=last_block,
+            acted=acted,
+            seconds=seconds,
+        )
 
     async def _sweep_sparse(
         self,
@@ -280,8 +404,13 @@ class SourceEmissionCollector:
         """
         if end <= current:
             return False
+        planner, planner_name = (
+            (plan_source_emission_range_by_reveals, "reveal")
+            if _REVEAL_PLAN_MODE == "primary"
+            else (plan_source_emission_range, "event")
+        )
         try:
-            plan = await plan_source_emission_range(
+            plan = await planner(
                 substrate,
                 netuid=self.netuid,
                 first_block=current + 1,
@@ -289,14 +418,27 @@ class SourceEmissionCollector:
             )
         except Exception as error:
             chain = getattr(self.state, "chain", None)
-            logger.warning(
-                "source emission sparse plan unavailable; scanning per block: %s",
+            detail = (
                 chain._safe_rpc_error(error)[:200]
                 if chain is not None
-                else type(error).__name__,
+                else type(error).__name__
+            )
+            logger.warning(
+                "source emission sparse plan unavailable; scanning per block: %s",
+                detail,
+            )
+            await self._record_catch_up(
+                current + 1, end, "error", planner_name, detail=detail
             )
             return False
         if plan.full_scan:
+            await self._record_catch_up(
+                current + 1,
+                end,
+                "full_scan",
+                planner_name,
+                detail=plan.full_scan_reason,
+            )
             return False
         async with self.sessions() as session:
             cursor = await session.get(SourceEmissionCollectorCursor, self.netuid)
@@ -308,15 +450,18 @@ class SourceEmissionCollector:
             raise ValueError("durable cursor does not match the planned range")
         interesting = set(plan.interesting)
         quiet = [b for b in range(current + 1, end + 1) if b not in interesting]
-        # Continuous self-audit: the full reader must agree a sampled skip is quiet.
-        for block in random.sample(quiet, min(_SPARSE_AUDIT_SAMPLES, len(quiet))):
-            observed = await read_source_emission_block(
-                substrate,
-                netuid=self.netuid,
-                block=block,
-                finalized_block=finalized,
-                cache=SourceEmissionReadCache(),
-            )
+        gate = asyncio.Semaphore(_SPARSE_READ_CONCURRENCY)
+
+        async def audit(block: int) -> None:
+            # Continuous self-audit: the full reader must agree a skip is quiet.
+            async with gate:
+                observed = await read_source_emission_block(
+                    substrate,
+                    netuid=self.netuid,
+                    block=block,
+                    finalized_block=finalized,
+                    cache=SourceEmissionReadCache(),
+                )
             if (
                 observed.is_payout
                 or observed.updates
@@ -324,7 +469,86 @@ class SourceEmissionCollector:
                 or observed.block_hash != plan.hashes[block]
             ):
                 raise ValueError(f"sparse replay audit disagreed at block {block}")
+
+        async def read_ahead(
+            block: int,
+        ) -> tuple[SourceEmissionBlock, ChainMinerEmissionReceipt | None, str | None]:
+            async with gate:
+                return await self._read_block(substrate, block, finalized, reads)
+
+        # Every read starts now and runs under the gate; the audits are created
+        # first, so they take the first slots, and must pass before any commit.
+        audits = [
+            asyncio.ensure_future(audit(block))
+            for block in random.sample(quiet, min(_SPARSE_AUDIT_SAMPLES, len(quiet)))
+        ]
+        ahead = {
+            block: asyncio.ensure_future(read_ahead(block))
+            for block in sorted(interesting)
+        }
+        try:
+            await asyncio.gather(*audits)
+            replayed = await self._replay_planned(
+                current=current, end=end, plan=plan, ahead=ahead
+            )
+        finally:
+            # A failure (or a cancelled sweep) must not leave reads running.
+            pending = [task for task in (*audits, *ahead.values()) if not task.done()]
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*audits, *ahead.values(), return_exceptions=True)
+        await self._record_catch_up(
+            current + 1,
+            end,
+            "sparse",
+            planner_name,
+            read=len(interesting),
+            skipped=len(quiet),
+        )
+        return replayed
+
+    async def _record_catch_up(
+        self,
+        first_block: int,
+        last_block: int,
+        outcome: str,
+        planner: str,
+        *,
+        read: int = 0,
+        skipped: int = 0,
+        detail: str | None = None,
+    ) -> None:
+        """Fold one range into Backroom's catch-up summary. Never raises."""
+        try:
+            async with self.sessions() as session, session.begin():
+                await record_catch_up_range(
+                    session,
+                    netuid=self.netuid,
+                    first_block=first_block,
+                    last_block=last_block,
+                    outcome=outcome,
+                    planner=planner,
+                    read=read,
+                    skipped=skipped,
+                    detail=detail,
+                    now=datetime.now(UTC),
+                )
+        except Exception:
+            logger.exception("source emission catch-up summary write failed")
+
+    async def _replay_planned(
+        self,
+        *,
+        current: int,
+        end: int,
+        plan: Any,
+        ahead: Mapping[int, Awaitable[Any]],
+    ) -> bool:
+        """Commit a planned range in cursor order from reads already under way."""
+        interesting = set(ahead)
         cursor_block, cursor_hash = current, plan.hashes[current]
+        # Blocks the full reader acted on: what any range plan must include.
+        acted: list[int] = []
         stops: list[int | None] = [*sorted(interesting), None]
         for stop in stops:
             target = end if stop is None else stop - 1
@@ -344,9 +568,87 @@ class SourceEmissionCollector:
                 cursor_block, cursor_hash = target, plan.hashes[target]
             if stop is None:
                 break
-            await self._scan_block(substrate, stop, finalized, reads)
+            observed, payout, payout_blocked_reason = await ahead[stop]
+            await self.process_block(
+                observed, payout, payout_blocked_reason=payout_blocked_reason
+            )
+            if (
+                observed.is_payout
+                or observed.updates
+                or observed.reset_reason
+                or observed.invalidated_hotkeys
+            ):
+                acted.append(stop)
             cursor_block, cursor_hash = stop, plan.hashes[stop]
+        if _REVEAL_PLAN_MODE == "shadow":
+            if self._pending_shadow is not None:
+                # The previous sweep failed before its comparison ran.
+                logger.warning(
+                    "reveal plan shadow for %s-%s dropped before comparison",
+                    *self._pending_shadow[:2],
+                )
+            self._pending_shadow = (current + 1, end, acted)
         return True
+
+    async def _shadow_reveal_plan(
+        self,
+        substrate: Any,
+        *,
+        first_block: int,
+        last_block: int,
+        acted: list[int],
+        seconds: float = 90.0,
+    ) -> None:
+        """Check the reveal-anchored planner against an already-replayed range.
+
+        Every block the full reader acted on (payouts, weight writes, resets)
+        must be in its plan. Extra blocks only cost reads. Never raises: the
+        cursor already moved on the event planner's evidence.
+        """
+        counted = _CallCounter(substrate)
+        outcome, missed, detail = "error", [], None
+        try:
+            async with asyncio.timeout(seconds):
+                plan = await plan_source_emission_range_by_reveals(
+                    counted,
+                    netuid=self.netuid,
+                    first_block=first_block,
+                    last_block=last_block,
+                )
+            if plan.full_scan:
+                outcome = "fallback"
+            else:
+                missed = sorted(set(acted) - set(plan.interesting))
+                outcome = "missed" if missed else "agreed"
+        except Exception as error:
+            chain = getattr(self.state, "chain", None)
+            detail = (
+                chain._safe_rpc_error(error)
+                if chain is not None
+                else type(error).__name__
+            )
+        if outcome == "missed":
+            logger.warning(
+                "reveal plan shadow missed blocks %s in %s-%s",
+                missed,
+                first_block,
+                last_block,
+            )
+        try:
+            async with self.sessions() as session, session.begin():
+                await record_reveal_plan_shadow(
+                    session,
+                    netuid=self.netuid,
+                    first_block=first_block,
+                    last_block=last_block,
+                    outcome=outcome,
+                    missed=missed,
+                    calls=counted.calls,
+                    detail=detail,
+                    now=datetime.now(UTC),
+                )
+        except Exception:
+            logger.exception("reveal plan shadow summary write failed")
 
     async def _scan_block(
         self,
@@ -354,8 +656,28 @@ class SourceEmissionCollector:
         block: int,
         finalized: int,
         reads: SourceEmissionReadCache,
-    ) -> None:
+    ) -> SourceEmissionBlock:
         """Read one finalized block in full and commit it to the cursor."""
+        observed, payout, payout_blocked_reason = await self._read_block(
+            substrate, block, finalized, reads
+        )
+        await self.process_block(
+            observed, payout, payout_blocked_reason=payout_blocked_reason
+        )
+        return observed
+
+    async def _read_block(
+        self,
+        substrate: Any,
+        block: int,
+        finalized: int,
+        reads: SourceEmissionReadCache,
+    ) -> tuple[SourceEmissionBlock, ChainMinerEmissionReceipt | None, str | None]:
+        """Read one finalized block and its payout receipt, writing nothing.
+
+        Finalized chain state never changes, so reads of different blocks can
+        run concurrently; only ``process_block`` must follow cursor order.
+        """
         observed = await read_source_emission_block(
             substrate,
             netuid=self.netuid,
@@ -380,9 +702,7 @@ class SourceEmissionCollector:
                 )
             except ChainEmissionReceiptUnavailable as error:
                 payout_blocked_reason = f"unverifiable_payout: {str(error)[:200]}"
-        await self.process_block(
-            observed, payout, payout_blocked_reason=payout_blocked_reason
-        )
+        return observed, payout, payout_blocked_reason
 
     async def _confirmed_receipt(
         self, substrate: Any, *, block: int, allow_initialization_reveals: bool
@@ -761,9 +1081,17 @@ class SourceEmissionCollector:
             binding["vector_digest"],
         ), receipt
 
-    async def resolve_pending_payouts(self, substrate: Any) -> int:
+    async def resolve_pending_payouts(
+        self, substrate: Any, *, deadline: float | None = None
+    ) -> int:
+        """Resolve pending payouts, oldest-checked first, until ``deadline``.
+
+        ``deadline`` is a ``loop.time()`` value. Rows left over are untouched
+        and come first next time, since rows cycle by ``last_checked_at``.
+        """
         if not self.confirmation_enabled:
             return 0
+        loop = asyncio.get_running_loop()
         async with self.sessions() as session:
             rows = list(
                 await session.scalars(
@@ -790,17 +1118,22 @@ class SourceEmissionCollector:
             snapshots = [(row.block, row.block_hash, dict(row.proof)) for row in rows]
         confirmed = 0
         refetched = 0
-        for block, block_hash, snapshot in snapshots:
+
+        async def archive_evidence(
+            block: int, block_hash: str, snapshot: dict
+        ) -> tuple[dict, ChainMinerEmissionReceipt, list] | None:
+            """The row's archive reads; None when the row must wait."""
+            nonlocal refetched
             if snapshot.get("receipt") is None:
                 # Reopened after a non-reproducible ambiguity verdict.
                 if refetched >= _RECEIPT_REFETCH_LIMIT:
-                    continue
+                    return None
                 refetched += 1
                 receipt = await self._refetch_receipt(
                     substrate, block=block, block_hash=block_hash, snapshot=snapshot
                 )
                 if receipt is None:
-                    continue
+                    return None
                 snapshot = {**snapshot, "receipt": asdict(receipt)}
             payout = _receipt_from_json(snapshot["receipt"])
             resolved = []
@@ -813,6 +1146,24 @@ class SourceEmissionCollector:
                 backing = await self._resolve_backing(substrate, binding, payout)
                 if backing is not None:
                     resolved.append(backing)
+            return snapshot, payout, resolved
+
+        for block, block_hash, snapshot in snapshots:
+            if deadline is not None and loop.time() >= deadline:
+                break
+            # The deadline also bounds the row in progress: a row cut short
+            # wrote no verdict and comes first next sweep.
+            row_budget = asyncio.timeout_at(deadline)
+            try:
+                async with row_budget:
+                    evidence = await archive_evidence(block, block_hash, snapshot)
+            except TimeoutError:
+                if not row_budget.expired():
+                    raise  # a provider timeout, not our deadline
+                break
+            if evidence is None:
+                continue
+            snapshot, payout, resolved = evidence
             decision = evaluate_winner_payout(
                 receipt=payout,
                 stake=tuple(VotingStake(**item) for item in snapshot["stake"]),

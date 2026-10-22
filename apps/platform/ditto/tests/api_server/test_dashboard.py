@@ -145,6 +145,15 @@ class TestDashboard:
         assert conditional.status_code == 304
         assert conditional.content == b""
 
+    async def test_a_bounty_deep_link_serves_the_dashboard(self) -> None:
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        response = await _get(
+            app, "/bounties?bounty=00000000-0000-4000-8000-000000000000"
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert '<div id="root">' in response.text
+
     async def test_served_at_root_with_injected_wandb_url(self) -> None:
         url = "https://wandb.ai/ditto/ditto-sn118"
         app = create_api_server(

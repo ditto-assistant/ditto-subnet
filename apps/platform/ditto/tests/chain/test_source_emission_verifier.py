@@ -154,6 +154,8 @@ def chain(request: pytest.FixtureRequest) -> tuple[AsyncMock, dict]:
 
     async def rpc(method: str, params: list) -> dict:
         assert method == "state_getStorageHash"
+        if params[-1] in state.get("code_at", {}):
+            return {"result": state["code_at"][params[-1]]}
         return {
             "result": state.get("post_runtime", state["runtime"])
             if params[-1] == "h100"
@@ -463,10 +465,10 @@ def commit_chain(chain: tuple) -> tuple:
         },
     }
 
-    async def rpc(method: str, _params: list) -> dict:
+    async def rpc(method: str, params: list) -> dict:
         if method == "chain_getBlock":
             return {"result": {"block": {"extrinsics": [raw]}}}
-        return {"result": state["runtime"]}
+        return {"result": state.get("code_at", {}).get(params[-1], state["runtime"])}
 
     substrate.rpc_request.side_effect = rpc
 
@@ -644,6 +646,44 @@ async def test_null_epoch_consensus_fails_closed(chain: tuple, at: str) -> None:
         await read_source_emission_block(substrate, netuid=118, block=100)
 
 
+def _library_decodes_with_the_writer(substrate: AsyncMock, state: dict) -> None:
+    """Fail SubnetEpochConsensus where the state's writer predates v475."""
+    query = substrate.query.side_effect
+
+    async def strict(**kw: Any) -> Any:
+        number = int(kw["block_hash"][1:])
+        writer = state.get("code_at", {}).get(f"h{number - 1}", state["runtime"])
+        if kw["storage_function"] == "SubnetEpochConsensus" and writer != _V475:
+            raise ValueError('Storage function "SubnetEpochConsensus" not found')
+        return await query(**kw)
+
+    substrate.query.side_effect = strict
+
+
+async def test_first_block_after_the_v475_upgrade_block_is_read(chain: tuple) -> None:
+    # h99 stores v475's code but was written by the previous runtime, whose
+    # metadata has no SubnetEpochConsensus (Finney block 9233781).
+    substrate, state = chain
+    state["runtime"] = _V475
+    state["code_at"] = {"h98": sorted(AUDITED_RUNTIME_CODE_HASHES)[0]}
+    _library_decodes_with_the_writer(substrate, state)
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.runtime_code_hash == _V475
+    assert block.updates
+
+
+async def test_commit_right_after_the_v475_upgrade_block_is_verified(
+    commit_chain: tuple,
+) -> None:
+    from ditto.chain.source_emission_verifier import verify_finalized_weight_commit
+
+    substrate, state, claim = commit_chain
+    state["runtime"] = _V475
+    state["code_at"] = {"h98": sorted(AUDITED_RUNTIME_CODE_HASHES)[0]}
+    _library_decodes_with_the_writer(substrate, state)
+    await verify_finalized_weight_commit(substrate, claim)
+
+
 async def test_pre_v475_runtime_never_reads_epoch_consensus(chain: tuple) -> None:
     substrate, _ = chain
     await read_source_emission_block(substrate, netuid=118, block=100)
@@ -780,3 +820,50 @@ async def test_configured_fingerprint_must_match_the_observed_runtime(
         await read_source_emission_block(
             substrate, netuid=118, block=100, expected_runtime_code_hash=_UNTAGGED
         )
+
+
+async def test_read_cache_loads_a_key_once_for_concurrent_readers() -> None:
+    import asyncio
+
+    cache = SourceEmissionReadCache()
+    release, calls = asyncio.Event(), []
+
+    async def load() -> str:
+        calls.append(1)
+        await release.wait()
+        return "state"
+
+    readers = [asyncio.ensure_future(cache.get(("Keys", "h1"), load)) for _ in range(3)]
+    await asyncio.sleep(0)
+    release.set()
+    assert await asyncio.gather(*readers) == ["state"] * 3
+    assert len(calls) == 1
+
+
+async def test_read_cache_waiter_retries_a_failed_load_and_cancels_alone() -> None:
+    import asyncio
+
+    cache = SourceEmissionReadCache()
+    release = asyncio.Event()
+    attempts = []
+
+    async def load() -> str:
+        attempts.append(1)
+        await release.wait()
+        if len(attempts) == 1:
+            raise ConnectionError("provider dropped")
+        return "state"
+
+    owner = asyncio.ensure_future(cache.get(("Keys", "h1"), load))
+    waiter = asyncio.ensure_future(cache.get(("Keys", "h1"), load))
+    cancelled = asyncio.ensure_future(cache.get(("Keys", "h1"), load))
+    await asyncio.sleep(0)
+    cancelled.cancel()  # one reader giving up leaves the load running
+    await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(ConnectionError):
+        await owner
+    assert await waiter == "state"  # the waiter retried the failed load itself
+    assert len(attempts) == 2
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled

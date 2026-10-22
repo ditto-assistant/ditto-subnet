@@ -165,8 +165,9 @@ review covers the entire effective downstream path.
 
 - Missing required submission evidence is
   `V1.required_submission_evidence_missing`.
-- Verification that remains incomplete after published retries/deadlines is
-  `V2.platform_verification_failed`.
-- V1/V2 do not establish misconduct and record `violation_proven: false`.
-- Infrastructure or provider failure remains attributable to that failure
-  domain and receives the published re-review treatment.
+- A platform/provider review that does not complete ends once and stays
+  parked for explicit operator review or manual retry. Repetition does not
+  justify rejection, clearance, or another automatic billed review.
+- V1 does not establish misconduct and records `violation_proven: false`.
+- Historical V2 records remain readable; infrastructure or provider failures
+  retain their actual failure domain and are not artifact rejection evidence.

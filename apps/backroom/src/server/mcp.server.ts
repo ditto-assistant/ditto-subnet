@@ -1,6 +1,24 @@
+import {
+  contributorHotkeyInputSchema, githubAccountInputSchema, claPolicyReadInputSchema,
+  claPolicyWriteInputSchema, claPublishInputSchema,
+  githubRevocationReadInputSchema, githubRevocationWriteInputSchema,
+} from '../lib/contributor.schemas'
+import {
+  fetchMinerGithubLink, fetchGithubContributor, fetchMinerClaStatus, fetchClaPolicy,
+  updateClaPolicy, publishClaVersion,
+  fetchGithubRevocationPreflight, revokeMinerGithubLink,
+} from './admin.service'
 import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.schemas'
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
+import {
+  officialControlsInputSchema, officialControlLookupSchema, officialControlStageSchema,
+  officialControlVerifySchema, officialControlApprovalSchema,
+} from '../lib/v13-official-control.schemas'
+import {
+  fetchOfficialV13Controls, fetchOfficialV13ControlApprovals, fetchOfficialV13ControlArtifact, stageOfficialV13ControlImage,
+  verifyOfficialV13ControlImage, recordOfficialV13ControlApproval,
+} from './v13-official-control.service'
 import {
   listV13BenignApprovalsInputSchema,
   v13BenignApprovalLookupInputSchema,
@@ -10,6 +28,29 @@ import {
   v13ReplayPackageWriteInputSchema,
 } from '../lib/v13-private.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
+import { bountyBoardInputSchema, bountyCatalogInputs, bountyQueueInputSchema } from '../lib/bounty.schemas'
+import {
+  approveBountyObligation,
+  awardBountyClaim,
+  controlBountySlot,
+  decideBountyAppeal,
+  dispatchBountyObligation,
+  fetchBounty,
+  fetchBountyBoard,
+  fetchBountyClaim,
+  fetchBountyPayoutPolicy,
+  fetchBountyQueue,
+  previewBountyRevision,
+  publishBountyRevision,
+  reassignBountyReviewer,
+  reconcileBountyTransfer,
+  recordBountyEvaluationDecision,
+  recordBountyEvaluationEntry,
+  recordBountyFact,
+  reviewBountySubmission,
+  setBountyClaimsPaused,
+  setBountyPayoutPolicy,
+} from './bounty.service'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 import { observerGrant } from './treasury-observer-access.server'
@@ -404,6 +445,9 @@ export const WRITE_TOOL_NAMES = new Set([
   'record_treasury_runtime',
   'record_treasury_receipt',
   'record_v13_benign_approval',
+  'stage_v13_official_control_image',
+  'verify_v13_official_control_image',
+  'record_v13_official_control_approval',
   'record_v13_replay_private_group',
   'register_v13_replay_private_package',
   'schedule_l2_report_canary',
@@ -475,6 +519,23 @@ export const WRITE_TOOL_NAMES = new Set([
   'authorize_conversation_retry',
   'unban_hotkey',
   'set_source_release_policy',
+  'set_cla_policy',
+  'publish_cla_version',
+  'revoke_miner_github_link',
+  'publish_bounty_revision',
+  'set_bounty_claims_paused',
+  'review_bounty_submission',
+  'reassign_bounty_reviewer',
+  'control_bounty_slot',
+  'decide_bounty_appeal',
+  'award_bounty_claim',
+  'set_bounty_payout_policy',
+  'approve_bounty_obligation',
+  'dispatch_bounty_obligation',
+  'reconcile_bounty_transfer',
+  'record_bounty_fact',
+  'record_bounty_evaluation',
+  'decide_bounty_evaluation',
   'set_burn_settings',
   'set_confirmation_bundle_settings',
   'authorize_confirmation_bundle_retest',
@@ -483,6 +544,7 @@ export const WRITE_TOOL_NAMES = new Set([
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
+  ['get_v13_official_control_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_verification_readiness', BACKROOM_ARTIFACT_SCOPE],
   ['download_runtime_profile', BACKROOM_ARTIFACT_SCOPE],
@@ -676,6 +738,9 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // `z.string().uuid()` schema before any Platform request, so validation is
 // unchanged; only the advertised JSON Schema is shorter.
 const sourceAgentId = () => z.string().meta({ format: 'uuid' })
+const officialControlCatalogId = () => z.string()
+  .refine((value) => officialControlLookupSchema.shape.controlId.safeParse(value).success, { message: 'Invalid UUID' })
+  .meta({ format: 'uuid' })
 
 // Tool descriptions are injected into model context before any tool is used.
 // Keep the catalog decision-grade; the original, detailed operation notes stay
@@ -793,6 +858,18 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
 
   get_canonical_starter_fixture_preflight:
     'Pinned starter source, independent review, object integrity and schedule readiness.',
+  get_v13_official_controls:
+    'List official control image identities; no miner, private bytes or verdict.',
+  get_v13_official_control_approvals:
+    'Read immutable official-image review claims; not certification.',
+  get_v13_official_control_artifact:
+    'Download sealed candidate image for independent review; no verdict.',
+  stage_v13_official_control_image:
+    'Registrar stages an exact official image for review; no miner row.',
+  verify_v13_official_control_image:
+    'Hash and seal official image bytes; no execution or verdict authority.',
+  record_v13_official_control_approval:
+    'Authenticated fixture reviewer records exact-image evidence; one account may perform all steps.',
   register_canonical_starter_fixture:
     'Stage exact released starter: operator fixture, no miner submission.',
   review_canonical_starter_fixture:
@@ -832,7 +909,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_outlier_escalation:
     'Read outlier escalation mode, each setting\'s env source, and audit-chain holds.',
   get_outlier_escalation_dry_run:
-    'Replay outlier escalation on the scored ledger: would-trigger count and agents.',
+    'Replay outlier escalation on the scored ledger: rows it would hold.',
   get_inference_failure_taxonomy:
     'Read inference outcome groups and report-only 429 bursts; unknown routes retained.',
   start_runtime_profile:
@@ -842,6 +919,34 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_inference_traces: 'Page trace archive objects by partition.',
   download_inference_trace: 'Presigned trace URL; artifact scope.',
   peek_inference_trace: 'Peek trace records; artifact scope.',
+  get_miner_github_link: 'Read active verified GitHub/hotkey proof. See help.',
+  get_github_link_revocation_preflight: 'Read exact-link revoke guard, audit and confirmation. See help.',
+  revoke_miner_github_link: 'Revoke exact link; actor, reason and confirmation. Write; see help.',
+  get_github_contributor_status: 'Numeric GitHub ID to hotkey and CLA; never payee authority. See help.',
+  get_miner_cla_status: 'Read effective CLA and hotkey consent receipt. See help.',
+  get_cla_policy: 'Read CLA mode, notice, history and adoption. See help.',
+  set_cla_policy: 'Set CLA mode with revision and confirmation. Write; see help.',
+  publish_cla_version: 'Publish approved pinned CLA; no activation. Write; see help.',
+  get_bounty_board: 'List build bounties: terms, slots, pause, awards.',
+  get_bounty: 'Operator view of one bounty: claims, appeals, full private audit.',
+  get_bounty_claim: 'Read one bounty claim: submissions, obligations, facts.',
+  get_bounty_queue: 'Review queue (overdue first), settlement queue with approvers, or pending appeals.',
+  get_bounty_payout_policy: 'Read approval thresholds in force, or one exact revision; null when unset.',
+  preview_bounty_revision: 'Digest, exact phrase and refusals for a revision; writes nothing.',
+  publish_bounty_revision: 'Publish a previewed bounty revision. Write; see help.',
+  set_bounty_claims_paused: 'Pause or resume new holds. Write; see help.',
+  review_bounty_submission: 'Accept, request changes, or reject one submission. Write; see help.',
+  reassign_bounty_reviewer: 'Name the reviewer in force. Write; see help.',
+  control_bounty_slot: 'Cancel (refunds) or reopen (retains) a slot. Write; see help.',
+  decide_bounty_appeal: 'Uphold or deny an appeal; not its reviewer. Write; see help.',
+  award_bounty_claim: 'Award accepted work within its claim\'s pool. Write; see help.',
+  set_bounty_payout_policy: 'Append approval thresholds. Write; see help.',
+  approve_bounty_obligation: 'Approve exact payee, amount, policy. Write; see help.',
+  dispatch_bounty_obligation: 'Dispatch an approved round once. Write; see help.',
+  reconcile_bounty_transfer: 'Settle a dispatched or uncertain transfer. Write; see help.',
+  record_bounty_fact: 'Record a merge, deploy or adoption fact. Write; see help.',
+  record_bounty_evaluation: 'Record a bounty estimate or actual. Write; see help.',
+  decide_bounty_evaluation: 'Record expand, revise or stop for a bounty pilot. Write; see help.',
   get_owner_attestations:
     'Read signed direct owner links/revocations; non-transitive copy-review evidence.',
   list_lease_revocations:
@@ -1632,6 +1737,176 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
 
+  registerTool('get_github_link_revocation_preflight', {
+    title: 'Inspect GitHub link',
+    description: 'Read an exact linkId, its original signed identity proof, revocation blocker and exact confirmation. Returns the append-only operator audit after revocation. Use for a hostile or compromised link; no signing key or OAuth token is exposed. Requires backroom:read.',
+    // The service still validates UUIDs; the catalog needs only their format.
+    inputSchema: githubRevocationReadInputSchema.extend({ linkId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGithubRevocationPreflight(input)))
+
+  registerTool('revoke_miner_github_link', {
+    title: 'Revoke GitHub link',
+    description: 'Revoke exactly linkId using REVOKE GITHUB LINK {linkId} and an operator reason. Writes an immutable audit with the current signed-in operator and preserves the original miner signature. The preflight and mutation share the same active-link guard; a link revoked by someone else fails, while a retry of your own revocation returns it. If the outcome cannot be decided, retry with the same input. Frees the GitHub account for a new verified link and never changes payees or submissions. Requires backroom:write.',
+    inputSchema: githubRevocationWriteInputSchema.extend({ linkId: z.string().meta({ format: 'uuid' }) }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => revokeMinerGithubLink(props.session.email, input)))
+
+  registerTool('get_miner_github_link', {
+    title: 'Get verified miner GitHub link',
+    description: 'Read the active signed link between a miner hotkey and an OAuth-verified numeric GitHub user id. Login is a recorded display label; renames require re-linking. The receipt includes its signature, nonce, issue time, and finalized Owner(hotkey) snapshot. No OAuth state, tokens or secrets are returned. Identity only; never derive payment destinations from this link. Requires backroom:read.',
+    inputSchema: contributorHotkeyInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchMinerGithubLink(input)))
+
+  registerTool('get_github_contributor_status', {
+    title: 'Get GitHub contributor identity and CLA',
+    description: 'Resolve an authenticated GitHub PR author numeric id to its active linked hotkey and current CLA status. Always use the numeric author id, never a login string: logins can be renamed or reused. is_current reports effective-version consent, not a bounty award or payee authorization. An unlinked account returns link=null and cla=null. If only the CLA read fails, the identity is still returned with cla=null and cla_error naming the failure; never read that as unsigned. Requires backroom:read.',
+    inputSchema: githubAccountInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGithubContributor(input)))
+
+  registerTool('get_miner_cla_status', {
+    title: 'Get miner CLA consent',
+    description: 'Read the currently effective immutable CLA version and this hotkey signature receipt. is_current means a matching version/digest receipt exists; a historical signature alone does not meet a newly effective version. A pending future version does not supersede the current one. The signature is consent only and cannot redirect payment. Requires backroom:read.',
+    inputSchema: contributorHotkeyInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchMinerClaStatus(input)))
+
+  registerTool('get_cla_policy', {
+    title: 'Get CLA rollout and adoption',
+    description: 'Read the append-only CLA off/shadow/enforce policy, current effective version, newest-first paged history and adoption counts. active_hotkeys_basis=non_retired_submissions counts distinct hotkeys with a non-rejected, non-banned, non-retired submission, not current chain registrations. Unsigned includes outdated receipts. unsigned_shadow_uploads counts unsigned artifacts accepted in shadow mode, recorded in the same transaction as the upload; rejected requests and exact retries add no observations. Requires backroom:read and changes nothing.',
+    inputSchema: claPolicyReadInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchClaPolicy(input)))
+
+  registerTool('set_cla_policy', {
+    title: 'Set CLA rollout mode',
+    description: 'Append a CLA policy revision using the exact expectedRevision, operator reason, and confirmation SET CLA GATE OFF, SET CLA GATE SHADOW or SET CLA GATE ENFORCE. Enforce requires published currently effective maintainer-approved text, and every current or scheduled version needs 24 hours notice first; get_cla_policy reports earliest_enforcement_at. Start off, measure adoption in shadow and announce the date before enforcing. Existing scored agents remain unchanged. Returns the committed revision as applied with the refreshed policy. If the outcome cannot be decided (timeout, 5xx or lost connection, and the revision is not visible yet), applied is null and refresh_error says it may have committed: retry with the same input, which returns your revision once visible. A definite refusal fails and applied nothing. Write outcomes in docs/mcp.md. Requires backroom:write.',
+    inputSchema: claPolicyWriteInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => updateClaPolicy(props.session.email, input)))
+
+  registerTool('publish_cla_version', {
+    title: 'Publish approved pinned CLA text',
+    description: 'Publish the exact UTF-8 bytes of maintainer-approved docs/legal/CLA-vN.md with its SHA-256, version, effective date and operator reason. Supply confirmation PUBLISH CLA {version} {sha256}. Text and digest are immutable; versions and effective dates advance monotonically. Never publish test fixtures or draft legal wording. This only publishes the registry entry and does not change rollout mode. If the outcome cannot be decided, it fails with may have committed: retry with the same input, which returns an already committed publication instead of failing. Write outcomes in docs/mcp.md. Requires backroom:write.',
+    // The service still parses effectiveAt strictly; the catalog needs only its format.
+    inputSchema: claPublishInputSchema.extend({ effectiveAt: z.string().meta({ format: 'date-time' }) }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => publishClaVersion(props.session.email, input)))
+
+  registerTool('get_bounty_board', {
+    title: 'List build bounties',
+    description: 'Page the public build-bounty board: each bounty with its current revision terms, effective slot counts, claims pause, overdue reviews and recorded awards. Filter by repo and issue to find one. Requires backroom:read.',
+    inputSchema: bountyBoardInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBountyBoard(input)))
+
+  registerTool('get_bounty', {
+    title: 'Get bounty operator view',
+    description: 'One bounty with everything public views hide: the reviewer in force, each revision\'s operator, reviewer and reason, every claim with submissions, obligations and facts, appeal statements, the evaluation records, and a chronological audit of every operator record (publication, pause, reassignment, review, appeal decision, cancel, reopen, award, approval, dispatch, fact, evaluation) with actor and reason, plus a source-safe report with settlement checks and the evaluation. Use it before any bounty write and to verify one after. Requires backroom:read.',
+    inputSchema: bountyCatalogInputs.bounty, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBounty(input)))
+
+  registerTool('get_bounty_claim', {
+    title: 'Get bounty claim',
+    description: 'Read one claim: its hold, fee receipts, slot status, exact-commit submissions and decisions, appeals, obligations with derived settlement state and transfers, and delivery facts. Requires backroom:read.',
+    inputSchema: bountyCatalogInputs.claim, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBountyClaim(input)))
+
+  registerTool('get_bounty_queue', {
+    title: 'Get bounty work queue',
+    description: 'queue=reviews lists submissions awaiting a decision, the most overdue first, with the reviewer in force; overdueOnly narrows it. queue=settlement lists obligations still needing an operator (awaiting_approval, over_policy_limit, approved, dispatched, uncertain, failed) with the operators who approved the current round; state narrows it, and state=confirmed shows paid ones. queue=appeals lists undecided appeals, the longest waiting first, each with its bounty, claim, the appealed event (rejected or deadline_missed) and the private statement; decide one with decide_bounty_appeal. Requires backroom:read.',
+    inputSchema: bountyQueueInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBountyQueue(input)))
+
+  registerTool('get_bounty_payout_policy', {
+    title: 'Get bounty payout policy',
+    description: 'Read the payout policy revision in force: amounts up to single_approver_max_alpha_rao need one approver, up to dual_approver_max_alpha_rao two distinct approvers, and nobody may approve more. Returns null before the first revision, when no obligation can be approved. Pass revision to read that exact revision instead, or null when it does not exist. Requires backroom:read.',
+    inputSchema: bountyCatalogInputs.policyRead, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchBountyPayoutPolicy(input)))
+
+  registerTool('preview_bounty_revision', {
+    title: 'Preview bounty revision',
+    description: 'Return the exact spec digest, the confirmation phrase PUBLISH BOUNTY {repo}#{issue} REVISION {n} {digest}, and every refusal for these terms. Writes nothing. Repos are lowercase owner/name; v1 requires rehearsal funding, three slots and distinct escrow keys. Requires backroom:read.',
+    inputSchema: bountyCatalogInputs.preview, annotations: toolAnnotations('read'),
+  }, async (input) => result(await previewBountyRevision(props.session.email, input)))
+
+  registerTool('publish_bounty_revision', {
+    title: 'Publish bounty revision',
+    description: 'Publish revision expectedRevision+1 with the exact phrase from preview_bounty_revision, the private reviewerActor and an operator reason. Revision 1 opens round 1 with three slots; later revisions never change existing slots. A changed revision fails; an uncertain outcome is settled by reading the revision back, so retry with the same input. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.publish, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => publishBountyRevision(props.session.email, input)))
+
+  registerTool('set_bounty_claims_paused', {
+    title: 'Pause or resume bounty claims',
+    description: 'Pause (PAUSE BOUNTY CLAIMS {repo}#{issue}) or resume (RESUME BOUNTY CLAIMS {repo}#{issue}) new holds with an operator reason. Existing holds still complete so no paid fee is stranded. The operator and reason stay private. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.pause, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => setBountyClaimsPaused(props.session.email, input)))
+
+  registerTool('review_bounty_submission', {
+    title: 'Review bounty submission',
+    description: 'Only the reviewer in force decides one exact submissionId: accept (ACCEPT BOUNTY CLAIM {repo}#{issue} {claimId}; optional public attribution; refunds the fee), changes_requested (REQUEST CHANGES ON ...; reworkDays sets the recorded rework deadline) or reject (REJECT ...; fee retained when the slot is reopened; appealable). The reason is public, the reviewer private. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.review, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => reviewBountySubmission(props.session.email, input)))
+
+  registerTool('reassign_bounty_reviewer', {
+    title: 'Reassign bounty reviewer',
+    description: 'Name a new reviewer in force with REASSIGN BOUNTY REVIEWER {repo}#{issue} and a reason. Overdue reviews get one more review window. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.reassign, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => reassignBountyReviewer(props.session.email, input)))
+
+  registerTool('control_bounty_slot', {
+    title: 'Cancel or reopen bounty slot',
+    description: 'action=cancel (CANCEL BOUNTY SLOT {repo}#{issue} ROUND {r} SLOT {p}; kind team or system_fault) cancels an open, claimed, submitted or rework slot and refunds a paid fee in full; a held slot is refused. action=reopen (REOPEN BOUNTY SLOT ...) reopens an expired, withdrawn, rejected or cancelled slot for a new claim, records a retained fee for a rejected, expired or withdrawn claim, and is refused while an appeal is pending or, for a rejected or expired slot, until 3 days after the rejection or the missed deadline is recorded, unless its appeal was decided (the 409 names when). Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.slot, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => controlBountySlot(props.session.email, input)))
+
+  registerTool('decide_bounty_appeal', {
+    title: 'Decide bounty appeal',
+    description: 'Uphold (UPHOLD BOUNTY APPEAL {appealId}; restoreDays required) or deny (DENY BOUNTY APPEAL {appealId}) an appeal of a rejection or missed deadline. The reviewer of the appealed rejection may not decide it. Upholding restores the claim to claimed with a fresh delivery window. Read the statement with get_bounty first. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.appeal, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => decideBountyAppeal(props.session.email, input)))
+
+  registerTool('award_bounty_claim', {
+    title: 'Award bounty claim',
+    description: 'Award accepted work amountAlphaRao with public attribution and a private reason (AWARD BOUNTY CLAIM {claimId} {amount} ALPHA RAO). Awards never exceed the pool of the revision the claim signed; a shared award awards each accepted claim. Recording an award moves no money. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.award, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => awardBountyClaim(props.session.email, input)))
+
+  registerTool('set_bounty_payout_policy', {
+    title: 'Set bounty payout policy',
+    description: 'Append payout policy revision expectedRevision+1 (SET BOUNTY PAYOUT POLICY {revision}) with single- and dual-approver limits in alpha rao. Approvals under an older revision stop counting. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.policy, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => setBountyPayoutPolicy(props.session.email, input)))
+
+  registerTool('approve_bounty_obligation', {
+    title: 'Approve bounty obligation',
+    description: 'Approve one obligation round binding its exact payee, amount and the policy revision in force (APPROVE BOUNTY OBLIGATION {obligationId} ROUND {r} {amount} ALPHA RAO TO {payee}). Whoever decided the award or accepted the work may not approve it; amounts above the single limit need a second, distinct approver. An award is held while its hotkey owner is not its payee. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.approve, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => approveBountyObligation(props.session.email, input)))
+
+  registerTool('dispatch_bounty_obligation', {
+    title: 'Dispatch bounty obligation',
+    description: 'Dispatch an approved round once (DISPATCH BOUNTY OBLIGATION {obligationId} ROUND {r}). The dispatch is recorded before sending; a held award is refused. A failed or expired transfer needs fresh approvals for the next round; an unknown outcome is uncertain and must be reconciled first. v1 is simulated: rehearsalOutcome names the outcome (confirmed, failed or unknown) and is required; no funds move. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.dispatch, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => dispatchBountyObligation(props.session.email, input)))
+
+  registerTool('reconcile_bounty_transfer', {
+    title: 'Reconcile bounty transfer',
+    description: 'Settle a dispatched or uncertain transfer from what the executor (chain) shows (RECONCILE BOUNTY TRANSFER {transferId}). Never resend an uncertain transfer; reconcile it. rehearsalOutcome is required, and each reconciliation is audited with its operator. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.reconcile, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => reconcileBountyTransfer(props.session.email, input)))
+
+  registerTool('record_bounty_fact', {
+    title: 'Record bounty delivery fact',
+    description: 'Record a public merged, deployed or adopted fact for accepted work (RECORD BOUNTY {KIND} {claimId}). Facts are never payment conditions. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.fact, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => recordBountyFact(props.session.email, input)))
+
+  registerTool('record_bounty_evaluation', {
+    title: 'Record bounty evaluation entry',
+    description: 'Record an estimate or actual of one evaluation metric of a bounty pilot (#2944): build_hours, reviewer_hours, integration_hours, operator_hours or turnaround_days, as a non-negative value up to 1,000,000, with an optional note and a private reason (RECORD BOUNTY {KIND} {METRIC} {repo}#{issue}). expectedEntryId names the current entry of that kind and metric, which this one supersedes (0 before the first); a stale one is refused. The history stays; the latest entry is current. get_bounty shows every entry with its operator; the report shows current estimates and actuals apart, without operators or notes. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.evaluationEntry, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => recordBountyEvaluationEntry(props.session.email, input)))
+
+  registerTool('decide_bounty_evaluation', {
+    title: 'Decide bounty evaluation',
+    description: 'Record the decision to expand, revise or stop a bounty pilot (#2944) with its integrationStatus (not_integrated, integrating, integrated, adopted or not_adopted) and non-blank reasons (DECIDE BOUNTY EVALUATION {repo}#{issue} {DECISION}). expectedDecisionId names the current decision, which this one supersedes (0 before the first); a stale one is refused. The history stays; the latest is current, and the public report shows it with its reasons verbatim, but not its operator. Requires backroom:write.',
+    inputSchema: bountyCatalogInputs.evaluationDecision, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => recordBountyEvaluationDecision(props.session.email, input)))
+
   registerTool(
     'get_owner_attestations',
     {
@@ -1727,7 +2002,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Preview screening quarantine batch',
       description:
-        'Dry-run up to 50 per-item release, rescreen, or reject decisions. Validates exact agent and artifact identities, current actionability, reasons, and idempotent replays. Returns a short-lived actor-bound preview token. A reject on a terminal_ghost row closes it and keeps the terminal agent ruling (terminal_reconciliation); the token is fenced to terminal_ruling. This tool cannot change review state.',
+        'Dry-run up to 50 per-item release, rescreen, or reject decisions. Validates exact agent and artifact identities, current actionability, reasons, and idempotent replays. To approve a screening_failed submission with a resolved rescreen quarantine, use release with expectedAttemptId and expectedScoreCount from the current context. This records manual source approval and retains ordinary build, health and scoring gates; active work or stale guards block it. Returns a short-lived actor-bound preview token. A reject on a terminal_ghost row closes it and keeps the terminal agent ruling (terminal_reconciliation); the token is fenced to terminal_ruling. This tool cannot change review state.',
       inputSchema: screeningQuarantineBatchPreviewInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1803,7 +2078,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Retry validation after validator infrastructure failure',
       description:
-        'Restore only the exhausted validation slots needed for quorum after an operator verifies validator-owned infrastructure failure. Preserves scores, screening verdicts, artifacts, payments, ownership, and all ticket history. This is not rescreening and acts on one agent only. Refused (409) while provider_outage_blocks_retry is true unless acknowledgeProviderOutage=true: the provider-wide circuit is open or a provider-parked slot remains inside the recovery quiet window. Requires backroom:write.',
+        'Restore only the exhausted validation slots needed for quorum after an operator verifies validator-owned infrastructure failure. When exactly one score is missing, targetValidatorHotkey may select one currently available exhausted validator instead of the default deadline order; it never adds a ticket or overrides existing retry gates. Preserves scores, screening verdicts, artifacts, payments, ownership, and all ticket history. This is not rescreening and acts on one agent only. Refused (409) while provider_outage_blocks_retry is true unless acknowledgeProviderOutage=true: the provider-wide circuit is open or a provider-parked slot remains inside the recovery quiet window. Requires backroom:write.',
       inputSchema: retryValidationInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2284,7 +2559,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get public source-release policy',
       description:
-        "Read the subnet-wide policy governing whether miners' submitted source is ever published, and how soon: disclosure ('public' — source enters the normal release path — or 'never' — no source is published at all), embargo_hours (the window measured from completed winner-emission confirmation, 6 to 8760, retained but inert while disclosure is 'never'), the current append-only revision, and the history with the actor and reason behind every change. Uniform for every submission: there is no per-miner or per-submission setting, so this one value describes the whole subnet. Release is king-only regardless — only the exact submission that held the crown and earned winner emissions in a completed tempo is ever eligible — so a 'public' policy does not mean every submission is published. The release_gate field, when present, reports the served gate version, automatic_confirmation_enabled, archive_provider (configured host, auth mode, and credential presence only; never a URL or key, and not a provider health or authentication result), the durable collector cursor and runtime hash, last payout attribution or blocking reason, pending receipt and unresolved payout counts, pending and confirmed king counts, and up to 25 exact-agent payout receipt summaries (confirmed first, then newest crowns); rows_has_more signals truncation. The receipt_diagnostics list contains up to 64 latest signed validator relay observations with received_at and stale; receipt_diagnostics_has_more signals truncation. Schema-v2 last_validation contains only bounded field/type/rule codes and the error count of the last invalid claim in the latest recovery page; a new page clears it, and absence on v1 means unknown. These are self-reported diagnostic stages, never payout evidence; missing observations mean unknown, not healthy. Missing archive_provider means the configured provider is unknown. Missing release_gate means this response cannot prove the new gate is deployed. Positive revealed weights alone are not earnings proof. Requires backroom:read and changes nothing.",
+        "Read the subnet-wide policy governing whether miners' submitted source is ever published, and how soon: disclosure ('public' — source enters the normal release path — or 'never' — no source is published at all), embargo_hours (the window measured from completed winner-emission confirmation, 6 to 8760, retained but inert while disclosure is 'never'), the current append-only revision, and the history with the actor and reason behind every change. Uniform for every submission: there is no per-miner or per-submission setting, so this one value describes the whole subnet. Release is king-only regardless — only the exact submission that held the crown and earned winner emissions in a completed tempo is ever eligible — so a 'public' policy does not mean every submission is published. The release_gate field, when present, reports the served gate version, automatic_confirmation_enabled, archive_provider (configured host, auth mode, and credential presence only; never a URL or key, and not a provider health or authentication result), the durable collector cursor and runtime hash, last payout attribution or blocking reason, pending receipt and unresolved payout counts, pending and confirmed king counts, and up to 25 exact-agent payout receipt summaries (confirmed first, then newest crowns); rows_has_more signals truncation. The receipt_diagnostics list contains up to 64 latest signed validator relay observations with received_at and stale; receipt_diagnostics_has_more signals truncation. Schema-v2 last_validation contains only bounded field/type/rule codes and the error count of the last invalid claim in the latest recovery page; a new page clears it, and absence on v1 means unknown. These are self-reported diagnostic stages, never payout evidence; missing observations mean unknown, not healthy. Missing archive_provider means the configured provider is unknown. Missing release_gate means this response cannot prove the new gate is deployed. Positive revealed weights alone are not earnings proof. reveal_plan_shadow, when present, is the running check of the reveal-anchored range planner against the event planner: missed > 0 means it skipped a block the full reader acted on and must not be promoted; calls/blocks is its chain cost per block. catch_up, when present, summarizes how deep catch-up ranges were replayed by the named planner: sparse ranges (blocks_read read in full, blocks_skipped committed as quiet), full_scan fallbacks counted by the planner's reason in full_scan_reasons (a cost in throughput, never in correctness), and error ranges that could not be planned (last_error). Requires backroom:read and changes nothing.",
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },
@@ -2603,11 +2878,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_canonical_starter_fixture_preflight',
     {
       title: 'Get canonical starter fixture preflight',
-      description: 'Read exact public release and archive identity, current object integrity, reviewer provenance and readiness. Requires backroom:read.',
+      description: 'Read exact public release and archive identity, current object integrity, reviewer provenance and readiness. Includes operator-proof configuration presence in Platform and Backroom; an older Platform reports unknown. When both are configured, a separate authenticated read-only probe verifies the binding. Rejected, unavailable or unverified proof cannot report scheduling readiness. No fixture mutation or write authority. Requires backroom:read.',
       inputSchema: z.object({}),
       annotations: toolAnnotations('read'),
     },
-    async () => result(await fetchCanonicalStarterPreflight()),
+    async () => result(await fetchCanonicalStarterPreflight(props.session.email)),
   )
 
   registerTool(
@@ -2625,7 +2900,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'review_canonical_starter_fixture',
     {
       title: 'Attest canonical starter served path',
-      description: 'A different signed-in operator binds a public exact-source and served-path review digest plus built image digest. Candidate only; no clear authority. Requires backroom:write and confirmation.',
+      description: 'The authenticated operator binds public exact-source and served-path review evidence plus built image digest. The registrar may record independent agent review evidence using the same account. Candidate only; no clear authority. Requires backroom:write and confirmation.',
       inputSchema: reviewCanonicalStarterInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2642,6 +2917,44 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) => write(() => scheduleCanonicalStarter(input, props.session.email)),
   )
+
+  registerTool('get_v13_official_controls', {
+    title: 'List official V13 control images',
+    description: 'Read operator-owned official control identities and archive verification time. No miner Agent or ScreeningAttempt is created. No storage URL, private cases, execution verification or policy verdict. Requires backroom:read.',
+    inputSchema: officialControlsInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchOfficialV13Controls(input)))
+
+  // Keep compact catalog UUIDs runtime-validated as well. Every service also
+  // reparses its strict schema before creating a Platform URL or proof.
+  registerTool('get_v13_official_control_approvals', {
+    title: 'Read official V13 control approvals',
+    description: 'Read append-only authenticated operator attestations for a controlId. Each binds the official fixture, exact image, profile and review evidence. recorded_unverified is not a semantic pass or terminal authorization. Requires backroom:read.',
+    inputSchema: officialControlLookupSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchOfficialV13ControlApprovals(input)))
+
+  registerTool('stage_v13_official_control_image', {
+    title: 'Stage official V13 control image',
+    description: 'The signed-in fixture registrar pins requestId, fixtureId, image tar SHA, config image ID and byte size. May stage before independent source review so the operator can inspect sealed image bytes first; one account may register and record review evidence. Once reviewed, the source fixture image ID must match. Returns a short-lived constrained PUT and headers. Creates no miner or attempt and cannot clear anything. Same exact requestId may remint an unverified upload; conflicts refuse. Requires backroom:write and exact confirmation.',
+    inputSchema: officialControlStageSchema.extend({ requestId: officialControlCatalogId(), fixtureId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => stageOfficialV13ControlImage(input, props.session.email)))
+
+  registerTool('verify_v13_official_control_image', {
+    title: 'Verify official V13 control archive',
+    description: 'The registrar hashes the staged tar, copies it to a distinct protected key and hashes again before pinning immutable archive identity. Claimed Docker image ID remains unverified until the private runner loads it. No source, semantic or admission pass. May take up to three minutes; reread after ambiguous delivery before retrying. Requires backroom:write and exact confirmation.',
+    inputSchema: officialControlVerifySchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => verifyOfficialV13ControlImage(input, props.session.email)))
+
+  registerTool('record_v13_official_control_approval', {
+    title: 'Record official control approval',
+    description: 'The authenticated fixture reviewer records the exact verified archive, image ID, profile and evidence digest; this may be the same account that registered and built it. Independent agent review evidence is not a second human identity or an automated semantic pass. The append-only recorded_unverified receipt must predate private generation and does not establish semantic benignness, execution or a policy verdict. No miner or attempt is fabricated. Requires backroom:write and exact confirmation.',
+    inputSchema: officialControlApprovalSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => recordOfficialV13ControlApproval(input, props.session.email)))
+
+  registerTool('get_v13_official_control_artifact', {
+    title: 'Download official V13 control candidate',
+    description: 'Return a short-lived GET for the verified protected archive and its exact size, SHA and claimed config image ID. Available before independent source attestation so the reviewer can inspect these actual bytes. A candidate can be unreviewed; verify the digest and use isolated review without credentials or host mounts. No private case bytes or verdict authority. Requires backroom:artifact:read and a current write-level account.',
+    inputSchema: officialControlLookupSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('read'),
+  }, async (input) => artifact(() => fetchOfficialV13ControlArtifact(input, props.session.email)))
 
   registerTool(
     'authorize_conversation_retry',
@@ -3350,8 +3663,8 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       title: 'Get outlier escalation posture',
       description:
         'Read the anomalous-score outlier escalation (issue #476), which can open ATH holds (review_kind anomalous_score) on an out-of-band high composite. It is configured ONLY by environment variables read once per Platform API process at startup (env_vars lists the names; settings_loaded_at is when this process read them), so this is the one place to see what scoring is actually using. ' +
-        'settings is the effective policy: mode off (never computed), observe (would-be holds recorded, nobody held) or enforce (holds opened), plus min_bench_version, min_cohort_size, modified_z_threshold and min_composite_floor; defaults is the shipped policy. sources gives each field\'s origin: env (set and parsed), default (unset) or default_invalid_env (SET BUT REJECTED, so the shipped default is silently in force -- e.g. a mistyped mode leaves the gate off). invalid_env_fields lists those fields; the rejected text is never echoed. A null threshold means the env set nan/inf, which scoring is using. ' +
-        'activity reads the append-only score audit chain: observed_total / enforced_total over all time, the same counts inside window_hours (168), and the recent_limit (20) newest entries with agent_id, recorded_at, enforced, bench_version and the recorded cohort evidence (composite, cohort median/MAD, modified_z, thresholds). recent_truncated means older entries exist beyond the page; the counts are exact. pending_review_count is pending ATH reviews of kind anomalous_score; open them with get_ath_review. ' +
+        'settings is the effective policy: mode off (never computed), observe (would-be holds recorded, nobody held) or enforce (holds opened), plus min_bench_version, min_cohort_size, modified_z_threshold, min_composite_floor and per_axis_enforce (false: a per-axis tool_mean/memory_mean outlier is recorded as evidence only; true: it can also hold); defaults is the shipped policy. sources gives each field\'s origin: env (set and parsed), default (unset) or default_invalid_env (SET BUT REJECTED, so the shipped default is silently in force -- e.g. a mistyped mode leaves the gate off). invalid_env_fields lists those fields; the rejected text is never echoed. A null threshold means the env set nan/inf, which scoring is using. ' +
+        'activity reads the append-only score audit chain: observed_total / enforced_total over all time, the same counts inside window_hours (168), and the recent_limit (20) newest entries with agent_id, recorded_at, enforced, bench_version and the recorded cohort evidence (composite, cohort median/MAD, modified_z, thresholds). recent_truncated means older entries exist beyond the page; the counts are exact. Per-axis evidence entries (a tool_mean or memory_mean outlier the composite gate did not hold) are counted separately as axis_evidence_total / axis_evidence_in_window and listed newest first in recent_axis_evidence (recent_axis_evidence_truncated likewise); the audit chain keeps only each axis and whether it was an outlier, never its cohort statistics. pending_review_count is pending ATH reviews of kind anomalous_score; open them with get_ath_review. ' +
         'Not /admin/score-outliers (validator disagreement inside one quorum). Changing a value needs an env change and a Platform restart; this tool changes nothing. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
@@ -3364,8 +3677,8 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       title: 'Dry-run outlier escalation',
       description:
         'Replay the anomalous-score outlier escalation over the CURRENT scored ledger for one benchmark version (default: active) and report which rows it would hold, whatever the mode -- the false-positive check before switching observe to enforce or retuning a threshold. It calls the same decision function scoring calls at finalization, over the same ledger scoring reads there (one scored row per owner, median-row composite). Each row is judged against every other row; held and banned agents are outside that ledger and are not replayed. ' +
-        'settings is the policy replayed: the effective settings (get_outlier_escalation) with any override applied -- minCohortSize, modifiedZThreshold, minCompositeFloor -- and overridden_fields names them. mode is reported but not applied. bench_version_in_scope false means the live gate never runs at that version (below min_bench_version). ' +
-        'Returns ledger_size, cohort_size (peers per candidate), cohort_too_small (then nothing can trigger), ledger_median / ledger_mad over all composites, would_trigger_count (exact), and up to limit (20, max 100) would_trigger rows, highest composite first, each with agent_id, miner_hotkey and the same evidence the gate records (composite, leave-one-out cohort median/MAD, modified_z, thresholds). truncated means more rows would trigger. ' +
+        'settings is the policy replayed: the effective settings (get_outlier_escalation) with any override applied -- minCohortSize, modifiedZThreshold, minCompositeFloor, perAxisEnforce -- and overridden_fields names them. Set perAxisEnforce true to preview per-axis holds before enabling DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE. mode is reported but not applied. bench_version_in_scope false means the live gate never runs at that version (below min_bench_version). ' +
+        'Returns ledger_size, cohort_size (peers per candidate), cohort_too_small (then nothing can trigger), ledger_median / ledger_mad over all composites, would_trigger_count (exact), and up to limit (20, max 100) would_trigger rows, highest composite first, each with agent_id, miner_hotkey and the same evidence the gate records (composite, leave-one-out cohort median/MAD, modified_z, thresholds). truncated means more rows would trigger. axis_evidence_count / axis_evidence (axis_evidence_truncated) list rows with a per-axis outlier the replayed policy would record but not hold, with per_axis value, cohort median/MAD and modified_z. A zero-MAD axis cohort flags any above-median value on that axis. ' +
         'It is a replay of today\'s ledger, not history: a row\'s cohort at its own finalization was the ledger then, and included its owner\'s earlier best. Past observe/enforce triggers are in get_outlier_escalation activity. Opens no hold, writes nothing, and changes no setting. Requires backroom:read.',
       inputSchema: outlierEscalationDryRunInputSchema,
       annotations: toolAnnotations('read'),
@@ -3456,7 +3769,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set hosted inference concurrency and budget settings',
       description:
-        'Apply the complete hosted-inference and v10 runtime policy with expectedRevision, reason, and "APPLY INFERENCE CONCURRENCY SETTINGS". benchmark_runtime controls case_concurrency (1-64, default 4) and an off/shadow 0-5000ms delay range. Concurrent /run uses the session URL. Shadow never changes scores and holds only inside confirmation case windows. ' +
+        'Apply the complete hosted-inference and v10 runtime policy with expectedRevision, reason, and "APPLY INFERENCE CONCURRENCY SETTINGS". benchmark_runtime controls case_concurrency (1-64, default 4), sandbox_memory_limit_mib (the harness memory cap every validator applies, 512-32768, default 6144), and an off/shadow 0-5000ms delay range. Concurrent /run uses the session URL. Shadow never changes scores and holds only inside confirmation case windows. ' +
         'chat_request_budget (1-32768, ships at 16384) and chat_token_budget (1-200000000, ships at 25000000) are the per-grant chat allowances. Both are STAMPED ONTO A GRANT WHEN IT IS MINTED and read from the grant row thereafter, so a revision governs the next lease and can never retroactively exhaust a run already in flight. chat_token_budget is the one to move when a legitimate strategy stuffs large contexts and dies partway through a run: raising chat_request_budget alone left the heaviest agents failing in exactly the same place, because tokens rather than calls were binding. It is a CAP, not a spend — an agent is charged what it consumes, so raising it changes only which runs are permitted to finish. ' +
         'The chat limits (each 1-512, shipping at 16/48/96) and embedding limits (each 1-512, shipping at 12/48/96) must each satisfy per_ticket <= per_validator <= global, and are enforced at admission rather than stamped. The six request-per-minute limits (1-100000, shipping at chat 1920/7680/23040 and embedding 10000/40000/100000) are the same live admission 503: 8-wide overlapping /run sat on the old boot-time 240 chat RPM cap and died as inference_lane_saturated while concurrency looked idle. Lowering either per-ticket value is a live emergency brake and is safe to pull mid-run. Global concurrency is enforced by a cross-grant aggregate, so it is best-effort under a simultaneous burst and should be sized as a load-shedding backstop with headroom, not as an exact valve. ' +
         'Every bound above uses the same hard ceiling enforced by the platform and Go relay, so Backroom cannot persist a value the admission process would refuse. The platform remains the authority on every bound and refusal. Requires backroom:write.',
@@ -3549,7 +3862,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
   registerTool(
     'get_treasury_receipt_preflight',
-    { title: 'Preflight exact finalized treasury receipt', description: 'Read-only exact historical policy, destination, finalized runtime and effect validation with sanitized archive checkpoint on failure. No receipt publication, allocation reservation, signing or provider credit. Ingress repeats all checks. Requires backroom:read.', inputSchema: { selectorJson: z.string().min(2).max(4096).describe('Exact receipt selector JSON; no secrets.') }, annotations: toolAnnotations('read') },
+    { title: 'Preflight exact finalized treasury receipt', description: 'Read-only exact historical policy, destination, finalized runtime and effect validation with sanitized archive checkpoint on failure. No receipt publication, allocation reservation, signing or provider credit. Ingress repeats all checks. Requires backroom:read.', inputSchema: { selectorJson: z.string().min(2).max(65536).describe('Exact receipt selector JSON (with source_claims); no secrets.') }, annotations: toolAnnotations('read') },
     async (input) => result(await fetchTreasuryReceiptPreflight(JSON.parse(input.selectorJson))),
   )
   registerTool(

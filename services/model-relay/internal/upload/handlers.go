@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -35,6 +36,7 @@ const (
 	errorHotkeyBanned       = 1103
 	errorIdentical          = 1104
 	errorCooldown           = 1105
+	errorCLARequired        = 1106
 
 	defaultCooldownSeconds = 3600
 	defaultFeeAmountRao    = int64(40_000_000)
@@ -130,6 +132,7 @@ func (d *Deps) handleEvalPricing(w http.ResponseWriter, r *http.Request) {
 type checkRequestWire struct {
 	Hotkey                *string `json:"hotkey"`
 	SHA256                *string `json:"sha256"`
+	Name                  *string `json:"name"`
 	FileSizeBytes         *int64  `json:"file_size_bytes"`
 	Signature             *string `json:"signature"`
 	AllowIdenticalRescore bool    `json:"allow_identical_rescore"`
@@ -152,6 +155,12 @@ func parseCheckRequest(body []byte) (*checkRequestWire, bool, bool) {
 		!ss58Pattern.MatchString(*wire.Hotkey) || !sha256Pattern.MatchString(*wire.SHA256) ||
 		*wire.FileSizeBytes < 1 || !signaturePattern.MatchString(*wire.Signature) {
 		return nil, false, false
+	}
+	if wire.Name != nil {
+		length := utf8.RuneCountInString(*wire.Name)
+		if length < 1 || length > 64 {
+			return nil, false, false
+		}
 	}
 	proofFields := 0
 	if wire.PaymentBlockHash != nil {
@@ -230,6 +239,28 @@ func (e *cooldownError) Error() string {
 	return "submission cooldown active until " + e.retryAt.String()
 }
 
+type claRequiredError struct{ message string }
+
+func (e *claRequiredError) Error() string { return e.message }
+
+func claGateRejection(consent postgres.GetClaUploadGateRow) error {
+	switch consent.Mode {
+	case "off", "shadow":
+		return nil
+	case "enforce":
+	default:
+		return errors.New("unknown CLA mode")
+	}
+	if consent.HasSignature {
+		return nil
+	}
+	message := "No effective contributor agreement is published; contact the operator before submitting."
+	if consent.Version.Valid {
+		message = "Contributor agreement v" + itoa(int(consent.Version.Int32)) + " is required; run `ditto cla sign` before submitting."
+	}
+	return &claRequiredError{message: message}
+}
+
 func retryAt(ctx context.Context, q *postgres.Queries, coldkey string, cooldown int32, now time.Time) (*time.Time, error) {
 	latest, err := q.GetSubmissionLatestPaidCreatedAt(ctx, coldkey)
 	if err != nil {
@@ -252,13 +283,18 @@ func minTime(a, b time.Time) time.Time {
 	return b
 }
 
-func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now time.Time) (*admission, settings, error) {
+func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string) (*admission, settings, error) {
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
 		return nil, settings{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := d.Queries.WithTx(tx)
+	// Readers share this lock; policy writers acquire it exclusively. Hold it
+	// through commit so publication cannot pass the admission's gate check.
+	if err := q.LockClaPolicy(ctx); err != nil {
+		return nil, settings{}, err
+	}
 	// Match Python's transaction boundary: bind the reservation to the latest
 	// append-only settings revision inside the transaction that writes it.
 	current, err := d.effectiveSettings(ctx, q)
@@ -267,6 +303,20 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 	}
 	if err := q.LockUploadAdmissionColdkey(ctx, coldkey); err != nil {
 		return nil, current, err
+	}
+	// Evaluate the gate after the coldkey wait, at a fresh time: an agreement
+	// that became effective while this request waited applies to it.
+	// The same fresh time must govern admission expiry, cooldown and its TTL.
+	now := d.now()
+	consent, err := q.GetClaUploadGate(ctx, postgres.GetClaUploadGateParams{
+		Netuid: d.Cfg.Chain.NetuidInt32(), Hotkey: hotkey,
+		ObservedAt: pgtype.Timestamptz{Time: now, Valid: true},
+	})
+	if err != nil {
+		return nil, current, err
+	}
+	if rejection := claGateRejection(consent); rejection != nil {
+		return nil, current, rejection
 	}
 	existing, err := q.GetUploadAdmissionForColdkey(ctx, coldkey)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -343,6 +393,9 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if recovery {
+		// Python owns payment-proof recovery, including the current CLA gate
+		// and the exact accepted-artifact retry exception. Forward unchanged;
+		// do not duplicate or skip those authoritative checks here.
 		if d.Legacy == nil {
 			relayhttp.WriteHTTPError(w, r, http.StatusServiceUnavailable, "upload payment recovery unavailable; retry shortly", nil)
 			return
@@ -379,6 +432,27 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	if banned {
 		appendFailure(&codes, &messages, errorHotkeyBanned, "hotkey is banned from submitting")
+	}
+
+	if signatureValid && !banned {
+		consent, qerr := d.Queries.GetClaUploadGate(r.Context(), postgres.GetClaUploadGateParams{
+			Netuid: d.Cfg.Chain.NetuidInt32(), Hotkey: *payload.Hotkey,
+			ObservedAt: pgtype.Timestamptz{Time: d.now(), Valid: true},
+		})
+		if qerr != nil {
+			d.dbError(w, r, "CLA gate lookup", qerr)
+			return
+		}
+		if gateError := claGateRejection(consent); gateError != nil {
+			var rejection *claRequiredError
+			if !errors.As(gateError, &rejection) {
+				d.dbError(w, r, "CLA gate lookup", gateError)
+				return
+			}
+			appendFailure(&codes, &messages, errorCLARequired, rejection.message)
+		} else if consent.Mode == "shadow" && !consent.HasSignature {
+			d.Logger.Debug("unsigned CLA prepayment check in shadow mode", slog.String("hotkey", *payload.Hotkey))
+		}
 	}
 
 	var identicalID, identicalStatus *string
@@ -418,14 +492,17 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 	var reserved *admission
 	if len(codes) == 0 && payload.ReserveSubmissionSlot {
 		var boundSettings settings
-		reserved, boundSettings, err = d.reserve(r.Context(), ownerColdkey, *payload.Hotkey, *payload.SHA256, now)
+		reserved, boundSettings, err = d.reserve(r.Context(), ownerColdkey, *payload.Hotkey, *payload.SHA256)
 		// reserve resolves settings before every response-producing path. On an
 		// earlier infrastructure error the handler returns below, so assignment is
 		// unconditional and does not encode that invariant as a magic sentinel.
 		current = boundSettings
 		if err != nil {
 			var cooldown *cooldownError
-			if errors.As(err, &cooldown) {
+			var consent *claRequiredError
+			if errors.As(err, &consent) {
+				appendFailure(&codes, &messages, errorCLARequired, consent.message)
+			} else if errors.As(err, &cooldown) {
 				wireValue := pydanticTime(cooldown.retryAt)
 				retryString = &wireValue
 				appendFailure(&codes, &messages, errorCooldown, "owner coldkey may submit again at "+pythonISOTime(cooldown.retryAt))

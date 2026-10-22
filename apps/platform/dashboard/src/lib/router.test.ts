@@ -72,6 +72,10 @@ describe("PAGES registry", () => {
       title: "ATH reviews",
       sub: "Public queue of held high-score submissions · scores preserved, emissions paused",
     });
+    expect(PAGES.bounties).toEqual({
+      title: "Bounties",
+      sub: "Paid build bounties · open slots, claims, reviews, awards, and payments",
+    });
     expect(PAGES.benchmark).toEqual({
       title: "Benchmark",
       sub: "What the scoring benchmark measures and the frozen scoring setup",
@@ -113,6 +117,7 @@ describe("PAGES registry", () => {
       "ditto",
       "reason",
       "attempt",
+      "bounty",
     ]);
   });
 });

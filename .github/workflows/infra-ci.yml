@@ -1,23 +1,9 @@
 name: Infrastructure CI
 
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
-  pull_request:
-    paths:
-      - infra/**
-      - scripts/test-coding-hosted-connectivity-kernel.py
-      - workers/screener/scripts/bootstrap-screener.sh
-      - .github/workflows/infra-ci.yml
-      - .github/workflows/infra-plan-apply.yml
-      - .github/workflows/platform-pg-restore-drill.yml
-  push:
-    branches: [main]
-    paths:
-      - infra/**
-      - scripts/test-coding-hosted-connectivity-kernel.py
-      - workers/screener/scripts/bootstrap-screener.sh
-      - .github/workflows/infra-ci.yml
-      - .github/workflows/infra-plan-apply.yml
-      - .github/workflows/platform-pg-restore-drill.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -124,9 +110,18 @@ jobs:
           GOBIN="$RUNNER_TEMP/caddy-bin" go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.11.4
           PATH="$RUNNER_TEMP/caddy-bin:$PATH" uv run --no-project --with pytest --with jinja2 python -m pytest tests/test_caddy_request_body.py -q
 
+      - name: Verify read-only screener log key admission
+        run: uvx --from ansible-core==2.21.2 ansible-playbook -i localhost, tests/screener-logs-access.yml
+
+      - name: Verify scoped GitHub linking activation and rollback
+        run: uvx --from ansible-core==2.21.2 ansible-playbook -i localhost, tests/github-link.yml
+
+      - name: Verify Platform environment include boundaries
+        run: uvx --from ansible-core==2.21.2 python3 tests/test_platform_env_includes.py
+
       - name: Syntax-check subnet playbooks
         run: |
-          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-pg-backup.yml playbooks/gcp-platform-app.yml playbooks/gcp-platform-backup-reader.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml; do
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-pg-backup.yml playbooks/gcp-platform-app.yml playbooks/gcp-platform-github-link.yml playbooks/gcp-platform-backup-reader.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml playbooks/hetzner-screener-logs.yml; do
             uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
           done
 

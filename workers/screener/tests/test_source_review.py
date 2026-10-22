@@ -4045,7 +4045,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v32-policy-v13"
+    assert _prompt_revision(13) == "source-review-v33-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -4301,6 +4301,9 @@ def test_written_policy_makes_policy_v10_invariants_implementable() -> None:
         "tool-argument-grammar-sheet",
         "review-turn-argument-template",
         "self-reported-benchmark-fitting",
+        "length-cut-draft-fallback",
+        "prompt-only-record-dedupe",
+        "generator-construction-admission",
     }
 
     assert all(fragment in policy for fragment in required)
@@ -4315,8 +4318,7 @@ def test_written_policy_v13_covers_new_invariant_and_activation_boundaries() -> 
         "`bench_version` or another protocol-version field",
         "Conditionality is neither necessary nor sufficient",
         "V1: required submission evidence missing",
-        "V2: platform verification not completed",
-        "V3: provider verification not completed",
+        "Platform and provider verification not completed",
         "Approval and emission eligibility",
         "Activation prerequisites",
         "policy-v13-opaque-verification.md",
@@ -4346,7 +4348,7 @@ def test_written_policy_v13_accepts_exact_official_component_provenance() -> Non
         "verification-profile digest all match",
         "artifact-bound screening and challenge records",
         "V1.required_submission_evidence_missing",
-        "V2.platform_verification_failed",
+        "Historical V2 records remain readable",
     }
 
     assert not sorted(
@@ -4357,20 +4359,18 @@ def test_written_policy_v13_accepts_exact_official_component_provenance() -> Non
     )
 
 
-def test_written_policy_v13_is_strictly_two_outcome() -> None:
-    """v13 resolves every completed review to CLEAR or REJECT.
-
-    A verification failure is a rejection with ``violation_proven: false`` and
-    a named failure domain, never an indefinite hold and never an allegation
-    of cheating.
-    """
+def test_written_policy_v13_parks_incomplete_verification() -> None:
+    """Eligibility decisions need evidence; reviewer failure grants no verdict."""
 
     policy = (
         Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
     ).read_text()
     required = {
         "Policy v13 has exactly two final outcomes",
-        "There is no `REVIEW_INCOMPLETE`, `INCONCLUSIVE`, implied clearance",
+        "submission stays `screening_failed`",
+        "Repeated inconclusive reviews and platform/provider failures are evidence of",
+        "There are no automatic cost-bearing retries",
+        "Counting reviews does not supply missing evidence",
         "violation_proven: true | false",
         "failure_domain: artifact | submission | platform | provider | none",
         "must never be described as cheating",
@@ -4440,7 +4440,7 @@ def test_written_policy_v13_forbids_every_non_decisive_admission() -> None:
 
     assert "may produce `CLEAR`, and none of them may submit a passing" in policy
     assert "v13 protocol guard that rejects\n  `pass_inconclusive`" in policy
-    assert "deadline finalizer" in policy
+    assert "Expire unresolved attempts into a parked failure" in policy
 
 
 def test_written_policy_v13_covers_the_prompt_security_surface() -> None:
@@ -4844,6 +4844,7 @@ def test_review_leads_skip_exact_starter_files(tmp_path: Path) -> None:
         "files_scanned",
         "bytes_scanned",
         "truncated",
+        "scan_truncated",
     ):
         assert leads[key] == untrusted[key], key
 
@@ -4941,6 +4942,57 @@ def test_review_leads_not_starved_by_non_source_noise(
             {"path": path, "line": 3, "role": "retrieval-override"},
         ],
     } in leads["items"]
+
+
+def test_review_lead_dossier_reports_padding_and_omissions(tmp_path: Path) -> None:
+    from tests.test_emulation_fingerprints import _RUST_EMULATOR
+
+    files = {
+        f"src/a{index}.py": b"# phrasing probe-selected over trial N\n" * 4
+        for index in range(6)
+    }
+    files["src/zz.rs"] = _RUST_EMULATOR.encode()
+    leads = TarSourceRepository(str(_archive_files(tmp_path, files))).review_leads(())
+
+    assert leads["files_scanned"] == 7
+    assert leads["scan_truncated"] is False
+    assert leads["truncated"] is False
+    assert leads["fingerprint_selection"]["truncated"] is True
+    assert leads["fingerprint_selection"]["omitted_by_kind"] == {
+        "self-reported-benchmark-fitting": 18
+    }
+    assert leads["fingerprint_selection"]["saturation_leads"][0]["kind"] == (
+        "raw-fingerprint-kind-saturation"
+    )
+    assert {"bench-version-equality-gate", "zero-token-answer-constructor"} <= {
+        finding["kind"] for finding in leads["emulation_fingerprints"]
+    }
+
+
+def test_review_lead_kind_padding_cannot_hide_later_distinct_kind(
+    tmp_path: Path,
+) -> None:
+    decoy = (
+        b"def route(question, memories):\n"
+        b'    if contains(question, "canary"):\n'
+        b"        memories.inject(question)\n"
+        b"    return memories\n"
+    )
+    files = {f"src/a{index:02}.py": decoy for index in range(40)}
+    files["src/zz.rs"] = (
+        b"fn temporal_template(question: &str) -> String {\n"
+        b"    return resolve(question);\n}\n"
+    )
+    leads = TarSourceRepository(str(_archive_files(tmp_path, files))).review_leads(())
+
+    assert len(leads["items"]) <= 32
+    assert leads["item_selection"]["truncated"] is True
+    assert any(
+        lead["kind"] == "deterministic-challenge-resolver"
+        and location["path"] == "src/zz.rs"
+        for lead in leads["items"]
+        for location in lead["locations"]
+    )
 
 
 @pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])

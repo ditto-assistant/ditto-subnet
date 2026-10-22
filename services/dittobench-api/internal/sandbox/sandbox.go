@@ -187,6 +187,53 @@ func (d RuntimeDiagnostics) InfrastructureCode() string {
 	return ""
 }
 
+type memoryLimitKey struct{}
+
+// WithMemoryLimitMiB returns ctx carrying a per-run sandbox memory cap. A
+// Platform-issued ticket cap is the same on every validator, so it replaces
+// the host's DITTOBENCH_SANDBOX_MEMORY_LIMIT default for that run only.
+func WithMemoryLimitMiB(ctx context.Context, mib int) context.Context {
+	if mib <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, memoryLimitKey{}, strconv.Itoa(mib)+"m")
+}
+
+func memoryLimitFromContext(ctx context.Context) (string, bool) {
+	limit, ok := ctx.Value(memoryLimitKey{}).(string)
+	return limit, ok && limit != ""
+}
+
+// illegalInstructionPattern matches a harness process killed by SIGILL: the
+// supervisord exit line, the shell's report, or a bare Go/Rust runtime trace.
+var illegalInstructionPattern = regexp.MustCompile(
+	`terminated by SIGILL|Illegal instruction|signal: illegal instruction|SIGILL: illegal instruction`,
+)
+
+// SIGILL evidence sources, recorded on the failure so an operator can tell the
+// runtime's own report from a match in miner-controlled output.
+const (
+	IllegalInstructionEvidenceExitCode = "exit_code"
+	IllegalInstructionEvidenceLogTail  = "log_tail"
+)
+
+// StartupIllegalInstruction reports a harness that died on an instruction the
+// validator host's CPU does not implement before it ever became healthy, and
+// which evidence showed it. Exit code 132 is the container runtime's own report
+// for PID 1. A supervisord-managed harness never exits, so its SIGILL appears
+// only in the log tail, which is miner output and therefore unauthenticated. A
+// forged line can only move a failed attempt into validator-owned parking that
+// needs an operator grant to retry; it never produces a score.
+func StartupIllegalInstruction(exitCode int, logTail string) (bool, string) {
+	if exitCode == 128+4 {
+		return true, IllegalInstructionEvidenceExitCode
+	}
+	if illegalInstructionPattern.MatchString(logTail) {
+		return true, IllegalInstructionEvidenceLogTail
+	}
+	return false, ""
+}
+
 // LocalDocker runs submissions on the host Docker daemon via the `docker` CLI.
 type LocalDocker struct {
 	// HarnessPort is the in-container port the harness serves on (the kit's
@@ -1092,7 +1139,13 @@ func (d *LocalDocker) run(ctx context.Context, image string, env map[string]stri
 			_, _ = d.dockerOutput(context.Background(), "network", "rm", network)
 		}
 	}
-	out, err := d.dockerOutput(runCtx, d.runArgsForNetwork(image, env, network, identity)...)
+	args := d.runArgsForNetwork(image, env, network, identity)
+	if limit, ok := memoryLimitFromContext(ctx); ok {
+		scoped := *d
+		scoped.MemoryLimit = limit
+		args = scoped.runArgsForNetwork(image, env, network, identity)
+	}
+	out, err := d.dockerOutput(runCtx, args...)
 	if err != nil {
 		if retainFailure {
 			return &Handle{ContainerID: containerName, ImageRef: image, NetworkName: network}, fmt.Errorf("sandbox start requires cleanup: %w", err)

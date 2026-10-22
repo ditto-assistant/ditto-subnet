@@ -559,8 +559,12 @@ identical weights across asynchronous validator upgrades.
 
 ## Optional observability
 
-Add the shared `WANDB_API_KEY` supplied by Ditto to `.env`, or set
-`WANDB_MODE=disabled`. Never commit the key.
+W&B telemetry is optional and defaults to `WANDB_MODE=disabled`. Enable it only
+after obtaining a dedicated, independently revocable write credential for this
+validator. Set that validator's `WANDB_API_KEY` locally and switch
+`WANDB_MODE=online`; never commit the key or reuse a team-wide key. Operators
+must revoke or rotate the dedicated credential when a validator leaves the
+fleet. Scoring does not depend on W&B telemetry.
 
 The validator also sends a signed public heartbeat with its version, source
 digest, phase, and coarse health; the platform uses it to route compatible

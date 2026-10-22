@@ -3221,6 +3221,7 @@ class ValidatorWorker:
                     job.deadline if broker is not None else None
                 ),
                 ticket_deadline=job.deadline,
+                benchmark_runtime=job.benchmark_runtime,
             )
         finally:
             if broker is not None:
@@ -3238,6 +3239,7 @@ class ValidatorWorker:
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
+        benchmark_runtime: BenchmarkRuntimeSettings | None = None,
     ) -> ScoreReport | None:
         """Evaluate fresh seeds and package one signed append-only receipt.
 
@@ -3274,6 +3276,7 @@ class ValidatorWorker:
                         inference_slot_id=inference_slot_id,
                         inference_ticket_deadline=inference_ticket_deadline,
                         ticket_deadline=ticket_deadline,
+                        benchmark_runtime=benchmark_runtime,
                     )
                 )
             except (PlatformError, DittobenchError) as exc:
@@ -4072,10 +4075,14 @@ class ValidatorWorker:
         than lend the ticket a signature. Tickets without a block hash
         (pre-derivation agents) proceed as before.
         """
+        # Both refusals below are Platform/validator disagreements, never the
+        # agent's doing, so they hand back as infrastructure exactly as the
+        # top-five lane already reports them, not as a spent scoring attempt.
         if not _supports_bench_version(job.bench_version):
-            raise PlatformError(
+            raise ValidatorInfrastructureError(
                 f"unsupported benchmark version {job.bench_version!r}; "
-                f"supported versions are {SUPPORTED_BENCH_VERSIONS}"
+                f"supported versions are {SUPPORTED_BENCH_VERSIONS}",
+                code="unsupported_bench_version",
             )
         if (
             job.minimum_screening_policy_version != 9
@@ -4099,10 +4106,11 @@ class ValidatorWorker:
                 ),
             )
         ):
-            raise PlatformError(
+            raise ValidatorInfrastructureError(
                 f"ticket seed {job.seed} for agent {job.agent_id} does not "
                 f"re-derive from pinned block hash "
-                f"{job.dataset_seed_block_hash!r}; refusing to score"
+                f"{job.dataset_seed_block_hash!r}; refusing to score",
+                code="seed_binding_mismatch",
             )
         # Claim the slot publicly BEFORE activating inference. Exchanging the
         # grant and standing up the broker session is unbounded work -- with

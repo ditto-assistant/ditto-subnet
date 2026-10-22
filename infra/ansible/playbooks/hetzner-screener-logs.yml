@@ -1,0 +1,8 @@
+---
+# Narrow access-only converge; never enrolls, restarts or reconfigures workers.
+- name: Converge read-only screener log access
+  hosts: role_hetzner_screener
+  become: true
+  gather_facts: false
+  roles:
+    - screener_logs_access

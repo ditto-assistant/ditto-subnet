@@ -226,6 +226,10 @@ type ChainConfig struct {
 	DevAllowUnpermittedValidator bool
 }
 
+// NetuidInt32 is NETUID as a Postgres int4. Load rejects any value outside
+// [0, 2147483647], so the conversion never truncates.
+func (c ChainConfig) NetuidInt32() int32 { return int32(c.Netuid) }
+
 // InferenceProxyConfig mirrors the Python InferenceProxyConfig (section 10 of
 // the DB contract / section 9 of the API contract). All limits validated with
 // the same bounds; non-numeric numerics fail boot.
@@ -436,6 +440,9 @@ func Load(lookup Lookup) (*Config, error) {
 		IdentityName:                 r.str("PYLON_IDENTITY_NAME", ""),
 		IdentityToken:                r.str("PYLON_IDENTITY_TOKEN", ""),
 		DevAllowUnpermittedValidator: r.boolval("DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR", false),
+	}
+	if cfg.Chain.Netuid < 0 || cfg.Chain.Netuid > 2147483647 {
+		r.fail("NETUID must be between 0 and 2147483647, got %d", cfg.Chain.Netuid)
 	}
 	if (cfg.Chain.IdentityName == "") != (cfg.Chain.IdentityToken == "") {
 		r.fail("PYLON_IDENTITY_NAME and PYLON_IDENTITY_TOKEN must be provided together")

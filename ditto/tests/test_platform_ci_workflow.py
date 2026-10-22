@@ -25,75 +25,9 @@ def _step(job: dict, name: str) -> dict:
     return next(step for step in job["steps"] if step.get("name") == name)
 
 
-def test_backend_and_dashboard_workflows_own_disjoint_platform_paths() -> None:
-    backend_triggers = _triggers(_load(BACKEND_WORKFLOW))
-    dashboard_triggers = _triggers(_load(DASHBOARD_WORKFLOW))
-    backend_paths = backend_triggers["pull_request"]["paths"]
-    dashboard_paths = dashboard_triggers["pull_request"]["paths"]
-
-    assert backend_paths[:5] == [
-        "apps/platform/**",
-        "!apps/platform/dashboard/**",
-        "!apps/platform/faircopy.config.mjs",
-        "!apps/platform/package.json",
-        "!apps/platform/package-lock.json",
-    ]
-    assert {
-        "apps/platform/dashboard/**",
-        "apps/platform/faircopy.config.mjs",
-        "apps/platform/package.json",
-        "apps/platform/package-lock.json",
-    } <= set(dashboard_paths)
-    for paths in (backend_paths, dashboard_paths):
-        assert "packages/ditto-screening-protocol/**" in paths
-        assert ".github/workflows/platform-verify.yml" in paths
-    for triggers in (backend_triggers, dashboard_triggers):
-        assert "workflow_dispatch" in triggers
-        assert "push" not in triggers
-
-
-def test_backend_workflow_runs_on_screener_verdict_producer_changes() -> None:
-    backend_paths = set(_triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"])
-    assert {
-        "workers/screener/ditto_screener/policy.py",
-        "workers/screener/ditto_screener/worker.py",
-    } <= backend_paths
-
-
-def test_backend_workflow_owns_every_platform_coding_contract_vector() -> None:
-    backend_paths = set(_triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"])
-    assert {
-        "packages/dittobench-coding-contract/testdata/coding_contract_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_catalog_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_selection_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_certification_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
-    } <= backend_paths
-    assert (
-        "packages/dittobench-coding-contract/testdata/coding_inference_miner_v1.json"
-        not in backend_paths
-    )
-    assert (
-        "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json"
-        in backend_paths
-    )
-    assert (
-        "packages/dittobench-coding-contract/generate_execution_delivery_vectors.py"
-        in backend_paths
-    )
-    assert {
-        "ditto/api_models/coding_harness.py",
-        "ditto/api_models/coding_claims.py",
-        "ditto/api_models/coding_certification_leases.py",
-        "ditto/api_models/coding_inference.py",
-        "ditto/api_models/coding_inference_grants.py",
-    } <= backend_paths
+def test_standalone_platform_verification_is_manual_only() -> None:
+    for path in (BACKEND_WORKFLOW, DASHBOARD_WORKFLOW):
+        assert set(_triggers(_load(path))) == {"workflow_dispatch"}
 
 
 def test_path_gated_callers_select_the_shared_exact_source_gates() -> None:
@@ -165,7 +99,7 @@ def test_shared_verification_shards_the_complete_suite_without_deselection() -> 
             f"--ignore={endpoint_root}test_admin_validator_slot_settings.py "
             f"--ignore={endpoint_root}test_admin_confirmation_bundles.py "
             "--ignore=ditto/tests/api_server/endpoints/test_gate_notes.py",
-            False,
+            True,
         ),
         "api-server": (
             "ditto/tests/api_server --ignore=ditto/tests/api_server/endpoints",
@@ -174,7 +108,9 @@ def test_shared_verification_shards_the_complete_suite_without_deselection() -> 
         "data-contract-integration": ("--ignore=ditto/tests/api_server", True),
     }
     pytest_step = _step(test_job, "pytest")
-    assert pytest_step["run"] == "uv run pytest ${{ matrix.pytest_args }}"
+    assert pytest_step["run"] == (
+        "uv run --group browser pytest ${{ matrix.pytest_args }}"
+    )
     assert pytest_step["env"]["DITTO_REQUIRE_POSTGRES"] == "1"
     assert pytest_step["env"]["DITTO_REQUIRE_OBJECT_STORAGE"] == "1"
     assert _step(test_job, "Start MinIO")["if"] == "matrix.object_storage"

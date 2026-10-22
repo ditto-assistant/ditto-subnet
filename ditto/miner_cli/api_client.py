@@ -49,6 +49,28 @@ from ditto.api_models import (
     UploadCheckRequest,
     UploadCheckResponse,
 )
+from ditto.api_models.bounty import (
+    BountyAppealRequest,
+    BountyBoardPage,
+    BountyClaimRequest,
+    BountyClaimView,
+    BountyConfirmRequest,
+    BountyDetail,
+    BountySubmitRequest,
+    BountyWithdrawRequest,
+)
+from ditto.api_models.contributor_identity import (
+    ClaSignatureView,
+    ClaSignRequest,
+    ClaStatus,
+    ClaVersionView,
+    GithubLinkAttemptStatus,
+    GithubLinkRequest,
+    GithubLinkStart,
+    GithubLinkStatus,
+    GithubLinkView,
+    GithubUnlinkRequest,
+)
 from ditto.api_models.miner_ditto_link import (
     MinerDittoLinkAttemptResponse,
     MinerDittoLinkResponse,
@@ -153,7 +175,14 @@ class ApiClient:
 
     # ---- transport-level wrapper ----------------------------------------
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        max_body_bytes: int | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
         """Issue an HTTP request, translating transport faults to typed errors.
 
         ``httpx.ConnectError``, ``httpx.TimeoutException``, and any other
@@ -164,6 +193,31 @@ class ApiClient:
         mapped here; each caller maps them based on endpoint semantics.
         """
         try:
+            if max_body_bytes is not None:
+                request = self._client.build_request(method, path, **kwargs)
+                response = self._client.send(request, stream=True)
+                try:
+                    content = bytearray()
+                    for chunk in response.iter_bytes(chunk_size=8192):
+                        if len(content) + len(chunk) > max_body_bytes:
+                            raise ApiResponseError(
+                                "API response exceeds the size limit "
+                                f"(HTTP {response.status_code})"
+                            )
+                        content.extend(chunk)
+                    headers = httpx.Headers(response.headers)
+                    # iter_bytes yields decoded content; do not decode it twice.
+                    for header in ("content-encoding", "content-length"):
+                        headers.pop(header, None)
+                    return httpx.Response(
+                        response.status_code,
+                        headers=headers,
+                        content=bytes(content),
+                        request=response.request,
+                        extensions=response.extensions,
+                    )
+                finally:
+                    response.close()
             return self._client.request(method, path, **kwargs)
         except httpx.ConnectError as e:
             raise TransientApiError(
@@ -507,6 +561,212 @@ class ApiClient:
         )
         if response.status_code not in (200, 204):
             raise self._ditto_link_error(response)
+
+    def _contributor_response(
+        self,
+        method: str,
+        path: str,
+        *,
+        token: str | None = None,
+        body: Any = None,
+        max_body_bytes: int | None = None,
+        retryable: bool = False,
+    ) -> httpx.Response:
+        kwargs: dict[str, Any] = {}
+        if token is not None:
+            kwargs["headers"] = {"authorization": f"Bearer {token}"}
+        if body is not None:
+            kwargs["json"] = body.model_dump(mode="json")
+        response = self._request(method, path, max_body_bytes=max_body_bytes, **kwargs)
+        if not response.is_success:
+            if retryable and response.status_code in (429, 500, 502, 503, 504):
+                raise TransientApiError(_format_error(response, prefix="contributor"))
+            if response.status_code == 401 and token is not None:
+                raise LoginRequiredError(
+                    "miner session is invalid or expired; run `ditto login`"
+                )
+            if response.status_code == 404 and path in (
+                "/api/v1/me/github-link",
+                "/api/v1/me/github-link/start",
+            ):
+                envelope = _safe_envelope(response)
+                message = envelope.get("message", envelope.get("detail"))
+                if message == "Not Found" or not response.content:
+                    raise ApiResponseError(
+                        "GitHub linking is unavailable on this Platform server "
+                        "(HTTP 404). Ask the operator to upgrade Platform to a "
+                        "release that supports `ditto link-github`."
+                    )
+            raise ApiResponseError(_format_error(response, prefix="contributor"))
+        return response
+
+    def get_github_link(
+        self, *, token: str, retryable: bool = False
+    ) -> GithubLinkStatus:
+        return GithubLinkStatus.model_validate(
+            self._contributor_response(
+                "GET", "/api/v1/me/github-link", token=token, retryable=retryable
+            ).json()
+        )
+
+    def start_github_link(self, *, token: str) -> GithubLinkStart:
+        return GithubLinkStart.model_validate(
+            self._contributor_response(
+                "POST", "/api/v1/me/github-link/start", token=token
+            ).json()
+        )
+
+    def get_github_link_attempt(
+        self, *, token: str, attempt_id: UUID
+    ) -> GithubLinkAttemptStatus:
+        return GithubLinkAttemptStatus.model_validate(
+            self._contributor_response(
+                "GET",
+                f"/api/v1/me/github-link/attempts/{attempt_id}",
+                token=token,
+                retryable=True,
+            ).json()
+        )
+
+    def confirm_github_link(
+        self, *, token: str, body: GithubLinkRequest
+    ) -> GithubLinkView:
+        return GithubLinkView.model_validate(
+            self._contributor_response(
+                "POST", "/api/v1/me/github-link/confirm", token=token, body=body
+            ).json()
+        )
+
+    def unlink_github(self, *, token: str, body: GithubUnlinkRequest) -> None:
+        self._contributor_response(
+            "POST", "/api/v1/me/github-link/unlink", token=token, body=body
+        )
+
+    def get_cla_status(self, *, hotkey: str | None = None) -> ClaStatus | None:
+        if hotkey == "":
+            # An empty path segment would 404 and read as a pre-gate server.
+            raise ValueError("hotkey must be a non-empty SS58 address")
+        path = (
+            f"/api/v1/public/cla/status/{hotkey}"
+            if hotkey is not None
+            else "/api/v1/public/cla"
+        )
+        response = self._request("GET", path)
+        if response.status_code == 404:
+            # Rolling upgrade to a server that predates the default-off gate.
+            return None
+        if not response.is_success:
+            raise ApiResponseError(_format_error(response, prefix="cla"))
+        return ClaStatus.model_validate(response.json())
+
+    def get_cla_version(self, *, version: int) -> ClaVersionView:
+        return ClaVersionView.model_validate(
+            self._contributor_response(
+                "GET", f"/api/v1/public/cla/versions/{version}"
+            ).json()
+        )
+
+    def get_cla_text(self, *, version: int) -> bytes:
+        response = self._contributor_response(
+            "GET",
+            f"/api/v1/public/cla/versions/{version}/text",
+            max_body_bytes=262144,
+        )
+        return response.content
+
+    def sign_cla(self, body: ClaSignRequest) -> ClaSignatureView:
+        return ClaSignatureView.model_validate(
+            self._contributor_response("POST", "/api/v1/cla/sign", body=body).json()
+        )
+
+    # ---- build bounties -------------------------------------------------
+
+    def list_bounties(
+        self,
+        *,
+        repo: str | None = None,
+        issue: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> BountyBoardPage:
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if repo is not None:
+            params["repo"] = repo
+        if issue is not None:
+            params["issue"] = issue
+        response = self._request("GET", "/api/v1/public/bounties", params=params)
+        if not response.is_success:
+            raise ApiResponseError(_format_error(response, prefix="bounties"))
+        return BountyBoardPage.model_validate(response.json())
+
+    def get_bounty(self, bounty_id: UUID) -> BountyDetail:
+        response = self._request("GET", f"/api/v1/public/bounties/{bounty_id}")
+        if not response.is_success:
+            raise ApiResponseError(_format_error(response, prefix="bounty"))
+        return BountyDetail.model_validate(response.json())
+
+    def hold_bounty_claim(self, body: BountyClaimRequest) -> BountyClaimView:
+        """Send a signed claim; resending the same body returns the same hold."""
+        return BountyClaimView.model_validate(
+            self._bounty_response(
+                "POST", "/api/v1/bounties/claims", body.model_dump(mode="json")
+            ).json()
+        )
+
+    def confirm_bounty_claim(
+        self, claim_id: UUID, body: BountyConfirmRequest
+    ) -> BountyClaimView:
+        """Send a fee receipt; resending it returns the recorded outcome."""
+        return BountyClaimView.model_validate(
+            self._bounty_response(
+                "POST",
+                f"/api/v1/bounties/claims/{claim_id}/confirm",
+                body.model_dump(mode="json"),
+            ).json()
+        )
+
+    def submit_bounty_work(
+        self, claim_id: UUID, body: BountySubmitRequest
+    ) -> BountyClaimView:
+        return self._bounty_action(claim_id, "submissions", body)
+
+    def withdraw_bounty_claim(
+        self, claim_id: UUID, body: BountyWithdrawRequest
+    ) -> BountyClaimView:
+        return self._bounty_action(claim_id, "withdraw", body)
+
+    def appeal_bounty_decision(
+        self, claim_id: UUID, body: BountyAppealRequest
+    ) -> BountyClaimView:
+        return self._bounty_action(claim_id, "appeals", body)
+
+    def _bounty_action(self, claim_id: UUID, action: str, body: Any) -> BountyClaimView:
+        """A signed action on one claim; resending it returns the same outcome."""
+        return BountyClaimView.model_validate(
+            self._bounty_response(
+                "POST",
+                f"/api/v1/bounties/claims/{claim_id}/{action}",
+                body.model_dump(mode="json"),
+            ).json()
+        )
+
+    def get_bounty_claim(self, claim_id: UUID) -> BountyClaimView:
+        return BountyClaimView.model_validate(
+            self._bounty_response("GET", f"/api/v1/bounties/claims/{claim_id}").json()
+        )
+
+    def _bounty_response(
+        self, method: str, path: str, body: Any = None
+    ) -> httpx.Response:
+        response = self._request(
+            method, path, **({"json": body} if body is not None else {})
+        )
+        if response.is_success:
+            return response
+        if response.status_code in (429, 500, 502, 503, 504):
+            # Every bounty write is an exact retry: resending is always safe.
+            raise TransientApiError(_format_error(response, prefix="bounty claim"))
+        raise ApiResponseError(_format_error(response, prefix="bounty claim"))
 
     def clear_miner_avatar(self, body: MinerAvatarClearRequest) -> MinerAvatarResponse:
         response = self._request(

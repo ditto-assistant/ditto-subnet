@@ -2,6 +2,403 @@
 
 <!-- version list -->
 
+## v0.381.2 (2026-10-22)
+
+### Bug Fixes
+
+- **dittobench**: Charge the agent, not the relay, for embedding declines after its chat token wall
+  ([#3026](https://github.com/ditto-assistant/ditto-subnet/pull/3026),
+  [`ce1938e`](https://github.com/ditto-assistant/ditto-subnet/commit/ce1938e9c69caa38ffd6f6a611b35bf1185a9d0f))
+
+- **gamma**: Settle delivery fence on a verified wallet movement
+  ([#3070](https://github.com/ditto-assistant/ditto-subnet/pull/3070),
+  [`8edd4e4`](https://github.com/ditto-assistant/ditto-subnet/commit/8edd4e4b451d1d08f348b4bac79ef37cb6ad8c10))
+
+- **infra**: Preserve platform environment include boundaries
+  ([#3057](https://github.com/ditto-assistant/ditto-subnet/pull/3057),
+  [`155a422`](https://github.com/ditto-assistant/ditto-subnet/commit/155a422b45958c503d1f1d98dae0673992e4cbd3))
+
+- **miner-cli**: Fail ditto verify on RUN --network=host / --security=insecure before the fee
+  ([#3027](https://github.com/ditto-assistant/ditto-subnet/pull/3027),
+  [`c040fd4`](https://github.com/ditto-assistant/ditto-subnet/commit/c040fd4d1819368f9f2af8e14b836678021939e0))
+
+- **treasury**: Recover custody on audited Finney v482
+  ([#3071](https://github.com/ditto-assistant/ditto-subnet/pull/3071),
+  [`ad16bed`](https://github.com/ditto-assistant/ditto-subnet/commit/ad16bed72e2791e1941f35b255a40436584124b2))
+
+- **validator**: Honor runtime settings on continual retests
+  ([#3056](https://github.com/ditto-assistant/ditto-subnet/pull/3056),
+  [`115ca38`](https://github.com/ditto-assistant/ditto-subnet/commit/115ca38f4b67b71917e5cf2ec0f8c3ba3cff23d3))
+
+- **validator,dittobench**: Stop charging miners for scorer-image and private-dataset outages
+  ([#3025](https://github.com/ditto-assistant/ditto-subnet/pull/3025),
+  [`c88a900`](https://github.com/ditto-assistant/ditto-subnet/commit/c88a9002215b84e0178d48a2aaad198b4caf13f9))
+
+### Code Style
+
+- **infra**: Format platform env include test
+  ([#3072](https://github.com/ditto-assistant/ditto-subnet/pull/3072),
+  [`2ccbc6d`](https://github.com/ditto-assistant/ditto-subnet/commit/2ccbc6d1e5890802fd5e76d4bba107417d29ec4e))
+
+
+## v0.381.1 (2026-10-21)
+
+### Bug Fixes
+
+- **screener**: Verify containerd image handles before launch
+  ([#3055](https://github.com/ditto-assistant/ditto-subnet/pull/3055),
+  [`03c4299`](https://github.com/ditto-assistant/ditto-subnet/commit/03c4299270d2fe2b0b181c475b50d43f3338a9c8))
+
+
+## v0.381.0 (2026-10-21)
+
+### Bug Fixes
+
+- **backroom**: Verify canonical fixture operator proof
+  ([#3044](https://github.com/ditto-assistant/ditto-subnet/pull/3044),
+  [`34cf307`](https://github.com/ditto-assistant/ditto-subnet/commit/34cf3079bf824092867df92aa9e0c43291345887))
+
+- **relay**: Regenerate schema after targeted retry migration
+  ([#3051](https://github.com/ditto-assistant/ditto-subnet/pull/3051),
+  [`c4d4e36`](https://github.com/ditto-assistant/ditto-subnet/commit/c4d4e3689cb4e585aed132a43c9f1d97866644bd))
+
+- **relay**: Synchronize schema with official control migration
+  ([`b940bfe`](https://github.com/ditto-assistant/ditto-subnet/commit/b940bfe0b65fa8136fb5fc8e28f768ea4f6cbb72))
+
+### Documentation
+
+- **skills**: Reconcile miner communications before board rulings
+  ([#3052](https://github.com/ditto-assistant/ditto-subnet/pull/3052),
+  [`4bc9b10`](https://github.com/ditto-assistant/ditto-subnet/commit/4bc9b10daca743e30bb0c976d931a7fcd17166a3))
+
+### Features
+
+- **backroom**: Manage official controls with one operator
+  ([#3048](https://github.com/ditto-assistant/ditto-subnet/pull/3048),
+  [`04f2191`](https://github.com/ditto-assistant/ditto-subnet/commit/04f21912c81a41ddcf02c4aa6f7c1614df99d2f3))
+
+- **backroom**: Target a compatible validator for final-quorum recovery
+  ([#3050](https://github.com/ditto-assistant/ditto-subnet/pull/3050),
+  [`b05ad65`](https://github.com/ditto-assistant/ditto-subnet/commit/b05ad65072619764aa2a5f0b37db744507b8d92b))
+
+
+## v0.380.1 (2026-10-21)
+
+### Bug Fixes
+
+- **scorer**: Accept already pinned reasoning privacy
+  ([#3049](https://github.com/ditto-assistant/ditto-subnet/pull/3049),
+  [`8505de8`](https://github.com/ditto-assistant/ditto-subnet/commit/8505de811008617b2eb1419138e15aa23aa64c47))
+
+
+## v0.380.0 (2026-10-21)
+
+### Features
+
+- **screener**: Load protected V13 blueprint banks
+  ([#2226](https://github.com/ditto-assistant/ditto-subnet/pull/2226),
+  [`5beb567`](https://github.com/ditto-assistant/ditto-subnet/commit/5beb5678f3e03746fc8591c5af885d31cff45908))
+
+
+## v0.379.2 (2026-10-21)
+
+### Bug Fixes
+
+- **platform**: Synchronize the published screener policy digest
+  ([#3043](https://github.com/ditto-assistant/ditto-subnet/pull/3043),
+  [`a9468ac`](https://github.com/ditto-assistant/ditto-subnet/commit/a9468ac72a69c7b157b8ea07cb94f30af3c97b35))
+
+- **screener**: Keep incomplete reviews parked for manual review
+  ([#3041](https://github.com/ditto-assistant/ditto-subnet/pull/3041),
+  [`1243f13`](https://github.com/ditto-assistant/ditto-subnet/commit/1243f13720e0f2be26fe99bab7695f1b08ea8015))
+
+
+## v0.379.1 (2026-10-21)
+
+### Bug Fixes
+
+- **backroom**: Approve parked screening failures with guarded releases
+  ([#3040](https://github.com/ditto-assistant/ditto-subnet/pull/3040),
+  [`9c6b0c6`](https://github.com/ditto-assistant/ditto-subnet/commit/9c6b0c6588403e491f04b484a294faf67fe94808))
+
+
+## v0.379.0 (2026-10-21)
+
+### Features
+
+- **platform**: Add bounty operator controls and durable pilot evaluation records
+  ([#3024](https://github.com/ditto-assistant/ditto-subnet/pull/3024),
+  [`68778c9`](https://github.com/ditto-assistant/ditto-subnet/commit/68778c9270c7238172097a021fb12c5abd32a3d1))
+
+
+## v0.378.2 (2026-10-21)
+
+### Bug Fixes
+
+- **platform**: Find every identity change in sparse catch-up and prove it replays like the full
+  scan ([#3022](https://github.com/ditto-assistant/ditto-subnet/pull/3022),
+  [`b70c083`](https://github.com/ditto-assistant/ditto-subnet/commit/b70c083eae19a5a5e8b8d84e6e0f0609678d1c6e))
+
+
+## v0.378.1 (2026-10-21)
+
+### Bug Fixes
+
+- **gamma**: Backfill wallet receipts after source audit refusal
+  ([#3039](https://github.com/ditto-assistant/ditto-subnet/pull/3039),
+  [`5ed91e9`](https://github.com/ditto-assistant/ditto-subnet/commit/5ed91e9e78ddbbd059adee75d4a6b61dbf8326a8))
+
+- **treasury**: Publish finalized manual wallet receipts
+  ([#3036](https://github.com/ditto-assistant/ditto-subnet/pull/3036),
+  [`41e3a76`](https://github.com/ditto-assistant/ditto-subnet/commit/41e3a76649c08b3d02f941108f8839c5cf5153e0))
+
+### Chores
+
+- **tests**: Align screener contracts with manual-only CI
+  ([#3038](https://github.com/ditto-assistant/ditto-subnet/pull/3038),
+  [`7d0635f`](https://github.com/ditto-assistant/ditto-subnet/commit/7d0635fbf5ee656ccf728e754ef3cae7ad4687ab))
+
+### Documentation
+
+- **screener**: Require a named applicable instruction for I2 and exclude /seed
+  ([#3019](https://github.com/ditto-assistant/ditto-subnet/pull/3019),
+  [`96182e3`](https://github.com/ditto-assistant/ditto-subnet/commit/96182e3432ba7bb11f42660820ef9a34c3dab2c7))
+
+
+## v0.378.0 (2026-10-20)
+
+### Features
+
+- **platform**: Issue a uniform sandbox memory cap and treat startup SIGILL as host fault
+  ([#3034](https://github.com/ditto-assistant/ditto-subnet/pull/3034),
+  [`50dca25`](https://github.com/ditto-assistant/ditto-subnet/commit/50dca2573e26e543b6b02e3cb19d00d6d7655283))
+
+### Testing
+
+- **ci**: Assert the manual-only standalone CI policy from #3031
+  ([#3035](https://github.com/ditto-assistant/ditto-subnet/pull/3035),
+  [`07bdb8a`](https://github.com/ditto-assistant/ditto-subnet/commit/07bdb8a3a357da6b909de5a1c95dd12a9a672acd))
+
+
+## v0.377.4 (2026-10-20)
+
+### Bug Fixes
+
+- **platform**: Fail over epoch schedule reads to archive RPCs
+  ([#3030](https://github.com/ditto-assistant/ditto-subnet/pull/3030),
+  [`956a425`](https://github.com/ditto-assistant/ditto-subnet/commit/956a425f8d05cc2046208a84f6a4f9882ff5f72b))
+
+
+## v0.377.3 (2026-10-20)
+
+### Bug Fixes
+
+- **treasury**: Read consensus at the v475 upgrade boundary
+  ([#3033](https://github.com/ditto-assistant/ditto-subnet/pull/3033),
+  [`2f7380d`](https://github.com/ditto-assistant/ditto-subnet/commit/2f7380d8f54c3401435dfc2926bde5344a73b4f3))
+
+### Chores
+
+- **ci**: Make standalone checks and previews manual-only
+  ([#3031](https://github.com/ditto-assistant/ditto-subnet/pull/3031),
+  [`a5ee432`](https://github.com/ditto-assistant/ditto-subnet/commit/a5ee432b5c05cdb1c170960184f51e39ab60a2db))
+
+
+## v0.377.2 (2026-10-20)
+
+### Bug Fixes
+
+- **platform**: Resolve payment block hashes through archive RPCs
+  ([#3029](https://github.com/ditto-assistant/ditto-subnet/pull/3029),
+  [`20afc29`](https://github.com/ditto-assistant/ditto-subnet/commit/20afc29123d5a57a075e90e65c6087381e5547e9))
+
+
+## v0.377.1 (2026-10-20)
+
+### Bug Fixes
+
+- **platform**: Prefer existing archive RPCs for treasury reads
+  ([#3023](https://github.com/ditto-assistant/ditto-subnet/pull/3023),
+  [`2523d25`](https://github.com/ditto-assistant/ditto-subnet/commit/2523d25f0f8041bea0321a1b60187286dd85c1ed))
+
+
+## v0.377.0 (2026-10-20)
+
+### Bug Fixes
+
+- **treasury**: Recover custody on audited Finney v481
+  ([#3020](https://github.com/ditto-assistant/ditto-subnet/pull/3020),
+  [`f09877f`](https://github.com/ditto-assistant/ditto-subnet/commit/f09877f83aaf29335f0dd3f7ffd847aa089f1573))
+
+### Features
+
+- **platform**: Configure github contributor oauth deployment
+  ([#3021](https://github.com/ditto-assistant/ditto-subnet/pull/3021),
+  [`3a5bdc9`](https://github.com/ditto-assistant/ditto-subnet/commit/3a5bdc9a322f9a59b0d694c57d7df4c286e84bfc))
+
+
+## v0.376.0 (2026-10-20)
+
+### Bug Fixes
+
+- **platform**: Deliver public dashboard data across slow reads
+  ([#2752](https://github.com/ditto-assistant/ditto-subnet/pull/2752),
+  [`06d0ffc`](https://github.com/ditto-assistant/ditto-subnet/commit/06d0ffcd2de38caf2f95b54cda192017dc1cf0cb))
+
+- **platform**: Keep a validator nonce until its signed request expires
+  ([#2925](https://github.com/ditto-assistant/ditto-subnet/pull/2925),
+  [`c8bb1d9`](https://github.com/ditto-assistant/ditto-subnet/commit/c8bb1d9ba37463a26a407ccee680679ce082b0c7))
+
+- **screener**: Detect sibling draft fallback and record dedupe
+  ([#3016](https://github.com/ditto-assistant/ditto-subnet/pull/3016),
+  [`049d8ac`](https://github.com/ditto-assistant/ditto-subnet/commit/049d8ac5ab7998ee15843d37292942a036e1039f))
+
+### Documentation
+
+- **skills**: File screener and Ditto core tickets on every board sweep
+  ([#3018](https://github.com/ditto-assistant/ditto-subnet/pull/3018),
+  [`a8a4ca1`](https://github.com/ditto-assistant/ditto-subnet/commit/a8a4ca1c80ccd2e9e08779eda201faf1050b731c))
+
+- **validator**: Stop recommending a shared W&B key
+  ([#2666](https://github.com/ditto-assistant/ditto-subnet/pull/2666),
+  [`cd83f34`](https://github.com/ditto-assistant/ditto-subnet/commit/cd83f340db481b939e4037ae17f00cfbb943f8ab))
+
+### Features
+
+- **platform**: Add contributor identity and build bounties
+  ([#2952](https://github.com/ditto-assistant/ditto-subnet/pull/2952),
+  [`b2d7cf9`](https://github.com/ditto-assistant/ditto-subnet/commit/b2d7cf9d102281dab240e9aee2e002092041f52d))
+
+- **platform**: Record artifact language inventory in fingerprint provenance
+  ([#2838](https://github.com/ditto-assistant/ditto-subnet/pull/2838),
+  [`d9e09a4`](https://github.com/ditto-assistant/ditto-subnet/commit/d9e09a4169212624b62ffbf1d9d0c17f4c8b7c75))
+
+- **protocol**: Add report-only private statistical analysis
+  ([#2202](https://github.com/ditto-assistant/ditto-subnet/pull/2202),
+  [`dbe1122`](https://github.com/ditto-assistant/ditto-subnet/commit/dbe1122b607a5ac3a560d51fefe817bc35bf2a5a))
+
+
+## v0.375.1 (2026-10-19)
+
+### Bug Fixes
+
+- **screener**: Prevent decoy padding from hiding review leads
+  ([#3017](https://github.com/ditto-assistant/ditto-subnet/pull/3017),
+  [`6f35997`](https://github.com/ditto-assistant/ditto-subnet/commit/6f35997ba61ec7eaefdd0527262264d592feb090))
+
+
+## v0.375.0 (2026-10-19)
+
+### Bug Fixes
+
+- **platform**: Carry the public crown incumbent through its owner family
+  ([#2849](https://github.com/ditto-assistant/ditto-subnet/pull/2849),
+  [`c99aa1d`](https://github.com/ditto-assistant/ditto-subnet/commit/c99aa1dfb3a544ef68e5292bbd130d1b00a72f09))
+
+### Chores
+
+- **infra**: Authorize Peyton cmux SSH key
+  ([#3013](https://github.com/ditto-assistant/ditto-subnet/pull/3013),
+  [`d1cad84`](https://github.com/ditto-assistant/ditto-subnet/commit/d1cad844bc64d86c08bb76713e5bf0ff68e59809))
+
+### Documentation
+
+- **starter-kit**: Explain v13 same-turn corrections and claim-span normalisation
+  ([#2836](https://github.com/ditto-assistant/ditto-subnet/pull/2836),
+  [`f69cee8`](https://github.com/ditto-assistant/ditto-subnet/commit/f69cee8628a8a3224243b248ccefd41d4185c104))
+
+### Features
+
+- **infra**: Provision read-only screener logs access
+  ([#3014](https://github.com/ditto-assistant/ditto-subnet/pull/3014),
+  [`9783371`](https://github.com/ditto-assistant/ditto-subnet/commit/97833716902ea19f933a71dc7ad6fdd2769401e5))
+
+- **platform**: Record per-axis outlier evidence for ATH escalation
+  ([#2835](https://github.com/ditto-assistant/ditto-subnet/pull/2835),
+  [`b3b9fcd`](https://github.com/ditto-assistant/ditto-subnet/commit/b3b9fcd4f07bd78345a39ad580d491ec3709db56))
+
+
+## v0.374.1 (2026-10-18)
+
+### Performance Improvements
+
+- **platform**: Bound payout resolution per catch-up sweep
+  ([#3012](https://github.com/ditto-assistant/ditto-subnet/pull/3012),
+  [`b198707`](https://github.com/ditto-assistant/ditto-subnet/commit/b198707de8c1f1a1153f26a043c23bcf0d5a95c9))
+
+
+## v0.374.0 (2026-10-18)
+
+### Features
+
+- **platform**: Plan catch-up by reveals and read planned blocks concurrently
+  ([#3011](https://github.com/ditto-assistant/ditto-subnet/pull/3011),
+  [`99c0d2e`](https://github.com/ditto-assistant/ditto-subnet/commit/99c0d2e62176ce045dc090865a891a85330d2d3b))
+
+
+## v0.373.1 (2026-10-18)
+
+### Bug Fixes
+
+- **platform**: Read epoch consensus under the runtime that wrote the state
+  ([#3008](https://github.com/ditto-assistant/ditto-subnet/pull/3008),
+  [`430a634`](https://github.com/ditto-assistant/ditto-subnet/commit/430a634edca57b6a9c67a02b8465b7d697bd02e5))
+
+
+## v0.373.0 (2026-10-18)
+
+### Features
+
+- **screening**: Enforce per-file source limits with a vendored upstream allowlist
+  ([#3002](https://github.com/ditto-assistant/ditto-subnet/pull/3002),
+  [`b4d0cf7`](https://github.com/ditto-assistant/ditto-subnet/commit/b4d0cf76562df6c34dc9a7f219aeb5d3876cccce))
+
+
+## v0.372.3 (2026-10-18)
+
+### Bug Fixes
+
+- **platform**: Keep sparse catch-up across a UID re-registration
+  ([#3006](https://github.com/ditto-assistant/ditto-subnet/pull/3006),
+  [`01caef4`](https://github.com/ditto-assistant/ditto-subnet/commit/01caef42f3456f1b19be8c173fbaff7198d822d2))
+
+
+## v0.372.2 (2026-10-18)
+
+### Bug Fixes
+
+- **platform**: Stop payout resolution before the sweep budget expires
+  ([#3005](https://github.com/ditto-assistant/ditto-subnet/pull/3005),
+  [`1ea4d25`](https://github.com/ditto-assistant/ditto-subnet/commit/1ea4d258ce4c8694c28bdf6d989970f5d61745db))
+
+
+## v0.372.1 (2026-10-18)
+
+### Bug Fixes
+
+- **platform**: Give the reveal-plan shadow its own window after each sweep
+  ([#3004](https://github.com/ditto-assistant/ditto-subnet/pull/3004),
+  [`73cc093`](https://github.com/ditto-assistant/ditto-subnet/commit/73cc0930c59e477b4ae9080298fe17f2ccdccb14))
+
+
+## v0.372.0 (2026-10-18)
+
+### Features
+
+- **platform**: Shadow a reveal-anchored range planner for source-emission catch-up
+  ([#3003](https://github.com/ditto-assistant/ditto-subnet/pull/3003),
+  [`af0c55d`](https://github.com/ditto-assistant/ditto-subnet/commit/af0c55d0e2f174aab3b61241e8c37529d6c4389b))
+
+
+## v0.371.2 (2026-10-18)
+
+### Bug Fixes
+
+- **screener**: Report an L3 safe claim on a truncated dossier as inconclusive
+  ([#2999](https://github.com/ditto-assistant/ditto-subnet/pull/2999),
+  [`29a8f4d`](https://github.com/ditto-assistant/ditto-subnet/commit/29a8f4d5d2f595a4f469b3c2557bb8db1e66de78))
+
+
 ## v0.371.1 (2026-10-18)
 
 ### Bug Fixes

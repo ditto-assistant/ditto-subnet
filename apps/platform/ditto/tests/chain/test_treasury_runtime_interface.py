@@ -146,3 +146,28 @@ def test_outer_call_enum_is_opaque_but_proxy_arguments_are_not() -> None:
     ].append({"name": "force_proxy_type", "type": RUNTIME_CALL})
     changed = runtime_interface(grown, TREASURY_RECEIPT_SURFACE)
     assert base.changed_entries(changed) == ["call:Proxy.proxy"]
+
+
+async def test_receipt_right_after_an_epoch_consensus_upgrade_block_is_read() -> None:
+    """Block 119 stores the new code but was written by the pre-v475 runtime."""
+    old = "0x" + "cd" * 32
+
+    class UpgradeChain(Chain):
+        async def rpc_request(self, method, params):
+            if method == "state_getStorageHash" and params[-1] == h(118):
+                return {"result": old}
+            return await super().rpc_request(method, params)
+
+        async def get_block_metadata(self, **kwargs):
+            if kwargs.get("block_hash") == h(118):
+                return treasury_metadata(epoch_consensus=False)
+            return await super().get_block_metadata(**kwargs)
+
+        async def query(self, **kwargs):
+            # The library decodes block 119 with the writer's metadata.
+            if kwargs["block_hash"] == h(119):
+                raise ValueError('Storage function "SubnetEpochConsensus" not found')
+            return await super().query(**kwargs)
+
+    chain = UpgradeChain(UPGRADE, UPGRADE)
+    assert (await finalized_block(chain, 120, FINNEY_GENESIS))[2] == UPGRADE

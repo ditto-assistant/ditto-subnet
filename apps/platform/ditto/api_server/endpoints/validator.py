@@ -203,11 +203,14 @@ from ditto.api_server.model_use import evaluate_model_use, model_use_policy
 from ditto.api_server.onchain_seed import derive_seed, derive_validator_seed
 from ditto.api_server.outlier_escalation import (
     OUTLIER_ALGORITHM_VERSION,
+    OUTLIER_AXIS_EVIDENCE_KIND,
     OUTLIER_REVIEW_KIND,
+    AxisObservation,
     OutlierEscalationSettings,
     OutlierEscalationSettingsLoad,
     evaluate_score_outlier,
     load_outlier_escalation_settings,
+    public_audit_evidence,
 )
 from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
 from ditto.api_server.queue_policy_settings import (
@@ -369,6 +372,7 @@ from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enable
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+    nonce_expires_at,
 )
 from ditto.db.queries.weight_receipts import (
     WeightReceiptConflict,
@@ -1129,6 +1133,7 @@ async def _evaluate_and_record_outlier_escalation(
     cohort: Sequence[float],
     settings: OutlierEscalationSettings,
     now: datetime,
+    axes: Mapping[str, AxisObservation] | None = None,
 ) -> None:
     """Escalate an out-of-band composite to ATH review (issue #476).
 
@@ -1146,6 +1151,22 @@ async def _evaluate_and_record_outlier_escalation(
     opens the hold. Bench-version scoped so v8-v11 are untouched, and gated on
     ``SCORED`` so a copy / transform-audit hold that already fired this
     transition wins outright (this path never re-holds an already-held agent).
+
+    ``axes`` adds per-axis robust-z evidence to every recorded entry. A
+    per-axis outlier that does not hold under the policy (per-axis
+    enforcement off, or the composite below the floor) is appended as
+    ``OUTLIER_AXIS_EVIDENCE_KIND`` evidence only -- never a hold, never a
+    would-be hold -- in both ``observe`` and ``enforce`` mode.
+
+    The audit chain is public, so its entries carry only the neutral per-axis
+    projection (:func:`public_audit_evidence`: axis name + outlier flag). The
+    full per-axis statistics (value, cohort median/MAD, modified z) are kept
+    only on the private ``ath_reviews`` snapshot, which exists only when an
+    ``enforce`` hold opens. An ``observe`` would-be hold and every
+    ``OUTLIER_AXIS_EVIDENCE_KIND`` entry persist ``{axis, outlier}`` and
+    nothing more, so observe mode records which axes were out of band, not
+    their per-axis z distribution. To see the statistics before enforcing,
+    replay the ledger with the dry-run endpoint (``per_axis_enforce=true``).
     """
     if settings.mode == "off":
         return
@@ -1157,9 +1178,32 @@ async def _evaluate_and_record_outlier_escalation(
         return
 
     decision = evaluate_score_outlier(
-        composite=composite, cohort=cohort, settings=settings
+        composite=composite, cohort=cohort, settings=settings, axes=axes
     )
     if not decision.held:
+        if decision.axis_outliers:
+            # A single axis far out of band while the policy holds nothing:
+            # observe-only evidence on its own audit kind, so the would-be-hold
+            # and hold counts stay exactly the composite policy's.
+            await append_audit_entry(
+                session,
+                agent_id=agent.agent_id,
+                validator_hotkey=None,
+                event=EVENT_AUDIT,
+                payload={
+                    "audit_kind": OUTLIER_AXIS_EVIDENCE_KIND,
+                    "enforced": False,
+                    "qualified": False,
+                    "bench_version": bench_version,
+                    "evidence": public_audit_evidence(decision.evidence),
+                },
+                recorded_at=now,
+            )
+            logger.info(
+                "agent %s: per-axis out-of-band score recorded as evidence: %s",
+                agent.agent_id,
+                ",".join(decision.axis_outliers),
+            )
         # In-band, below the floor, or an insufficient cohort. Rank normally and
         # leave no hold; the "why not" lives in the decision evidence, which is
         # only persisted when a would-be hold fires (below), matching the other
@@ -1181,7 +1225,7 @@ async def _evaluate_and_record_outlier_escalation(
                 "enforced": False,
                 "qualified": True,
                 "bench_version": bench_version,
-                "evidence": decision.evidence,
+                "evidence": public_audit_evidence(decision.evidence),
             },
             recorded_at=now,
         )
@@ -1232,7 +1276,7 @@ async def _evaluate_and_record_outlier_escalation(
             "enforced": True,
             "qualified": True,
             "bench_version": bench_version,
-            "evidence": decision.evidence,
+            "evidence": public_audit_evidence(decision.evidence),
         },
         recorded_at=now,
     )
@@ -2004,9 +2048,9 @@ _ARTIFACT_URL_TTL = timedelta(minutes=5)
 # rationale in ``ditto.api_models.scoring_lease_settings``) governs until an
 # operator writes one and on any failure to read it.
 
-# Signed job claims outside this window are stale. A consumed nonce remains in
-# the database for the same window, making replay rejection consistent across
-# every API replica without introducing another secret.
+# Signed job claims outside this window are stale. A consumed nonce is kept
+# until that window closes, including when the stamp is in the future, so a
+# replica cannot forget the nonce while the signature is still acceptable.
 _JOB_REQUEST_MAX_AGE = timedelta(minutes=2)
 # A leased seed of ``None`` is meaningful (a legacy bundle lease), so "this
 # validator holds no lease" needs a sentinel distinct from it.
@@ -3540,7 +3584,11 @@ async def request_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -3590,6 +3638,12 @@ async def request_job(
                 heartbeat is None
                 or heartbeat.protocol_version < (11 if target_version >= 7 else 10)
                 or not heartbeat_capabilities.ticket_inference
+                # v13+ scores must come from the Platform-issued sandbox memory
+                # cap, not each host's own default.
+                or (
+                    target_version >= 13
+                    and not heartbeat_capabilities.sandbox_memory_limit
+                )
                 or (
                     target_version == 7
                     and (
@@ -5454,7 +5508,11 @@ async def request_top5_confirmation_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -5593,6 +5651,14 @@ async def request_top5_confirmation_job(
                     detail=(
                         f"fresh benchmark v{canonical_version} inference capability "
                         "is required"
+                    ),
+                )
+            if canonical_version >= 13 and not capabilities.sandbox_memory_limit:
+                raise HTTPException(
+                    status_code=428,
+                    detail=(
+                        f"benchmark v{canonical_version} requires the Platform-issued "
+                        "sandbox memory cap; update ditto-subnet"
                     ),
                 )
         (
@@ -6349,7 +6415,11 @@ async def fail_job(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -6680,7 +6750,11 @@ async def agent_artifact(
                 nonce=x_validator_artifact_nonce,
                 validator_hotkey=x_validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=x_validator_artifact_requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as exc:
             raise HTTPException(
@@ -7617,6 +7691,8 @@ async def submit_score(
                 # it on. The cohort is the eligible ledger read above, which is
                 # one row per owner and excludes this still-evaluating
                 # candidate, held agents, and banned agents.
+                # Per-axis evidence: each axis is the median of this agent's
+                # quorum on that axis, against the same eligible ledger's axis.
                 await _evaluate_and_record_outlier_escalation(
                     session,
                     agent=agent,
@@ -7625,6 +7701,18 @@ async def submit_score(
                     cohort=[row.composite for row in eligible],
                     settings=OUTLIER_ESCALATION_SETTINGS,
                     now=audit_now,
+                    axes={
+                        "tool_mean": AxisObservation(
+                            value=statistics.median(s.tool_mean for s in agent_scores),
+                            cohort=[row.tool_mean for row in eligible],
+                        ),
+                        "memory_mean": AxisObservation(
+                            value=statistics.median(
+                                s.memory_mean for s in agent_scores
+                            ),
+                            cohort=[row.memory_mean for row in eligible],
+                        ),
+                    },
                 )
                 deferred_settings = queue_policy.deferred_source_review
                 await _evaluate_and_record_deferred_review(

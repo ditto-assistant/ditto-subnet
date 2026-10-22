@@ -1,3 +1,9 @@
+import {
+  contributorHotkeyInputSchema, githubAccountInputSchema, githubLinkStatusSchema,
+  claStatusSchema, claControlSchema, claSettingsRevisionSchema, claPolicyReadInputSchema, claPolicyWriteInputSchema,
+  claPublishInputSchema, claVersionSchema,
+  githubRevocationReadInputSchema, githubRevocationWriteInputSchema, githubRevocationControlSchema,
+} from '../lib/contributor.schemas'
 import '@tanstack/react-start/server-only'
 import { manualControlSchema } from '../lib/treasury-manual.schemas'
 
@@ -538,10 +544,12 @@ import {
 import {
   PlatformAdminError,
   isPlatformPublicNotFound,
+  operatorProofConfigured,
   platformAdminBinaryRequest,
   platformAdminRequest,
   platformPublicRequest,
 } from './ditto.server'
+import { NothingAppliedError, platformAdminWrite } from './platform-write'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
 import {
   submissionDepositAddressControlSchema,
@@ -864,11 +872,32 @@ export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
   return l2ReportCanaryViewSchema.parse(payload)
 }
 
-export async function fetchCanonicalStarterPreflight() {
+export async function fetchCanonicalStarterPreflight(actor: string) {
   const payload = await platformAdminRequest(
     '/api/v1/admin/screener-l2-report-canaries/fixture/preflight',
   )
-  return canonicalStarterPreflightSchema.parse(payload)
+  const preflight = canonicalStarterPreflightSchema.parse(payload)
+  const backroomConfigured = operatorProofConfigured()
+  let match: 'not_verified' | 'verified' | 'rejected' | 'unavailable' = 'not_verified'
+  if (backroomConfigured && preflight.operator_proof_configured === true) {
+    try {
+      const proof = await platformAdminRequest(
+        '/api/v1/admin/screener-l2-report-canaries/fixture/operator-proof/preflight',
+        { method: 'POST', actor, operatorProof: true, body: {} },
+      )
+      z.object({ verified: z.literal(true) }).parse(proof)
+      match = 'verified'
+    } catch (error) {
+      if (error instanceof PlatformAdminError && error.status === 403) match = 'rejected'
+      else match = 'unavailable'
+    }
+  }
+  return {
+    ...preflight,
+    backroom_operator_proof_configured: backroomConfigured,
+    operator_proof_match: match,
+    can_schedule: preflight.can_schedule && match === 'verified',
+  }
 }
 
 export async function registerCanonicalStarter(rawInput: unknown, actor: string) {
@@ -1805,6 +1834,9 @@ export async function fetchOutlierEscalationDryRun(rawInput: unknown = {}) {
   if (input.minCompositeFloor !== undefined) {
     params.set('min_composite_floor', String(input.minCompositeFloor))
   }
+  if (input.perAxisEnforce !== undefined) {
+    params.set('per_axis_enforce', String(input.perAxisEnforce))
+  }
   const payload = await platformAdminRequest(
     `/api/v1/admin/outlier-escalation/dry-run?${params.toString()}`,
     { retries: 1 },
@@ -2325,6 +2357,8 @@ function toPlatformBatchDecision(decision: {
   quarantineId: string
   expectedAgentId: string
   expectedArtifactSha256: string
+  expectedAttemptId?: string
+  expectedScoreCount?: number
   resolution: 'release' | 'rescreen' | 'reject'
   reason: string
 }) {
@@ -2332,6 +2366,8 @@ function toPlatformBatchDecision(decision: {
     quarantine_id: decision.quarantineId,
     expected_agent_id: decision.expectedAgentId,
     expected_artifact_sha256: decision.expectedArtifactSha256,
+    expected_attempt_id: decision.expectedAttemptId,
+    expected_score_count: decision.expectedScoreCount,
     resolution: decision.resolution,
     reason: decision.reason,
   }
@@ -2987,15 +3023,13 @@ export async function fetchValidationRetry(rawInput: unknown) {
 
 export async function retryValidation(rawInput: unknown, actor: string) {
   const input = retryValidationInputSchema.parse(rawInput)
-  const requestId = await deriveRequestId('validation-retry', [
-    input.agentId,
-    actor,
-    input.reason,
-    input.expectedSnapshot,
-  ])
+  const identity = [input.agentId, actor, input.reason, input.expectedSnapshot]
+  if (input.targetValidatorHotkey) identity.push(input.targetValidatorHotkey)
+  const requestId = await deriveRequestId('validation-retry', identity)
   type RetryRequest = PlatformOperations['retry_validation_after_infrastructure_failure_api_v1_admin_validation_retries__agent_id__retry_post']['requestBody']['content']['application/json']
+  const action = input.targetValidatorHotkey ? 'retry-targeted' : 'retry'
   const payload = await platformAdminRequest(
-    `/api/v1/admin/validation-retries/${encodeURIComponent(input.agentId)}/retry`,
+    `/api/v1/admin/validation-retries/${encodeURIComponent(input.agentId)}/${action}`,
     {
       method: 'POST',
       actor,
@@ -3004,6 +3038,9 @@ export async function retryValidation(rawInput: unknown, actor: string) {
         expected_snapshot: input.expectedSnapshot,
         reason: input.reason,
         acknowledge_provider_outage: input.acknowledgeProviderOutage,
+        ...(input.targetValidatorHotkey
+          ? { target_validator_hotkey: input.targetValidatorHotkey }
+          : {}),
       } satisfies RetryRequest,
     },
   )
@@ -4139,4 +4176,183 @@ export async function authorizeConversationRetry(actor: string, rawInput: unknow
     method: 'POST', body: { ...input, actor }, actor,
   })
   return conversationObservationsSchema.parse(payload)
+}
+
+// Contributor identity and default-off CLA rollout.
+export async function fetchGithubRevocationPreflight(rawInput: unknown) {
+  const input = githubRevocationReadInputSchema.parse(rawInput)
+  return githubRevocationControlSchema.parse(await platformAdminRequest(`/api/v1/admin/github-links/${input.linkId}`))
+}
+
+export async function revokeMinerGithubLink(actor: string, rawInput: unknown) {
+  const input = githubRevocationWriteInputSchema.parse(rawInput)
+  type Body = PlatformOperations['revoke_github_link_api_v1_admin_github_links__link_id__revoke_post']['requestBody']['content']['application/json']
+  const body = { reason: input.reason, confirmation: input.confirmation } satisfies Body
+  const outcome = await platformAdminWrite<z.infer<typeof githubRevocationControlSchema>>(`/api/v1/admin/github-links/${input.linkId}/revoke`, { actor, body }, {
+    parse: (payload) => githubRevocationControlSchema.safeParse(payload).data ?? null,
+    readBack: async () => {
+      const control = await fetchGithubRevocationPreflight({ linkId: input.linkId })
+      const audit = control.operator_revocation
+      if (!control.link.revoked_at) return { state: 'absent' }
+      // Platform records the stripped header actor; a revocation is terminal.
+      if (audit && audit.actor === actor.trim() && audit.reason === input.reason) return { state: 'applied', value: control }
+      return { state: 'superseded', detail: audit ? `The link was already revoked by ${audit.actor}` : 'The link was already unlinked by its miner' }
+    },
+    retryHint: 'retry with the same input.',
+  })
+  if (outcome.state === 'committed') return outcome.value
+  throw new Error(
+    `The GitHub link revocation may have committed (${outcome.reason}). Retry revoke_miner_github_link with the ` +
+      'same input: an already applied revocation is returned, not repeated.',
+    { cause: outcome.cause },
+  )
+}
+
+export async function fetchMinerGithubLink(rawInput: unknown) {
+  const input = contributorHotkeyInputSchema.parse(rawInput)
+  return githubLinkStatusSchema.parse(await platformAdminRequest(`/api/v1/public/github-link/${encodeURIComponent(input.hotkey)}`))
+}
+
+export async function fetchGithubContributor(rawInput: unknown) {
+  const input = githubAccountInputSchema.parse(rawInput)
+  const identity = githubLinkStatusSchema.parse(await platformAdminRequest(`/api/v1/public/github-account/${input.githubUserId}`))
+  if (!identity.link) return { ...identity, cla: null, cla_error: null }
+  // Keep the resolved identity visible when only the consent read fails.
+  try {
+    return { ...identity, cla: await fetchMinerClaStatus({ hotkey: identity.link.hotkey }), cla_error: null }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    return { ...identity, cla: null, cla_error: `Identity resolved, but reading CLA status failed: ${reason}` }
+  }
+}
+
+export async function fetchMinerClaStatus(rawInput: unknown) {
+  const input = contributorHotkeyInputSchema.parse(rawInput)
+  return claStatusSchema.parse(await platformAdminRequest(`/api/v1/public/cla/status/${encodeURIComponent(input.hotkey)}`))
+}
+
+export async function fetchClaPolicy(rawInput: unknown = {}) {
+  const input = claPolicyReadInputSchema.parse(rawInput)
+  const query = new URLSearchParams({ history_limit: String(input.historyLimit), history_offset: String(input.historyOffset) })
+  return claControlSchema.parse(await platformAdminRequest(`/api/v1/admin/cla/settings?${query}`))
+}
+
+/** Platform's contributor_cla.CLA_POLICY_BUSY_MESSAGE, raised before any write. */
+const CLA_POLICY_BUSY_MESSAGE = 'CLA policy is busy with in-flight uploads'
+
+function claPolicyBusy(error: PlatformAdminError) {
+  return error.status === 503 && error.message.startsWith(CLA_POLICY_BUSY_MESSAGE)
+}
+
+type ClaControl = z.infer<typeof claControlSchema>
+type ClaSettingsRevision = z.infer<typeof claSettingsRevisionSchema>
+
+/** Read CLA settings revision `target` with the current policy.
+ *
+ * History is newest-first and starts at the current revision, so the target's
+ * offset is exact while no other revision commits between reads. When one
+ * does, the next page is anchored to the newer current revision.
+ */
+async function readClaRevision(target: number): Promise<{ policy: ClaControl; row: ClaSettingsRevision | null }> {
+  let policy = await fetchClaPolicy()
+  for (let anchor = 0; anchor < 3; anchor += 1) {
+    const found = [policy.current, ...policy.history].find((item) => item.revision === target)
+    if (found || policy.current.revision < target) return { policy, row: found ?? null }
+    const page = await fetchClaPolicy({ historyLimit: 1, historyOffset: policy.current.revision - target })
+    const row = [page.current, ...page.history].find((item) => item.revision === target)
+    if (row) return { policy, row }
+    if (page.current.revision === policy.current.revision) break
+    policy = page
+  }
+  return { policy, row: null }
+}
+
+export async function updateClaPolicy(actor: string, rawInput: unknown) {
+  const input = claPolicyWriteInputSchema.parse(rawInput)
+  type Body = PlatformOperations['set_policy_api_v1_admin_cla_settings_post']['requestBody']['content']['application/json']
+  const body = { expected_revision: input.expectedRevision, mode: input.mode, reason: input.reason, confirmation: input.confirmation } satisfies Body
+  // The revision guard makes this write recognisable: only one revision can
+  // follow expectedRevision, so its actor, mode and reason say whose it is.
+  const target = input.expectedRevision + 1
+  const isThisWrite = (row: ClaSettingsRevision) => row.actor === actor.trim() && row.mode === input.mode && row.reason === input.reason
+  let observed: ClaControl | null = null
+  const outcome = await platformAdminWrite<ClaSettingsRevision>('/api/v1/admin/cla/settings', { actor, body }, {
+    parse: (payload) => claSettingsRevisionSchema.safeParse(payload).data ?? null,
+    readBack: async () => {
+      const read = await readClaRevision(target)
+      observed = read.policy
+      if (!read.row) return { state: 'absent' }
+      if (isThisWrite(read.row)) return { state: 'applied', value: read.row }
+      return { state: 'superseded', detail: `Revision ${target} was already written by ${read.row.actor}` }
+    },
+    refusedBeforeWrite: claPolicyBusy,
+    retryHint: 'retry with the same expectedRevision.',
+  })
+  let applied: ClaSettingsRevision | null = outcome.state === 'committed' ? outcome.value : null
+  const uncertain = `The CLA policy write may have committed (${outcome.state === 'unknown' ? outcome.reason : ''})`
+  let policy: ClaControl | null = observed
+  if (applied || !policy) {
+    try {
+      if (applied) {
+        policy = await fetchClaPolicy()
+      } else {
+        // The read-back failed before it saw the policy. A later read that
+        // finds this write still reports it as a commit.
+        const read = await readClaRevision(target)
+        policy = read.policy
+        if (read.row && isThisWrite(read.row)) applied = read.row
+        else if (read.row) {
+          // Only one revision can follow expectedRevision, and it is not this write's.
+          throw new NothingAppliedError(`Revision ${target} was already written by ${read.row.actor}, so this write cannot have applied.`)
+        }
+      }
+    } catch (error) {
+      if (error instanceof NothingAppliedError) throw error
+      const status = applied ? `CLA policy revision ${applied.revision} was committed` : uncertain
+      return { applied, policy: null, refresh_error: `${status}, but reading the refreshed policy failed; call get_cla_policy.` }
+    }
+  }
+  return {
+    applied,
+    policy,
+    refresh_error: applied
+      ? null
+      : `${uncertain}. Retry with the same input: once revision ${target} is visible, a retry returns it instead of failing.`,
+  }
+}
+
+export async function publishClaVersion(actor: string, rawInput: unknown) {
+  const input = claPublishInputSchema.parse(rawInput)
+  type Body = PlatformOperations['publish_api_v1_admin_cla_versions_post']['requestBody']['content']['application/json']
+  const body = { version: input.version, sha256: input.sha256, text: input.text, effective_at: input.effectiveAt,
+    reason: input.reason, confirmation: input.confirmation } satisfies Body
+  const outcome = await platformAdminWrite<z.infer<typeof claVersionSchema>>('/api/v1/admin/cla/versions', { actor, body }, {
+    parse: (payload) => claVersionSchema.safeParse(payload).data ?? null,
+    readBack: async () => {
+      // Versions are immutable: a row with this digest and date is this write.
+      const existing = await readPublishedClaVersion(input.version)
+      if (!existing) return { state: 'absent' }
+      if (existing.sha256 === input.sha256 && Date.parse(existing.effective_at) === Date.parse(input.effectiveAt)) {
+        return { state: 'applied', value: existing }
+      }
+      return { state: 'superseded', detail: `CLA version ${input.version} is already published with a different digest or effective date` }
+    },
+    refusedBeforeWrite: claPolicyBusy,
+    retryHint: 'retry with the same input.',
+  })
+  if (outcome.state === 'committed') return outcome.value
+  throw new Error(
+    `The CLA version ${input.version} publish may have committed (${outcome.reason}). Retry publish_cla_version with ` +
+      'the same input: an already committed publication is returned, not duplicated.',
+    { cause: outcome.cause },
+  )
+}
+
+async function readPublishedClaVersion(version: number) {
+  try {
+    return claVersionSchema.parse(await platformAdminRequest(`/api/v1/public/cla/versions/${version}`))
+  } catch (error) {
+    if (error instanceof PlatformAdminError && error.status === 404) return null
+    throw error
+  }
 }

@@ -15,6 +15,61 @@ from ditto.treasury.service_allocation import ServiceDestination
 
 
 class Migration(unittest.TestCase):
+    def test_v478_to_v481_reapproval_cannot_change_financial_authority(self):
+        from ditto_screening_protocol.collector_receipts import (
+            AUDITED_COLLECTOR_CODE_HASH,
+            V478_COLLECTOR_CODE_HASH,
+            V479_READONLY_CODE_HASH,
+        )
+
+        old = replace(self.new, runtime_code_hash=V478_COLLECTOR_CODE_HASH)
+        new = replace(
+            old,
+            revision=old.revision + 1,
+            runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH,
+        )
+        m.policy_transition(old, new)
+        for changed in (
+            replace(new, max_distribution_rao=2_500_000_000_000),
+            replace(new, max_fee_rao=new.max_fee_rao + 1),
+            replace(new, runtime_code_hash=V479_READONLY_CODE_HASH),
+            replace(new, revision=old.revision),
+            replace(new, start_block=old.start_block + 1),
+        ):
+            with self.assertRaises(ValueError):
+                m.policy_transition(old, changed)
+
+    def test_v481_to_v482_reapproval_cannot_change_financial_authority(self):
+        from ditto_screening_protocol.collector_receipts import (
+            AUDITED_COLLECTOR_CODE_HASH,
+            V479_READONLY_CODE_HASH,
+            V481_COLLECTOR_CODE_HASH,
+        )
+
+        old = replace(self.new, runtime_code_hash=V481_COLLECTOR_CODE_HASH)
+        new = replace(
+            old,
+            revision=old.revision + 1,
+            runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH,
+        )
+        m.policy_transition(old, new)
+        for changed in (
+            replace(new, max_distribution_rao=2_500_000_000_000),
+            replace(new, max_fee_rao=new.max_fee_rao + 1),
+            replace(new, runtime_code_hash=V479_READONLY_CODE_HASH),
+            replace(new, revision=old.revision),
+            replace(new, revision=old.revision + 2),
+            replace(new, start_block=old.start_block + 1),
+        ):
+            with self.assertRaises(ValueError):
+                m.policy_transition(old, changed)
+        # Reverse and same-runtime transitions stay refused.
+        with self.assertRaises(ValueError):
+            m.policy_transition(
+                new,
+                replace(old, revision=new.revision + 1),
+            )
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()

@@ -521,3 +521,152 @@ artifact-fetch audit row per agent read (`admin.get_lineage_source_diff` or
 The source readers publish their agent ids as plain `format: uuid` rather than
 zod's long uuid regex, also for the byte budget. Each service function still
 parses its input with the strict uuid schema before calling Platform.
+
+
+## Build bounties
+
+The build-bounty tools (#2942) operate the v1 workflow: signed revisions, paid
+slots, exact-commit review, appeals, and settlement records. v1 runs in
+rehearsal funding only: fees and transfers are simulated, and no funds move.
+
+**Reads** (`backroom:read`, change nothing):
+
+- `get_bounty_board`: each bounty's current terms, effective slot counts, claims
+  pause, overdue reviews and recorded awards. Filter by `repo` and `issue`.
+- `get_bounty`: one bounty with everything public views hide: the reviewer in
+  force, each revision's operator and reason, every claim, appeal statements,
+  every `evaluation` record with its operator, and a chronological `audit` of
+  every operator record with its actor and reason. Its `report` is a
+  source-safe account of the bounty's fees, awards, transfers, reviews,
+  appeals, each accepted claim's delivery, integration and receipts, and the
+  current evaluation, with settlement checks that should all pass; the
+  [operator runbook](../../../docs/bounty-operations.md#read-the-report)
+  explains each field. Read it before a write and to verify one after.
+- `get_bounty_claim`: one claim's hold, receipts, submissions and decisions,
+  appeals, obligations (with derived settlement state and transfers) and facts.
+- `get_bounty_queue`: `queue=reviews` lists submissions awaiting a decision,
+  most overdue first; `queue=settlement` lists obligations still needing an
+  operator, with who approved the current round; `queue=appeals` lists
+  undecided appeals, the longest waiting first, each with its bounty, claim,
+  the event it appeals and the appellant's private statement.
+- `get_bounty_payout_policy`: the approval thresholds in force, or `null`. Pass
+  `revision` to read that exact revision; a write's read-back uses it to find
+  its own revision however many followed it.
+- `preview_bounty_revision`: the exact digest, the confirmation phrase and every
+  refusal for proposed terms. It is a POST but writes nothing.
+
+**Writes** (`backroom:write`, each with its exact confirmation phrase):
+
+| Tool | What it records |
+|---|---|
+| `publish_bounty_revision` | revision `expectedRevision + 1`; revision 1 opens three slots |
+| `set_bounty_claims_paused` | pause or resume new holds; paid holds still complete |
+| `review_bounty_submission` | the reviewer in force decides one exact submission |
+| `reassign_bounty_reviewer` | a new reviewer; overdue reviews get one more window |
+| `control_bounty_slot` | cancel (refunds a paid fee) or reopen (retains a final one; a rejected or expired slot after its 3-day appeal window) |
+| `decide_bounty_appeal` | uphold (fresh delivery window) or deny; never by its reviewer |
+| `award_bounty_claim` | an award on accepted work, within the pool its claim signed |
+| `set_bounty_payout_policy` | a new revision of the approval thresholds |
+| `approve_bounty_obligation` | one approval binding payee, amount and policy revision |
+| `dispatch_bounty_obligation` | one dispatch of an approved round |
+| `reconcile_bounty_transfer` | the settled outcome of a dispatched or uncertain transfer |
+| `record_bounty_fact` | a public merge, deployment or adoption fact |
+| `record_bounty_evaluation` | an estimate or actual of one evaluation metric, superseding the entry `expectedEntryId` names |
+| `decide_bounty_evaluation` | expand, revise or stop the pilot, with integration status and reasons, superseding `expectedDecisionId` |
+
+Every write follows the outcome rule below (`src/server/platform-write.ts`).
+Each read-back recognises the exact record its write creates (your revision,
+review, award, approval, transfer round, fact, the evaluation record after the
+one you named, or your audit entry), so an unknown outcome is safe to retry
+with the same input. Never resend a dispatch
+whose transfer is recorded: reconcile it. Money moves only through approved,
+dispatched transfers; awards, refunds and facts record facts and move nothing.
+An award's approval and dispatch are refused with `payout held` while the claim
+hotkey's finalized owner is not the payee of record; the refusal names both
+coldkeys. Fee refunds return to the coldkey that paid and are never held. An
+amount above the payout policy's limit reads `over_policy_limit` until a policy
+revision raises it. Dispatch and reconcile require an explicit
+`rehearsalOutcome` in rehearsal, and every reconciliation is recorded in the
+audit (`transfer_reconciled`) with its operator.
+
+The catalog publishes compact input schemas (ids as `format: uuid`, terms as an
+object) for its byte budget; each service function parses its input strictly.
+
+## Contributor identity and CLA
+
+`get_miner_github_link` reads an active OAuth-verified numeric GitHub id and its
+signed hotkey link. `get_github_contributor_status` resolves a numeric PR author
+id to its linked hotkey and current CLA status; logins alone are not identity.
+If only the CLA read fails, it still returns the identity with `cla: null` and
+a `cla_error` naming the failure, which never means unsigned.
+`get_miner_cla_status` reads the effective version and exact consent receipt.
+These are identity/consent evidence, never payment routing or bounty awards.
+
+`get_cla_policy` reads the audited off/shadow/enforce mode, paged history,
+effective version and signed/unsigned adoption. Its active-hotkey basis is
+non-rejected, non-banned, non-retired submissions, not chain registrations. All reads use
+`backroom:read`. `set_cla_policy` and `publish_cla_version` require
+`backroom:write`, the account's live write level, exact confirmation and the
+signed-in operator's audit identity. Publication preserves exact UTF-8 text and
+SHA-256 and never activates enforcement. Maintain approved versioned text in
+`docs/legal`; never publish a test fixture or draft legal wording.
+### Write outcomes
+
+`set_cla_policy`, `publish_cla_version` and `revoke_miner_github_link` share
+one outcome rule (`src/server/platform-write.ts`), so none of them reports a
+possible commit as a failure or a definite refusal as a possible commit:
+
+- **Applied:** Platform answered 2xx, or the write was found by reading its
+  target back. The tool returns the committed result.
+- **Nothing applied:** the request never reached Platform (configuration,
+  invalid URL or header, or no connection), Platform refused it (auth or
+  4xx), Platform refused it before
+  writing (the 503 "CLA policy is busy with in-flight uploads"), or the read-
+  back shows a different write already holds the target (another operator's
+  revision `expectedRevision + 1`, a different text for the version, or a link
+  revoked by someone else). The error says so.
+- **Unknown:** a timeout, 5xx, lost connection or redirect after sending
+  (writes never follow one), and the write is not visible yet (Platform may still commit it) or could not be read
+  back. `set_cla_policy` returns `applied: null`, the observed `policy` and a
+  `refresh_error`; the other two fail with "may have committed".
+
+In every unknown case, retry with the same input. Each write is recognisable
+on read-back (the revision that follows `expectedRevision` with your actor,
+mode and reason; the version with your digest and effective date; your
+revocation audit), so a retry that meets its own earlier commit returns it
+instead of failing, including when Platform answers that retry with 409.
+
+When enforcement is on, new versions require at least 24 hours notice.
+`get_cla_policy` returns `minimum_enforced_notice_seconds` and
+`earliest_enforced_effective_at`; the publication transaction rechecks that
+deadline under the policy lock. Turning enforcement on requires the same notice:
+the current version must have been published at least 24 hours earlier, and
+each scheduled version at least 24 hours before its effective date.
+`earliest_enforcement_at` reports the earliest allowed switch (null while
+enforcing or before an effective version exists), and `set_cla_policy` rechecks
+it under the policy lock.
+
+For a hostile or compromised identity link, read
+`get_github_link_revocation_preflight` with the exact `linkId`. It returns the
+original proof, current blocker, confirmation and any operator recovery audit.
+`revoke_miner_github_link` requires `backroom:write`, an operator reason and
+`REVOKE GITHUB LINK {linkId}`. It records the signed-in operator in append-only
+history, preserves the miner's original signature, and frees the account for a
+fresh OAuth-verified link. Stale targets cannot revoke a replacement link.
+Revocation does not change payments or previously accepted submissions.
+
+Manual source approval of a parked `screening_failed` submission uses the existing
+`preview_screening_quarantine_batch` / `execute_screening_quarantine_batch` flow:
+select its latest resolved `rescreen` quarantine, `resolution: release`, and supply
+`expectedAttemptId` and `expectedScoreCount` from its current quarantine context
+(`agent.score_count`). Agent UUID and artifact SHA guards remain mandatory. Preview
+and the locked write share the same checks: the quarantine belongs to the latest
+failed/expired attempt for the artifact, its start time is unambiguous, counts
+match, and no pending retry grant, screening, source
+review or image/runtime build is active. The actor-bound preview signs both new
+guards. Approval appends a manual release ruling and preserves failed attempts,
+prior resolutions, scores and dataset pins. It enters ordinary build, health and
+validation gates without rerunning deep source review or granting a paid retry.
+The review console exposes this release action on the resolved quarantine when its
+submission is still `screening_failed`; older Platform contexts without score
+counts fail closed. Inconclusive reviews alone do not establish a policy violation.

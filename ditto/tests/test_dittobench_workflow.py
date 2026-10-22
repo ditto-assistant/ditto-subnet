@@ -1,10 +1,22 @@
 import re
+import tomllib
+from fnmatch import fnmatch
 from pathlib import Path
 
 import yaml
 
 WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/dittobench.yml"
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
+COMPONENTS_PATH = Path(__file__).parents[2] / "release/components.toml"
+
+
+def _release_component_for(path: str) -> str | None:
+    """The release-graph component whose paths cover ``path``, if any."""
+    components = tomllib.loads(COMPONENTS_PATH.read_text())["components"]
+    for name, component in components.items():
+        if any(fnmatch(path, pattern) for pattern in component.get("paths", [])):
+            return name
+    return None
 
 
 def _step(steps: list[dict], name: str) -> dict:
@@ -17,9 +29,17 @@ def test_dittobench_workflow_uses_monorepo_contexts_without_repinning() -> None:
     jobs = workflow["jobs"]
 
     assert "repin" not in text.lower()
-    assert "services/dittobench-api/**" in text
-    assert "research/dittobench-datagen/**" in text
-    assert "packages/ditto-screening-protocol/ditto_screening_protocol/data/**" in text
+    # Standalone verification is operator-dispatched (SN-120); the release
+    # graph, not a PR path filter, decides which changes are verified.
+    # safe_load reads the bare ``on`` key as YAML 1.1 boolean True.
+    assert set(workflow[True]) == {"workflow_dispatch"}
+    assert (
+        _release_component_for("services/dittobench-api/cmd/x.go") == "dittobench_api"
+    )
+    assert (
+        _release_component_for("research/dittobench-datagen/universe/x.go")
+        == "dittobench_datagen"
+    )
 
     for job_name in ("docker-build", "provenance"):
         build = next(
@@ -100,15 +120,14 @@ def test_validator_executable_set_tracks_the_scorer_advertisement() -> None:
     )
 
 
-def test_every_dittobench_surface_triggers_ci() -> None:
-    text = WORKFLOW_PATH.read_text()
+def test_every_dittobench_surface_is_in_the_release_graph() -> None:
     for path in (
         "services/dittobench-api/Dockerfile.egress-proxy",
         "services/dittobench-api/integrations/longmemeval/longmemeval_adapter.py",
         "services/dittobench-api/scripts/calibrate.sh",
         "services/dittobench-api/calibration/token-efficiency-v5/contract.json",
     ):
-        # A single service-wide filter intentionally covers all current and
-        # future API, research, integration, and image-build inputs.
+        # Every scorer input belongs to the dittobench_api release component,
+        # whose release gate verifies it now that PR checks are manual-only.
         assert path.startswith("services/dittobench-api/")
-        assert "services/dittobench-api/**" in text
+        assert _release_component_for(path) == "dittobench_api"

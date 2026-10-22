@@ -492,6 +492,32 @@ describe('ScreeningQuarantinePanel', () => {
     expect(screen.queryByText('All screening outcomes')).toBeNull()
   })
 
+  it('offers manual approval for a parked failure with fresh attempt and score guards', async () => {
+    const parked: ScreeningQuarantine = {
+      ...quarantine, status: 'resolved', resolution: 'rescreen', agent_status: 'screening_failed',
+    }
+    vi.mocked(getScreeningQuarantineContext).mockResolvedValue({
+      ...quarantineContext, quarantine: parked,
+      agent: { ...quarantineContext.agent, agent_status: 'screening_failed', score_count: 1 },
+      attempts: [{ ...quarantineContext.attempts[0], status: 'expired' }],
+    })
+    vi.mocked(previewScreeningQuarantineDecisions).mockRejectedValue(new Error('test preview reached'))
+    render(<ScreeningQuarantinePanel initialItems={[parked]} initialSubmissions={[submission]} readOnly={false} />)
+    expect(screen.getByText('Approve after manual source review')).toBeTruthy()
+    expect(screen.queryByLabelText('Rescreen with current rules')).toBeNull()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Miner-visible reason' }), {
+      target: { value: 'Manually reviewed seed notes and original evidence retention' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview release' }))
+    await waitFor(() => expect(previewScreeningQuarantineDecisions).toHaveBeenCalledWith({
+      data: { decisions: [{
+        quarantineId: quarantine.quarantine_id, expectedAgentId: quarantine.agent_id,
+        expectedArtifactSha256: quarantine.artifact_sha256, expectedAttemptId: quarantine.attempt_id,
+        expectedScoreCount: 1, resolution: 'release', reason: 'Manually reviewed seed notes and original evidence retention',
+      }] },
+    }))
+  })
+
   it('previews a per-item batch before executing it', async () => {
     const second = {
       ...quarantine,

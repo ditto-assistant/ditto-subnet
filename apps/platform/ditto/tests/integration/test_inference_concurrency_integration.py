@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -45,6 +45,7 @@ from ditto.db.queries.inference import (
     ensure_inference_grant,
     revoke_ticket_inference,
 )
+from ditto.tests.pgharness import truncate_test_tables
 
 pytestmark = pytest.mark.integration
 
@@ -194,7 +195,7 @@ async def _seed_grant(maker, *, validator_hotkey: str, config) -> tuple[UUID, st
 
 async def _clean(maker) -> None:
     async with maker() as session, session.begin():
-        await session.execute(text("TRUNCATE TABLE agents CASCADE"))
+        await truncate_test_tables(session, "agents")
 
 
 async def test_reservations_on_different_grants_are_not_serialized() -> None:

@@ -68,6 +68,8 @@ paths = [
   "ditto/api_models/__init__.py",
   "ditto/api_models/agent_status.py",
   "ditto/api_models/attestation.py",
+  "ditto/api_models/bounty.py",
+  "ditto/api_models/contributor_identity.py",
   "ditto/api_models/health.py",
   "ditto/api_models/miner_avatar.py",
   "ditto/api_models/miner_ditto_link.py",

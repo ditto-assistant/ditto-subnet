@@ -1,28 +1,9 @@
 name: DittoBench
 
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - services/dittobench-api/**
-      - research/dittobench-datagen/**
-      - packages/ditto-screening-protocol/ditto_screening_protocol/data/**
-      - packages/dittobench-coding-contract/**
-      - scripts/generate_confirmation_installation.py
-      - docker-compose.yml
-      - Dockerfile.sandbox-docker
-      - scripts/sandbox-docker-entrypoint.sh
-      - scripts/test-validator-embedding-gateway.sh
-      - scripts/test-coding-python-driver.sh
-      - scripts/test-coding-compiled-bootstrap.sh
-      - scripts/test-coding-rust-bridge.sh
-      - scripts/test-coding-rust-driver.sh
-      - scripts/test-coding-go-build.sh
-      - scripts/test-coding-go-driver.sh
-      - scripts/test-coding-node-driver.sh
-      - scripts/test-coding-node-confinement.sh
-      - .github/workflows/dittobench.yml
-
 concurrency:
   group: dittobench-${{ github.ref }}
   cancel-in-progress: true

@@ -2409,6 +2409,8 @@ func TestNormalizeV9ReasoningStrategy(t *testing.T) {
 		{name: "nested low", body: `{"reasoning":{"effort":"low"}}`, wantEffort: "low"},
 		{name: "nested medium", body: `{"reasoning":{"effort":"medium"}}`, wantEffort: "medium"},
 		{name: "nested high", body: `{"reasoning":{"effort":"high"}}`, wantEffort: "high"},
+		{name: "pinned privacy low", body: `{"reasoning":{"effort":"low","exclude":true}}`, wantEffort: "low"},
+		{name: "pinned privacy high", body: `{"reasoning":{"effort":"high","exclude":true}}`, wantEffort: "high"},
 		{name: "equal aliases", body: `{"reasoning":{"effort":"high"},"reasoning_effort":"high"}`, wantEffort: "high"},
 		{name: "conflicting aliases prefer nested", body: `{"reasoning":{"effort":"high"},"reasoning_effort":"low"}`, wantEffort: "high"},
 	}
@@ -2436,6 +2438,25 @@ func TestNormalizeV9ReasoningStrategy(t *testing.T) {
 	}
 }
 
+func TestNormalizeV13PinnedReasoningPrivacy(t *testing.T) {
+	body := []byte(`{"model":"stale","messages":[{"role":"user","content":"synthetic request"}],"temperature":0,"seed":7,"max_tokens":8000,"reasoning":{"effort":"medium","exclude":true}}`)
+	got, err := normalizeChatRequest(body, llm.V7HarnessModel, protocol.BenchVersionV13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	reasoning := decoded["reasoning"].(map[string]any)
+	if len(reasoning) != 2 || reasoning["effort"] != "medium" || reasoning["exclude"] != true {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+	if decoded["model"] != llm.V7HarnessModel || decoded["temperature"] != float64(0) || decoded["seed"] != float64(7) {
+		t.Fatalf("request fields changed: %#v", decoded)
+	}
+}
+
 func TestNormalizeV9ReasoningRejectsInvalidAndConflictingInputs(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2452,7 +2473,12 @@ func TestNormalizeV9ReasoningRejectsInvalidAndConflictingInputs(t *testing.T) {
 		{name: "empty nested", body: `{"reasoning":{}}`, want: "invalid reasoning"},
 		{name: "unknown nested", body: `{"reasoning":{"effort":"minimal"}}`, want: "invalid reasoning effort"},
 		{name: "boolean nested", body: `{"reasoning":{"effort":true}}`, want: "invalid reasoning effort"},
-		{name: "caller exclude", body: `{"reasoning":{"effort":"medium","exclude":true}}`, want: "invalid reasoning"},
+		{name: "caller exposes reasoning", body: `{"reasoning":{"effort":"medium","exclude":false}}`, want: "invalid reasoning"},
+		{name: "null privacy", body: `{"reasoning":{"effort":"medium","exclude":null}}`, want: "invalid reasoning"},
+		{name: "string privacy", body: `{"reasoning":{"effort":"medium","exclude":"true"}}`, want: "invalid reasoning"},
+		{name: "numeric privacy", body: `{"reasoning":{"effort":"medium","exclude":1}}`, want: "invalid reasoning"},
+		{name: "privacy without effort", body: `{"reasoning":{"exclude":true}}`, want: "invalid reasoning"},
+		{name: "pinned privacy with provider control", body: `{"reasoning":{"effort":"medium","exclude":true,"enabled":true}}`, want: "invalid reasoning"},
 		{name: "caller enabled", body: `{"reasoning":{"effort":"medium","enabled":true}}`, want: "invalid reasoning"},
 		{name: "caller budget", body: `{"reasoning":{"effort":"medium","max_tokens":1}}`, want: "invalid reasoning"},
 	}
@@ -2555,10 +2581,13 @@ func TestV9BrokerNormalizesReasoningBeforePlatformAndAccountsRejections(t *testi
 	if response := call(`{"model":"openai/gpt-oss-20b","reasoning":{"effort":"high","exclude":false}}`); response.Code != http.StatusBadRequest {
 		t.Fatalf("provider-control status=%d body=%s", response.Code, response.Body.String())
 	}
-	if len(delivered) != 2 {
-		t.Fatalf("provider received %d requests, want 2", len(delivered))
+	if response := call(`{"model":"stale","reasoning":{"effort":"high","exclude":true}}`); response.Code != http.StatusOK {
+		t.Fatalf("pinned privacy status=%d body=%s", response.Code, response.Body.String())
 	}
-	for index, effort := range []string{"low", "medium"} {
+	if len(delivered) != 3 {
+		t.Fatalf("provider received %d requests, want 3", len(delivered))
+	}
+	for index, effort := range []string{"low", "medium", "high"} {
 		if _, present := delivered[index]["reasoning_effort"]; present {
 			t.Fatalf("request %d retained flat alias", index)
 		}
@@ -2571,9 +2600,9 @@ func TestV9BrokerNormalizesReasoningBeforePlatformAndAccountsRejections(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Requests != 2 || snapshot.Successes != 2 || snapshot.UsageAvailable != 2 ||
-		snapshot.PromptTokens != 6 || snapshot.CompletionTokens != 8 ||
-		snapshot.AgentRequestRejections != 1 || snapshot.UpstreamAttempts != 2 {
+	if snapshot.Requests != 3 || snapshot.Successes != 3 || snapshot.UsageAvailable != 3 ||
+		snapshot.PromptTokens != 9 || snapshot.CompletionTokens != 12 ||
+		snapshot.AgentRequestRejections != 1 || snapshot.UpstreamAttempts != 3 {
 		t.Fatalf("v9 reasoning accounting = %+v", snapshot)
 	}
 }

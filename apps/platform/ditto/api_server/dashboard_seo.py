@@ -51,6 +51,8 @@ STATIC_DOC_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600"
 
 _SNAPSHOT_TTL_SECONDS = 30.0
 _SNAPSHOT_FAILURE_TTL_SECONDS = 5.0
+_SNAPSHOT_STALE_SECONDS = 120.0
+_SNAPSHOT_WAIT_SECONDS = 0.5
 _DEFAULT_ORIGIN = "https://dittobench.ai"
 # These aliases serve the same dashboard (infra/ansible/host_vars/
 # ditto-platform-prod.yml). Advertising each request host as canonical splits
@@ -175,6 +177,13 @@ CRAWLABLE_PAGES += (
         "Public audit history of Backroom actions, settings changes, "
         "and canary requests.",
     ),
+    (
+        "/bounties",
+        "bounties",
+        "Build bounties · Ditto SN118",
+        "Paid build work on Ditto repositories: signed terms, open slots, "
+        "claims, review decisions, awards, and payments.",
+    ),
 )
 
 CRAWLABLE_PAGE_PATHS: tuple[str, ...] = tuple(
@@ -265,12 +274,16 @@ class _SnapshotCache:
 
 _cache_lock = asyncio.Lock()
 _cached: _SnapshotCache | None = None
+_refresh_task: asyncio.Task[None] | None = None
 
 
 def reset_seo_cache() -> None:
     """Drop the process-local snapshot (tests)."""
-    global _cached
+    global _cached, _refresh_task
     _cached = None
+    if _refresh_task is not None:
+        _refresh_task.cancel()
+    _refresh_task = None
 
 
 def public_origin(request: Request) -> str:
@@ -352,6 +365,7 @@ def llms_txt(origin: str) -> str:
             f"- Recent submissions: {origin}/submissions",
             f"- ATH reviews: {origin}/ath",
             f"- Gamma service treasury: {origin}/gamma",
+            f"- Build bounties: {origin}/bounties",
             f"- Miner profile: {origin}/miner/{{hotkey}}",
             f"  or {origin}/h/{{handle}}",
             f"- Agent evidence: {origin}/agent/{{agent_id}}",
@@ -415,6 +429,8 @@ def llms_full_txt(origin: str) -> str:
             "| `/bench/glossary` | Metric and category vocabulary |",
             "| `/bench/timeline` | Historical bench releases |",
             "| `/bench/rollout` | Bench rollout progress and promotion gates |",
+            "| `/bounties` | Build bounties: current terms and slot counts |",
+            "| `/bounties/{{id}}` | One bounty: revisions, slots, and history |",
             "",
             "Source tarballs become downloadable only after the public-source",
             "window; review-held and rejected source stays private.",
@@ -470,6 +486,7 @@ def sitemap_xml(origin: str, snapshot: SeoSnapshot | None) -> str:
         (origin + "/submissions", "0.5", "hourly"),
         (origin + "/ath", "0.4", "hourly"),
         (origin + "/gamma", "0.4", "hourly"),
+        (origin + "/bounties", "0.4", "hourly"),
     ]
     if snapshot is not None:
         seen: set[str] = set()
@@ -533,24 +550,48 @@ def snapshot_from_leaderboard(board: PublicLeaderboardResponse) -> SeoSnapshot:
 
 
 async def load_seo_snapshot(request: Request) -> SeoSnapshot | None:
-    """Return the cached board projection, refreshing at most every 30s.
+    """Serve HTML promptly even if the full leaderboard read is slow.
 
-    Fail closed: no session maker, or any error while building the public
-    board, yields ``None`` rather than a placeholder ranking.
+    A fresh snapshot is preferred. During a refresh, a bounded-old snapshot
+    remains usable for crawler metadata; on a cold start the static shell is
+    preferable to making every browser wait for the board query.
     """
-    global _cached
+    global _refresh_task
     now = time.monotonic()
     cached = _cached
     if cached is not None and now < cached.expires_at:
         return cached.snapshot
-
-    async with _cache_lock:
-        cached = _cached
-        if cached is not None and time.monotonic() < cached.expires_at:
+    if _refresh_task is None or _refresh_task.done():
+        _refresh_task = asyncio.create_task(_refresh_seo_snapshot(request))
+    if cached is not None:
+        if (
+            cached.snapshot is not None
+            and now < cached.expires_at + _SNAPSHOT_STALE_SECONDS
+        ):
             return cached.snapshot
+        if cached.snapshot is None:
+            return None
+    refresh_task = _refresh_task
+    assert refresh_task is not None
+    try:
+        await asyncio.wait_for(asyncio.shield(refresh_task), _SNAPSHOT_WAIT_SECONDS)
+    except TimeoutError:
+        return None
+    except asyncio.CancelledError:
+        current_task = asyncio.current_task()
+        if refresh_task.cancelled() and (
+            current_task is None or not current_task.cancelling()
+        ):
+            return None
+        raise
+    return _cached.snapshot if _cached is not None else None
+
+
+async def _refresh_seo_snapshot(request: Request) -> None:
+    global _cached
+    async with _cache_lock:
         snapshot, ttl = await _read_snapshot(request)
         _cached = _SnapshotCache(expires_at=time.monotonic() + ttl, snapshot=snapshot)
-        return snapshot
 
 
 async def _read_snapshot(request: Request) -> tuple[SeoSnapshot | None, float]:

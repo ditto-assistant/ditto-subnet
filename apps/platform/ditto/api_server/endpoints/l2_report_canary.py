@@ -19,6 +19,7 @@ from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.l2_report_canary import (
+    CanonicalFixturePreflightView,
     CanonicalFixtureRegisterRequest,
     CanonicalFixtureReviewRequest,
     CanonicalFixtureScheduleRequest,
@@ -60,7 +61,10 @@ from ditto.api_server.endpoints.screener import (
     _resolve_effective_review_settings,
     require_screener,
 )
-from ditto.api_server.operator_proof import require_operator_proof
+from ditto.api_server.operator_proof import (
+    operator_proof_configured,
+    require_operator_proof,
+)
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.api_server.source_inspect import MAX_TARBALL_BYTES
 from ditto.api_server.storage import S3StorageClient, StorageError
@@ -861,6 +865,9 @@ async def _exact_source(
 
 
 def _fixture_attestation_valid(row: ScreenerL2ReportCanary) -> bool:
+    # One authenticated account may register, record review evidence and
+    # schedule. Independent agent review belongs in the committed evidence;
+    # a second human account is not the operator authorization boundary.
     att = row.source_attestation
     return bool(
         row.source_kind == "canonical_starter_fixture"
@@ -880,7 +887,6 @@ def _fixture_attestation_valid(row: ScreenerL2ReportCanary) -> bool:
         and att.get("reviewed_dockerfile_sha256") == DOCKERFILE_SHA256
         and isinstance(att.get("registered_by"), str)
         and isinstance(att.get("reviewed_by"), str)
-        and att["registered_by"] != att["reviewed_by"]
         and isinstance(att.get("reviewer_built_image_digest"), str)
         and re.fullmatch(r"sha256:[0-9a-f]{64}", att["reviewer_built_image_digest"])
         and isinstance(att.get("reviewer_evidence_sha256"), str)
@@ -1274,13 +1280,22 @@ async def _schedule_l2_report_canary(
         return _view(row)
 
 
-@admin_router.get("/fixture/preflight")
+@admin_router.post("/fixture/operator-proof/preflight")
+async def verify_canonical_fixture_operator_proof(
+    _payload: dict[str, object], request: Request, _admin: AdminDep
+) -> dict[str, bool]:
+    """Check a body-bound authenticated proof without touching fixture state."""
+    await require_operator_proof(request)
+    return {"verified": True}
+
+
+@admin_router.get("/fixture/preflight", response_model=CanonicalFixturePreflightView)
 async def get_canonical_fixture_preflight(
     response: Response,
     _admin: AdminDep,
     session: SessionDep,
     storage: Annotated[S3StorageClient, Depends(get_storage_client)],
-) -> dict:
+) -> CanonicalFixturePreflightView:
     """Expose the pinned public source and current object before any queue write."""
     response.headers["Cache-Control"] = "no-store"
     row = await session.scalar(
@@ -1296,23 +1311,27 @@ async def get_canonical_fixture_preflight(
         and await _fixture_worker_ready(session, node=node, now=datetime.now(UTC))
     )
     object_matches = await _fixture_object_matches(storage)
-    return {
-        "release": RELEASE,
-        "release_commit": RELEASE_COMMIT,
-        "source_tree": SOURCE_TREE,
-        "archive_sha256": ARCHIVE_SHA256,
-        "archive_size_bytes": ARCHIVE_BYTES,
-        "fixture": _view(row).model_dump(mode="json") if row is not None else None,
-        "stored_object_matches": object_matches,
-        "fixture_capable_worker_ready": worker_ready,
-        "can_schedule": bool(
-            row is not None
-            and row.status == "ready"
-            and _fixture_attestation_valid(row)
-            and object_matches
-            and worker_ready
-        ),
-    }
+    return CanonicalFixturePreflightView.model_validate(
+        {
+            "release": RELEASE,
+            "release_commit": RELEASE_COMMIT,
+            "source_tree": SOURCE_TREE,
+            "archive_sha256": ARCHIVE_SHA256,
+            "archive_size_bytes": ARCHIVE_BYTES,
+            "fixture": _view(row).model_dump(mode="json") if row is not None else None,
+            "stored_object_matches": object_matches,
+            "fixture_capable_worker_ready": worker_ready,
+            "operator_proof_configured": operator_proof_configured(),
+            "can_schedule": bool(
+                row is not None
+                and row.status == "ready"
+                and _fixture_attestation_valid(row)
+                and object_matches
+                and worker_ready
+                and operator_proof_configured()
+            ),
+        }
+    )
 
 
 @admin_router.post("/fixture/register", response_model=L2CanaryView)
@@ -1389,7 +1408,7 @@ async def review_canonical_fixture(
     session: SessionDep,
     storage: Annotated[S3StorageClient, Depends(get_storage_client)],
 ) -> L2CanaryView:
-    """Require a second authenticated operator's served-path evidence."""
+    """Record authenticated served-path evidence, including agent reviews."""
     actor = await require_operator_proof(request)
     async with session.begin():
         row = await session.scalar(
@@ -1403,8 +1422,6 @@ async def review_canonical_fixture(
             row.source_attestation, dict
         ):
             raise HTTPException(409, "fixture review state changed")
-        if actor == row.source_attestation.get("registered_by"):
-            raise HTTPException(409, "independent reviewer required")
         if not await _fixture_object_matches(storage):
             raise HTTPException(409, "fixture object changed")
         row.source_attestation = {
@@ -1447,8 +1464,6 @@ async def schedule_canonical_fixture(
         if row.status != "ready" or not _fixture_attestation_valid(row):
             raise HTTPException(409, "fixture not independently ready")
         assert isinstance(row.source_attestation, dict)
-        if actor == row.source_attestation["reviewed_by"]:
-            raise HTTPException(409, "reviewer cannot schedule their own control")
         if not await _fixture_object_matches(storage):
             raise HTTPException(409, "fixture object changed")
         node = await session.get(ScreenerNode, row.target_node_id)

@@ -167,26 +167,38 @@ def test_unknown_metadata_envelope_fails_closed(value) -> None:
 
 
 @pytest.mark.parametrize(
-    "pinned",
-    [PINNED, audited_runtime_interfaces.TREASURY_RECEIPT_INTERFACES],
+    "pinned,releases",
+    [
+        # v482's source-emission interface is identical to v478's, so its pin
+        # collapses onto the existing digest.
+        (PINNED, {"v473", "v478"}),
+        (
+            audited_runtime_interfaces.TREASURY_RECEIPT_INTERFACES,
+            {"v473", "v478", "v482"},
+        ),
+    ],
     ids=["source_emission", "treasury_receipt"],
 )
-def test_pinned_audited_interfaces_are_self_consistent(pinned) -> None:
-    assert {release for release, _ in pinned.values()} == {"v473", "v478"}
+def test_pinned_audited_interfaces_are_self_consistent(pinned, releases) -> None:
+    assert {release for release, _ in pinned.values()} == releases
     for digest, (_, interface) in pinned.items():
         assert interface.digest == digest
         assert not interface.changed_entries(interface)
+    by_release = dict(pinned.values())
+    v473, v478 = by_release["v473"], by_release["v478"]
     # v478 differs from v473 only by the epoch-consensus map added in v475.
-    v473, v478 = (i for _, i in sorted(pinned.values(), key=lambda item: item[0]))
     assert v473.changed_entries(v478) == [
         "storage:SubtensorModule.SubnetEpochConsensus"
     ]
     assert (v473.has_epoch_consensus, v478.has_epoch_consensus) == (False, True)
+    if "v482" in by_release:
+        # v482 only appended ProxyType variants (docs/audits/collector-finney-v482).
+        assert v478.changed_entries(by_release["v482"]) == ["call:Proxy.proxy"]
 
 
 def test_treasury_call_baseline_names_the_signed_runtime() -> None:
     release, calls = audited_runtime_interfaces.TREASURY_CALL_BASELINE
-    assert release == "v478"
+    assert release == "v482"
     assert {"Proxy.proxy", "SubtensorModule.transfer_stake"} <= set(calls)
     assert all(len(digest) == 16 for digest in calls.values())
 

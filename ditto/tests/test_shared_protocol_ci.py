@@ -27,12 +27,7 @@ def test_shared_protocol_changes_trigger_every_filtered_consumer_workflow(
         Loader=yaml.BaseLoader,
     )
 
-    assert SHARED_PROTOCOL_PATH in workflow["on"]["pull_request"]["paths"], (
-        f"{workflow_name} must run on {SHARED_PROTOCOL_PATH} changes so shared "
-        "Pydantic semantics are tested by the consumer that imports them"
-    )
-    assert "workflow_dispatch" in workflow["on"]
-    assert "push" not in workflow["on"]
+    assert set(workflow["on"]) == {"workflow_dispatch"}
 
 
 def test_root_validator_ci_is_unfiltered() -> None:
@@ -41,7 +36,7 @@ def test_root_validator_ci_is_unfiltered() -> None:
         Loader=yaml.BaseLoader,
     )
 
-    assert not workflow["on"]["pull_request"]
+    assert "pull_request" not in workflow["on"]
     assert "workflow_dispatch" in workflow["on"]
     assert "push" not in workflow["on"]
 
@@ -71,12 +66,9 @@ def test_reason_code_drift_guards_run_when_the_registry_changes(
         (ROOT / ".github/workflows" / workflow_name).read_text(),
         Loader=yaml.BaseLoader,
     )
-    paths = workflow["on"]["pull_request"]["paths"]
-    assert SHARED_PROTOCOL_PATH in paths
-    for guard, component_path in REASON_CODE_GUARDS[workflow_name]:
+    assert set(workflow["on"]) == {"workflow_dispatch"}
+    for guard, _component_path in REASON_CODE_GUARDS[workflow_name]:
         assert (ROOT / guard).is_file(), guard
-        if component_path is not None:
-            assert component_path in paths, (workflow_name, component_path)
 
 
 def test_screener_ci_runs_the_shared_protocol_suite() -> None:

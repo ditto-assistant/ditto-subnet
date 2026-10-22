@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -31,6 +32,7 @@ from ditto.api_models.validator_capabilities import (
 from ditto.validator import dittobench
 from ditto.validator.dittobench import (
     _AGENT_ATTRIBUTABLE_INFERENCE_CODES,
+    _BOUNDED_RETRY_CODES,
     _SANDBOX_INFRASTRUCTURE_CODES,
     SUPPORTED_BENCH_VERSIONS,
     DittobenchClient,
@@ -60,6 +62,9 @@ _REVISION = "ab" * 20
 _V9_CONTRACT_VECTOR = (
     Path(__file__).resolve().parents[3]
     / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+)
+_SCORER_COMMAND = Path(__file__).resolve().parents[3] / (
+    "services/dittobench-api/cmd/dittobench-api"
 )
 
 
@@ -1752,10 +1757,12 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
         "sandbox_oom",
         "sandbox_tmpfs_exhausted",
         "sandbox_network_unavailable",
+        "sandbox_image_unavailable",
         "model_relay_unavailable",
         "embedding_provider_unavailable",
         "screened_image_unavailable",
         "seed_store_lock_timeout",
+        "sandbox_cpu_unsupported",
     ],
 )
 async def test_sandbox_resource_failure_is_retryable_infrastructure(
@@ -3066,3 +3073,33 @@ async def test_confirmation_progress_cancel_during_poll_cleanup_stays_cancelled(
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+_SCORER_INFRASTRUCTURE_CODE = re.compile(
+    r'(?:Kind:\s*|"kind":\s*)"validator_infrastructure",\s*'
+    r'(?:Code:\s*|"code":\s*)"([a-z0-9_]+)"'
+)
+
+
+def _scorer_infrastructure_codes() -> set[str]:
+    """Every validator_infrastructure code literal the scored-run scorer emits."""
+    return {
+        code
+        for path in _SCORER_COMMAND.glob("*.go")
+        if not path.name.endswith("_test.go")
+        for code in _SCORER_INFRASTRUCTURE_CODE.findall(path.read_text())
+    }
+
+
+def test_every_scorer_infrastructure_code_is_classified_by_the_validator() -> None:
+    # ditto-subnet#2959: the scorer emitted ``sandbox_image_unavailable`` for a
+    # lost request-scoped image tag, the validator did not list it, and the
+    # unclassified failure was charged to the miner as ``scoring_error``. A
+    # scorer code the validator cannot classify must fail here, not in a sweep.
+    emitted = _scorer_infrastructure_codes()
+    assert {"sandbox_network_unavailable", "model_relay_unavailable"} <= emitted
+    unclassified = emitted - _SANDBOX_INFRASTRUCTURE_CODES - _BOUNDED_RETRY_CODES
+    assert not unclassified, (
+        f"scorer validator_infrastructure codes the validator would charge to "
+        f"the miner as scoring_error: {sorted(unclassified)}"
+    )
