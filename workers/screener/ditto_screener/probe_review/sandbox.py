@@ -203,15 +203,30 @@ class Session:
     # -- lifecycle -----------------------------------------------------------
 
     def start(self, *, health_timeout: float = 300.0) -> None:
+        # Same scheme as the gate's gateway state: the session root is private
+        # to the owner; the sidecar (a different uid, no DAC override) can
+        # traverse the state dir, read the script and throwaway shim certs,
+        # and append to the transcript without reading it back.
+        Path(self.root).mkdir(parents=True, exist_ok=True)
+        Path(self.root).chmod(0o700)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.probes_dir.mkdir(parents=True, exist_ok=True)
-        self.state_dir.chmod(0o777)
+        self.state_dir.chmod(0o711)
+        # A restarted session re-stages read-only files; probes already hold
+        # their own transcript slices, so the previous state is disposable.
+        for stale in self.state_dir.iterdir():
+            if stale.is_file():
+                stale.unlink()
         _write_openrouter_shim_certs(str(self.state_dir))
-        shutil.copyfile(_GATEWAY_SCRIPT, self.state_dir / "scripted_gateway.py")
-        (self.state_dir / "script.json").write_text("{}")
-        (self.state_dir / "transcript.jsonl").touch()
-        for path in self.state_dir.iterdir():
-            path.chmod(0o666 if path.is_file() else 0o777)
+        gateway_script = self.state_dir / "scripted_gateway.py"
+        shutil.copyfile(_GATEWAY_SCRIPT, gateway_script)
+        gateway_script.chmod(0o444)
+        script = self.state_dir / "script.json"
+        script.write_text("{}")
+        script.chmod(0o644)
+        transcript = self.state_dir / "transcript.jsonl"
+        transcript.touch()
+        transcript.chmod(0o622)
         code, out = _docker(
             ["network", "create", "--internal", self.network], timeout=120
         )

@@ -771,7 +771,9 @@ def run_battery(session: Session) -> dict[str, Any]:
                 "model_calls": len(calibration.model_requests),
             }
         )
-        fmt_name = "answer_line"
+        # Without a calibrated encoding, answer-dependent items would report
+        # leads for scripted outputs the harness was never shown to relay.
+        return report
     fmt = FORMATS[fmt_name]
     for item in build_items(session, fmt):
         request = dict(item.request)

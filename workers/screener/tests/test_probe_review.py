@@ -289,6 +289,79 @@ def test_agent_loop_respects_ledger_and_stops_on_verdict(tmp_path: Path) -> None
     assert not exhausted["complete"] and exhausted["requests"] == 3
 
 
+def test_agent_loop_does_not_act_on_a_response_that_crosses_the_budget(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "prepare.json").write_text(
+        json.dumps(
+            {
+                "artifact_sha256": "0" * 64,
+                "battery": {"format": "answer_line", "items": []},
+                "triage": {"leads": []},
+            }
+        )
+    )
+    session = Session(
+        root=str(tmp_path), image="sha256:x", artifact_sha256="0" * 64, bench_version=13
+    )
+    verdict_call = {
+        "id": "1",
+        "function": {
+            "name": "submit_verdict",
+            "arguments": json.dumps({"verdict": {"outcome": "no_violation_found"}}),
+        },
+    }
+    result = agent_loop.review(
+        session,
+        complete=lambda _m, _s: {
+            "choices": [
+                {"message": {"role": "assistant", "tool_calls": [verdict_call]}}
+            ],
+            "usage": {"prompt_tokens": 900, "completion_tokens": 200},
+        },
+        ledger=agent_loop.Ledger(max_total_tokens=1000),
+    )
+    assert not result["complete"] and result["budget_exhausted"]
+    assert not (tmp_path / "verdict.json").exists()
+
+
+def test_probe_ids_cannot_escape_the_session(tmp_path: Path) -> None:
+    session = Session(
+        root=str(tmp_path / "s"),
+        image="sha256:x",
+        artifact_sha256="0" * 64,
+        bench_version=13,
+    )
+    session.probes_dir.mkdir(parents=True)
+    other = tmp_path / "other" / "probes"
+    other.mkdir(parents=True)
+    (other / "p001.json").write_text(json.dumps({}))
+    with pytest.raises(ValueError):
+        tools.load_probe(session, "../../other/probes/p001")
+
+
+def test_replay_requires_at_least_one_replay(tmp_path: Path) -> None:
+    session = Session(
+        root=str(tmp_path), image="sha256:x", artifact_sha256="0" * 64, bench_version=13
+    )
+    result = tools.replay_verdict(session, {"outcome": "violation"}, replays=0)
+    assert not result["verified"] and result["problems"]
+
+
+def test_malformed_regex_and_auto_tool_choice_do_not_hold() -> None:
+    record = _record({"answer": "x"}, [_chat_entry(["a"], {"type": "auto"})])
+    assert not evaluate(record, {"op": "answer_matches", "value": "["})[0]
+    where = {"op": "any_model_request", "where": {"tool_choice_pinned": True}}
+    assert not evaluate(record, where)[0]
+    for pinned in (
+        "required",
+        {"type": "any"},
+        {"type": "tool", "name": "a"},
+        {"type": "function", "function": {"name": "a"}},
+    ):
+        assert evaluate(_record({}, [_chat_entry(["a"], pinned)]), where)[0], pinned
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
@@ -372,3 +445,15 @@ def test_battery_separates_honest_and_violating_fixture(
             assert tools.replay_verdict(session, verdict)["verified"]
     finally:
         session.stop()
+    if not expected:
+        # A reviewer restarts a prepared session: read-only state is re-staged.
+        session.start()
+        try:
+            summary = tools.run_case(
+                session,
+                {"user_input": "What is 2+2?"},
+                {"default": {"content": "Answer: 4"}},
+            )
+            assert summary["http_status"] == 200, summary
+        finally:
+            session.stop()

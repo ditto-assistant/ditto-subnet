@@ -32,9 +32,11 @@ _MAX_SEARCH_HITS = 60
 
 
 def load_probe(session: Session, probe_id: str) -> ProbeRecord:
-    return ProbeRecord.from_json(
-        json.loads((session.probes_dir / f"{probe_id}.json").read_text())
-    )
+    probes_dir = session.probes_dir.resolve()
+    path = (probes_dir / f"{probe_id}.json").resolve()
+    if path.parent != probes_dir:
+        raise ValueError(f"invalid probe id: {probe_id!r}")
+    return ProbeRecord.from_json(json.loads(path.read_text()))
 
 
 def _clip(text: str, limit: int) -> str:
@@ -516,6 +518,12 @@ def replay_verdict(
     original record AND on every replay, and any cited control's predicates
     hold too. No model is consulted.
     """
+    if replays < 1:
+        return {
+            "verified": False,
+            "problems": ["replays must be at least 1"],
+            "findings": [],
+        }
     problems = validate_verdict(verdict) + check_citations(session, verdict)
     if problems:
         return {"verified": False, "problems": problems, "findings": []}

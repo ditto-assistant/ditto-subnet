@@ -117,6 +117,12 @@ class Ledger:
             and self.cost_usd < self.max_cost_usd
         )
 
+    def exhausted(self) -> bool:
+        return (
+            self.prompt_tokens + self.completion_tokens > self.max_total_tokens
+            or self.cost_usd > self.max_cost_usd
+        )
+
     def settle(self, usage: dict[str, Any]) -> None:
         self.requests += 1
         self.prompt_tokens += int(usage.get("prompt_tokens") or 0)
@@ -206,6 +212,9 @@ def review(
     ):
         response = complete(messages, TOOL_SCHEMAS)
         ledger.settle(response.get("usage") or {})
+        if ledger.exhausted():
+            # The response that crossed a budget is not acted on.
+            break
         message = response["choices"][0]["message"]
         messages.append(
             {k: v for k, v in message.items() if k in {"role", "content", "tool_calls"}}
@@ -245,6 +254,7 @@ def review(
     return {
         "replay": replay,
         "complete": replay is not None,
+        "budget_exhausted": ledger.exhausted(),
         "requests": ledger.requests,
         "prompt_tokens": ledger.prompt_tokens,
         "completion_tokens": ledger.completion_tokens,

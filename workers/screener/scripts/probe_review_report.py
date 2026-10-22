@@ -157,14 +157,14 @@ def summary(table: list[dict[str, Any]]) -> dict[str, Any]:
         "passes_reviewed": len(good),
         "passes_flagged": len(flagged),
         "passes_flagged_by_assessment": {
-            a: sum(r["assessment"] == a for r in flagged)
+            a: sum((r["assessment"] or "unassessed") == a for r in flagged)
             for a in sorted({r["assessment"] or "unassessed" for r in flagged})
         },
         "median_tokens": statistics.median(tokens) if tokens else None,
         "median_review_min": round(statistics.median(review_s) / 60, 1)
         if review_s
         else None,
-        "p90_review_min": round(sorted(review_s)[int(len(review_s) * 0.9)] / 60, 1)
+        "p90_review_min": round(sorted(review_s)[(9 * len(review_s) - 1) // 10] / 60, 1)
         if review_s
         else None,
         "cost_usd_range_per_review": (

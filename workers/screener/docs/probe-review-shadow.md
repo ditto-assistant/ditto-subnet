@@ -205,6 +205,10 @@ is counted as a false positive or a miss until an operator rules.
     doctor v8, logan v7, Pig v1, om-parce, and Gryffindor v18/v19.
   - Receipt head-cut at 6000 characters: dan0l v10 and v14. The other
     dan0l siblings parked the same cap, so this is reviewer variance.
+    Ruled after the run (2026-10-22): a fixed receipt cap with a truthful
+    truncation marker is not a violation on its own, and ten bans that
+    rested only on it were reversed. Both findings are therefore false
+    positives, and the reviewer prompt now carries the ruling.
   - Fixed turn cap of 5 ordinary + 2 receipt turns: lucas_v56.
   - A reserved identity field blocking a user-typed `session_id`: logan v5.
 

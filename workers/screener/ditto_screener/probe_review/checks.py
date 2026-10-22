@@ -91,13 +91,33 @@ def _model_request_view(entry: dict[str, Any]) -> dict[str, Any]:
             fn = as_dict(tool.get("function")) or tool
             names.append(fn.get("name"))
     choice = request.get("tool_choice")
-    pinned = isinstance(choice, dict) or choice in {"required", "any"}
     return {
         "text": json.dumps(request.get("messages") or request.get("input") or ""),
         "tool_names": names,
         "tool_choice": choice,
-        "pinned": pinned,
+        "pinned": _choice_pinned(choice),
     }
+
+
+def _choice_pinned(choice: Any) -> bool:
+    """Whether a tool_choice removes the model's discretion (any wire format)."""
+    if isinstance(choice, str):
+        return choice in {"required", "any"}
+    if not isinstance(choice, dict):
+        return False
+    kind = choice.get("type")
+    if kind == "any":
+        return True
+    named = as_dict(choice.get("function")).get("name") or choice.get("name")
+    return kind in {"function", "tool"} and bool(named)
+
+
+def _search(pattern: str, text: str) -> bool:
+    """A malformed pattern is a failed predicate, not an evaluation crash."""
+    try:
+        return re.search(pattern, text) is not None
+    except re.error:
+        return False
 
 
 def _request_matches(view: dict[str, Any], spec: Mapping[str, Any]) -> bool:
@@ -140,7 +160,7 @@ def evaluate(record: ProbeRecord, check: Check) -> tuple[bool, str]:
         "answer_contains": lambda: (str(value) in answer, f"answer={answer[:200]!r}"),
         "answer_lacks": lambda: (str(value) not in answer, f"answer={answer[:200]!r}"),
         "answer_matches": lambda: (
-            re.search(str(value), answer) is not None,
+            _search(str(value), answer),
             f"answer={answer[:200]!r}",
         ),
         "final_text_contains": lambda: (

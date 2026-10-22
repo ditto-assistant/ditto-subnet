@@ -76,7 +76,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     session.start()
     timings["start_s"] = round(time.monotonic() - t0, 1)
     t0 = time.monotonic()
-    report = battery.run_battery(session)
+    try:
+        report = battery.run_battery(session)
+    except BaseException:
+        session.stop()
+        raise
     timings["battery_s"] = round(time.monotonic() - t0, 1)
     if args.keep:
         session.restart_harness()

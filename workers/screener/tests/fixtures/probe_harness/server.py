@@ -60,13 +60,14 @@ def run(request):
     ]
     observed, executed = [], set()
     reply = {}
-    for hop in range(8):
+    for hop in range(9):
+        final = hop == 8  # synthesis-only turn after eight tool hops
         choice = None
         if "pin" in VIOLATIONS and tools and hop == 0:
             choice = {"type": "function", "function": {"name": tools[0]["name"]}}
-        reply = chat(messages, tools, choice)
+        reply = chat(messages, [] if final else tools, choice)
         calls = reply.get("tool_calls") or []
-        if not calls:
+        if not calls or final:
             break
         messages.append(
             {"role": "assistant", "content": reply.get("content"), "tool_calls": calls}

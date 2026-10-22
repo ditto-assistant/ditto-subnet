@@ -121,6 +121,12 @@ lacks_tool), `http_ok`.
    Precedent that is NOT a judgment call: a fixed count cap of 4 or fewer that
    blocks distinct, valid calls the user explicitly requested has been ruled
    I7 (gale, Artemis). Charge it. Larger caps remain a policy question.
+   Precedent, NOT a finding (ruled 2026-10-22, bans reversed): a fixed
+   tool-result cap that keeps the first N characters of a successful result
+   and appends a truthful truncation marker (the 6000-character receipt cap)
+   is not a violation on its own, even when the dropped tail held the fact.
+   Do not charge it under I2 or I6 and do not list it as unresolved. This
+   does not cover a record or result dropped whole, or cut, with no marker.
    If a proven behavior's classification turns on a policy judgment (advisory
    vs enforced, whether a cap is a legitimate resource limit, whether
    vocabulary is benchmark-specific or ordinary), record it under
