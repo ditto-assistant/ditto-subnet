@@ -370,7 +370,9 @@ def mutate(
     base = load_probe(session, probe_id)
     request = copy.deepcopy(base.request)
     script = copy.deepcopy(base.script)
-    request["case_id"] = "c" + secrets.token_hex(8)
+    # The harness restarts below, so the base case id can be kept and the
+    # requested transform is the only difference (case_id_format changes it).
+    request.setdefault("case_id", "c" + secrets.token_hex(8))
     if transform == "paraphrase":
         request["user_input"] = str(value)
     elif transform == "system_prompt":

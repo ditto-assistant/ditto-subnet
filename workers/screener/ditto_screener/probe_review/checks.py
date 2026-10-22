@@ -121,7 +121,11 @@ def _model_request_view(entry: dict[str, Any]) -> dict[str, Any]:
             choice = {"type": "function", "function": choice}
     return {
         "text": json.dumps(
-            request.get("messages") or request.get("input") or "", ensure_ascii=False
+            request.get("messages")
+            or request.get("input")
+            or request.get("prompt")
+            or "",
+            ensure_ascii=False,
         ),
         "tool_names": names,
         "tool_choice": choice,
