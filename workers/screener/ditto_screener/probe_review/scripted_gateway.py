@@ -123,7 +123,10 @@ class _State:
             used = self._rule_uses.get(index, 0)
             if isinstance(limit, int) and used >= limit:
                 continue
-            if _matches(rule.get("when") or {}, request, text, self._model_turn):
+            when = rule.get("when") or {}
+            if not isinstance(when, dict):
+                continue  # a malformed condition never matches
+            if _matches(when, request, text, self._model_turn):
                 self._rule_uses[index] = used + 1
                 return dict(rule.get("reply") or {})
         turns = script.get("turns") or []
@@ -434,8 +437,16 @@ class ScriptedGateway:
                 "embedding",
             )
         if self._surface in {"tool", "model", "all"} and path.startswith("/v1/tools/"):
-            if method == "GET":
+            if method in {"GET", "HEAD"}:
                 return 204, b"", "application/json", "tool_health"
+            if method != "POST":
+                # Only a POST invokes a tool; nothing else consumes a reply.
+                return (
+                    405,
+                    {"error": {"message": "method not allowed"}},
+                    "application/json",
+                    "tool_method",
+                )
             return (*self._tool(request), "tool")
         return (
             404,

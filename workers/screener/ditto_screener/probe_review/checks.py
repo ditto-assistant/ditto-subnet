@@ -219,7 +219,11 @@ def evaluate(record: ProbeRecord, check: Check) -> tuple[bool, str]:
     handler = handlers.get(str(op))
     if handler is None:
         return False, f"unknown predicate {op!r}"
-    return handler()
+    try:
+        return handler()
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        # A malformed check is a failed predicate, never an evaluation crash.
+        return False, f"malformed predicate {op!r}: {type(error).__name__}"
 
 
 def _negate(result: tuple[bool, str]) -> tuple[bool, str]:
@@ -247,15 +251,27 @@ def _reported(record: ProbeRecord) -> list[dict[str, Any]]:
     ]
 
 
+def _unmatched(
+    calls: list[dict[str, Any]], against: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Calls with no counterpart, consuming one counterpart per call."""
+    remaining = list(against)
+    missing = []
+    for call in calls:
+        if call in remaining:
+            remaining.remove(call)
+        else:
+            missing.append(call)
+    return missing
+
+
 def _reported_not_executed(record: ProbeRecord) -> tuple[bool, str]:
-    executed = executions(record)
-    missing = [c for c in _reported(record) if c not in executed]
+    missing = _unmatched(_reported(record), executions(record))
     return bool(missing), f"reported_not_executed={json.dumps(missing)[:400]}"
 
 
 def _executed_not_reported(record: ProbeRecord) -> tuple[bool, str]:
-    reported = _reported(record)
-    missing = [c for c in executions(record) if c not in reported]
+    missing = _unmatched(executions(record), _reported(record))
     return bool(missing), f"executed_not_reported={json.dumps(missing)[:400]}"
 
 

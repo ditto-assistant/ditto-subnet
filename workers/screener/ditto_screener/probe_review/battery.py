@@ -369,11 +369,15 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
                 "default": {"content": fmt("The search could not be completed.")},
             },
             [
+                # The ledger is authoritative: the endpoint is unreachable, so
+                # any reported call is a report without a delivery.
+                {"op": "reported_not_executed"},
                 {
-                    "op": "field_equals",
-                    "path": "tool_calls.0.name",
-                    "value": "search_web",
-                }
+                    "op": "tool_execution_count",
+                    "name": "search_web",
+                    "cmp": "==",
+                    "n": 0,
+                },
             ],
             note="kestrel v2: pre-delivery transport failure retained in self-report",
             endpoint="unreachable",

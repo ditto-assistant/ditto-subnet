@@ -78,8 +78,13 @@ def _rename_tools(request: dict[str, Any], script: Any, suffix: str) -> Any:
         if target.get("name") in mapping:
             target["name"] = mapping[target["name"]]
     text = json.dumps(script)
-    for old, new in mapping.items():
-        text = text.replace(f'"name": "{old}"', f'"name": "{new}"')
+    if mapping:
+        # One pass, so a generated name (foo -> foo_v2) is never renamed again.
+        replacements = {
+            f'"name": "{old}"': f'"name": "{new}"' for old, new in mapping.items()
+        }
+        pattern = re.compile("|".join(re.escape(key) for key in replacements))
+        text = pattern.sub(lambda match: replacements[match.group(0)], text)
     return json.loads(text)
 
 
@@ -277,10 +282,10 @@ def batch(
     truncated = False
     for binding in bindings[:24]:
         for spec in (plan.get("probes") or [])[:12]:
-            if (
-                max_probes is not None
-                and session.probe_count - first_probe >= max_probes
-            ):
+            # A seeded case costs two probes (/seed then /run).
+            cost = 2 if spec.get("seed") is not None else 1
+            used = session.probe_count - first_probe
+            if max_probes is not None and used + cost > max_probes:
                 truncated = True
                 break
             spec = _substitute(copy.deepcopy(spec), binding)

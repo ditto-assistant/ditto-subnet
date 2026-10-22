@@ -60,18 +60,14 @@ class SandboxError(RuntimeError):
     """Infrastructure failure: never evidence about the submission."""
 
 
-def _docker(
-    args: list[str],
-    *,
-    timeout: float,
-    stdin: Any = None,
-    docker_host: str | None = None,
-) -> tuple[int, str]:
-    # One isolated daemon builds and runs every probe image when configured.
-    docker_host = docker_host or os.environ.get("PROBE_REVIEW_DOCKER_HOST") or None
-    env = None
-    if docker_host is not None:
-        env = {**os.environ, "DOCKER_HOST": docker_host}
+def _docker_env() -> dict[str, str] | None:
+    """One daemon builds and runs every probe image: PROBE_REVIEW_DOCKER_HOST."""
+    host = os.environ.get("PROBE_REVIEW_DOCKER_HOST")
+    return {**os.environ, "DOCKER_HOST": host} if host else None
+
+
+def _docker(args: list[str], *, timeout: float, stdin: Any = None) -> tuple[int, str]:
+    env = _docker_env()
     try:
         completed = subprocess.run(
             ["docker", *args],
@@ -90,6 +86,15 @@ def _docker(
 
 
 _ARCHIVE_LABEL = "probe-review.archive-sha256"
+
+
+def file_sha256(path: Path) -> str:
+    """Stream the digest so a large archive is never held in memory."""
+    hasher = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 @contextlib.contextmanager
@@ -128,23 +133,21 @@ def build_image(
     tag: str,
     *,
     timeout: float = 5400.0,
-    docker_host: str | None = None,
     allow_host_daemon: bool = False,
 ) -> tuple[str, float]:
     """Build the exact archive with the screener's build-context normalizer.
 
     Submitted Dockerfiles run ``RUN`` steps with network access, so the trust
     boundary is the daemon: like the gate's dedicated rootless builder behind
-    a host egress guard, builds (and the sessions that run them) go to
-    ``docker_host`` or ``PROBE_REVIEW_DOCKER_HOST``. The workstation's default daemon is
+    a host egress guard, builds and the sessions that run them all go to
+    ``PROBE_REVIEW_DOCKER_HOST``. The workstation's default daemon is
     used only with an explicit ``allow_host_daemon`` (research on artifacts
     whose build steps the operator accepts, or trusted test fixtures).
 
     A cached image under ``tag`` is reused only when its label names this
     archive's digest, so a reused tag can never serve another archive's code.
     """
-    host = docker_host or os.environ.get("PROBE_REVIEW_DOCKER_HOST") or None
-    if host is None and not allow_host_daemon:
+    if not os.environ.get("PROBE_REVIEW_DOCKER_HOST") and not allow_host_daemon:
         raise SandboxError(
             "refusing to build an untrusted archive on the default Docker daemon: "
             "set PROBE_REVIEW_DOCKER_HOST to an isolated builder or pass "
@@ -154,7 +157,7 @@ def build_image(
     if refused is not None:
         raise SandboxError(refused)
     started = time.monotonic()
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    digest = file_sha256(archive)
     code, out = _docker(
         [
             "image",
@@ -164,7 +167,6 @@ def build_image(
             tag,
         ],
         timeout=30,
-        docker_host=host,
     )
     if code == 0:
         image_id, _, label = out.strip().partition(" ")
@@ -194,14 +196,12 @@ def build_image(
             ],
             timeout=timeout,
             stdin=context,
-            docker_host=host,
         )
     if code != 0:
         raise SandboxError(f"build failed: {out[-1500:]}")
     code, out = _docker(
         ["image", "inspect", "--format", "{{.Id}}", tag],
         timeout=30,
-        docker_host=host,
     )
     if code != 0:
         raise SandboxError("built image is not inspectable")
@@ -432,7 +432,7 @@ class Session:
             raise SandboxError(f"harness start failed: {out[-500:]}")
         deadline = time.monotonic() + health_timeout
         while time.monotonic() < deadline:
-            status, _ = self._http("GET", "/health", None, timeout=5)
+            status, _, _ = self._http("GET", "/health", None, timeout=5)
             if status is not None and 200 <= status < 300:
                 return
             code, state = _docker(
@@ -469,7 +469,8 @@ class Session:
 
     def _http(
         self, method: str, path: str, payload: Any, *, timeout: float
-    ) -> tuple[int | None, bytes]:
+    ) -> tuple[int | None, bytes, bool]:
+        """(status, body, truncated) for one request, via the gateway container."""
         encoded = (
             base64.b64encode(json.dumps(payload).encode()).decode()
             if payload is not None
@@ -485,8 +486,11 @@ class Session:
             "except urllib.error.HTTPError as e:\n r=e\n"
             "except Exception as e:\n"
             " sys.stdout.write('ERR '+type(e).__name__);sys.exit(24)\n"
-            f"out=r.read({_MAX_RESPONSE_BYTES})\n"
-            "sys.stdout.write(str(r.status)+'\\n');sys.stdout.flush();sys.stdout.buffer.write(out)\n"
+            f"out=r.read({_MAX_RESPONSE_BYTES + 1})\n"
+            f"cut=len(out)>{_MAX_RESPONSE_BYTES}\n"
+            f"out=out[:{_MAX_RESPONSE_BYTES}]\n"
+            "sys.stdout.write(str(r.status)+(' TRUNCATED' if cut else '')+'\\n')\n"
+            "sys.stdout.flush();sys.stdout.buffer.write(out)\n"
         )
         try:
             completed = subprocess.run(
@@ -505,16 +509,18 @@ class Session:
                 capture_output=True,
                 timeout=timeout + 15,
                 check=False,
+                env=_docker_env(),
             )
         except subprocess.TimeoutExpired:
-            return None, b"probe transport timeout"
+            return None, b"probe transport timeout", False
         if completed.returncode != 0:
-            return None, completed.stdout + completed.stderr
+            return None, completed.stdout + completed.stderr, False
         head, _, body = completed.stdout.partition(b"\n")
+        status, _, flag = head.partition(b" ")
         try:
-            return int(head), body
+            return int(status), body, flag == b"TRUNCATED"
         except ValueError:
-            return None, completed.stdout
+            return None, completed.stdout, False
 
     def _transcript_offset(self) -> int:
         return (self.state_dir / "transcript.jsonl").stat().st_size
@@ -582,7 +588,7 @@ class Session:
         )
         offset = self._transcript_offset()
         started = time.monotonic()
-        status, body = self._http("POST", path, request, timeout=timeout)
+        status, body, truncated = self._http("POST", path, request, timeout=timeout)
         elapsed = round((time.monotonic() - started) * 1000)
         time.sleep(0.05)
         transcript = self._transcript_since(offset)
@@ -601,7 +607,13 @@ class Session:
             transcript=transcript,
             label=label,
             preconditions=list(preconditions or []),
-            error="" if status is not None else body[:500].decode("utf-8", "replace"),
+            error=(
+                body[:500].decode("utf-8", "replace")
+                if status is None
+                else f"response truncated at {_MAX_RESPONSE_BYTES} bytes"
+                if truncated
+                else ""
+            ),
         )
         (self.probes_dir / f"{probe_id}.json").write_text(
             json.dumps(record.to_json(), indent=1)

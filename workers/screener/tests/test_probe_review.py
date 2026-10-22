@@ -443,6 +443,43 @@ def test_rename_tools_handles_nested_function_definitions() -> None:
     assert renamed["default"]["tool_calls"][0]["name"] == "search_v2"
 
 
+def test_gateway_skips_malformed_rules_and_rejects_non_post_tool_calls(
+    tmp_path: Path,
+) -> None:
+    gateway = _gateway(
+        tmp_path,
+        {
+            "rules": [{"when": "always", "reply": {"content": "Answer: 1"}}],
+            "default": {"content": "Answer: 2"},
+            "tools": {"s": {"result": "ok"}},
+        },
+    )
+    body = json.dumps({"model": "m", "messages": [{"role": "user", "content": "q"}]})
+    _, payload, _, _ = gateway.route("POST", "/v1/chat/completions", body.encode())
+    assert payload["choices"][0]["message"]["content"] == "Answer: 2"
+    status, _, _, surface = gateway.route(
+        "DELETE", "/v1/tools/r/tool", json.dumps({"name": "s"}).encode()
+    )
+    assert (status, surface) == (405, "tool_method")
+
+
+def test_ledger_mismatch_counts_duplicates_and_bad_checks_fail_closed() -> None:
+    call = {"name": "remind", "args": {"t": "x"}}
+    record = _record({"tool_calls": [call, call]}, [_tool_entry("remind", {"t": "x"})])
+    assert evaluate(record, {"op": "reported_not_executed"})[0]
+    assert not evaluate(record, {"op": "executed_not_reported"})[0]
+    assert not evaluate(record, {"op": "model_calls"})[0]
+    assert not evaluate(record, {"op": "any_model_request", "where": 3})[0]
+
+
+def test_rename_tools_never_renames_a_generated_name() -> None:
+    request = {"tools": [{"name": "foo"}, {"name": "foo_v2"}]}
+    script = {"rules": [{"reply": {"tool_calls": [{"name": "foo"}]}}]}
+    renamed = tools._rename_tools(request, script, "_v2")
+    assert [t["name"] for t in request["tools"]] == ["foo_v2", "foo_v2_v2"]
+    assert renamed["rules"][0]["reply"]["tool_calls"][0]["name"] == "foo_v2"
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

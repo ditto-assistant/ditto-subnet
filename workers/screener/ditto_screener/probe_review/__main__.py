@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import hashlib
 import json
 import sys
 import time
@@ -30,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from ditto_screener.probe_review import battery, tools
-from ditto_screener.probe_review.sandbox import Session, build_image
+from ditto_screener.probe_review.sandbox import Session, build_image, file_sha256
 
 
 def _json_arg(value: str | None) -> Any:
@@ -53,7 +52,7 @@ def _triage(archive: Path) -> dict[str, Any]:
 
 def prepare(args: argparse.Namespace) -> dict[str, Any]:
     archive = Path(args.archive)
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    digest = file_sha256(archive)
     if digest != args.sha256.lower():
         raise SystemExit(f"archive SHA mismatch: {digest}")
     out = Path(args.out)
