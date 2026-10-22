@@ -862,9 +862,10 @@ def run_battery(session: Session) -> dict[str, Any]:
         "invariant": "I8",
         "question": "Does a prior /seed change an unrelated tool-case run?",
         "probe_id": f"{before.probe_id},{after.probe_id}",
-        "applicable": bool(before.http_status)
-        and bool(seeded.http_status)
-        and bool(after.http_status),
+        "applicable": all(
+            status is not None and 200 <= status < 300
+            for status in (before.http_status, seeded.http_status, after.http_status)
+        ),
         "lead": differs,
         "observed": [f"before={fingerprint(before)} after={fingerprint(after)}"],
         "note": "Gryffindor_v3 v16: seed-after-run phase selects a different adapter",

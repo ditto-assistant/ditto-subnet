@@ -117,11 +117,16 @@ class Ledger:
             and self.cost_usd < self.max_cost_usd
         )
 
-    def exhausted(self) -> bool:
+    def over_budget(self) -> bool:
+        """A settled response went past a token or cost limit: do not act on it."""
         return (
             self.prompt_tokens + self.completion_tokens > self.max_total_tokens
             or self.cost_usd > self.max_cost_usd
         )
+
+    def exhausted(self) -> bool:
+        """Any limit reached, so ``admit`` refuses another request."""
+        return not self.admit()
 
     def settle(self, usage: dict[str, Any]) -> None:
         self.requests += 1
@@ -212,7 +217,7 @@ def review(
     ):
         response = complete(messages, TOOL_SCHEMAS)
         ledger.settle(response.get("usage") or {})
-        if ledger.exhausted():
+        if ledger.over_budget():
             # The response that crossed a budget is not acted on.
             break
         message = response["choices"][0]["message"]
@@ -229,6 +234,9 @@ def review(
             )
             continue
         for call in calls:
+            if replay is not None:
+                # Nothing may touch the session after a verified replay.
+                break
             name = call["function"]["name"]
             try:
                 args = json.loads(call["function"].get("arguments") or "{}")
@@ -264,28 +272,32 @@ def review(
     }
 
 
-def http_completer(
-    base_url: str,
-    model: str,
-    api_key_file: str,
-    *,
-    provider: str = "ditto",
-    timeout: float = 120.0,
-) -> Callable[[list[dict[str, Any]], list[dict[str, Any]]], dict[str, Any]]:
-    key = Path(api_key_file).read_text().strip()
-    client = httpx.Client(timeout=timeout)
+class HttpCompleter:
+    """OpenAI-compatible completer over one pooled client; close it when done."""
 
-    def complete(
-        messages: list[dict[str, Any]], schemas: list[dict[str, Any]]
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key_file: str,
+        *,
+        provider: str = "ditto",
+        timeout: float = 120.0,
+    ) -> None:
+        self._url = f"{base_url.rstrip('/')}/chat/completions"
+        self._model = model
+        self._key = Path(api_key_file).read_text().strip()
+        self._headers = review_gateway_headers(provider)
+        self._client = httpx.Client(timeout=timeout)
+
+    def __call__(
+        self, messages: list[dict[str, Any]], schemas: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        response = client.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {key}",
-                **review_gateway_headers(provider),
-            },
+        response = self._client.post(
+            self._url,
+            headers={"Authorization": f"Bearer {self._key}", **self._headers},
             json={
-                "model": model,
+                "model": self._model,
                 "messages": messages,
                 "tools": schemas,
                 "tool_choice": "auto",
@@ -293,6 +305,28 @@ def http_completer(
             },
         )
         response.raise_for_status()
-        return response.json()
+        result: dict[str, Any] = response.json()
+        return result
 
-    return complete
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> HttpCompleter:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
+def http_completer(
+    base_url: str,
+    model: str,
+    api_key_file: str,
+    *,
+    provider: str = "ditto",
+    timeout: float = 120.0,
+) -> HttpCompleter:
+    """Use as a context manager so the connection pool is released."""
+    return HttpCompleter(
+        base_url, model, api_key_file, provider=provider, timeout=timeout
+    )

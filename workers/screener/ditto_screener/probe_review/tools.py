@@ -31,6 +31,34 @@ _MAX_FILE_LINES = 400
 _MAX_SEARCH_HITS = 60
 
 
+# Only dictated model or tool output is flipped; rule metadata such as
+# ``max_uses``, ``turn`` or ``http_status`` keeps its value.
+_REPLY_TEXT_KEYS = frozenset({"content", "arguments", "result"})
+_SIGNED_NUMBER = re.compile(r"(?<![\w.])(-?)(\d+(?:\.\d+)?)")
+
+
+def _flip_reply_numbers(script: Any, value: Any = None) -> Any:
+    """Negate numbers inside reply text; ``value`` = [old, new] replaces a token."""
+
+    def flip_text(text: str) -> str:
+        if value:
+            return text.replace(str(value[0]), str(value[1]))
+        return _SIGNED_NUMBER.sub(
+            lambda m: m.group(2) if m.group(1) else f"-{m.group(2)}", text
+        )
+
+    def walk(item: Any, key: str | None = None) -> Any:
+        if isinstance(item, dict):
+            return {k: walk(v, k) for k, v in item.items()}
+        if isinstance(item, list):
+            return [walk(v, key) for v in item]
+        if isinstance(item, str) and key in _REPLY_TEXT_KEYS:
+            return flip_text(item)
+        return item
+
+    return walk(script)
+
+
 def load_probe(session: Session, probe_id: str) -> ProbeRecord:
     probes_dir = session.probes_dir.resolve()
     path = (probes_dir / f"{probe_id}.json").resolve()
@@ -310,13 +338,7 @@ def mutate(
             text = text.replace(f'"name": "{old}"', f'"name": "{new}"')
         script = json.loads(text)
     elif transform == "sign_flip":
-        text = json.dumps(script)
-        text = (
-            re.sub(r"(?<![\w.-])(\d+(?:\.\d+)?)", r"-\1", text)
-            if not value
-            else text.replace(str(value[0]), str(value[1]))
-        )
-        script = json.loads(text)
+        script = _flip_reply_numbers(script, value)
     elif transform == "set":
         if not path:
             raise ValueError("set requires path")
@@ -539,6 +561,8 @@ def replay_verdict(
             observations.append(evaluate_all(again, checks))
             if finding.get("control_probe_id"):
                 control = load_probe(session, finding["control_probe_id"])
+                # Isolate the control from the finding replay's state.
+                session.restart_harness()
                 replayed = _replay_one(session, control)
                 control_obs.append(
                     evaluate_all(

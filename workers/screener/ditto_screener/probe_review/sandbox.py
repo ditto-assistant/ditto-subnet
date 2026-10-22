@@ -15,12 +15,15 @@ screening outcome.
 from __future__ import annotations
 
 import base64
+import contextlib
+import fcntl
 import hashlib
 import json
 import secrets
 import shutil
 import subprocess
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -71,14 +74,44 @@ def _docker(args: list[str], *, timeout: float, stdin: Any = None) -> tuple[int,
     return completed.returncode, output
 
 
+_ARCHIVE_LABEL = "probe-review.archive-sha256"
+
+
+@contextlib.contextmanager
+def _session_lock(root: Path) -> Iterator[None]:
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "probe.lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def build_image(
     archive: Path, tag: str, *, timeout: float = 5400.0
 ) -> tuple[str, float]:
-    """Build the exact archive with the screener's build-context normalizer."""
+    """Build the exact archive with the screener's build-context normalizer.
+
+    A cached image under ``tag`` is reused only when its label names this
+    archive's digest, so a reused tag can never serve another archive's code.
+    """
     started = time.monotonic()
-    code, out = _docker(["image", "inspect", "--format", "{{.Id}}", tag], timeout=30)
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    code, out = _docker(
+        [
+            "image",
+            "inspect",
+            "--format",
+            f'{{{{.Id}}}} {{{{index .Config.Labels "{_ARCHIVE_LABEL}"}}}}',
+            tag,
+        ],
+        timeout=30,
+    )
     if code == 0:
-        return out.strip(), 0.0
+        image_id, _, label = out.strip().partition(" ")
+        if label == digest:
+            return image_id, 0.0
     with _normalized_build_context(str(archive)) as context:
         code, out = _docker(
             [
@@ -91,6 +124,8 @@ def build_image(
                 "--sbom=false",
                 "--memory",
                 "8g",
+                "--label",
+                f"{_ARCHIVE_LABEL}={digest}",
                 "-t",
                 tag,
                 "-f",
@@ -441,7 +476,37 @@ class Session:
         label: str = "",
         preconditions: list[dict[str, Any]] | None = None,
     ) -> ProbeRecord:
-        """POST one request with a dictated model script; return the transcript."""
+        """POST one request with a dictated model script; return the transcript.
+
+        Reviewer tools are separate processes sharing one session, so a
+        cross-process lock covers the shared script, transcript window and
+        probe counter.
+        """
+        with _session_lock(Path(self.root)):
+            saved = Path(self.root) / "session.json"
+            if saved.exists():
+                self.probe_count = max(
+                    self.probe_count, json.loads(saved.read_text())["probe_count"]
+                )
+            return self._probe_locked(
+                request,
+                script=script,
+                path=path,
+                timeout=timeout,
+                label=label,
+                preconditions=preconditions,
+            )
+
+    def _probe_locked(
+        self,
+        request: dict[str, Any],
+        *,
+        script: dict[str, Any] | None,
+        path: str,
+        timeout: float,
+        label: str,
+        preconditions: list[dict[str, Any]] | None,
+    ) -> ProbeRecord:
         script = dict(script or {})
         self.probe_count += 1
         probe_id = f"p{self.probe_count:03d}-{secrets.token_hex(3)}"

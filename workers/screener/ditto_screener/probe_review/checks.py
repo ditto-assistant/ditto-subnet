@@ -22,7 +22,9 @@ Check = Mapping[str, Any]
 def served_answer(record: ProbeRecord) -> str | None:
     response = record.response if isinstance(record.response, dict) else {}
     answer = response.get("answer")
-    if isinstance(answer, str) and answer:
+    # The v13 scorer's AssertedAnswer: the slot when it is non-blank, else
+    # the prose (services/dittobench-api/internal/scorer/twins_v13.go).
+    if isinstance(answer, str) and answer.strip():
         return answer
     final = response.get("final_text")
     return final if isinstance(final, str) else None
@@ -84,13 +86,18 @@ def executions(record: ProbeRecord, name: str | None = None) -> list[dict[str, A
 
 def _model_request_view(entry: dict[str, Any]) -> dict[str, Any]:
     request = as_dict(entry.get("request"))
-    tools = request.get("tools") or []
+    # Legacy function calling: ``functions`` + ``function_call``.
+    tools = request.get("tools") or request.get("functions") or []
     names = []
     for tool in tools if isinstance(tools, list) else []:
         if isinstance(tool, dict):
             fn = as_dict(tool.get("function")) or tool
             names.append(fn.get("name"))
     choice = request.get("tool_choice")
+    if choice is None:
+        choice = request.get("function_call")
+        if isinstance(choice, dict) and choice.get("name"):
+            choice = {"type": "function", "function": choice}
     return {
         "text": json.dumps(request.get("messages") or request.get("input") or ""),
         "tool_names": names,

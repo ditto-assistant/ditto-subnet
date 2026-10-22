@@ -362,6 +362,44 @@ def test_malformed_regex_and_auto_tool_choice_do_not_hold() -> None:
         assert evaluate(_record({}, [_chat_entry(["a"], pinned)]), where)[0], pinned
 
 
+def test_sign_flip_touches_only_reply_text() -> None:
+    script = {
+        "rules": [{"reply": {"content": "Answer: -5 of 12"}, "max_uses": 1}],
+        "default": {"content": "Answer: 7.5"},
+        "tools": {"t": {"result": "id 42"}},
+    }
+    flipped = tools._flip_reply_numbers(script)
+    assert flipped["rules"][0]["reply"]["content"] == "Answer: 5 of -12"
+    assert flipped["rules"][0]["max_uses"] == 1
+    assert flipped["default"]["content"] == "Answer: -7.5"
+    assert flipped["tools"]["t"]["result"] == "id -42"
+
+
+def test_legacy_function_calling_and_blank_answer_slot() -> None:
+    legacy = {
+        "surface": "chat",
+        "request": {
+            "messages": [],
+            "functions": [{"name": "a"}, {"name": "b"}],
+            "function_call": {"name": "a"},
+        },
+    }
+    record = _record({"answer": "  ", "final_text": "Answer: 9"}, [legacy])
+    pinned = {"op": "any_model_request", "where": {"tool_choice_pinned": True}}
+    assert evaluate(record, pinned)[0]
+    offers = {"op": "any_model_request", "where": {"offers_tool": "b"}}
+    assert evaluate(record, offers)[0]
+    # The v13 scorer reads the prose when the slot is blank.
+    assert evaluate(record, {"op": "answer_contains", "value": "9"})[0]
+
+
+def test_ledger_reports_exhaustion_at_the_request_limit() -> None:
+    ledger = agent_loop.Ledger(max_requests=1)
+    assert not ledger.exhausted()
+    ledger.settle({})
+    assert ledger.exhausted() and not ledger.over_budget()
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

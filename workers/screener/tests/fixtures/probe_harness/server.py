@@ -48,7 +48,8 @@ def extract_answer(text):
 
 def run(request):
     tools = request.get("tools") or []
-    memories = MEMORY.get(request.get("user_id") or "", [])
+    user_id = request.get("user_id")
+    memories = MEMORY.get(user_id, []) if user_id else []
     context = "\n".join(f"- {p['prompt']} -> {p['response']}" for p in memories)
     messages = [
         {"role": "system", "content": request.get("system_prompt", "")},
