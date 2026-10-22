@@ -287,6 +287,18 @@ func providerFailureIsReceiptFree(result *providerHTTPResult, expectedModel stri
 	if !ok || !onlyJSONKeys(errorPayload, "code", "message", "metadata") {
 		return false
 	}
+	// error.metadata is diagnostic, but an unrecognized member of it could
+	// describe provider work, so its keys are bounded to the observed set
+	// rather than left to the receipt walk alone.
+	if rawErrMeta, present := errorPayload["metadata"]; present {
+		errMeta, isMap := rawErrMeta.(map[string]any)
+		if !isMap || !onlyJSONKeys(errMeta,
+			"headers", "is_byok", "limit_source", "provider_error_code",
+			"provider_name", "raw", "remedy_hint",
+			"retry_after_seconds", "retry_after_seconds_raw") {
+			return false
+		}
+	}
 	errorCode, ok := errorPayload["code"].(json.Number)
 	if !ok {
 		return false
@@ -341,9 +353,16 @@ func providerGatewayIsReceiptFree(result *providerHTTPResult, expectedModel stri
 // and when nothing was selected there is no provider to agree with. Identity is
 // asserted on success, where a receipt exists to check it against.
 func providerBackpressureMetadataIsPreProvider(payload map[string]any, expectedModel string) bool {
+	// Absence fails closed. "No receipt visible" is strictly weaker than
+	// "provably no endpoint selected", and only the latter licenses sending a
+	// billable request again: a bare error envelope carries no statement about
+	// whether the gateway reached a provider. The cost of being wrong is a
+	// duplicated provider charge against a frozen scored grant, so a retry
+	// requires positive routing evidence, not merely the lack of contrary
+	// evidence. Callers that only park or open a circuit lose nothing by this.
 	raw, present := payload["openrouter_metadata"]
 	if !present {
-		return true
+		return false
 	}
 	metadata, ok := raw.(map[string]any)
 	if !ok || !onlyJSONKeys(metadata,

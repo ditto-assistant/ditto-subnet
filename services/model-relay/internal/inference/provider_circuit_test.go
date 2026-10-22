@@ -14,7 +14,7 @@ func overloadPhase(status int, body string) phaseTrace {
 }
 
 func TestReceiptFreeOverloadRequiresEveryPhaseToBeCanonicalBackpressure(t *testing.T) {
-	body := `{"error":{"code":429,"message":"rate limited"}}`
+	body := receiptFreeEnvelope(429, "openai/gpt-oss-20b")
 	status, ok := receiptFreeOverload(
 		[]phaseTrace{overloadPhase(429, body), overloadPhase(429, body)},
 		"openai/gpt-oss-20b",

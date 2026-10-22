@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -105,5 +106,32 @@ func TestReceiptFreeStillFailsClosedOnUnknownEnvelopeFields(t *testing.T) {
 				t.Fatal("ambiguous envelope was classified receipt-free")
 			}
 		})
+	}
+}
+
+// receiptFreeEnvelope is the smallest body that actually proves a pre-provider
+// rejection: routing metadata stating that no endpoint was selected. A bare
+// {"error":{...}} is NOT sufficient -- it makes no statement about whether the
+// gateway reached a provider, so it cannot license re-sending a billable
+// request. Tests that want a retryable rejection must use this shape.
+func receiptFreeEnvelope(status int, model string) string {
+	return fmt.Sprintf(
+		`{"error":{"code":%d,"message":"rate limited"},`+
+			`"openrouter_metadata":{"requested":%q,"strategy":"direct","attempt":1,`+
+			`"endpoints":{"total":1,"available":[`+
+			`{"provider":"DeepInfra","model":%q,"selected":false}]}}}`,
+		status, model, model)
+}
+
+// A bare error envelope must never be retried, however harmless it looks.
+func TestReceiptFreeRejectsEnvelopeWithoutRoutingMetadata(t *testing.T) {
+	bare := `{"error":{"code":429,"message":"rate limited"}}`
+	if providerFailureIsReceiptFree(liveBackpressureResult(bare), liveBackpressureModel) {
+		t.Fatal("a 429 with no routing metadata was treated as proven receipt-free")
+	}
+	withProof := receiptFreeEnvelope(429, liveBackpressureModel)
+	if !providerFailureIsReceiptFree(liveBackpressureResult(withProof), liveBackpressureModel) {
+		t.Fatal("routing metadata proving no selection was still refused; " +
+			"this case must be able to pass or the negative above proves nothing")
 	}
 }

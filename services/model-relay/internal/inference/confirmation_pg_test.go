@@ -1148,7 +1148,7 @@ func TestConfirmationChatBackpressureRetriesWhenActivated(t *testing.T) {
 		calls++
 		w.Header().Set("Retry-After", "30")
 		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited"}}`))
+		_, _ = w.Write([]byte(receiptFreeEnvelope(429, confirmationTestModel)))
 	}))
 	defer upstream.Close()
 
