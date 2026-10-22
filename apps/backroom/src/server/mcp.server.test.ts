@@ -365,6 +365,34 @@ describe('Backroom MCP tools', () => {
     }
   })
 
+  // #2979: a settings revision stores the whole policy, so the catalog must
+  // not advertise any field of a whole-policy write as optional; an omitted
+  // field would be written as its read-compat default over the live value.
+  it('advertises every field of a whole-policy settings write as required', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.listTools()
+      for (const name of [
+        'set_continual_retest_settings',
+        'apply_screener_review_settings',
+        'set_screener_provider_settings',
+      ]) {
+        const tool = response.tools.find((each) => each.name === name)
+        const settings = (
+          tool?.inputSchema as {
+            properties?: Record<string, { properties?: Record<string, unknown>; required?: string[] }>
+          }
+        ).properties?.settings
+        const fields = Object.keys(settings?.properties ?? {}).sort()
+        expect(fields.length, name).toBeGreaterThan(4)
+        expect([...(settings?.required ?? [])].sort(), name).toEqual(fields)
+      }
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('publishes every Backroom operation with MCP safety annotations', async () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     const response = await client.listTools()
@@ -726,7 +754,10 @@ describe('Backroom MCP tools', () => {
     // Keep procedure text in tool help and retain about 0.5 KB headroom.
     // Six official-control operations add compact UUID schemas and short
     // summaries. Detailed procedures stay in help; services validate IDs.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(205_300)
+    // The three whole-policy settings writes now list every field as required
+    // (#2979), so an omission cannot overwrite live policy with a default:
+    // measured 205,592. Keep about 0.5 KB of headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(206_100)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
