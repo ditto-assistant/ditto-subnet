@@ -4046,9 +4046,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'get_benchmark_contract_migration',
     {
-      title: 'Inspect zero-score v2-to-v3 migration',
+      title: 'Inspect zero-score legacy bench-2 migration',
       description:
-        'Inspect whether one zero-score legacy v2 submission can be safely migrated to v3 without replacing its artifact or history. Returns score, dataset, screening, and active-validator guards. Requires backroom:read and does not change production.',
+        'Inspect whether one zero-score legacy bench-2 submission can be safely migrated onto the open rollout target contract without replacing its artifact or history. The source contract is pinned to bench_version 2; the target is whatever the open rollout desires, so this reports blocked when no rollout is open. Returns score, dataset, screening, and active-validator guards. Requires backroom:read and does not change production.',
       inputSchema: benchmarkContractMigrationLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -4058,9 +4058,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'migrate_zero_score_benchmark_contract',
     {
-      title: 'Migrate zero-score v2 submission to v3',
+      title: 'Migrate zero-score legacy bench-2 submission',
       description:
-        'Preserve one exact zero-score v2 submission and its history while expiring unscored legacy tickets, pinning a v3 dataset, clearing stale screened-image metadata, and queuing rescreening before fresh v3 ticket issuance. Requires backroom:write.',
+        'Preserve one exact zero-score bench-2 submission and its history while expiring unscored legacy tickets, pinning a dataset for the open rollout target contract, clearing stale screened-image metadata, and queuing rescreening before fresh ticket issuance. The source is pinned to bench_version 2; the target follows the open rollout, not a fixed version. Requires backroom:write.',
       inputSchema: migrateBenchmarkContractInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -4140,7 +4140,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Inspect scored benchmark rollout qualification',
       description:
-        'Inspect whether one scored or live current-hybrid-top-five submission can be safely enrolled for the active v2-to-v3 rollout. Returns immutable artifact, rollout, score-count, dataset, screening, and validator-run guards. Requires backroom:read and does not change production.',
+        'Inspect whether one scored or live current-hybrid-top-five submission can be safely enrolled for the open benchmark rollout. The rollout target is read live rather than fixed to any version pair. Returns immutable artifact, rollout, score-count, dataset, screening, and validator-run guards. Requires backroom:read and does not change production.',
       inputSchema: benchmarkRolloutQualificationLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -4152,7 +4152,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Qualify scored submission for benchmark rollout',
       description:
-        'Enroll one exact scored or live current-hybrid-top-five submission into the active v2-to-v3 rollout and queue its required policy rescreen without deleting accepted scores or attempt history. Requires current artifact, rollout, and score-count guards from get_benchmark_rollout_qualification. Requires backroom:write.',
+        'Enroll one exact scored or live current-hybrid-top-five submission into the open benchmark rollout and queue its required policy rescreen without deleting accepted scores or attempt history. The rollout target is read live rather than fixed to any version pair. Requires current artifact, rollout, and score-count guards from get_benchmark_rollout_qualification. Requires backroom:write.',
       inputSchema: qualifyBenchmarkRolloutInputSchema,
       annotations: toolAnnotations('write', true),
     },
