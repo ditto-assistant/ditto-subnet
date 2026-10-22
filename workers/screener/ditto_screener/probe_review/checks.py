@@ -10,6 +10,7 @@ predicates is verifiable without another review layer.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -59,6 +60,8 @@ def _compare(actual: Any, op: Any, expected: Any) -> bool:
         or not isinstance(expected, numeric)
         or isinstance(actual, bool)
         or isinstance(expected, bool)
+        or not math.isfinite(actual)
+        or not math.isfinite(expected)
         or not isinstance(op, str)
     ):
         return False
@@ -113,7 +116,9 @@ def _model_request_view(entry: dict[str, Any]) -> dict[str, Any]:
         if isinstance(choice, dict) and choice.get("name"):
             choice = {"type": "function", "function": choice}
     return {
-        "text": json.dumps(request.get("messages") or request.get("input") or ""),
+        "text": json.dumps(
+            request.get("messages") or request.get("input") or "", ensure_ascii=False
+        ),
         "tool_names": names,
         "tool_choice": choice,
         "pinned": _choice_pinned(choice),
@@ -222,6 +227,9 @@ def evaluate(record: ProbeRecord, check: Check) -> tuple[bool, str]:
             _any_request(record, check.get("where") or {})
         ),
         "last_model_request": lambda: _last_request(record, check.get("where") or {}),
+        "model_request_after_tool": lambda: _model_request_after_tool(
+            record, check.get("name")
+        ),
     }
     handler = handlers.get(str(op))
     if handler is None:
@@ -256,6 +264,23 @@ def _reported(record: ProbeRecord) -> list[dict[str, Any]]:
         for c in calls
         if isinstance(c, dict)
     ]
+
+
+def _model_request_after_tool(
+    record: ProbeRecord, name: str | None
+) -> tuple[bool, str]:
+    """A model request follows the first (named) tool execution in the transcript."""
+    tool_seqs = [
+        int(e.get("seq") or 0)
+        for e in record.tool_executions
+        if name is None or as_dict(e.get("request")).get("name") == name
+    ]
+    if not tool_seqs:
+        return False, "no matching tool execution"
+    first = min(tool_seqs)
+    later = [int(e.get("seq") or 0) for e in record.model_requests]
+    after = [seq for seq in later if seq > first]
+    return bool(after), f"tool_seq={first} later_model_seqs={after[:8]}"
 
 
 def _unmatched(

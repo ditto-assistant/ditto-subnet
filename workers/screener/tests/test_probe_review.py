@@ -499,6 +499,30 @@ def test_tool_endpoint_encodes_identity() -> None:
     assert "case_id=case%26user_id%3Devil" in url and "user_id=u%231" in url
 
 
+def test_unicode_prompts_finite_counts_and_post_tool_requests() -> None:
+    chat = _chat_entry(["s"], text="café au lait")
+    chat["seq"] = 3
+    tool = _tool_entry("s", {})
+    tool["seq"] = 2
+    record = _record({}, [tool, chat])
+    where = {"op": "any_model_request", "where": {"prompt_contains": "café"}}
+    assert evaluate(record, where)[0]
+    assert not evaluate(record, {"op": "model_calls", "cmp": "!=", "n": float("nan")})[
+        0
+    ]
+    after = {"op": "model_request_after_tool", "name": "s"}
+    assert evaluate(record, after)[0]
+    chat["seq"] = 1
+    assert not evaluate(record, after)[0]
+
+
+def test_ledger_charges_a_fallback_price_without_reported_cost() -> None:
+    ledger = agent_loop.Ledger(max_cost_usd=1.0)
+    ledger.settle({"prompt_tokens": 100_000, "completion_tokens": 40_000})
+    assert ledger.cost_usd == pytest.approx(1.5)
+    assert not ledger.admit()
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

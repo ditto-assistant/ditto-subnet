@@ -105,6 +105,8 @@ class Ledger:
     max_total_tokens: int = 1_500_000
     max_cost_usd: float = 3.0
     # The reviewer contract's cumulative limits (reviewer_prompt.md).
+    fallback_input_usd_per_mtok: float = 5.0
+    fallback_output_usd_per_mtok: float = 25.0
     max_tool_calls: int = 40
     max_probes: int = 30
     tool_calls: int = 0
@@ -134,9 +136,20 @@ class Ledger:
 
     def settle(self, usage: dict[str, Any]) -> None:
         self.requests += 1
-        self.prompt_tokens += int(usage.get("prompt_tokens") or 0)
-        self.completion_tokens += int(usage.get("completion_tokens") or 0)
-        self.cost_usd += float(usage.get("cost") or 0.0)
+        prompt = int(usage.get("prompt_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or 0)
+        self.prompt_tokens += prompt
+        self.completion_tokens += completion
+        cost = usage.get("cost")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            self.cost_usd += float(cost)
+        else:
+            # Endpoints that omit the cost field are charged at a deliberately
+            # high list price so the cost cap still binds.
+            self.cost_usd += (
+                prompt * self.fallback_input_usd_per_mtok
+                + completion * self.fallback_output_usd_per_mtok
+            ) / 1e6
 
 
 _PROBING_TOOLS = frozenset({"run_case", "batch", "mutate"})

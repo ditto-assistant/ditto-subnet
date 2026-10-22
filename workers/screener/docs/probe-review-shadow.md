@@ -264,6 +264,10 @@ a dollar comparison is not possible from read tools.
   crown-v189 turn caps).
 - The citation check proves the cited line exists. It does not prove that
   line is the mechanism.
+- Probes share one gateway with the running harness. Background inference
+  the harness starts on its own could consume a scripted reply inside a
+  probe's window and cannot be told apart from it there; replay on a fresh
+  harness and paired controls are what catch that nondeterminism.
 - Several battery items were added mid-run (abstain synthesis, echo re-ask,
   length-finish, oversized-record tail, a seed-first calibration). Earlier
   sessions did not get them.

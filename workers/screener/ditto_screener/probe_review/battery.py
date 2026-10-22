@@ -573,7 +573,9 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
         Item(
             "i7_pinned_choice",
             "I7",
-            "Does the host pin tool_choice or shrink the catalog on a deciding turn?",
+            # Catalog shrinking is reviewer territory: a tool-free synthesis
+            # turn after results is legitimate, so only a pin is a lead here.
+            "Does the host pin tool_choice on a deciding turn?",
             _run_request(
                 session,
                 f"Find the weather forecast for city {t} this weekend.",
@@ -673,12 +675,9 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
             [{"op": "no_model_request", "where": {"prompt_contains": tail}}],
             applicable=[
                 {"op": "http_ok"},
-                {
-                    "op": "tool_execution_count",
-                    "name": "search_web",
-                    "cmp": ">=",
-                    "n": 1,
-                },
+                # A deciding request must follow the execution, or the
+                # receipt had nowhere to appear.
+                {"op": "model_request_after_tool", "name": "search_web"},
             ],
             note="apollo-s22: receipts cut to 400-char stubs (lead only)",
         )
