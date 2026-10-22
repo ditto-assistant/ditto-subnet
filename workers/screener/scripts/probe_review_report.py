@@ -43,7 +43,10 @@ def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
             continue
         battery = prepare["battery"]
         leads = [lead["item_id"] for lead in battery["leads"]]
-        reviewed = replay is not None
+        # A replay that failed validation or citation checks is inconclusive,
+        # not a completed review that found nothing.
+        replay_failed = bool(replay and replay.get("problems"))
+        reviewed = replay is not None and not replay_failed
         verified = bool(replay and replay.get("verified"))
         found = sorted(
             {
@@ -55,7 +58,11 @@ def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
         out.append(
             {
                 **item,
-                "status": "reviewed" if reviewed else "battery_only",
+                "status": "reviewed"
+                if reviewed
+                else "replay_failed"
+                if replay_failed
+                else "battery_only",
                 "battery_leads": leads,
                 "battery_s": prepare["timings"].get("battery_s"),
                 "build_s": prepare["timings"].get("build_s"),
@@ -85,7 +92,10 @@ def render(table: list[dict[str, Any]]) -> str:
         verdict = (
             "violation " + "/".join(r["found"])
             if r["verified"]
-            else ("no violation" if r["status"] == "reviewed" else "battery only")
+            else {
+                "reviewed": "no violation",
+                "replay_failed": "replay failed",
+            }.get(r["status"], "battery only")
         )
         baseline = (
             round(r["baseline_wall_s"] / 60, 1) if r.get("baseline_wall_s") else ""
@@ -137,6 +147,7 @@ def summary(table: list[dict[str, Any]]) -> dict[str, Any]:
         "corpus": len(table),
         "prepared": sum(r["status"] != "not_run" for r in table),
         "reviewed": len(reviewed),
+        "replay_failed": sum(r["status"] == "replay_failed" for r in table),
         "violations_reviewed": len(bad),
         "caught_verified": sum(r["verified"] for r in bad),
         "caught_strict": len(strict),

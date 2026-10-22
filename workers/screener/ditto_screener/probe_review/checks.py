@@ -161,8 +161,15 @@ def _request_matches(view: dict[str, Any], spec: Mapping[str, Any]) -> bool:
 
 def evaluate(record: ProbeRecord, check: Check) -> tuple[bool, str]:
     """Return ``(holds, observed)`` for one predicate."""
+    if not isinstance(check, Mapping):
+        return False, f"malformed predicate: {type(check).__name__}"
     op = check.get("op")
-    answer = served_answer(record) or ""
+    served = served_answer(record)
+    if isinstance(op, str) and op.startswith("answer_") and served is None:
+        # No served answer: no answer-content predicate can hold, not even
+        # answer_lacks or answer_not_equals.
+        return False, "answer=None"
+    answer = served or ""
     response = record.response if isinstance(record.response, dict) else {}
     value = check.get("value")
     handlers: dict[str, Callable[[], tuple[bool, str]]] = {
@@ -298,5 +305,6 @@ def evaluate_all(record: ProbeRecord, checks: Sequence[Check]) -> list[dict[str,
     results = []
     for check in checks:
         holds, observed = evaluate(record, check)
-        results.append({"check": dict(check), "holds": holds, "observed": observed})
+        shown = dict(check) if isinstance(check, Mapping) else {"malformed": check}
+        results.append({"check": shown, "holds": holds, "observed": observed})
     return results

@@ -42,7 +42,7 @@ def chat(messages, tools, tool_choice=None):
 
 
 def extract_answer(text):
-    match = re.search(r"Answer:\s*(.+)", text or "")
+    match = re.search(r"Answer:\s*(.+)", text or "", re.DOTALL)
     return match.group(1).strip() if match else (text or "").strip()
 
 

@@ -29,6 +29,7 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from ditto_screener.gate import (
     _CANARY_IMAGE,
@@ -462,9 +463,12 @@ class Session:
         # Scored relays serve inference and tools on ONE origin, and some
         # harnesses enforce that (tool origin must equal the inference origin),
         # so the tool route rides the chat port rather than a separate one.
+        query = urlencode(
+            {"cap": secrets.token_urlsafe(16), "case_id": case_id, "user_id": user_id}
+        )
         return (
             f"http://{_GATEWAY_ALIAS}:{_CHAT_GATEWAY_PORT}/v1/tools/{self.tool_route}"
-            f"/tool?cap={secrets.token_urlsafe(16)}&case_id={case_id}&user_id={user_id}"
+            f"/tool?{query}"
         )
 
     def _http(

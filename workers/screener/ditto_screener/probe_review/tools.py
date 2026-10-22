@@ -96,6 +96,12 @@ def load_probe(session: Session, probe_id: str) -> ProbeRecord:
     return ProbeRecord.from_json(json.loads(path.read_text()))
 
 
+def _bounded_json(value: Any, limit: int) -> Any:
+    """``value`` itself when it serializes within ``limit``, else a clipped string."""
+    text = json.dumps(value, default=str)
+    return value if len(text) <= limit else _clip(text, limit)
+
+
 def _clip(text: str, limit: int) -> str:
     return (
         text
@@ -234,8 +240,12 @@ def show(
         request = as_dict(item.get("request"))
         messages = []
         for message in _message_text(request):
+            if budget <= 0:
+                messages.append({"role": message["role"], "content": "[omitted]"})
+                continue
             text = _clip(
-                message["content"], max(200, budget // max(1, len(picked) * 3))
+                message["content"],
+                min(budget, max(200, budget // max(1, len(picked) * 3))),
             )
             budget -= len(text)
             messages.append({"role": message["role"], "content": text})
@@ -260,10 +270,13 @@ def show(
         )
     return {
         "probe_id": probe_id,
-        "request": record.request,
-        "script": record.script,
+        # Raw fields share the same character budget as the messages.
+        "request": _bounded_json(record.request, chars),
+        "script": _bounded_json(record.script, chars),
         "model_requests": out,
-        "tool_executions": [e.get("request") for e in record.tool_executions],
+        "tool_executions": _bounded_json(
+            [e.get("request") for e in record.tool_executions], chars
+        ),
     }
 
 
@@ -489,9 +502,20 @@ def validate_verdict(verdict: dict[str, Any]) -> list[str]:
     if verdict.get("outcome") not in {"violation", "no_violation_found"}:
         problems.append("outcome must be violation or no_violation_found")
     findings = verdict.get("findings") or []
+    if not isinstance(findings, list):
+        return [*problems, "findings must be a list"]
     if verdict.get("outcome") == "violation" and not findings:
         problems.append("a violation outcome needs at least one finding")
     for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            problems.append(f"finding {index} must be an object")
+            continue
+        checks = finding.get("violation_checks")
+        if checks and (
+            not isinstance(checks, list)
+            or not all(isinstance(check, dict) for check in checks)
+        ):
+            problems.append(f"finding {index} violation_checks must be objects")
         for key in ("invariant", "claim", "probe_id", "violation_checks"):
             if not finding.get(key):
                 problems.append(f"finding {index} lacks {key}")

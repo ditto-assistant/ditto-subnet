@@ -480,6 +480,25 @@ def test_rename_tools_never_renames_a_generated_name() -> None:
     assert renamed["rules"][0]["reply"]["tool_calls"][0]["name"] == "foo_v2"
 
 
+def test_missing_answer_and_malformed_entries_never_hold() -> None:
+    record = _record({"tool_calls": []})
+    for op in ("answer_lacks", "answer_not_equals", "answer_matches"):
+        assert not evaluate(record, {"op": op, "value": "x"})[0], op
+    results = evaluate_all(record, [None, "http_ok", {"op": "http_ok"}])  # type: ignore[list-item]
+    assert [r["holds"] for r in results] == [False, False, True]
+    problems = tools.validate_verdict({"outcome": "violation", "findings": [None]})
+    assert "finding 0 must be an object" in problems
+    assert tools.validate_verdict({"outcome": "violation", "findings": "x"})
+
+
+def test_tool_endpoint_encodes_identity() -> None:
+    session = Session(
+        root="/tmp/x", image="i", artifact_sha256="0" * 64, bench_version=13
+    )
+    url = session.tool_endpoint("case&user_id=evil", "u#1")
+    assert "case_id=case%26user_id%3Devil" in url and "user_id=u%231" in url
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

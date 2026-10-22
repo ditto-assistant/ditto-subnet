@@ -279,6 +279,7 @@ def review(
             if (
                 name == "submit_verdict"
                 and isinstance(result, dict)
+                and "error" not in result
                 and not result.get("problems")
             ):
                 replay = result
@@ -292,7 +293,9 @@ def review(
     return {
         "replay": replay,
         "complete": replay is not None,
-        "budget_exhausted": ledger.exhausted(),
+        "budget_exhausted": ledger.exhausted()
+        or ledger.tool_calls >= ledger.max_tool_calls
+        or session.probe_count - first_probe >= ledger.max_probes,
         "requests": ledger.requests,
         "prompt_tokens": ledger.prompt_tokens,
         "completion_tokens": ledger.completion_tokens,
