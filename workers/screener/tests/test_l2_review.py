@@ -9112,8 +9112,11 @@ def _inconclusive_review(digest: str) -> dict[str, object]:
     }
 
 
-async def test_v13_inconclusive_analyst_routes_to_l3_which_can_clear(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "i5_pass_clause", ["no_family_compiler", "runtime_described_generic_engine", None]
+)
+async def test_v13_inconclusive_analyst_adjudicates_refuted_or_unresolved_i5(
+    tmp_path: Path, i5_pass_clause: str | None
 ) -> None:
     source = "fn main() { call_model_inference(); }\nfn helper() {}"
     archive, artifact_sha = _tar(tmp_path, source)
@@ -9132,6 +9135,19 @@ async def test_v13_inconclusive_analyst_routes_to_l3_which_can_clear(
         }
     )
 
+    final = _with_policy_v10_invariants(safe)
+    invariants = final["invariants"]
+    assert isinstance(invariants, list)
+    i5 = next(
+        item for item in invariants if item["invariant"] == "i5_production_engine"
+    )
+    i5["pass_clause"] = i5_pass_clause
+    if i5_pass_clause is None:
+        final["disposition"] = "inconclusive"
+        final["resolution_basis"] = "insufficient_static_evidence"
+        i5["disposition"] = "inconclusive"
+        i5["summary"] = "The helper-to-response edge in src/main.rs remains unresolved."
+
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(json.loads(request.content))
         if len(requests) == 1:
@@ -9141,7 +9157,15 @@ async def test_v13_inconclusive_analyst_routes_to_l3_which_can_clear(
             )
         if len(requests) == 3:
             return _response([_tool_call("3", "read_file", {"path": "src/main.rs"})])
-        return _response([_tool_call(str(len(requests)), "submit_l2_review", safe)])
+        return _response(
+            [
+                _tool_call(
+                    str(len(requests)),
+                    "submit_l2_review",
+                    final if len(requests) >= 4 else safe,
+                )
+            ]
+        )
 
     result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
         str(archive),
@@ -9157,9 +9181,20 @@ async def test_v13_inconclusive_analyst_routes_to_l3_which_can_clear(
     assert "provisional result is unresolved, not a clearance" in json.dumps(
         requests[1]
     )
-    assert result.observation.ok
-    assert result.observation.risk_level == "low"
-    assert result.clearance_path == "l3_adjudicated_safe"
+    for request in requests:
+        prompt = str(request["instructions"])
+        assert "not prerequisites for a supported I5 pass" in prompt
+        assert "Missing breach proof alone warrants neither a pass nor" in prompt
+        assert "If the source does not support these\nproof obligations" not in prompt
+        assert "schema_version 3 with i5_proof for an I5 breach" in prompt
+    if i5_pass_clause is None:
+        assert not result.observation.ok
+        assert result.observation.failure_disposition == "inconclusive"
+        assert result.clearance_path == "l3_adjudicator_inconclusive"
+    else:
+        assert result.observation.ok
+        assert result.observation.risk_level == "low"
+        assert result.clearance_path == "l3_adjudicated_safe"
 
 
 def test_only_policy_v13_inconclusive_analysts_route_to_l3() -> None:
