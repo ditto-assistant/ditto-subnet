@@ -8848,11 +8848,15 @@ export const publicDethroneDecisionSchema = z.object({
 })
 
 export const publicEmissionRecipientSchema = z.object({
-  role: z.enum(['champion', 'tail']),
+  // A score-ceiling pool crowns its tied cohort as joint champions.
+  role: z.enum(['champion', 'joint_champion', 'tail']),
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
   raw_rank: z.number().int().positive(),
   share_of_miner_pool: z.number().positive().max(1),
+  // False only for a provisional incumbent whose share validators burn;
+  // Platform omits it when true.
+  paid: z.boolean().default(true),
   // Confirmation-seed depth: distinct champion-anchored CRN seeds this top-5
   // agent has been re-scored on by the continual rescore lane.
   shared_seed_confirmations: z.number().int().nonnegative().default(0),
@@ -8873,6 +8877,10 @@ export const publicKothEmissionsSchema = z.object({
   champion_share: z.number().positive().max(1),
   rank_shares: z.array(z.number().positive().max(1)),
   tail_size: z.number().int().nonnegative(),
+  // `score_ceiling_pool` splits the crown's share equally across a cohort
+  // no submission can separate within the score domain.
+  allocation_mode: z.enum(['ranked', 'score_ceiling_pool']).default('ranked'),
+  score_ceiling_pool_size: z.number().int().nonnegative().default(0),
   champion_agent_id: z.string().uuid(),
   champion_miner_hotkey: z.string(),
   raw_leader_agent_id: z.string().uuid(),
