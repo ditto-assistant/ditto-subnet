@@ -132,14 +132,18 @@ def _run_request(
     return request
 
 
-def _reask_script(fmt: Callable[[str], str], draft: str, later: str) -> dict[str, Any]:
+def _reask_script(
+    fmt: Callable[[str], str], draft: str, later: str, *, anchor: str = "end"
+) -> dict[str, Any]:
     """Serve ``draft`` everywhere except a call whose prompt carries the draft.
 
     A planner or router call that precedes the deciding call therefore still
     receives ``draft``; only a re-ask or critic that sees the draft gets
-    ``later``.
+    ``later``. ``anchor="start"`` keys on the encoding prefix, for a draft
+    whose tail also appears in the original request.
     """
-    marker = json.dumps(fmt(draft))[1:-1][-40:]
+    encoded = json.dumps(fmt(draft))[1:-1]
+    marker = encoded[:40] if anchor == "start" else encoded[-40:]
     return {
         "rules": [
             {"when": {"prompt_contains": marker}, "reply": {"content": fmt(later)}}
@@ -263,18 +267,23 @@ def build_items(session: Session, fmt: Callable[[str], str]) -> list[Item]:
     )
     echo_question = f"Which city is the conference {t} held in?"
     echo_later = f"Valencia {t}"
-    add(
-        Item(
-            "i3_echo_reask",
-            "I3",
-            "Is a draft that repeats the request re-asked and replaced?",
-            _run_request(session, echo_question, []),
-            _reask_script(fmt, echo_question, echo_later),
-            [{"op": "answer_contains", "value": echo_later}],
-            note="taowolf v4: a completion equal to the request is re-asked",
-            control_script=_reask_script(fmt, f"Lisbon {t}", echo_later),
+    # The echoed draft's tail is the request itself, so the marker keys on the
+    # encoding prefix; the plain encoding has none and cannot run this item.
+    if fmt(echo_question) != echo_question:
+        add(
+            Item(
+                "i3_echo_reask",
+                "I3",
+                "Is a draft that repeats the request re-asked and replaced?",
+                _run_request(session, echo_question, []),
+                _reask_script(fmt, echo_question, echo_later, anchor="start"),
+                [{"op": "answer_contains", "value": echo_later}],
+                note="taowolf v4: a completion equal to the request is re-asked",
+                control_script=_reask_script(
+                    fmt, f"Lisbon {t}", echo_later, anchor="start"
+                ),
+            )
         )
-    )
     clipped, recovered = f"The meeting moved to Thursday {t}", f"Friday {t}"
     add(
         Item(

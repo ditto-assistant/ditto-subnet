@@ -81,8 +81,9 @@ def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
 
 
 def _cell(value: str) -> str:
-    """Escape a Markdown table cell so corpus text cannot add columns or rows."""
-    escaped = value.replace("\\", "\\\\").replace("|", "\\|")
+    """Escape a Markdown cell: no raw HTML, extra columns, or extra rows."""
+    escaped = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    escaped = escaped.replace("\\", "\\\\").replace("|", "\\|")
     return escaped.replace("\r\n", "<br>").replace("\r", "<br>").replace("\n", "<br>")
 
 

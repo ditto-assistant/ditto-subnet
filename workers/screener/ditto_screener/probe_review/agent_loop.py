@@ -110,6 +110,7 @@ class Ledger:
     max_tool_calls: int = 40
     max_probes: int = 30
     tool_calls: int = 0
+    untracked: bool = False
     requests: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -118,14 +119,15 @@ class Ledger:
 
     def admit(self) -> bool:
         return (
-            self.requests < self.max_requests
+            not self.untracked
+            and self.requests < self.max_requests
             and self.prompt_tokens + self.completion_tokens < self.max_total_tokens
             and self.cost_usd < self.max_cost_usd
         )
 
     def over_budget(self) -> bool:
         """A settled response went past a token or cost limit: do not act on it."""
-        return (
+        return self.untracked or (
             self.prompt_tokens + self.completion_tokens > self.max_total_tokens
             or self.cost_usd > self.max_cost_usd
         )
@@ -136,8 +138,18 @@ class Ledger:
 
     def settle(self, usage: dict[str, Any]) -> None:
         self.requests += 1
-        prompt = int(usage.get("prompt_tokens") or 0)
-        completion = int(usage.get("completion_tokens") or 0)
+        prompt_raw = usage.get("prompt_tokens")
+        completion_raw = usage.get("completion_tokens")
+        if not all(
+            isinstance(v, int) and not isinstance(v, bool) and v >= 0
+            for v in (prompt_raw, completion_raw)
+        ):
+            # Untracked spend fails closed: the response is not acted on and
+            # no further request is admitted.
+            self.untracked = True
+            return
+        prompt = int(prompt_raw)  # type: ignore[arg-type]
+        completion = int(completion_raw)  # type: ignore[arg-type]
         self.prompt_tokens += prompt
         self.completion_tokens += completion
         cost = usage.get("cost")

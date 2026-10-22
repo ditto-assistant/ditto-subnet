@@ -114,7 +114,10 @@ def _model_request_view(entry: dict[str, Any]) -> dict[str, Any]:
     choice = request.get("tool_choice")
     if choice is None:
         choice = request.get("function_call")
-        if isinstance(choice, dict) and choice.get("name"):
+        if isinstance(choice, str) and choice not in {"auto", "none"}:
+            # Legacy ``function_call: "<name>"`` forces that function.
+            choice = {"type": "function", "function": {"name": choice}}
+        elif isinstance(choice, dict) and choice.get("name"):
             choice = {"type": "function", "function": choice}
     return {
         "text": json.dumps(
@@ -268,11 +271,15 @@ def _tool_executed(record: ProbeRecord, check: Check) -> tuple[bool, str]:
 def _reported(record: ProbeRecord) -> list[dict[str, Any]]:
     response = record.response if isinstance(record.response, dict) else {}
     calls = response.get("tool_calls") or []
-    return [
-        {"name": c.get("name"), "args": _parse_args(c.get("args"))}
-        for c in calls
-        if isinstance(c, dict)
-    ]
+    reported = []
+    for c in calls if isinstance(calls, list) else []:
+        if not isinstance(c, dict):
+            continue
+        # Flat {name, args} or OpenAI-nested {function: {name, arguments}}.
+        call = as_dict(c.get("function")) or c
+        args = call.get("arguments", c.get("args"))
+        reported.append({"name": call.get("name"), "args": _parse_args(args)})
+    return reported
 
 
 def _count_matching(record: ProbeRecord, where: Mapping[str, Any]) -> int:

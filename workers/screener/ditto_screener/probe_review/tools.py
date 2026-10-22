@@ -660,6 +660,14 @@ def replay_verdict(
         checks = finding["violation_checks"]
         observations = [evaluate_all(original, checks)]
         control_obs = []
+        if finding.get("control_probe_id"):
+            # The control must hold as cited, not only on replay.
+            cited = load_probe(session, finding["control_probe_id"])
+            control_obs.append(
+                evaluate_all(
+                    cited, finding.get("control_checks") or [{"op": "http_ok"}]
+                )
+            )
         for _ in range(replays):
             session.restart_harness()
             again = _replay_one(session, original)

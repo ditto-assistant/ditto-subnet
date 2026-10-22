@@ -24,6 +24,7 @@ import secrets
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import time
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
@@ -73,23 +74,37 @@ def _docker_env() -> dict[str, str] | None:
     return env
 
 
+_MAX_DOCKER_OUTPUT = 1024 * 1024
+
+
+def _tail(handle: Any) -> str:
+    """The last ``_MAX_DOCKER_OUTPUT`` bytes of a spooled stream."""
+    size = handle.seek(0, os.SEEK_END)
+    handle.seek(max(0, size - _MAX_DOCKER_OUTPUT))
+    data: bytes = handle.read()
+    return data.decode("utf-8", "replace")
+
+
 def _docker(args: list[str], *, timeout: float, stdin: Any = None) -> tuple[int, str]:
-    env = _docker_env()
-    try:
-        completed = subprocess.run(
-            ["docker", *args],
-            env=env,
-            stdin=stdin,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return 124, f"[timeout after {timeout:g}s]"
-    output = completed.stdout.decode("utf-8", "replace")
-    if completed.returncode != 0:
-        output += completed.stderr.decode("utf-8", "replace")
-    return completed.returncode, output
+    # Untrusted RUN steps can print without bound, so output spools to disk
+    # and only its tail is read back into memory.
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            completed = subprocess.run(
+                ["docker", *args],
+                env=_docker_env(),
+                stdin=stdin,
+                stdout=out,
+                stderr=err,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return 124, f"[timeout after {timeout:g}s]"
+        output = _tail(out)
+        if completed.returncode != 0:
+            output += _tail(err)
+        return completed.returncode, output
 
 
 _ARCHIVE_LABEL = "probe-review.archive-sha256"

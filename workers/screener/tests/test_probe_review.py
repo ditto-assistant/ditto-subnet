@@ -282,7 +282,7 @@ def test_agent_loop_respects_ledger_and_stops_on_verdict(tmp_path: Path) -> None
         session,
         complete=lambda _m, _s: {
             "choices": [{"message": {"role": "assistant", "content": "x"}}],
-            "usage": {},
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         },
         ledger=agent_loop.Ledger(max_requests=3),
     )
@@ -396,7 +396,7 @@ def test_legacy_function_calling_and_blank_answer_slot() -> None:
 def test_ledger_reports_exhaustion_at_the_request_limit() -> None:
     ledger = agent_loop.Ledger(max_requests=1)
     assert not ledger.exhausted()
-    ledger.settle({})
+    ledger.settle({"prompt_tokens": 0, "completion_tokens": 0})
     assert ledger.exhausted() and not ledger.over_budget()
 
 
@@ -554,6 +554,7 @@ def test_report_cells_cannot_break_the_table() -> None:
     spec.loader.exec_module(report)
     _cell = report._cell
     assert _cell("a|b\nc") == "a\\|b<br>c"
+    assert _cell("<img src=x>") == "&lt;img src=x&gt;"
 
 
 def test_requests_matching_counts_only_offering_requests() -> None:
@@ -578,6 +579,25 @@ def test_isolated_daemon_overrides_an_inherited_docker_context(
     assert env is not None
     assert env["DOCKER_HOST"] == "unix:///run/isolated.sock"
     assert "DOCKER_CONTEXT" not in env
+
+
+def test_untracked_usage_nested_reports_and_named_function_call() -> None:
+    ledger = agent_loop.Ledger()
+    ledger.settle({})
+    assert ledger.untracked and not ledger.admit() and ledger.over_budget()
+    nested = _record(
+        {"tool_calls": [{"function": {"name": "s", "arguments": '{"q": 1}'}}]},
+        [_tool_entry("s", {"q": 1})],
+    )
+    assert not evaluate(nested, {"op": "reported_not_executed"})[0]
+    legacy = {
+        "surface": "chat",
+        "request": {"functions": [{"name": "s"}], "function_call": "s"},
+    }
+    pinned = {"op": "any_model_request", "where": {"tool_choice_pinned": True}}
+    assert evaluate(_record({}, [legacy]), pinned)[0]
+    legacy["request"]["function_call"] = "auto"
+    assert not evaluate(_record({}, [legacy]), pinned)[0]
 
 
 def _fixture_archive(path: Path, violations: str) -> None:
