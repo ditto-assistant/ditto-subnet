@@ -170,7 +170,7 @@ func TestConfirmationReaderBackpressureDelay(t *testing.T) {
 			if tc.retryAfter != "" {
 				header.Set("Retry-After", tc.retryAfter)
 			}
-			if got := confirmationReaderBackpressureDelay(header); got != tc.want {
+			if got := confirmationBackpressureDelay(header); got != tc.want {
 				t.Fatalf("delay: got %s want %s", got, tc.want)
 			}
 		})
@@ -178,7 +178,7 @@ func TestConfirmationReaderBackpressureDelay(t *testing.T) {
 	multiple := make(http.Header)
 	multiple.Add("Retry-After", "1")
 	multiple.Add("Retry-After", "60")
-	if got := confirmationReaderBackpressureDelay(multiple); got != 10*time.Second {
+	if got := confirmationBackpressureDelay(multiple); got != 10*time.Second {
 		t.Fatalf("duplicate Retry-After: got %s want 10s", got)
 	}
 }
@@ -208,10 +208,9 @@ func TestConfirmationReaderBackpressureDoesNotWaitForRetryDeadline(t *testing.T)
 		1024,
 		5,
 		providerRetryPolicy{
-			retryBackpressure:              true,
-			backpressureMaxAttempts:        confirmationReaderBackpressureMaxAttempts,
-			requireReceiptFreeBackpressure: true,
-			maxElapsed:                     elapsedBudget,
+			retryBackpressure:       true,
+			backpressureMaxAttempts: confirmationBackpressureMaxAttempts,
+			maxElapsed:              elapsedBudget,
 		},
 		func(_ context.Context, delay time.Duration) { slept = delay },
 	)
@@ -239,10 +238,9 @@ func TestConfirmationReader503KeepsOrdinaryAttemptCap(t *testing.T) {
 		context.Background(), upstream.Client(), upstream.URL,
 		map[string]any{"model": "fixed/model"}, nil, 1024, 5,
 		providerRetryPolicy{
-			retryBackpressure:              true,
-			backpressureMaxAttempts:        confirmationReaderBackpressureMaxAttempts,
-			requireReceiptFreeBackpressure: true,
-			maxElapsed:                     confirmationReaderBackpressureMaxElapsed,
+			retryBackpressure:       true,
+			backpressureMaxAttempts: confirmationBackpressureMaxAttempts,
+			maxElapsed:              confirmationBackpressureMaxElapsed,
 		},
 		func(context.Context, time.Duration) {},
 	)
@@ -268,10 +266,9 @@ func TestConfirmationReaderBackpressureDoesNotScheduleCancellationWait(t *testin
 		ctx, upstream.Client(), upstream.URL,
 		map[string]any{"model": "fixed/model"}, nil, 1024, 5,
 		providerRetryPolicy{
-			retryBackpressure:              true,
-			backpressureMaxAttempts:        confirmationReaderBackpressureMaxAttempts,
-			requireReceiptFreeBackpressure: true,
-			maxElapsed:                     confirmationReaderBackpressureMaxElapsed,
+			retryBackpressure:       true,
+			backpressureMaxAttempts: confirmationBackpressureMaxAttempts,
+			maxElapsed:              confirmationBackpressureMaxElapsed,
 		},
 		func(context.Context, time.Duration) { cancel() },
 	)
@@ -326,13 +323,15 @@ func TestProviderBackpressureReceiptProofFailsClosed(t *testing.T) {
 		"nested cost in list":            {body: `{"error":{"code":429,"message":"rate limited","metadata":[{"cost":0}]}}`},
 		"nested receipt":                 {body: `{"error":{"code":429,"message":"rate limited","metadata":{"receipt":"r"}}}`},
 		"nested choices in list":         {body: `{"error":{"code":429,"message":"rate limited","metadata":[{"choices":[]}]}}`},
-		"metadata attempt one":           {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":1`, 1) + `}`},
+		"metadata attempt one":           {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":1`, 1) + `}`, want: true},
+		"metadata attempt two":           {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":2`, 1) + `}`},
 		"metadata negative zero attempt": {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":-0`, 1) + `}`},
 		"metadata attempts present":      {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0,`, `"attempt":0,"attempts":[],`, 1) + `}`},
 		"metadata endpoint selected":     {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"selected":false`, `"selected":true`, 1) + `}`},
 		"metadata requested mismatch":    {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"requested":"fixed/model"`, `"requested":"other/model"`, 1) + `}`},
 		"metadata model mismatch":        {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"model":"fixed/model"`, `"model":"other/model"`, 1) + `}`},
-		"metadata provider mismatch":     {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"provider":"DeepInfra"`, `"provider":"Azure"`, 1) + `}`},
+		"unselected other provider":      {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"provider":"DeepInfra"`, `"provider":"Azure"`, 1) + `}`, want: true},
+		"selected other provider":        {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(strings.Replace(canonicalMetadata, `"provider":"DeepInfra"`, `"provider":"Azure"`, 1), `"selected":false`, `"selected":true`, 1) + `}`},
 		"metadata null":                  {body: `{"error":{"code":429,"message":"rate limited"},"openrouter_metadata":null}`},
 	}
 	for name, tc := range tests {
@@ -340,7 +339,7 @@ func TestProviderBackpressureReceiptProofFailsClosed(t *testing.T) {
 			got := providerBackpressureIsReceiptFree(&providerHTTPResult{
 				status: http.StatusTooManyRequests,
 				body:   []byte(tc.body),
-			}, "fixed/model", "deepinfra")
+			}, "fixed/model")
 			if got != tc.want {
 				t.Fatalf("receipt-free classification: got %v want %v", got, tc.want)
 			}
@@ -349,7 +348,7 @@ func TestProviderBackpressureReceiptProofFailsClosed(t *testing.T) {
 	if providerBackpressureIsReceiptFree(&providerHTTPResult{
 		status: http.StatusInternalServerError,
 		body:   []byte(`{"error":"boom"}`),
-	}, "fixed/model", "deepinfra") {
+	}, "fixed/model") {
 		t.Fatal("non-429/503 response was classified as receipt-free backpressure")
 	}
 }
@@ -551,7 +550,7 @@ func TestGenerationErrorWithReceiptMetadataIsClassifiedWithoutReplay(t *testing.
 			if got := chatProviderFailure(exhausted).headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
 				t.Fatalf("failure class=%q", got)
 			}
-			if providerFailureIsReceiptFree(&providerHTTPResult{status: status, body: []byte(body)}, "openai/gpt-oss-20b", "openrouter") {
+			if providerFailureIsReceiptFree(&providerHTTPResult{status: status, body: []byte(body)}, "openai/gpt-oss-20b") {
 				t.Fatal("receipt-bearing failure must never authorize replay")
 			}
 		})

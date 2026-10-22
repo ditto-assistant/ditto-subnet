@@ -831,8 +831,11 @@ func TestConfirmationChatBackpressureExhaustionSettlesOnce(t *testing.T) {
 	body := []byte(confirmationReaderChatBody())
 	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, nonce, body)))
 	expectEnvelope(t, w, 502, relayhttp.CodeHTTPException, "confirmation provider unavailable")
-	if calls != confirmationReaderBackpressureMaxAttempts {
-		t.Fatalf("backpressure attempts: got %d want %d", calls, confirmationReaderBackpressureMaxAttempts)
+	// Default-off: a scored confirmation request is single-shot and parks for an
+	// operator retry. Pinned to the concrete value, not to whichever constant the
+	// retry path happens to select, so this cannot silently track a retune.
+	if calls != 1 {
+		t.Fatalf("backpressure attempts: got %d want 1", calls)
 	}
 	var status string
 	var prompt, completion, cost, reserved int64
@@ -1131,4 +1134,91 @@ func TestConfirmationEmbeddingsLaneAndIdentityPins(t *testing.T) {
 		w := serve(f.deps, proxyRequest(confirmationEmbPath, string(body), f.signedHeaders(1, uuid.New(), body)))
 		expectEnvelope(t, w, 429, relayhttp.CodeHTTPException, "confirmation embedding declined: budget_exhausted")
 	})
+}
+
+// TestConfirmationChatBackpressureRetriesWhenActivated is the end-to-end proof
+// for DITTO_CONFIRMATION_BACKPRESSURE_RETRY. With the gate on, a receipt-free
+// 429 is re-dispatched once, honouring the gateway's Retry-After rather than
+// the ordinary 5s hint, and the settlement still records exactly one failed
+// request with no tokens and no cost.
+func TestConfirmationChatBackpressureRetriesWhenActivated(t *testing.T) {
+	var calls int
+	var sleeps []time.Duration
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited"}}`))
+	}))
+	defer upstream.Close()
+
+	cfg := chatTestConfig(t, upstream.URL)
+	cfg.Inference.ConfirmationBackpressureRetry = true
+	f := newConfirmationFixture(t, cfg, "judge", confirmationTestModel, "openrouter")
+	f.deps.Sleep = func(_ context.Context, delay time.Duration) { sleeps = append(sleeps, delay) }
+
+	nonce := uuid.New()
+	body := []byte(confirmationChatBody())
+	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, nonce, body)))
+	expectEnvelope(t, w, 502, relayhttp.CodeHTTPException, "confirmation provider unavailable")
+
+	if confirmationBackpressureMaxAttempts != 2 {
+		t.Fatalf("this fixture assumes a two-attempt budget; constant is %d",
+			confirmationBackpressureMaxAttempts)
+	}
+	if calls != 2 {
+		t.Fatalf("activated backpressure attempts: got %d want 2", calls)
+	}
+	if len(sleeps) != 1 || sleeps[0] != 30*time.Second {
+		t.Fatalf("activated backpressure waits: got %v want [30s]", sleeps)
+	}
+
+	var status string
+	var prompt, completion, cost int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT status, prompt_tokens, completion_tokens, cost_microusd
+		 FROM confirmation_inference_requests WHERE grant_id = $1 AND nonce = $2`,
+		f.grantID, nonce).Scan(&status, &prompt, &completion, &cost); err != nil {
+		t.Fatalf("read retried request: %v", err)
+	}
+	if status != "failed" || prompt != 0 || completion != 0 || cost != 0 {
+		t.Fatalf("retried request settle: %s %d/%d cost=%d", status, prompt, completion, cost)
+	}
+
+	var requestCount, rows int
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT request_count, (SELECT count(*) FROM confirmation_inference_requests WHERE grant_id = $1)
+		 FROM confirmation_inference_grants WHERE grant_id = $1`, f.grantID).
+		Scan(&requestCount, &rows); err != nil {
+		t.Fatalf("read retried grant: %v", err)
+	}
+	// Two upstream dispatches, one accounted request: a receipt-free retry must
+	// not bill the grant twice.
+	if requestCount != 1 || rows != 1 {
+		t.Fatalf("retry double-counted the grant: request_count=%d rows=%d", requestCount, rows)
+	}
+}
+
+// A receipt-bearing 429 must stay single-shot even with the gate activated.
+func TestConfirmationChatActivatedRetrySkipsReceiptBearingBackpressure(t *testing.T) {
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited"},"usage":{"total_tokens":7}}`))
+	}))
+	defer upstream.Close()
+
+	cfg := chatTestConfig(t, upstream.URL)
+	cfg.Inference.ConfirmationBackpressureRetry = true
+	f := newConfirmationFixture(t, cfg, "judge", confirmationTestModel, "openrouter")
+	f.deps.Sleep = func(context.Context, time.Duration) {}
+
+	body := []byte(confirmationChatBody())
+	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, uuid.New(), body)))
+	expectEnvelope(t, w, 502, relayhttp.CodeHTTPException, "confirmation provider unavailable")
+	if calls != 1 {
+		t.Fatalf("receipt-bearing backpressure attempts: got %d want 1", calls)
+	}
 }
