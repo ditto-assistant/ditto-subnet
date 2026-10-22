@@ -729,7 +729,7 @@ describe('Backroom MCP tools', () => {
     // summaries. Detailed procedures stay in help; services validate IDs.
     // One publication-evidence read adds two compact UUIDs and a one-line
     // summary: measured 205,900 bytes. Retain about 0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(206_400)
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(206_800)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

@@ -76,6 +76,38 @@ class ShadowReviewObservationRequest(BaseModel):
         return self
 
 
+class ProbeBatteryLead(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    item_id: Annotated[str, Field(pattern=r"^[a-z0-9_]{1,64}$")]
+    invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
+
+
+class ProbeBatteryObservationRequest(BaseModel):
+    """Bounded report-only probe battery leads for one active attempt."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    settings_revision: Annotated[int, Field(ge=1)]
+    settings_scope: Annotated[str, Field(pattern=r"^(?:\*|[a-zA-Z0-9._-]{1,63})$")]
+    settings_checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    status: Literal["complete", "calibration_failed", "timeout", "error"]
+    encoding: Annotated[str, Field(pattern=r"^[a-z_]{1,32}$")] | None = None
+    seed_first: bool = False
+    items_run: Annotated[int, Field(ge=0, le=128)] = 0
+    probe_count: Annotated[int, Field(ge=0, le=512)] = 0
+    leads: tuple[ProbeBatteryLead, ...] = ()
+    battery_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeBatteryObservationRequest:
+        if len(self.leads) > 32:
+            raise ValueError("probe battery has too many leads")
+        return self
+
+
 class ShadowReviewObservationResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
@@ -131,6 +163,9 @@ class ReviewSettings(BaseModel):
     fanout_shadow_daily_cost_usd: Annotated[float, Field(gt=0, le=100)] = 20.0
     fanout_shadow_global_concurrency: Literal[1] = 1
     fanout_shadow_reserved_targon_slots: Annotated[int, Field(ge=1, le=4)] = 1
+    # Report-only zero-token probe battery against the gate's built image.
+    probe_battery_mode: Literal["off", "shadow"] = "off"
+    probe_battery_timeout_seconds: Annotated[int, Field(ge=30, le=600)] = 120
     # Aggregate effective input: uncached tokens plus 10% of cached tokens.
     max_input_tokens: Annotated[int, Field(ge=1, le=5_000_000)]
     max_output_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
@@ -223,6 +258,12 @@ _POST_CHECKSUM_FIELDS: tuple[str, ...] = (
     "l2_always_escalate",
     "adjudicator_max_completion_tokens",
 )
+# Hashed only while the battery is enabled, so they sit outside the
+# introduction-ordered replay above.
+_PROBE_BATTERY_FIELDS: tuple[str, ...] = (
+    "probe_battery_mode",
+    "probe_battery_timeout_seconds",
+)
 _DEFAULTS = {
     name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
 }
@@ -243,6 +284,17 @@ class EffectiveReviewSettings(BaseModel):
         payload = json.dumps(current, sort_keys=True, separators=(",", ":")).encode()
         if hashlib.sha256(payload).hexdigest() == self.checksum:
             return self
+        if self.settings.probe_battery_mode == "off":
+            # Platform hashes an inactive battery in the shape that predates
+            # it, so every existing revision keeps verifying; every legacy
+            # shape below is derived from this battery-free payload.
+            for name in _PROBE_BATTERY_FIELDS:
+                current.pop(name)
+            payload = json.dumps(
+                current, sort_keys=True, separators=(",", ":")
+            ).encode()
+            if hashlib.sha256(payload).hexdigest() == self.checksum:
+                return self
         if self.settings.adjudicator_max_completion_tokens is None:
             # Platform omits an inherited cap from the checksum so existing
             # immutable revisions keep verifying across a rolling deploy.
@@ -434,6 +486,10 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
     canonical = settings.model_dump(mode="json")
     if settings.adjudicator_max_completion_tokens is None:
         canonical.pop("adjudicator_max_completion_tokens")
+    if settings.probe_battery_mode == "off":
+        # Same shape Platform hashes for an inactive battery.
+        for name in _PROBE_BATTERY_FIELDS:
+            canonical.pop(name)
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return EffectiveReviewSettings(
         revision=0,

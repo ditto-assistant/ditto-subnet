@@ -42,6 +42,7 @@ from ditto.api_models.screener import (
 from ditto.api_models.screener_review_settings import (
     FANOUT_SHADOW_SETTINGS_FIELDS,
     INTEGRITY_DOUBLE_CHECK_SCOPE,
+    PROBE_BATTERY_SETTINGS_FIELDS,
     ScreenerReviewSettings,
 )
 from ditto.api_models.system_health import (
@@ -98,6 +99,7 @@ from ditto.db.models import (
     ScreenerNode,
     ScreenerNodeChannelSettingsRevision,
     ScreenerPolicyActivation,
+    ScreenerProbeBattery,
     ScreenerProviderSettingsRevision,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
@@ -188,7 +190,7 @@ def test_inactive_fanout_checksum_keeps_the_pre_fanout_wire_shape() -> None:
         fanout_shadow_daily_cost_usd=5,
     )
     legacy = settings.model_dump(mode="json")
-    for field in FANOUT_SHADOW_SETTINGS_FIELDS:
+    for field in (*FANOUT_SHADOW_SETTINGS_FIELDS, *PROBE_BATTERY_SETTINGS_FIELDS):
         legacy.pop(field)
     legacy.pop("l2_always_escalate")
     legacy.pop("adjudicator_max_completion_tokens")
@@ -204,7 +206,7 @@ def test_always_escalate_is_bound_into_the_checksum_only_when_enabled() -> None:
     normal = ScreenerReviewSettings(mode="enforce")
     escalating = normal.model_copy(update={"l2_always_escalate": True})
     shape = escalating.model_dump(mode="json")
-    for field in FANOUT_SHADOW_SETTINGS_FIELDS:
+    for field in (*FANOUT_SHADOW_SETTINGS_FIELDS, *PROBE_BATTERY_SETTINGS_FIELDS):
         shape.pop(field)
     shape.pop("adjudicator_max_completion_tokens")
     expected = hashlib.sha256(
@@ -212,6 +214,16 @@ def test_always_escalate_is_bound_into_the_checksum_only_when_enabled() -> None:
     ).hexdigest()
     assert _review_settings_checksum(escalating) == expected
     assert _review_settings_checksum(escalating) != _review_settings_checksum(normal)
+
+
+def test_probe_battery_is_bound_into_the_checksum_only_when_enabled() -> None:
+    off = ScreenerReviewSettings()
+    on = off.model_copy(update={"probe_battery_mode": "shadow"})
+    longer = on.model_copy(update={"probe_battery_timeout_seconds": 300})
+    assert _review_settings_checksum(off) == _review_settings_checksum(
+        off.model_copy(update={"probe_battery_timeout_seconds": 300})
+    )
+    assert len({_review_settings_checksum(x) for x in (off, on, longer)}) == 3
 
 
 def test_explicit_l4_cap_changes_checksum_without_changing_l2() -> None:
@@ -2539,6 +2551,85 @@ class TestShadowReview:
             attempt.deadline = datetime.now(UTC) - timedelta(minutes=1)
         response = await client.post(url, json=payload)
         assert response.status_code == 409
+
+
+class TestProbeBattery:
+    async def test_report_only_battery_is_idempotent_and_needs_an_enabling_revision(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        agent_id = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING, name="battery-agent"
+        )
+        attempt_id = uuid4()
+        enabled = ScreenerReviewSettings(probe_battery_mode="shadow")
+        disabled = ScreenerReviewSettings()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            revisions = {}
+            for name, settings in (("on", enabled), ("off", disabled)):
+                revision = ScreenerReviewSettingsRevision(
+                    parent_revision=0,
+                    scope=f"ditto-screener-{name}",
+                    settings=settings.model_dump(mode="json"),
+                    checksum=_review_settings_checksum(settings),
+                    reason="probe battery canary",
+                    actor="test",
+                )
+                session.add(revision)
+                await session.flush()
+                revisions[name] = revision
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=now,
+                    deadline=now + timedelta(minutes=30),
+                )
+            )
+            on = (revisions["on"].revision, revisions["on"].checksum)
+            off = (revisions["off"].revision, revisions["off"].checksum)
+        payload = {
+            "attempt_id": str(attempt_id),
+            "artifact_sha256": _SHA256,
+            "settings_revision": on[0],
+            "settings_scope": "ditto-screener-on",
+            "settings_checksum": on[1],
+            "status": "complete",
+            "encoding": "answer_line",
+            "seed_first": True,
+            "items_run": 14,
+            "probe_count": 31,
+            "leads": [{"item_id": "i7_identical_twice", "invariant": "I7"}],
+            "battery_ms": 41_000,
+        }
+        url = f"/api/v1/screener/agent/{agent_id}/probe-battery"
+
+        assert (await client.post(url, json=payload)).status_code == 200
+        assert (await client.post(url, json=payload)).status_code == 200
+        async with session_maker() as session:
+            row = await session.get(ScreenerProbeBattery, attempt_id)
+            agent = await session.get(Agent, agent_id)
+            assert row is not None and row.leads == [
+                {"item_id": "i7_identical_twice", "invariant": "I7"}
+            ]
+            assert agent is not None and agent.status == AgentStatus.SCREENING
+
+        conflicting = {**payload, "leads": []}
+        assert (await client.post(url, json=conflicting)).status_code == 409
+        not_enabled = {
+            **payload,
+            "settings_revision": off[0],
+            "settings_scope": "ditto-screener-off",
+            "settings_checksum": off[1],
+        }
+        assert (await client.post(url, json=not_enabled)).status_code == 409
 
 
 class TestHeartbeat:

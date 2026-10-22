@@ -12,12 +12,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ditto.api_models.screener_review_settings import AdminShadowReviewObservation
+from ditto.api_models.screener_review_settings import (
+    AdminProbeBatteryObservation,
+    AdminShadowReviewObservation,
+)
 
 if TYPE_CHECKING:
-    from ditto.db.models import ScreenerShadowReview
+    from ditto.db.models import ScreenerProbeBattery, ScreenerShadowReview
 
-__all__ = ["shadow_review_observation"]
+__all__ = ["probe_battery_observation", "shadow_review_observation"]
 
 
 def shadow_review_observation(
@@ -47,6 +50,29 @@ def shadow_review_observation(
             "response_models": list(row.response_models),
             "response_providers": list(row.response_providers),
             "usage": dict(row.usage),
+            "created_at": row.created_at,
+        }
+    )
+
+
+def probe_battery_observation(
+    row: ScreenerProbeBattery,
+) -> AdminProbeBatteryObservation:
+    """Project one persisted report-only probe battery onto its admin model."""
+    return AdminProbeBatteryObservation.model_validate(
+        {
+            "attempt_id": row.attempt_id,
+            "agent_id": row.agent_id,
+            "artifact_sha256": row.artifact_sha256,
+            "settings_revision": row.settings_revision,
+            "settings_scope": row.settings_scope,
+            "status": row.status,
+            "encoding": row.encoding,
+            "seed_first": row.seed_first,
+            "items_run": row.items_run,
+            "probe_count": row.probe_count,
+            "leads": [dict(lead) for lead in row.leads],
+            "battery_ms": row.battery_ms,
             "created_at": row.created_at,
         }
     )

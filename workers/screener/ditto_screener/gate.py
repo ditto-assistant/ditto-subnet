@@ -58,6 +58,7 @@ import secrets
 import shutil
 import signal
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -1106,6 +1107,11 @@ class BuildGate:
             config.static_preflight_audit_file
         )
         self._review_settings_key: tuple[int, str] | None = None
+        # Report-only probe battery: (mode, timeout) from the applied revision
+        # and per-attempt bounded summaries the worker pops and submits with
+        # the shadow review, before the signed decision closes the attempt.
+        self._probe_battery: tuple[str, int] = ("off", 120)
+        self._probe_battery_reports: dict[UUID, dict[str, Any]] = {}
         self._executor_verified = False
         self._capture_enforce_result = capture_enforce_result
         self._configure_source_reviewer(config)
@@ -1192,6 +1198,10 @@ class BuildGate:
             rotation_id=effective.settings.policy_manifest_rotation_id,
         )
         self._configure_source_reviewer(runtime)
+        self._probe_battery = (
+            effective.settings.probe_battery_mode,
+            effective.settings.probe_battery_timeout_seconds,
+        )
         self._review_settings_key = key
         logger.info(
             "applied review settings revision=%d scope=%s mode=%s model=%s "
@@ -1207,6 +1217,10 @@ class BuildGate:
     def pop_shadow_review(self, attempt_id: UUID) -> L2RunResult | None:
         """Return and remove one attempt's non-authoritative shadow result."""
         return self._source_reviewer.pop_shadow_result(attempt_id)
+
+    def pop_probe_battery(self, attempt_id: UUID) -> dict[str, Any] | None:
+        """Return and remove one attempt's report-only probe battery summary."""
+        return self._probe_battery_reports.pop(attempt_id, None)
 
     def pop_preview_l1_review(self, attempt_id: UUID) -> SourceReviewObservation | None:
         """Return the L1 lead paired with an isolated enforce preview."""
@@ -2102,6 +2116,32 @@ class BuildGate:
                         logger.info("v13 shadow runtime observation budget expired")
                     except Exception:  # noqa: BLE001 - never change a settled decision
                         logger.exception("v13 shadow runtime observations unavailable")
+            # The probe battery runs last for the same reason: it drives the
+            # screened image with dictated model replies, so it must never
+            # precede the decision it cannot influence.
+            if (
+                self._probe_battery[0] == "shadow"
+                and policy_version == 13
+                and not build_only
+                and used_local_docker
+                and built_image_id
+            ):
+                remaining = self._lease_remaining(deadline)
+                budget = float(self._probe_battery[1])
+                if remaining is not None:
+                    budget = min(budget, remaining - 30.0)
+                if budget > 0:
+                    try:
+                        self._probe_battery_reports[
+                            attempt_id
+                        ] = await self._run_probe_battery(
+                            image_id=built_image_id,
+                            artifact_sha256=sha256.lower(),
+                            bench_version=bench_version,
+                            budget=budget,
+                        )
+                    except Exception:  # noqa: BLE001 - never change a settled decision
+                        logger.exception("probe battery shadow unavailable")
             return decision
         except Exception as e:  # noqa: BLE001 - the loop must never die on one agent
             logger.exception("gate error for agent_id=%s", agent_id)
@@ -2142,6 +2182,92 @@ class BuildGate:
             )
 
     # --- lease budget -----------------------------------------------------
+
+    async def _run_probe_battery(
+        self,
+        *,
+        image_id: str,
+        artifact_sha256: str,
+        bench_version: int,
+        budget: float,
+    ) -> dict[str, Any]:
+        """Run the zero-token battery in a killable subprocess; bound the result.
+
+        The child gets only what the docker CLI needs: no Platform, provider,
+        or node credentials. It prints lead names, never probe content.
+        """
+        from ditto_screener.probe_review.gate_shadow import container_names
+
+        token = secrets.token_hex(6)
+        shared_root = os.environ.get("SCREENER_GATEWAY_STATE_ROOT")
+        if shared_root:
+            Path(shared_root).mkdir(mode=0o700, parents=True, exist_ok=True)
+        root = tempfile.mkdtemp(prefix="ditto-probe-battery-", dir=shared_root)
+        env = {
+            key: value
+            for key in ("PATH", "HOME", "LANG", "TMPDIR", "XDG_RUNTIME_DIR")
+            if (value := os.environ.get(key))
+        }
+        env["PROBE_REVIEW_DOCKER_BIN"] = self._config.docker_bin
+        if self._config.docker_host is not None:
+            env["DOCKER_HOST"] = self._config.docker_host
+        started = time.monotonic()
+        status = "error"
+        summary: dict[str, Any] | None = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "ditto_screener.probe_review",
+                "gate-battery",
+                "--image",
+                image_id,
+                "--root",
+                root,
+                "--artifact-sha256",
+                artifact_sha256,
+                "--bench-version",
+                str(bench_version),
+                "--token",
+                token,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=env,
+            )
+            try:
+                async with asyncio.timeout(budget):
+                    stdout = await proc.stdout.read(65_536) if proc.stdout else b""
+                    await proc.wait()
+            except TimeoutError:
+                status = "timeout"
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+            else:
+                if proc.returncode == 0:
+                    with contextlib.suppress(ValueError):
+                        parsed = json.loads(stdout)
+                        if isinstance(parsed, dict):
+                            summary = parsed
+        finally:
+            network, gateway, harness = container_names(token)
+            with contextlib.suppress(Exception):
+                await self._run(["rm", "-f", harness, gateway], timeout=60)
+            with contextlib.suppress(Exception):
+                await self._run(["network", "rm", network], timeout=60)
+            shutil.rmtree(root, ignore_errors=True)
+        if summary is None:
+            summary = {
+                "status": status,
+                "encoding": None,
+                "seed_first": False,
+                "items_run": 0,
+                "probe_count": 0,
+                "leads": [],
+            }
+        summary["battery_ms"] = min(int((time.monotonic() - started) * 1000), 3_600_000)
+        return summary
 
     @staticmethod
     def _lease_remaining(deadline: Deadline) -> float | None:

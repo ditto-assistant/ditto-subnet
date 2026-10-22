@@ -63,6 +63,11 @@ class SandboxError(RuntimeError):
     """Infrastructure failure: never evidence about the submission."""
 
 
+def _docker_bin() -> str:
+    """The gate passes its own docker binary; the daemon still comes from env."""
+    return os.environ.get("PROBE_REVIEW_DOCKER_BIN") or "docker"
+
+
 def _docker_env() -> dict[str, str] | None:
     """One daemon builds and runs every probe image: PROBE_REVIEW_DOCKER_HOST."""
     host = os.environ.get("PROBE_REVIEW_DOCKER_HOST")
@@ -98,7 +103,7 @@ def _docker(args: list[str], *, timeout: float, stdin: Any = None) -> tuple[int,
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         try:
             completed = subprocess.run(
-                ["docker", *args],
+                [_docker_bin(), *args],
                 env=_docker_env(),
                 stdin=stdin,
                 stdout=out,
@@ -631,7 +636,7 @@ class Session:
         try:
             completed = subprocess.run(
                 [
-                    "docker",
+                    _docker_bin(),
                     "exec",
                     self.gateway,
                     "python",

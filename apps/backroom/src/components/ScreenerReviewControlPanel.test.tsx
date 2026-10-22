@@ -48,6 +48,8 @@ const settings = {
   fanout_shadow_daily_cost_usd: 20,
   fanout_shadow_global_concurrency: 1 as const,
   fanout_shadow_reserved_targon_slots: 1,
+  probe_battery_mode: 'off' as const,
+  probe_battery_timeout_seconds: 120,
   source_review_reasoning_effort: 'high' as const,
   source_review_model: 'openai/gpt-5.6-luna' as const,
   source_review_timeout_seconds: 1_800,
@@ -100,6 +102,7 @@ const state: ScreenerReviewControl = {
     },
   ],
   shadow_observations: [],
+  probe_battery_observations: [],
   policy_manifests: [],
 }
 

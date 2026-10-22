@@ -14,6 +14,7 @@ ditto_screener.probe_review``)::
     PR search  --session DIR --pattern 'trim_matches'
     PR verdict --session DIR --verdict @verdict.json
     PR stop    --session DIR
+    PR gate-battery --image ID --root DIR --artifact-sha256 S --token T
 
 Nothing here contacts Platform; outputs are shadow evidence only.
 """
@@ -154,6 +155,12 @@ def main(argv: list[str] | None = None) -> int:
         help="build on the default Docker daemon instead of PROBE_REVIEW_DOCKER_HOST "
         "(submitted RUN steps get that daemon's network)",
     )
+    g = sub.add_parser("gate-battery", help="bounded battery summary for the gate")
+    g.add_argument("--image", required=True)
+    g.add_argument("--root", required=True)
+    g.add_argument("--artifact-sha256", required=True)
+    g.add_argument("--bench-version", type=int, default=13)
+    g.add_argument("--token", required=True)
     for name in (
         "run",
         "show",
@@ -204,6 +211,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd == "prepare":
         result: Any = prepare(args)
+    elif args.cmd == "gate-battery":
+        from ditto_screener.probe_review.gate_shadow import run_gate_battery
+
+        result = run_gate_battery(
+            image=args.image,
+            root=args.root,
+            artifact_sha256=args.artifact_sha256,
+            bench_version=args.bench_version,
+            token=args.token,
+        )
     else:
         session = Session.load(args.session)
         if args.cmd == "run":

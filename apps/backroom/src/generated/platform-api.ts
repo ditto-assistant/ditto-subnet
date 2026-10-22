@@ -7066,6 +7066,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/agent/{agent_id}/probe-battery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Probe Battery
+         * @description Persist report-only probe battery leads without mutating submission state.
+         *
+         *     A lead is an unverified black-box observation from dictated model replies;
+         *     it never participates in the signed decision or any queue transition.
+         */
+        post: operations["submit_probe_battery_api_v1_screener_agent__agent_id__probe_battery_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/agent/{agent_id}/result": {
         parameters: {
             query?: never;
@@ -12190,6 +12213,54 @@ export interface components {
             /** Submission Count */
             submission_count: number;
         };
+        /** AdminProbeBatteryLead */
+        AdminProbeBatteryLead: {
+            /** Invariant */
+            invariant: string;
+            /** Item Id */
+            item_id: string;
+        };
+        /** AdminProbeBatteryObservation */
+        AdminProbeBatteryObservation: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Battery Ms */
+            battery_ms: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Encoding */
+            encoding: string | null;
+            /** Items Run */
+            items_run: number;
+            /** Leads */
+            leads: components["schemas"]["AdminProbeBatteryLead"][];
+            /** Probe Count */
+            probe_count: number;
+            /** Seed First */
+            seed_first: boolean;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Settings Scope */
+            settings_scope: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "complete" | "calibration_failed" | "timeout" | "error";
+        };
         /**
          * AdminQuarantineAgentContext
          * @description Submission metadata an operator needs while judging a quarantine.
@@ -13131,6 +13202,11 @@ export interface components {
             known_instances: string[];
             /** Policy Manifests */
             policy_manifests: components["schemas"]["ScreenerPolicyManifestView"][];
+            /**
+             * Probe Battery Observations
+             * @default []
+             */
+            probe_battery_observations: components["schemas"]["AdminProbeBatteryObservation"][];
             /** Shadow Observations */
             shadow_observations: components["schemas"]["AdminShadowReviewObservation"][];
         };
@@ -21592,6 +21668,81 @@ export interface components {
             schema_version: 1;
         };
         /**
+         * ConfirmationFailureGroup
+         * @description One (window, lane, model, provider, status) confirmation bucket.
+         */
+        ConfirmationFailureGroup: {
+            /** Bundles Affected */
+            bundles_affected: number;
+            /** Calls */
+            calls: number;
+            /**
+             * Lane
+             * @enum {string}
+             */
+            lane: "reader" | "judge" | "embedding";
+            /** Max Duration Ms */
+            max_duration_ms: number;
+            /** Model */
+            model: string;
+            /** P50 Duration Ms */
+            p50_duration_ms: number;
+            /**
+             * Provider Basis
+             * @enum {string}
+             */
+            provider_basis: "confirmed_selected" | "last_attempted" | "configured" | "router_internal" | "unknown" | "unrecognized";
+            /** Status */
+            status: string;
+            /** Upstream Provider */
+            upstream_provider: string | null;
+            /** Window Seconds */
+            window_seconds: number;
+            /** Without Cost */
+            without_cost: number;
+        };
+        /**
+         * ConfirmationFailureLaneWindow
+         * @description Confirmation-lane totals for one window.
+         *
+         *     ``lane`` is the confirmation grant lane (reader / judge / embedding), which
+         *     is a different axis from ``request_kind`` on the ordinary lanes: a
+         *     confirmation reader call is also a chat call. The two taxonomies are kept
+         *     separate rather than merged because they read different tables and need
+         *     different windows.
+         */
+        ConfirmationFailureLaneWindow: {
+            /** Bundles With Failure */
+            bundles_with_failure: number;
+            /** Calls */
+            calls: number;
+            /** Completed */
+            completed: number;
+            /** Failed */
+            failed: number;
+            /** Failed Max Duration Ms */
+            failed_max_duration_ms: number;
+            /** Failed P50 Duration Ms */
+            failed_p50_duration_ms: number;
+            /** Failed Without Cost */
+            failed_without_cost: number;
+            /** Failed Without Provider */
+            failed_without_provider: number;
+            /** Failure Share */
+            failure_share: number;
+            /** In Flight */
+            in_flight: number;
+            /**
+             * Lane
+             * @enum {string}
+             */
+            lane: "reader" | "judge" | "embedding";
+            /** Settled */
+            settled: number;
+            /** Window Seconds */
+            window_seconds: number;
+        };
+        /**
          * ConfirmationInferenceGrantOffer
          * @description One ticket-scoped, lane-specific Platform inference capability.
          */
@@ -24592,6 +24743,21 @@ export interface components {
         };
         /** InferenceFailureTaxonomy */
         InferenceFailureTaxonomy: {
+            /**
+             * Confirmation Groups
+             * @default []
+             */
+            confirmation_groups: components["schemas"]["ConfirmationFailureGroup"][];
+            /**
+             * Confirmation Lanes
+             * @default []
+             */
+            confirmation_lanes: components["schemas"]["ConfirmationFailureLaneWindow"][];
+            /**
+             * Confirmation Window Seconds
+             * @default []
+             */
+            confirmation_window_seconds: number[];
             /** Group Limit */
             group_limit: number;
             /** Groups */
@@ -27648,6 +27814,67 @@ export interface components {
             variant_correct: number;
             /** Variant Only Correct */
             variant_only_correct: number;
+        };
+        /** ProbeBatteryLead */
+        ProbeBatteryLead: {
+            /** Invariant */
+            invariant: string;
+            /** Item Id */
+            item_id: string;
+        };
+        /**
+         * ProbeBatteryObservationRequest
+         * @description Bounded zero-token probe battery leads for an active attempt.
+         *
+         *     Report-only: a lead is an unverified black-box observation and never
+         *     participates in the signed decision.
+         */
+        ProbeBatteryObservationRequest: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Battery Ms
+             * @default 0
+             */
+            battery_ms: number;
+            /** Encoding */
+            encoding?: string | null;
+            /**
+             * Items Run
+             * @default 0
+             */
+            items_run: number;
+            /**
+             * Leads
+             * @default []
+             */
+            leads: components["schemas"]["ProbeBatteryLead"][];
+            /**
+             * Probe Count
+             * @default 0
+             */
+            probe_count: number;
+            /**
+             * Seed First
+             * @default false
+             */
+            seed_first: boolean;
+            /** Settings Checksum */
+            settings_checksum: string;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Settings Scope */
+            settings_scope: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "complete" | "calibration_failed" | "timeout" | "error";
         };
         /** ProbeGrade */
         ProbeGrade: {
@@ -35902,6 +36129,17 @@ export interface components {
              * @default v8-luna-source-review-behavioral-oracle
              */
             policy_manifest_rotation_id: string;
+            /**
+             * Probe Battery Mode
+             * @default off
+             * @enum {string}
+             */
+            probe_battery_mode: "off" | "shadow";
+            /**
+             * Probe Battery Timeout Seconds
+             * @default 120
+             */
+            probe_battery_timeout_seconds: number;
             /**
              * Source Review Max Completion Tokens
              * @default 8000
@@ -55492,6 +55730,44 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    submit_probe_battery_api_v1_screener_agent__agent_id__probe_battery_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProbeBatteryObservationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowReviewObservationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

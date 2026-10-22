@@ -309,3 +309,30 @@ Follow-ups outside this prototype:
   gateway. Confirm which origin the live scorer uses and align the gate.
 
 Not built or not reviewed (host capacity): blackbox v1 (python, reject), blackbox-ditto-miner v1 (python, reject).
+
+## Gate battery shadow (report-only)
+
+`probe_battery_mode: shadow` on a review-settings revision makes the gate run the
+zero-token battery against the image it has already built and screened. It runs
+after the v13 shadow block, once the decision is settled. The battery:
+
+- runs as a killable `python -m ditto_screener.probe_review gate-battery`
+  subprocess. The environment is limited to PATH/HOME/LANG/TMPDIR/
+  XDG_RUNTIME_DIR plus the gate's own docker binary and daemon, with no
+  Platform, provider or node credentials;
+- is bounded by `probe_battery_timeout_seconds` (30-600, default 120) and by the
+  remaining lease minus 30 s. The gate removes the session's containers and
+  network on every exit path;
+- prints only lead names and counts (`item_id`, `invariant`, status, encoding,
+  probe count, time), never prompts, transcripts or harness output.
+
+The worker submits that summary to `POST /api/v1/screener/agent/{id}/probe-battery`
+alongside the shadow review, while the attempt is still running. Platform stores
+it in `screener_probe_batteries` only when the attempt, artifact and an enabling
+revision all match. The record is never read by any decision, queue or policy
+path. Operators read the latest 100 under `probe_battery_observations` on
+`get_screener_review_settings` / the Backroom review-settings panel.
+
+Checksum compatibility: an `off` battery is hashed without its two keys on both
+sides, so every existing revision keeps verifying. Enabling `shadow` binds both
+keys and therefore requires the upgraded worker release.
