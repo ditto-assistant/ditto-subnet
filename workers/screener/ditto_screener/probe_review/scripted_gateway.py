@@ -53,7 +53,8 @@ _EMBED_ROUTES = {
     "/v1/embeddings",
     "/api/v1/embeddings",
 }
-_WORD = re.compile(r"[a-z0-9]+")
+# Unicode-aware, so non-ASCII words contribute to the hashed embedding.
+_WORD = re.compile(r"\w+")
 
 
 def _transcript_reply(payload: dict[str, Any] | bytes) -> Any:

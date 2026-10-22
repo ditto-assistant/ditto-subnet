@@ -507,9 +507,10 @@ def test_unicode_prompts_finite_counts_and_post_tool_requests() -> None:
     record = _record({}, [tool, chat])
     where = {"op": "any_model_request", "where": {"prompt_contains": "café"}}
     assert evaluate(record, where)[0]
-    assert not evaluate(record, {"op": "model_calls", "cmp": "!=", "n": float("nan")})[
-        0
-    ]
+    nan_check = {"op": "model_calls", "cmp": "!=", "n": float("nan")}
+    assert not evaluate(record, nan_check)[0]
+    huge_check = {"op": "model_calls", "cmp": "<", "n": 10**1000}
+    assert evaluate(record, huge_check)[0]
     after = {"op": "model_request_after_tool", "name": "s"}
     assert evaluate(record, after)[0]
     chat["seq"] = 1

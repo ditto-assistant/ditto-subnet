@@ -60,8 +60,9 @@ def _compare(actual: Any, op: Any, expected: Any) -> bool:
         or not isinstance(expected, numeric)
         or isinstance(actual, bool)
         or isinstance(expected, bool)
-        or not math.isfinite(actual)
-        or not math.isfinite(expected)
+        # Huge ints are exact and finite; isfinite would overflow on them.
+        or (not isinstance(actual, int) and not math.isfinite(actual))
+        or (not isinstance(expected, int) and not math.isfinite(expected))
         or not isinstance(op, str)
     ):
         return False
@@ -236,7 +237,7 @@ def evaluate(record: ProbeRecord, check: Check) -> tuple[bool, str]:
         return False, f"unknown predicate {op!r}"
     try:
         return handler()
-    except (KeyError, TypeError, ValueError, AttributeError) as error:
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as error:
         # A malformed check is a failed predicate, never an evaluation crash.
         return False, f"malformed predicate {op!r}: {type(error).__name__}"
 
