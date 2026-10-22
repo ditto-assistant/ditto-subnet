@@ -56,6 +56,16 @@ _EMBED_ROUTES = {
 _WORD = re.compile(r"[a-z0-9]+")
 
 
+def _transcript_reply(payload: dict[str, Any] | bytes) -> Any:
+    """Record a reply bounded like request bodies, whatever its type."""
+    if isinstance(payload, bytes):
+        return payload.decode("utf-8", "replace")[:_TRANSCRIPT_BODY_CAP]
+    encoded = json.dumps(payload, default=str)
+    if len(encoded) <= _TRANSCRIPT_BODY_CAP:
+        return payload
+    return {"_truncated": encoded[:_TRANSCRIPT_BODY_CAP]}
+
+
 class _State:
     """Per-probe script cursor and append-only transcript, shared by surfaces."""
 
@@ -486,9 +496,7 @@ class ScriptedGateway:
                     "path": raw_path,
                     "status": status,
                     "request": parsed,
-                    "reply": payload
-                    if isinstance(payload, dict)
-                    else payload.decode("utf-8", "replace")[:_TRANSCRIPT_BODY_CAP],
+                    "reply": _transcript_reply(payload),
                 }
             )
         data = (

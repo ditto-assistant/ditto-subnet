@@ -59,6 +59,30 @@ def _flip_reply_numbers(script: Any, value: Any = None) -> Any:
     return walk(script)
 
 
+def _rename_tools(request: dict[str, Any], script: Any, suffix: str) -> Any:
+    """Suffix every offered tool name in ``request`` (in place) and ``script``.
+
+    Tools may be flat or OpenAI-nested (``{"type": "function", "function"}``).
+    """
+    targets = [
+        as_dict(tool.get("function")) or tool
+        for tool in request.get("tools") or []
+        if isinstance(tool, dict)
+    ]
+    mapping = {
+        name: f"{name}{suffix}"
+        for target in targets
+        if isinstance(name := target.get("name"), str)
+    }
+    for target in targets:
+        if target.get("name") in mapping:
+            target["name"] = mapping[target["name"]]
+    text = json.dumps(script)
+    for old, new in mapping.items():
+        text = text.replace(f'"name": "{old}"', f'"name": "{new}"')
+    return json.loads(text)
+
+
 def load_probe(session: Session, probe_id: str) -> ProbeRecord:
     probes_dir = session.probes_dir.resolve()
     path = (probes_dir / f"{probe_id}.json").resolve()
@@ -238,7 +262,9 @@ def show(
     }
 
 
-def batch(session: Session, plan: dict[str, Any]) -> dict[str, Any]:
+def batch(
+    session: Session, plan: dict[str, Any], *, max_probes: int | None = None
+) -> dict[str, Any]:
     """Code-mode: many probes in one call, with ``foreach`` template expansion.
 
     ``plan = {"foreach": [{"x": ...}, ...]?, "probes": [{"label", "request",
@@ -247,8 +273,16 @@ def batch(session: Session, plan: dict[str, Any]) -> dict[str, Any]:
     """
     bindings = plan.get("foreach") or [{}]
     results = []
+    first_probe = session.probe_count
+    truncated = False
     for binding in bindings[:24]:
         for spec in (plan.get("probes") or [])[:12]:
+            if (
+                max_probes is not None
+                and session.probe_count - first_probe >= max_probes
+            ):
+                truncated = True
+                break
             spec = _substitute(copy.deepcopy(spec), binding)
             summary = run_case(
                 session,
@@ -272,7 +306,9 @@ def batch(session: Session, plan: dict[str, Any]) -> dict[str, Any]:
                     "checks": summary.get("checks"),
                 }
             )
-    return {"results": results}
+        if truncated:
+            break
+    return {"results": results, "truncated": truncated}
 
 
 def _substitute(value: Any, binding: dict[str, Any]) -> Any:
@@ -327,16 +363,7 @@ def mutate(
     elif transform == "reorder_tools":
         request["tools"] = list(reversed(request.get("tools") or []))
     elif transform == "rename_tools":
-        mapping = {
-            t["name"]: f"{t['name']}_{value or 'v2'}"
-            for t in request.get("tools") or []
-        }
-        for tool in request.get("tools") or []:
-            tool["name"] = mapping[tool["name"]]
-        text = json.dumps(script)
-        for old, new in mapping.items():
-            text = text.replace(f'"name": "{old}"', f'"name": "{new}"')
-        script = json.loads(text)
+        script = _rename_tools(request, script, f"_{value or 'v2'}")
     elif transform == "sign_flip":
         script = _flip_reply_numbers(script, value)
     elif transform == "set":

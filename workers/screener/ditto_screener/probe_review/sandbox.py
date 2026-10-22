@@ -19,9 +19,11 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import os
 import secrets
 import shutil
 import subprocess
+import tarfile
 import time
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
@@ -40,6 +42,7 @@ from ditto_screener.gate import (
     _VALIDATOR_SANDBOX_PIDS,
     _VALIDATOR_SANDBOX_TMPFS,
     _VALIDATOR_SANDBOX_USER,
+    _dockerfile_instructions,
     _gateway_runtime_env,
     _normalized_build_context,
     _write_openrouter_shim_certs,
@@ -57,10 +60,22 @@ class SandboxError(RuntimeError):
     """Infrastructure failure: never evidence about the submission."""
 
 
-def _docker(args: list[str], *, timeout: float, stdin: Any = None) -> tuple[int, str]:
+def _docker(
+    args: list[str],
+    *,
+    timeout: float,
+    stdin: Any = None,
+    docker_host: str | None = None,
+) -> tuple[int, str]:
+    # One isolated daemon builds and runs every probe image when configured.
+    docker_host = docker_host or os.environ.get("PROBE_REVIEW_DOCKER_HOST") or None
+    env = None
+    if docker_host is not None:
+        env = {**os.environ, "DOCKER_HOST": docker_host}
     try:
         completed = subprocess.run(
             ["docker", *args],
+            env=env,
             stdin=stdin,
             capture_output=True,
             timeout=timeout,
@@ -88,14 +103,56 @@ def _session_lock(root: Path) -> Iterator[None]:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def _refused_build_entitlement(archive: Path) -> str | None:
+    """The gate's contract check: no RUN --network=host / --security=insecure."""
+    with tarfile.open(archive) as tar:
+        member = next(
+            (m for m in tar.getmembers() if m.name in {"Dockerfile", "./Dockerfile"}),
+            None,
+        )
+        handle = tar.extractfile(member) if member is not None else None
+        if handle is None:
+            return "archive has no readable Dockerfile"
+        text = handle.read().decode("utf-8", "replace")
+    for instruction, remainder in _dockerfile_instructions(text):
+        lowered = remainder.casefold()
+        if instruction == "RUN" and (
+            "--security=insecure" in lowered or "--network=host" in lowered
+        ):
+            return "Dockerfile requests an insecure build entitlement"
+    return None
+
+
 def build_image(
-    archive: Path, tag: str, *, timeout: float = 5400.0
+    archive: Path,
+    tag: str,
+    *,
+    timeout: float = 5400.0,
+    docker_host: str | None = None,
+    allow_host_daemon: bool = False,
 ) -> tuple[str, float]:
     """Build the exact archive with the screener's build-context normalizer.
+
+    Submitted Dockerfiles run ``RUN`` steps with network access, so the trust
+    boundary is the daemon: like the gate's dedicated rootless builder behind
+    a host egress guard, builds (and the sessions that run them) go to
+    ``docker_host`` or ``PROBE_REVIEW_DOCKER_HOST``. The workstation's default daemon is
+    used only with an explicit ``allow_host_daemon`` (research on artifacts
+    whose build steps the operator accepts, or trusted test fixtures).
 
     A cached image under ``tag`` is reused only when its label names this
     archive's digest, so a reused tag can never serve another archive's code.
     """
+    host = docker_host or os.environ.get("PROBE_REVIEW_DOCKER_HOST") or None
+    if host is None and not allow_host_daemon:
+        raise SandboxError(
+            "refusing to build an untrusted archive on the default Docker daemon: "
+            "set PROBE_REVIEW_DOCKER_HOST to an isolated builder or pass "
+            "allow_host_daemon (--allow-host-daemon) to accept the risk"
+        )
+    refused = _refused_build_entitlement(archive)
+    if refused is not None:
+        raise SandboxError(refused)
     started = time.monotonic()
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     code, out = _docker(
@@ -107,6 +164,7 @@ def build_image(
             tag,
         ],
         timeout=30,
+        docker_host=host,
     )
     if code == 0:
         image_id, _, label = out.strip().partition(" ")
@@ -124,6 +182,8 @@ def build_image(
                 "--sbom=false",
                 "--memory",
                 "8g",
+                "--network",
+                "default",
                 "--label",
                 f"{_ARCHIVE_LABEL}={digest}",
                 "-t",
@@ -134,10 +194,15 @@ def build_image(
             ],
             timeout=timeout,
             stdin=context,
+            docker_host=host,
         )
     if code != 0:
         raise SandboxError(f"build failed: {out[-1500:]}")
-    code, out = _docker(["image", "inspect", "--format", "{{.Id}}", tag], timeout=30)
+    code, out = _docker(
+        ["image", "inspect", "--format", "{{.Id}}", tag],
+        timeout=30,
+        docker_host=host,
+    )
     if code != 0:
         raise SandboxError("built image is not inspectable")
     return out.strip(), time.monotonic() - started

@@ -60,7 +60,9 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     timings: dict[str, float] = {}
     started = time.monotonic()
-    image, build_seconds = build_image(archive, f"probe-review/{digest[:16]}")
+    image, build_seconds = build_image(
+        archive, f"probe-review/{digest[:16]}", allow_host_daemon=args.allow_host_daemon
+    )
     timings["build_s"] = round(build_seconds, 1)
     session = Session(
         root=str(out),
@@ -137,6 +139,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", required=True)
     p.add_argument("--bench-version", type=int, default=13)
     p.add_argument("--keep", action="store_true", help="leave the harness running")
+    p.add_argument(
+        "--allow-host-daemon",
+        action="store_true",
+        help="build on the default Docker daemon instead of PROBE_REVIEW_DOCKER_HOST "
+        "(submitted RUN steps get that daemon's network)",
+    )
     for name in (
         "run",
         "show",

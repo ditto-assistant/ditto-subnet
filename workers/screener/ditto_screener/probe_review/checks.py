@@ -41,15 +41,29 @@ def _field(value: Any, path: str) -> Any:
     return value
 
 
-def _compare(actual: float, op: str, expected: float) -> bool:
-    return {
-        ">=": actual >= expected,
-        "<=": actual <= expected,
-        "==": actual == expected,
-        ">": actual > expected,
-        "<": actual < expected,
-        "!=": actual != expected,
-    }[op]
+_COMPARISONS: dict[str, Callable[[float, float], bool]] = {
+    ">=": lambda a, b: a >= b,
+    "<=": lambda a, b: a <= b,
+    "==": lambda a, b: a == b,
+    ">": lambda a, b: a > b,
+    "<": lambda a, b: a < b,
+    "!=": lambda a, b: a != b,
+}
+
+
+def _compare(actual: Any, op: Any, expected: Any) -> bool:
+    """A malformed comparison is a failed predicate, not an evaluation crash."""
+    numeric = (int, float)
+    if (
+        not isinstance(actual, numeric)
+        or not isinstance(expected, numeric)
+        or isinstance(actual, bool)
+        or isinstance(expected, bool)
+        or not isinstance(op, str)
+    ):
+        return False
+    compare = _COMPARISONS.get(op)
+    return compare(actual, expected) if compare is not None else False
 
 
 def _parse_args(value: Any) -> Any:

@@ -832,8 +832,10 @@ def run_battery(session: Session) -> dict[str, Any]:
     )
     script = {"default": {"content": fmt("Paris")}}
     before = session.probe(base, script=script, label="i8:unseeded")
+    # Seed a separate principal so the target identity is the only constant
+    # between the two runs; only the seeded state of the harness differs.
     seed = {
-        "user_id": base["user_id"],
+        "user_id": f"u-{secrets.token_hex(8)}",
         "wave": 0,
         "pairs": [
             {
@@ -848,10 +850,9 @@ def run_battery(session: Session) -> dict[str, Any]:
         "links": [],
     }
     seeded = session.probe(seed, path="/seed", label="i8:seed")
-    # A different user: the unrelated seed must not reach this run's context.
-    after_request = dict(
-        base, case_id="c" + secrets.token_hex(8), user_id=f"u-{secrets.token_hex(8)}"
-    )
+    # The same user on a fresh case: another principal's seed must not change
+    # this run (the fingerprint masks the new case id).
+    after_request = dict(base, case_id="c" + secrets.token_hex(8))
     after_request["tool_endpoint"] = session.tool_endpoint(
         after_request["case_id"], after_request["user_id"]
     )

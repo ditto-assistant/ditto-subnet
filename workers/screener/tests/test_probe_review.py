@@ -400,6 +400,49 @@ def test_ledger_reports_exhaustion_at_the_request_limit() -> None:
     assert ledger.exhausted() and not ledger.over_budget()
 
 
+def test_build_refuses_the_default_daemon_and_insecure_entitlements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ditto_screener.probe_review.sandbox import SandboxError, build_image
+
+    monkeypatch.delenv("PROBE_REVIEW_DOCKER_HOST", raising=False)
+    archive = tmp_path / "a.tar.gz"
+    _fixture_archive(archive, "")
+    with pytest.raises(SandboxError, match="default Docker daemon"):
+        build_image(archive, "probe-review-test/refused")
+    hostile = tmp_path / "hostile.tar.gz"
+    with tarfile.open(hostile, "w:gz") as tar:
+        data = b"FROM scratch\nRUN --network=host true\n"
+        info = tarfile.TarInfo("Dockerfile")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    with pytest.raises(SandboxError, match="insecure build entitlement"):
+        build_image(hostile, "probe-review-test/hostile", allow_host_daemon=True)
+
+
+def test_malformed_comparisons_fail_closed() -> None:
+    record = _record({}, [_chat_entry(["a"])])
+    for check in (
+        {"op": "model_calls", "cmp": "~", "n": 1},
+        {"op": "model_calls", "cmp": ">=", "n": "one"},
+    ):
+        assert not evaluate(record, check)[0], check
+
+
+def test_rename_tools_handles_nested_function_definitions() -> None:
+    request = {
+        "tools": [
+            {"type": "function", "function": {"name": "search"}},
+            {"name": "flat"},
+        ]
+    }
+    script = {"default": {"tool_calls": [{"name": "search", "arguments": "{}"}]}}
+    renamed = tools._rename_tools(request, script, "_v2")
+    assert request["tools"][0]["function"]["name"] == "search_v2"
+    assert request["tools"][1]["name"] == "flat_v2"
+    assert renamed["default"]["tool_calls"][0]["name"] == "search_v2"
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
@@ -453,8 +496,11 @@ def test_battery_separates_honest_and_violating_fixture(
 
     archive = tmp_path / "fixture.tar.gz"
     _fixture_archive(archive, violations)
+    # Trusted in-tree fixture: building it on the test daemon is intended.
     image, _ = build_image(
-        archive, f"probe-review-test/{abs(hash(violations)) % 10**8}"
+        archive,
+        f"probe-review-test/{abs(hash(violations)) % 10**8}",
+        allow_host_daemon=True,
     )
     session = Session(
         root=str(tmp_path / "s"),

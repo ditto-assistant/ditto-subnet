@@ -104,6 +104,10 @@ class Ledger:
     max_requests: int = 48
     max_total_tokens: int = 1_500_000
     max_cost_usd: float = 3.0
+    # The reviewer contract's cumulative limits (reviewer_prompt.md).
+    max_tool_calls: int = 40
+    max_probes: int = 30
+    tool_calls: int = 0
     requests: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -135,7 +139,24 @@ class Ledger:
         self.cost_usd += float(usage.get("cost") or 0.0)
 
 
-def dispatch(session: Session, name: str, args: dict[str, Any]) -> Any:
+_PROBING_TOOLS = frozenset({"run_case", "batch", "mutate"})
+
+
+def _observation(result: Any) -> str:
+    """Serialize a tool result; say so when the reviewer sees only a prefix."""
+    text = json.dumps(result, default=str)
+    if len(text) <= _OBS_LIMIT:
+        return text
+    return text[:_OBS_LIMIT] + f"...[truncated {len(text) - _OBS_LIMIT} chars]"
+
+
+def dispatch(
+    session: Session,
+    name: str,
+    args: dict[str, Any],
+    *,
+    max_probes: int | None = None,
+) -> Any:
     if name == "run_case":
         return tools.run_case(
             session,
@@ -148,7 +169,7 @@ def dispatch(session: Session, name: str, args: dict[str, Any]) -> Any:
     if name == "show":
         return tools.show(session, args["probe_id"], entry=args.get("entry"))
     if name == "batch":
-        return tools.batch(session, args.get("plan") or {})
+        return tools.batch(session, args.get("plan") or {}, max_probes=max_probes)
     if name == "mutate":
         return tools.mutate(
             session,
@@ -209,6 +230,7 @@ def review(
         {"role": "user", "content": "Session prepared. Brief:\n" + json.dumps(brief)},
     ]
     started = time.monotonic()
+    first_probe = session.probe_count
     replay: dict[str, Any] | None = None
     while (
         replay is None
@@ -238,11 +260,19 @@ def review(
                 # Nothing may touch the session after a verified replay.
                 break
             name = call["function"]["name"]
-            try:
-                args = json.loads(call["function"].get("arguments") or "{}")
-                result: Any = dispatch(session, name, args)
-            except Exception as error:  # noqa: BLE001 - tool errors go back to the reviewer
-                result = {"error": f"{type(error).__name__}: {error}"[:500]}
+            probes_left = ledger.max_probes - (session.probe_count - first_probe)
+            result: Any
+            if name != "submit_verdict" and ledger.tool_calls >= ledger.max_tool_calls:
+                result = {"error": "tool-call budget spent; call submit_verdict"}
+            elif name in _PROBING_TOOLS and probes_left <= 0:
+                result = {"error": "probe budget spent; call submit_verdict"}
+            else:
+                ledger.tool_calls += 1
+                try:
+                    args = json.loads(call["function"].get("arguments") or "{}")
+                    result = dispatch(session, name, args, max_probes=probes_left)
+                except Exception as error:  # noqa: BLE001 - tool errors go back to the reviewer
+                    result = {"error": f"{type(error).__name__}: {error}"[:500]}
             ledger.events.append(
                 {"tool": name, "t": round(time.monotonic() - started, 1)}
             )
@@ -256,7 +286,7 @@ def review(
                 {
                     "role": "tool",
                     "tool_call_id": call["id"],
-                    "content": json.dumps(result, default=str)[:_OBS_LIMIT],
+                    "content": _observation(result),
                 }
             )
     return {
