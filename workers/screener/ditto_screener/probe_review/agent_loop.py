@@ -10,6 +10,7 @@ Router in production shadow); the API key is read from a file and never logged.
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -154,6 +155,10 @@ class Ledger:
         self.completion_tokens += completion
         cost = usage.get("cost")
         if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            if not math.isfinite(cost) or cost < 0:
+                # A negative or non-finite cost would loosen the cap.
+                self.untracked = True
+                return
             self.cost_usd += float(cost)
         else:
             # Endpoints that omit the cost field are charged at a deliberately

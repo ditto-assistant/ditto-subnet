@@ -9,6 +9,7 @@ are testable without miner artifacts.
 import json
 import os
 import re
+import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -19,6 +20,7 @@ VIOLATIONS = set(
     filter(None, os.environ.get("PROBE_FIXTURE_VIOLATIONS", "").split(","))
 )
 MEMORY = {}
+MEMORY_LOCK = threading.Lock()
 
 
 def post(url, payload, timeout=60):
@@ -49,7 +51,8 @@ def extract_answer(text):
 def run(request):
     tools = request.get("tools") or []
     user_id = request.get("user_id")
-    memories = MEMORY.get(user_id, []) if user_id else []
+    with MEMORY_LOCK:
+        memories = list(MEMORY.get(user_id, [])) if user_id else []
     context = "\n".join(f"- {p['prompt']} -> {p['response']}" for p in memories)
     messages = [
         {"role": "system", "content": request.get("system_prompt", "")},
@@ -176,14 +179,20 @@ class Handler(BaseHTTPRequestHandler):
             self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}"
         )
         if self.path == "/seed":
-            MEMORY.setdefault(body.get("user_id", ""), []).extend(
-                body.get("pairs") or []
-            )
+            with MEMORY_LOCK:
+                MEMORY.setdefault(body.get("user_id", ""), []).extend(
+                    body.get("pairs") or []
+                )
             self._send(
                 200, {"pairs": len(body.get("pairs") or []), "subjects": 0, "links": 0}
             )
         elif self.path == "/run":
-            self._send(200, run(body))
+            try:
+                result = run(body)
+            except Exception as error:  # noqa: BLE001 - the caller gets an HTTP error
+                self._send(502, {"error": type(error).__name__})
+            else:
+                self._send(200, result)
         else:
             self._send(404, {})
 

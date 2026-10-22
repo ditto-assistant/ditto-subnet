@@ -67,6 +67,12 @@ def _docker_env() -> dict[str, str] | None:
     host = os.environ.get("PROBE_REVIEW_DOCKER_HOST")
     if not host:
         return None
+    if not host.startswith("unix://"):
+        # Sessions bind-mount host-staged state (gateway script, shim certs,
+        # transcript), which only a same-host daemon can see.
+        raise SandboxError(
+            "PROBE_REVIEW_DOCKER_HOST must be a same-host unix:// socket"
+        )
     # A context would take precedence over DOCKER_HOST and could select
     # another daemon, so the isolated host is the only daemon selector left.
     env = {k: v for k, v in os.environ.items() if k != "DOCKER_CONTEXT"}

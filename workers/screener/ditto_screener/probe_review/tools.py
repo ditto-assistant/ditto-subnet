@@ -31,6 +31,7 @@ from ditto_screener.probe_review.sandbox import ProbeRecord, Session
 _MAX_FILE_LINES = 400
 _MAX_SEARCH_HITS = 60
 _MAX_EXTRACT_BYTES = 256 * 1024 * 1024
+_MAX_EXTRACT_MEMBERS = 100_000
 
 
 # Only dictated model or tool output is flipped; rule metadata such as
@@ -394,8 +395,18 @@ def mutate(
         request["tool_endpoint"] = session.tool_endpoint(
             request["case_id"], str(request.get("user_id", ""))
         )
+    # Same starting conditions as the base: fresh harness plus its setup.
+    setup = _setup_for(session, base)
+    session.restart_harness()
+    for step in setup:
+        session.probe(
+            step["request"], path=step["path"], label=f"mutate-setup:{probe_id}"
+        )
     record = session.probe(
-        request, script=script, label=f"mutate:{transform}:{probe_id}"
+        request,
+        script=script,
+        label=f"mutate:{transform}:{probe_id}",
+        preconditions=setup,
     )
     return {"mutated": summarize(record), "diff": diff_records(base, record)}
 
@@ -440,7 +451,11 @@ def extract_source(archive: Path, dest: Path) -> int:
     count = 0
     total = 0
     with tarfile.open(archive, "r:gz") as tar:
-        for member in tar:
+        for index, member in enumerate(tar, 1):
+            if index > _MAX_EXTRACT_MEMBERS:
+                raise ValueError(
+                    f"source archive exceeds {_MAX_EXTRACT_MEMBERS} members"
+                )
             if not member.isfile() or member.size > 4 * 1024 * 1024:
                 continue
             total += member.size

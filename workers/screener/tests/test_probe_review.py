@@ -600,6 +600,24 @@ def test_untracked_usage_nested_reports_and_named_function_call() -> None:
     assert not evaluate(_record({}, [legacy]), pinned)[0]
 
 
+def test_negative_cost_remote_daemon_and_nested_json_fail_safely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ditto_screener.probe_review import sandbox
+
+    ledger = agent_loop.Ledger()
+    ledger.settle({"prompt_tokens": 1, "completion_tokens": 1, "cost": -5})
+    assert ledger.untracked and not ledger.admit()
+    monkeypatch.setenv("PROBE_REVIEW_DOCKER_HOST", "tcp://10.0.0.5:2376")
+    with pytest.raises(sandbox.SandboxError, match="same-host"):
+        sandbox._docker_env()
+    gateway = _gateway(tmp_path, {"default": {"content": "Answer: 1"}})
+    deep = ("[" * 100_000 + "]" * 100_000).encode()
+    # Unparseable bodies are recorded as such; the route still answers.
+    status, _, _, _ = gateway.route("POST", "/v1/chat/completions", deep)
+    assert isinstance(status, int)
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

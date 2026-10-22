@@ -406,7 +406,7 @@ class ScriptedGateway:
     ) -> tuple[int, dict | bytes, str, str]:
         try:
             request = json.loads(body) if body else {}
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             request = {"_unparsed": body[:2048].decode("utf-8", "replace")}
         if not isinstance(request, dict):
             request = {"_value": request}
@@ -496,7 +496,7 @@ class ScriptedGateway:
         if surface not in {"health", "tool_health"}:
             try:
                 parsed = json.loads(body) if body else None
-            except (ValueError, UnicodeError):
+            except (ValueError, UnicodeError, RecursionError):
                 parsed = body[:_TRANSCRIPT_BODY_CAP].decode("utf-8", "replace")
             encoded = json.dumps(parsed, default=str)
             if len(encoded) > _TRANSCRIPT_BODY_CAP:
