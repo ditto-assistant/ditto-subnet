@@ -204,6 +204,13 @@ paths = [
   "miners/dittobench-router-starter-kit/**",
 ]
 
+[components.dittobench_reranker]
+description = "Season 2 reranker competition: contract, evaluation pools and deterministic scorer"
+paths = [
+  "packages/dittobench-reranker/**",
+  ".github/workflows/reranker-ci.yml",
+]
+
 [components.platform_api]
 description = "Subnet API, database migrations, relays, and control plane"
 depends_on = ["screening_protocol"]
