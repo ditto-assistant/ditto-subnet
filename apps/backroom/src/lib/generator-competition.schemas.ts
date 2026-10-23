@@ -325,7 +325,11 @@ const roundSummarySchema = z.object({
   secret_hex: z.string().nullable().optional(),
   seed: z.string().nullable().optional(),
   dataset_sha256: z.string().nullable().optional(),
-})
+}).transform((summary) =>
+  // An unrevealed round's seed (and secret) regenerate its private cases, so
+  // only the artifact-scoped dataset tool may return them.
+  summary.revealed_at ? summary : { ...summary, secret_hex: null, seed: null },
+)
 
 export const generatorRoundListSchema = z.object({
   schedule: roundScheduleSchema,
@@ -421,7 +425,7 @@ export const generatorRoundDetailSchema = z.object({
   scorer_version: z.string().nullable(),
   standings: z.array(standingSchema),
   columns_scored: z.array(columnViewSchema),
-})
+}).transform((detail) => (detail.summary.revealed_at ? detail : { ...detail, seed: null }))
 
 export const generatorRoundPreviewSchema = z.object({
   schedule: roundScheduleSchema,

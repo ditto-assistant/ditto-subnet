@@ -307,7 +307,6 @@ async def record_result(
     run: GeneratorRun,
     payload: GeneratorResultRequest,
     *,
-    resolved: ResolvedSettings,
     probe_seed: str,
     now: datetime,
 ) -> RecordedResult:

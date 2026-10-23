@@ -185,6 +185,21 @@ async function roundWrite<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+// A registration refusal is about the source or the confirmation, not a round,
+// so its recovery never points at get_generator_round.
+async function defaultGeneratorWrite<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation()
+  } catch (cause) {
+    if (cause instanceof PlatformAdminError && (cause.status === 409 || cause.status === 422)) {
+      throw new Error(
+        `${cause.message}. Nothing was registered: send the confirmation "REGISTER DEFAULT GENERATOR" with a source archive whose SHA-256 matches sourceSha256 and that no earlier upload already holds.`,
+      )
+    }
+    throw cause
+  }
+}
+
 export async function listGeneratorRounds(rawInput: unknown) {
   const { limit, offset } = listGeneratorRoundsInputSchema.parse(rawInput)
   return generatorRoundListSchema.parse(
@@ -294,7 +309,7 @@ export async function releaseGeneratorRoundLease(rawInput: unknown, actor: strin
 
 export async function registerDefaultGenerator(rawInput: unknown, actor: string) {
   const input = registerDefaultGeneratorInputSchema.parse(rawInput)
-  return roundWrite(async () =>
+  return defaultGeneratorWrite(async () =>
     defaultGeneratorResponseSchema.parse(
       await platformAdminRequest(`${BASE}/default-generator`, {
         method: 'POST',

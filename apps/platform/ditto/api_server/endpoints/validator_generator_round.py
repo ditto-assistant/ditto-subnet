@@ -341,7 +341,6 @@ async def submit_generator_round_score(
             validate_round_results(row, payload.results)
         except RoundSubmissionRejected as exc:
             raise HTTPException(422, str(exc)) from exc
-        resolved = await load_settings(session)
         await revoke_ticket_inference(session, ticket=ticket, now=now)
         ticket.status = TicketStatus.SCORED
         accepted = await record_panel_result(
@@ -353,7 +352,6 @@ async def submit_generator_round_score(
             run_id=payload.run_id,
             results=payload.results,
             signature=payload.signature,
-            settings=resolved.settings,
             now=now,
         )
     logger.info(
@@ -420,8 +418,12 @@ async def fail_generator_round_job(
             deadline=payload.ticket_deadline,
             now=now,
         )
-        await revoke_ticket_inference(session, ticket=ticket, now=now)
-        ticket.status = TicketStatus.SCORED
+        # Validate the round and find its attempt before changing anything, so
+        # a payload naming another round cannot close this ticket while the
+        # real attempt stays leased.
+        row = await round_for_dataset(session, ticket.dataset_sha256)
+        if row is None or row.round_index != payload.round_index:
+            raise HTTPException(409, "round failure names another round")
         attempt = await session.get(
             GeneratorRoundAttempt,
             (
@@ -430,11 +432,15 @@ async def fail_generator_round_job(
                 payload.validator_hotkey,
                 payload.ticket_deadline,
             ),
+            with_for_update=True,
         )
-        if attempt is not None:
-            attempt.status = "failed"
-            attempt.detail = f"{payload.reason}: {payload.detail or ''}".strip()[:500]
-            attempt.finished_at = now
+        if attempt is None or attempt.status != "leased":
+            raise HTTPException(409, "round attempt is not open")
+        await revoke_ticket_inference(session, ticket=ticket, now=now)
+        ticket.status = TicketStatus.SCORED
+        attempt.status = "failed"
+        attempt.detail = f"{payload.reason}: {payload.detail or ''}".strip()[:500]
+        attempt.finished_at = now
     logger.info(
         "generator round lease released round=%s agent=%s validator=%s reason=%s",
         payload.round_index,

@@ -253,6 +253,7 @@ describe('generator competition MCP tools', () => {
       scorer_version: null, standings: [], columns_scored: [],
     }
     const schedule = { mode: 'shadow', epochs_per_round: 4, subnet_epoch_index: 29, current_round: 7 }
+    let roundSeed: string | null = null
     const calls: Array<[string, string, unknown]> = []
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const path = url.replace('https://platform-api.heyditto.ai', '')
@@ -274,7 +275,9 @@ describe('generator competition MCP tools', () => {
       if (path.endsWith('/default-generator')) {
         return Response.json({ submission_id: SUBMISSION, source_sha256: 'dd'.repeat(32), tree_sha256: 'ee'.repeat(32), status: 'active', superseded: [] })
       }
-      return Response.json(roundDetail)
+      return Response.json(
+        roundSeed ? { ...roundDetail, seed: roundSeed, summary: { ...summary, seed: roundSeed, secret_hex: 'ff'.repeat(32) } } : roundDetail,
+      )
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -284,6 +287,12 @@ describe('generator competition MCP tools', () => {
         .toMatchObject({ rounds: [{ round_index: 7 }], schedule: { current_round: 7 } })
       expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 7 } })))
         .toMatchObject({ pending_agents: [AGENT], column_case_counts: { c0: 16 } })
+      // Platform shows a closed round's seed to operators; read scope never
+      // carries it before the round is revealed.
+      roundSeed = 'cc'.repeat(32)
+      expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 7 } })))
+        .toMatchObject({ seed: null, summary: { seed: null, secret_hex: null } })
+      roundSeed = null
       expect(json(await reader.client.callTool({ name: 'preview_generator_round', arguments: {} })))
         .toMatchObject({ blockers: ['validator_rounds_enabled is false'] })
       expect(json(await reader.client.callTool({ name: 'get_generator_round_loop', arguments: {} })))

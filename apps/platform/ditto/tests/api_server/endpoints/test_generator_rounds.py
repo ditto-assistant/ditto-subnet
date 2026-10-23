@@ -36,6 +36,7 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.generator import generator_settings_confirmation
 from ditto.api_models.generator_round_validator import (
     GeneratorRoundCaseResult,
+    GeneratorRoundFailRequest,
     GeneratorRoundJobRequest,
     GeneratorRoundScoreRequest,
 )
@@ -62,6 +63,7 @@ from ditto.api_server.generator_rounds import (
 from ditto.chain.models import NeuronInfo
 from ditto.db.models import (
     Agent,
+    GeneratorOperatorAction,
     GeneratorRoundAttempt,
     GeneratorSubmission,
     ValidatorTicket,
@@ -366,6 +368,21 @@ def _signed_score(job: dict[str, Any], case_ids: list[str], score: float) -> dic
         results=[
             GeneratorRoundCaseResult(case_id=cid, score=score) for cid in case_ids
         ],
+    )
+    payload.signature = _VALIDATOR.sign(
+        payload.signing_message(UUID(job["agent_id"]))
+    ).hex()
+    return payload.model_dump(mode="json")
+
+
+def _signed_fail(job: dict[str, Any], *, round_index: int | None = None) -> dict:
+    payload = GeneratorRoundFailRequest(
+        validator_hotkey=_VALIDATOR.ss58_address,
+        round_index=job["round_index"] if round_index is None else round_index,
+        ticket_deadline=datetime.fromisoformat(job["deadline"]),
+        reason="scoring_error",
+        nonce=uuid4(),
+        requested_at=datetime.now(UTC),
     )
     payload.signature = _VALIDATOR.sign(
         payload.signing_message(UUID(job["agent_id"]))
@@ -735,6 +752,21 @@ class TestRoundLifecycle:
             )
         ).json()
 
+        # A failure that names another round changes nothing.
+        misnamed = await client.post(
+            f"/api/v1/validator/agent/{job['agent_id']}/generator-round-fail",
+            headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
+            json=_signed_fail(job, round_index=99),
+        )
+        assert misnamed.status_code == 409, misnamed.text
+        async with session_maker() as session:
+            attempt = await session.scalar(
+                select(GeneratorRoundAttempt).where(
+                    GeneratorRoundAttempt.agent_id == UUID(job["agent_id"])
+                )
+            )
+            assert attempt is not None and attempt.status == "leased"
+
         # Operator releases the quiet validator's lease.
         released = await client.post(
             f"{_ROUNDS_URL}/1/release-lease",
@@ -749,6 +781,16 @@ class TestRoundLifecycle:
         )
         assert released.status_code == 200, released.text
         assert job["agent_id"] in released.json()["pending_agents"]
+        async with session_maker() as session:
+            audit = (
+                await session.scalars(
+                    select(GeneratorOperatorAction).order_by(GeneratorOperatorAction.id)
+                )
+            ).all()
+            assert [(a.action, a.subject, a.actor) for a in audit][1:] == [
+                ("release_lease", "round:1", "backroom:test")
+            ]
+            assert audit[0].action == "register_default_generator"
         relet = (
             await client.post(
                 "/api/v1/validator/generator-round-job",
@@ -775,6 +817,27 @@ class TestRoundLifecycle:
                 )
             ).all()
             assert {a.status for a in attempts} == {"failed"}
+
+    async def test_a_round_reached_after_its_first_epoch_is_void(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)  # commits round 1 (epochs 4..7)
+        actions = await _advance(session_maker, 5)  # the loop missed epoch 4
+        assert "round 1: void (opening epoch missed)" in actions
+        async with session_maker() as session:
+            row = await get_round(session, 1)
+            assert row is not None and row.status == "void" and row.seed is None
+            assert row.void_reason == "round opening epoch was missed"
 
     async def test_mode_off_and_missing_generators(
         self,

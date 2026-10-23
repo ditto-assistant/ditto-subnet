@@ -69,6 +69,7 @@ from ditto.db.queries.generator import (
     list_runs,
     list_submissions,
     list_verdicts,
+    record_operator_action,
     rotate_probe_epoch,
     submission_counts_by_status,
 )
@@ -277,7 +278,7 @@ async def rescore_submission(
     """Re-qualify an active generator now on fresh seeds (build, validity,
     determinism, probe). It stays out of new round columns until it passes
     again; an in-flight qualification run is left to finish."""
-    row, _reason, _actor = await _locked_submission(session, submission_id, payload)
+    row, reason, actor = await _locked_submission(session, submission_id, payload)
     if row.status != "active":
         raise HTTPException(status_code=409, detail="only an active generator runs")
     now = datetime.now(UTC)
@@ -285,6 +286,13 @@ async def rescore_submission(
     row.qualified_at = None
     row.attempts = 0
     row.updated_at = now
+    record_operator_action(
+        session,
+        action="rescore",
+        subject=str(row.submission_id),
+        actor=actor,
+        reason=reason,
+    )
     await session.commit()
     return await admin_submission_detail(submission_id, _admin, session)
 
@@ -321,6 +329,13 @@ async def reject_submission(
     row.status = "rejected"
     row.status_reason = f"operator ({actor}): {reason}"[:1000]
     row.updated_at = now
+    record_operator_action(
+        session,
+        action="reject",
+        subject=str(row.submission_id),
+        actor=actor,
+        reason=reason,
+    )
     await session.commit()
     return await admin_submission_detail(submission_id, _admin, session)
 
@@ -342,9 +357,10 @@ async def admin_run_detail(
         summary=summary,
         submission_id=row.submission_id,
         miner_hotkey=row.miner_hotkey,
-        # A leased run's seeds are live secrets; finished runs reveal them so an
-        # operator can reproduce the exact packs.
-        seeds=list(run.seeds) if run.status != "leased" else None,
+        # A leased run's seeds are live secrets, and an abandoned run's were
+        # exposed to a scorer that never reported. Only a run that reported
+        # reveals them, so an operator can reproduce the exact packs.
+        seeds=list(run.seeds) if run.status not in ("leased", "abandoned") else None,
         probe_epoch=run.probe_epoch,
         cases_per_seed=run.cases_per_seed,
         settings_revision=run.settings_revision,

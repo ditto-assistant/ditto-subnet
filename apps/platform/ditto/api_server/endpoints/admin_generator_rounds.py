@@ -75,6 +75,7 @@ from ditto.db.queries.audit import append_audit_entry
 from ditto.db.queries.generator import (
     get_submission_by_sha,
     get_submission_by_tree,
+    record_operator_action,
 )
 from ditto.db.queries.inference import revoke_ticket_inference
 
@@ -347,6 +348,13 @@ async def admin_void_round(
     now = datetime.now(UTC)
     await expire_round_tickets(session, row, now=now, detail=f"operator void: {reason}")
     void_round(row, f"operator ({actor}): {reason}", now=now)
+    record_operator_action(
+        session,
+        action="void",
+        subject=f"round:{round_index}",
+        actor=actor,
+        reason=reason,
+    )
     await session.commit()
     return await admin_round_detail(round_index, _admin, session)
 
@@ -371,13 +379,20 @@ async def admin_close_round(
     row, reason, actor = await _locked_round(session, round_index, payload)
     if row.status != "running":
         raise HTTPException(status_code=409, detail="only a running round closes")
-    resolved = await load_settings(session)
-    await close_round(
+    # close_round judges min_panel by the round's own settings revision.
+    outcome = await close_round(
         session,
         row,
-        settings=resolved.settings,
         now=datetime.now(UTC),
         reason=f"operator ({actor}): {reason}",
+    )
+    record_operator_action(
+        session,
+        action="close",
+        subject=f"round:{round_index}",
+        actor=actor,
+        reason=reason,
+        detail={"outcome": outcome},
     )
     await session.commit()
     return await admin_round_detail(round_index, _admin, session)
@@ -400,7 +415,7 @@ async def admin_republish_commitment(
             status_code=409,
             detail=f"confirmation must be exactly {REPUBLISH_COMMITMENT_CONFIRMATION}",
         )
-    row, _reason, _actor = await _locked_round(session, round_index, payload)
+    row, reason, actor = await _locked_round(session, round_index, payload)
     if row.commitment_publication not in {"failed", "disabled"}:
         raise HTTPException(
             status_code=409,
@@ -411,6 +426,14 @@ async def admin_republish_commitment(
             status_code=409,
             detail="a commitment published after the round opened proves nothing",
         )
+    record_operator_action(
+        session,
+        action="republish_commitment",
+        subject=f"round:{round_index}",
+        actor=actor,
+        reason=reason,
+        detail={"previous": row.commitment_publication},
+    )
     row.commitment_publication = "pending"
     row.commitment_error = None
     await session.commit()
@@ -446,32 +469,51 @@ async def admin_release_round_lease(
     if row is None or row.dataset_sha256 is None:
         raise HTTPException(status_code=404, detail="round has no dataset")
     now = datetime.now(UTC)
-    ticket = await session.scalar(
-        select(ValidatorTicket)
-        .where(
-            ValidatorTicket.agent_id == payload.agent_id,
-            ValidatorTicket.validator_hotkey == payload.validator_hotkey,
-            ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
-            ValidatorTicket.status == TicketStatus.ISSUED,
-            ValidatorTicket.dataset_sha256 == row.dataset_sha256,
-        )
-        .with_for_update()
-    )
-    if ticket is None:
-        raise HTTPException(status_code=409, detail="no live round lease to release")
-    await revoke_ticket_inference(session, ticket=ticket, now=now)
-    ticket.status = TicketStatus.SCORED
-    await session.execute(
-        update(GeneratorRoundAttempt)
+    # The round's own leased attempt names the exact ticket (by deadline), so a
+    # ticket another round issued on an identical dataset is never touched.
+    attempt = await session.scalar(
+        select(GeneratorRoundAttempt)
         .where(
             GeneratorRoundAttempt.round_index == round_index,
             GeneratorRoundAttempt.agent_id == payload.agent_id,
             GeneratorRoundAttempt.validator_hotkey == payload.validator_hotkey,
             GeneratorRoundAttempt.status == "leased",
         )
-        .values(
-            status="failed", detail=f"operator ({actor}): {reason}", finished_at=now
+        .with_for_update()
+    )
+    ticket = (
+        await session.scalar(
+            select(ValidatorTicket)
+            .where(
+                ValidatorTicket.agent_id == payload.agent_id,
+                ValidatorTicket.validator_hotkey == payload.validator_hotkey,
+                ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.dataset_sha256 == row.dataset_sha256,
+                ValidatorTicket.deadline == attempt.ticket_deadline,
+            )
+            .with_for_update()
         )
+        if attempt is not None
+        else None
+    )
+    if attempt is None or ticket is None:
+        raise HTTPException(status_code=409, detail="no live round lease to release")
+    await revoke_ticket_inference(session, ticket=ticket, now=now)
+    ticket.status = TicketStatus.SCORED
+    attempt.status = "failed"
+    attempt.detail = f"operator ({actor}): {reason}"
+    attempt.finished_at = now
+    record_operator_action(
+        session,
+        action="release_lease",
+        subject=f"round:{round_index}",
+        actor=actor,
+        reason=reason,
+        detail={
+            "agent_id": str(payload.agent_id),
+            "validator_hotkey": payload.validator_hotkey,
+        },
     )
     await append_audit_entry(
         session,
@@ -562,6 +604,17 @@ async def admin_register_default_generator(
         public_default=True,
     )
     session.add(row)
+    record_operator_action(
+        session,
+        action="register_default_generator",
+        subject=str(row.submission_id),
+        actor=actor,
+        reason=reason,
+        detail={
+            "source_sha256": payload.source_sha256,
+            "superseded": [str(sid) for sid in superseded],
+        },
+    )
     await session.commit()
     assert hashlib.sha256(inspected.raw).hexdigest() == payload.source_sha256
     return AdminDefaultGeneratorResponse(

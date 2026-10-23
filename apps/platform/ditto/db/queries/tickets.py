@@ -1223,6 +1223,14 @@ async def issue_generator_round_ticket(
         is not None
     ):
         return None
+    agent = await session.scalar(
+        select(Agent).where(Agent.agent_id == agent_id).with_for_update()
+    )
+    if agent is None or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}:
+        return None
+    # Checked under the agent lock: two requests for this agent on different
+    # slots both pass an earlier check, and the second would then overwrite
+    # the first's freshly issued lease on the shared ticket row.
     live = await session.scalar(
         select(ValidatorTicket)
         .where(
@@ -1239,11 +1247,6 @@ async def issue_generator_round_ticket(
         .with_for_update()
     )
     if live is not None:
-        return None
-    agent = await session.scalar(
-        select(Agent).where(Agent.agent_id == agent_id).with_for_update()
-    )
-    if agent is None or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}:
         return None
     latest_retest = await get_latest_score_retest_event(
         session, agent_id=agent_id, validator_hotkey=validator_hotkey

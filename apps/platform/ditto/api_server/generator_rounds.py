@@ -261,7 +261,15 @@ async def select_round_panel(
     """The round's agent panel and any reference agents that were skipped."""
     from ditto.api_server.generator_competition import select_panel
 
-    panel = await select_panel(session, size=settings.panel_size)
+    # A reference agent that also ranks is seated as a reference only, and the
+    # next ranked agent takes its ranked seat, so the panel reaches
+    # panel_size + references whenever enough agents exist.
+    references = {str(agent_id) for agent_id in settings.reference_agent_ids}
+    ranked = await select_panel(session, size=settings.panel_size + len(references))
+    panel = [slot for slot in ranked if slot["agent_id"] not in references][
+        : settings.panel_size
+    ]
+    champion = next((slot["agent_id"] for slot in ranked if slot["champion"]), None)
     seen = {slot["agent_id"] for slot in panel}
     skipped: list[str] = []
     for agent_id in settings.reference_agent_ids:
@@ -279,7 +287,8 @@ async def select_round_panel(
                 "agent_id": str(agent_id),
                 "owner_key": f"reference:{agent_id}",
                 "miner_hotkey": agent.miner_hotkey,
-                "champion": False,
+                # A champion that is also a reference stays the champion.
+                "champion": str(agent_id) == champion,
                 "reference": True,
             }
         )
@@ -371,15 +380,27 @@ async def expire_round_tickets(
     return len(tickets)
 
 
+async def round_settings(
+    session: AsyncSession, row: GeneratorRound
+) -> GeneratorCompetitionSettings:
+    """The policy the round opened under: closing and scoring a frozen round
+    never depend on a settings write made after it opened."""
+    from ditto.api_server.generator_competition import settings_at
+
+    return await settings_at(session, row.settings_revision)
+
+
 async def close_round(
     session: AsyncSession,
     row: GeneratorRound,
     *,
-    settings: GeneratorCompetitionSettings,
     now: datetime,
     reason: str,
 ) -> str:
-    """Move a running round to scoring, or void it with too few results."""
+    """Move a running round to scoring, or void it with too few results.
+
+    ``min_panel`` comes from the round's own settings revision."""
+    settings = await round_settings(session, row)
     results = await _result_count(session, row.round_index)
     await expire_round_tickets(session, row, now=now, detail=f"round closed: {reason}")
     row.closed_at = now
@@ -432,9 +453,7 @@ async def advance_rounds(
             void_round(row, "round dataset was not generated before it closed", now=now)
             out.note(f"round {row.round_index}: void (not generated)")
         else:
-            outcome = await close_round(
-                session, row, settings=settings, now=now, reason="round ended"
-            )
+            outcome = await close_round(session, row, now=now, reason="round ended")
             out.note(f"round {row.round_index}: {outcome} at round end")
 
     # 2. Commit the next round ahead of time.
@@ -461,7 +480,18 @@ async def advance_rounds(
         session.add(late)
         out.note(f"round {current}: void (not committed in time)")
     elif opening.status == "committed":
-        if opening.committed_epoch_index >= first_epoch:
+        if position.subnet_epoch_index != first_epoch:
+            # The seed binds the boundary block of the round's first epoch, and
+            # only the latest boundary is observable: a round the loop reaches
+            # late cannot be opened on the block its commitment promised.
+            opening.commitment_publication = (
+                opening.commitment_publication
+                if opening.commitment_publication == "published"
+                else "disabled"
+            )
+            void_round(opening, "round opening epoch was missed", now=now)
+            out.note(f"round {current}: void (opening epoch missed)")
+        elif opening.committed_epoch_index >= first_epoch:
             opening.commitment_publication = (
                 opening.commitment_publication
                 if opening.commitment_publication == "published"
@@ -651,7 +681,7 @@ async def lease_round_work(
             lease_id=row.lease_id,
             round_index=row.round_index,
             lease_expires_at=row.lease_expires_at,
-            params=resolved.settings.score_params(),
+            params=(await round_settings(session, row)).score_params(),
             matrix=await build_matrix(session, row),
         )
     return RoundLease(row=row, work=work)
@@ -917,7 +947,6 @@ async def record_panel_result(
     run_id: str,
     results: list[GeneratorRoundCaseResult],
     signature: str,
-    settings: GeneratorCompetitionSettings,
     now: datetime,
 ) -> bool:
     """Store one agent's results; ``False`` when the agent already reported.
@@ -951,7 +980,6 @@ async def record_panel_result(
         await close_round(
             session,
             row,
-            settings=settings,
             now=now,
             reason="every panel agent reported",
         )
@@ -1126,7 +1154,9 @@ async def build_round_ledger(
     """
     settings = resolved.settings
     if settings.mode == "off":
-        return GeneratorLedgerResponse(mode="off", window_days=settings.window_days)
+        return GeneratorLedgerResponse(
+            count=0, mode="off", window_days=settings.window_days
+        )
     since = now - timedelta(days=settings.window_days)
     latest = (
         select(

@@ -40,6 +40,7 @@ from ditto.api_models.generator import (
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.chain.models import NeuronInfo
 from ditto.db.models import (
+    GeneratorOperatorAction,
     GeneratorProbeEpoch,
     GeneratorRun,
     GeneratorSubmission,
@@ -824,6 +825,16 @@ class TestOperatorActions:
         ).status_code == 409
         resp = await client.post(f"{base}/rescore", headers=_ADMIN, json=body)
         assert resp.status_code == 200, resp.text
+        async with session_maker() as session:
+            audit = (
+                await session.scalars(
+                    select(GeneratorOperatorAction).where(
+                        GeneratorOperatorAction.subject == sub_id
+                    )
+                )
+            ).all()
+            assert [a.action for a in audit] == ["rescore"]
+            assert audit[0].reason == body["reason"]
         rerun = await _lease(client)
         assert rerun is not None and rerun["submission_id"] == sub_id
 
