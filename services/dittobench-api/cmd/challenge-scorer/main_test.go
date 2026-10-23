@@ -83,6 +83,11 @@ func TestParseAgentFlag(t *testing.T) {
 	if _, err := parseAgentFlag("nourl"); err == nil {
 		t.Fatal("missing url accepted")
 	}
+	for _, bad := range []string{"a=/", "a=h:1", "a=ftp://h", "a=http://h,owner="} {
+		if _, err := parseAgentFlag(bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
 	if _, err := parseAgentFlag("a=http://h,bogus"); err == nil {
 		t.Fatal("unknown option accepted")
 	}

@@ -43,6 +43,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -108,17 +109,25 @@ func (a *agentFlags) Set(v string) error {
 
 func parseAgentFlag(v string) (agentFlag, error) {
 	parts := strings.Split(v, ",")
-	id, url, ok := strings.Cut(parts[0], "=")
-	if !ok || id == "" || url == "" {
+	id, raw, ok := strings.Cut(parts[0], "=")
+	if !ok || id == "" || raw == "" {
 		return agentFlag{}, fmt.Errorf("agent %q must be id=url[,owner=key][,champion]", v)
 	}
-	out := agentFlag{ID: id, URL: strings.TrimRight(url, "/"), Owner: id}
+	// The harness URL must name a host: "/" or a bare path would leave every
+	// case to fault instead of refusing the flag.
+	if u, err := neturl.Parse(raw); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return agentFlag{}, fmt.Errorf("agent %q: url must be an http(s) URL with a host", v)
+	}
+	out := agentFlag{ID: id, URL: strings.TrimRight(raw, "/"), Owner: id}
 	for _, p := range parts[1:] {
 		switch {
 		case p == "champion":
 			out.Champion = true
 		case strings.HasPrefix(p, "owner="):
 			out.Owner = strings.TrimPrefix(p, "owner=")
+			if out.Owner == "" {
+				return agentFlag{}, fmt.Errorf("agent %q: owner must not be empty", v)
+			}
 		default:
 			return agentFlag{}, fmt.Errorf("agent %q: unknown option %q", v, p)
 		}
