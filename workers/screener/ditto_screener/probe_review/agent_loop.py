@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -172,6 +173,29 @@ class Ledger:
 _PROBING_TOOLS = frozenset({"run_case", "batch", "mutate"})
 
 
+def _call_with_deadline(
+    call: Callable[[], dict[str, Any]], timeout: float
+) -> dict[str, Any] | None:
+    """Result of ``call``, or None when it has not finished within ``timeout``."""
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["result"] = call()
+        except BaseException as error:  # noqa: BLE001 - re-raised on the caller
+            box["error"] = error
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        return None
+    if "error" in box:
+        raise box["error"]
+    result: dict[str, Any] = box["result"]
+    return result
+
+
 def _observation(result: Any) -> str:
     """Serialize a tool result; say so when the reviewer sees only a prefix."""
     text = json.dumps(result, default=str)
@@ -273,11 +297,17 @@ def review(
     ):
         remaining = deadline_seconds - (time.monotonic() - started)
         # A pooled completer is bounded by the review's remaining wall time.
-        response = (
-            complete(messages, TOOL_SCHEMAS, timeout=max(1.0, remaining))
-            if isinstance(complete, HttpCompleter)
-            else complete(messages, TOOL_SCHEMAS)
-        )
+        response: dict[str, Any] | None
+        if isinstance(complete, HttpCompleter):
+            response = complete(messages, TOOL_SCHEMAS, timeout=max(1.0, remaining))
+        else:
+            # Any other completer runs on a daemon thread that the loop stops
+            # waiting for at the deadline (the thread is abandoned, not killed).
+            response = _call_with_deadline(
+                lambda: complete(messages, TOOL_SCHEMAS), max(1.0, remaining)
+            )
+            if response is None:
+                break
         ledger.settle(response.get("usage") or {})
         if ledger.over_budget():
             # The response that crossed a budget is not acted on.

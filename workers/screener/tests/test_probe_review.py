@@ -693,6 +693,27 @@ def test_tool_placeholders_render_from_the_issuing_model_request(
     assert "budget spent" in refused["error"]
 
 
+def test_legacy_reports_live_restart_and_slow_completers(tmp_path: Path) -> None:
+    import time as _time
+
+    from ditto_screener.probe_review import sandbox
+
+    legacy = _record(
+        {"function_call": {"name": "s", "arguments": '{"q": 1}'}},
+        [_tool_entry("s", {"q": 1})],
+    )
+    assert not evaluate(legacy, {"op": "executed_not_reported"})[0]
+    session = Session(
+        root=str(tmp_path), image="i", artifact_sha256="0" * 64, bench_version=13
+    )
+    session.started = True
+    with pytest.raises(sandbox.SandboxError, match="already started"):
+        session.start()
+    started = _time.monotonic()
+    assert agent_loop._call_with_deadline(lambda: _time.sleep(5) or {}, 0.2) is None
+    assert _time.monotonic() - started < 2
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

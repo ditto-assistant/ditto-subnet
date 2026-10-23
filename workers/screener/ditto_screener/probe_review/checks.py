@@ -285,7 +285,11 @@ def _tool_executed(record: ProbeRecord, check: Check) -> tuple[bool, str]:
 
 def _reported(record: ProbeRecord) -> list[dict[str, Any]]:
     response = record.response if isinstance(record.response, dict) else {}
-    calls = response.get("tool_calls") or []
+    calls = response.get("tool_calls")
+    if not calls and isinstance(response.get("function_call"), dict):
+        # Legacy single-call responses report {name, arguments}.
+        calls = [response["function_call"]]
+    calls = calls or []
     reported = []
     for c in calls if isinstance(calls, list) else []:
         if not isinstance(c, dict):

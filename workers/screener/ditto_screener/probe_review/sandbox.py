@@ -352,6 +352,10 @@ class Session:
     # -- lifecycle -----------------------------------------------------------
 
     def start(self, *, health_timeout: float = 300.0) -> None:
+        if self.started:
+            # Restaging would erase the live gateway's script and transcript
+            # under an in-flight probe; stop() first (the CLI does).
+            raise SandboxError("session is already started; stop it first")
         # Same scheme as the gate's gateway state: the session root is private
         # to the owner; the sidecar (a different uid, no DAC override) can
         # traverse the state dir, read the script and throwaway shim certs,
