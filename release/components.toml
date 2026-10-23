@@ -206,6 +206,8 @@ paths = [
 
 [components.dittobench_reranker]
 description = "Season 2 reranker competition: contract, evaluation pools and deterministic scorer"
+# Pools are a pure function of the generator, so a datagen change re-checks them.
+depends_on = ["dittobench_datagen"]
 paths = [
   "packages/dittobench-reranker/**",
   ".github/workflows/reranker-ci.yml",

@@ -42,19 +42,34 @@ A pool is one question plus 20 candidate memories in **base order** (the order
 retrieval produced before reranking), with the subset that answers the
 question marked gold.
 
-- Pools come from fresh DittoBench datagen universes. The generator records the
-  pairs it planted as evidence for each case (`RequiredPairIDs`), so gold labels
-  are exact, not inferred from answer strings.
-- Candidate text is `"User: " + prompt + "\nDitto: " + response`, the same
-  shape the product hydrates.
-- Base order is a deterministic BM25 ranking over the case's memory graph. The
-  product's base order is its composite retriever. Matching it exactly needs
-  embeddings and is deferred.
-- Only pools with at least one gold memory in the top 20 are kept, because a
-  reranker cannot move what is not in the pool.
+- Pools come from fresh DittoBench datagen universes
+  (`packages/dittobench-reranker/poolgen`: package `rerankpool`, CLI
+  `cmd/rerank-pools`). The
+  generator records the pairs it planted as evidence for each case
+  (`RequiredPairIDs`), so gold labels are exact, not inferred from answer
+  strings.
+- A case's graph is what the scorer would have seeded for that user up to the
+  case's wave: the tool-prerequisite world first, then the memory waves.
+- Every gold memory is in the pool. The other slots go to the hardest
+  negatives: the non-evidence memories BM25 ranks highest. The pool is then
+  ordered by BM25. A lexically weak gold memory therefore sits low in base
+  order, which is the product's real situation: the evidence was retrieved but
+  ranked badly.
+- The product's base order is its composite retriever. Matching that needs
+  embeddings and is deferred; every candidate is scored on the same BM25 order.
+- Cases whose evidence would fill more than half the pool are dropped.
+- Candidate text is `"User: " + prompt + "\nDitto: " + response`, the shape the
+  product hydrates, capped at 4,096 characters. The cap never changes what a
+  256-token model sees.
 - Scored pools are generated from a seed fixed only after the submission is
-  committed, so they cannot be memorised. A public practice generator uses a
-  disjoint seed space.
+  committed, so they cannot be memorised. They are rendered under a held surface
+  salt, so their wording differs from anything public. Any seed a miner picks is
+  practice.
+
+At bench version 13 (full profile), one seed yields 244 pools. Over seeds 1–4
+the BM25 base order scores a mean NDCG@10 of 0.718, and gold is already first in
+73% of pools. Most of the headroom is in ranking all of a case's evidence
+highly, since most cases plant three or more memories.
 
 ## Score
 
