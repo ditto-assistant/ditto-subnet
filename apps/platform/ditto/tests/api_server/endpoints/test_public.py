@@ -2804,9 +2804,9 @@ class TestPublicBenchmarkTimeline:
         body = response.json()
         assert body["metric"] == "memory_mean"
         assert body["score_quorum"] == 3
-        assert inspected == [10, 11, 12, 13]
         releases = {r["bench_version"]: r for r in body["releases"]}
         assert list(releases) == [10, 11, 12, 13]
+        assert inspected == [10, 11, 12, 13]
         assert releases[10]["title"] == "Known title"
         # Observed score time beats an erroneous future glossary epoch.
         assert releases[10]["released_at"] == "2026-08-10T00:00:00Z"

@@ -6264,9 +6264,9 @@ export interface paths {
          * Benchmark Timeline
          * @description Running best finalized miner memory score across the newest contracts.
          *
-         *     The window follows the bench_version changelog rather than a hardcoded
-         *     range, so shipping a new contract puts it on the timeline on its own. See
-         *     :data:`_TIMELINE_MAX_RELEASES` for why it stays bounded.
+         *     Discover competitions from accepted scores and started rollouts. The public
+         *     glossary supplies optional titles only: stale or future documentation must
+         *     never determine which live competitions appear.
          */
         get: operations["benchmark_timeline_api_v1_public_bench_timeline_get"];
         put?: never;
