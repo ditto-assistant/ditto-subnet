@@ -2868,6 +2868,62 @@ class TestPublicBenchmarkTimeline:
         assert body["releases"] == []
         assert body["points"] == []
 
+    async def test_new_competition_is_visible_while_awaiting_its_first_quorum(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        for version in range(10, 15):
+            await _seed_k3(
+                session_maker,
+                miner=_MINER_A,
+                composites=[0.61, 0.62] if version == 14 else [0.61, 0.62, 0.63],
+                details={"bench_version": version},
+            )
+        _install_db(app, session_maker)
+        body = (await client.get("/api/v1/public/bench/timeline")).json()
+        assert [r["bench_version"] for r in body["releases"]] == [11, 12, 13, 14]
+        assert {p["bench_version"] for p in body["points"]} == {11, 12, 13}
+
+    async def test_concurrent_score_removal_keeps_remaining_dated_competitions(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        for version in (12, 13):
+            await _seed_k3(
+                session_maker,
+                miner=_MINER_A,
+                composites=[0.61, 0.62, 0.63],
+                details={"bench_version": version},
+            )
+        original_execute = AsyncSession.execute
+        removed = False
+
+        async def remove_score_before_timestamp_read(
+            session, statement, *args, **kwargs
+        ):
+            nonlocal removed
+            if not removed and "min(scores.created_at)" in str(statement):
+                removed = True
+                async with session_maker() as concurrent, concurrent.begin():
+                    await concurrent.execute(
+                        Score.__table__.delete().where(Score.bench_version == 13)
+                    )
+            return await original_execute(session, statement, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncSession, "execute", remove_score_before_timestamp_read)
+        _install_db(app, session_maker)
+        response = await client.get("/api/v1/public/bench/timeline")
+        assert removed
+        assert response.status_code == 200
+        body = response.json()
+        assert [r["bench_version"] for r in body["releases"]] == [12]
+        assert {p["bench_version"] for p in body["points"]} == {12}
+
 
 def _check_finalized_admission_parity(monkeypatch):
     """Reuse public-board scenarios to check the admission contract fields."""

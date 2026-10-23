@@ -3340,7 +3340,11 @@ async def benchmark_timeline(
             ),
             title=titles.get(version, f"DittoBench v{version}"),
         )
+        # Score-only versions can disappear between discovery and this read
+        # under READ COMMITTED (for example, an agent deletion cascades scores).
+        # Keep every remaining dated competition; the next poll rediscovers it.
         for version in versions
+        if version in rollout_by_version or version in first_scored_at
     ]
     releases.sort(key=lambda entry: entry.bench_version)
     released_at = {entry.bench_version: entry.released_at for entry in releases}
