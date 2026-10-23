@@ -7,9 +7,9 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy import select
 
 from ditto.api_models.private_dataset import PrivateDatasetRequest
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.endpoints import validator as v
-from ditto.db.models import PrivateBenchmarkDataset, ValidatorTicket
+from ditto.db.models import GeneratorRound, PrivateBenchmarkDataset, ValidatorTicket
 from ditto.db.queries.private_benchmark_datasets import (
     PrivateDatasetIdentity,
     find_private_dataset,
@@ -70,6 +70,27 @@ async def download_private_dataset(
         )
         if ticket is None:
             raise HTTPException(409, "no matching live private dataset lease")
+        if ticket.purpose == TicketPurpose.GENERATOR_ROUND:
+            # A generator round panel run: the bytes are the round dataset,
+            # served only while the round is accepting results.
+            round_row = await session.scalar(
+                select(GeneratorRound).where(
+                    GeneratorRound.dataset_sha256 == payload.dataset_sha256,
+                    GeneratorRound.status == "running",
+                )
+            )
+            if round_row is None or round_row.dataset_bytes is None:
+                raise HTTPException(409, "generator round dataset is unavailable")
+            body = round_row.dataset_bytes
+            return Response(
+                body,
+                media_type="application/octet-stream",
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                    "X-Dataset-SHA256": payload.dataset_sha256,
+                },
+            )
         row = await session.scalar(
             select(PrivateBenchmarkDataset)
             .where(

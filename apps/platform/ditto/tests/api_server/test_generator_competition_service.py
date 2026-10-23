@@ -19,7 +19,6 @@ from ditto.api_models.generator import (
     GeneratorBuildResult,
     GeneratorResultRequest,
     GeneratorSeedOutput,
-    GeneratorSeedResult,
     ValidationReport,
 )
 from ditto.api_server.generator_competition import (
@@ -65,7 +64,7 @@ def test_inspect_upload_rejects_bad_bytes() -> None:
 
 
 def _payload(**overrides: object) -> GeneratorResultRequest:
-    seed = GeneratorSeedResult(
+    seed = GeneratorSeedOutput(
         seed="ab" * 32, validation=ValidationReport(valid=True, case_count=8)
     )
     base: dict[str, object] = {
@@ -90,7 +89,7 @@ def test_generator_failure_classification() -> None:
     assert service._generator_failure(
         _payload(build=GeneratorBuildResult(ok=False, error="compile_failed: x"))
     ) == ("build_failed", "compile_failed: x")
-    crashed = GeneratorSeedResult(seed="ab" * 32, error="generator generate: timeout")
+    crashed = GeneratorSeedOutput(seed="ab" * 32, error="generator generate: timeout")
     assert service._generator_failure(_payload(seeds=[crashed]))[0] == (  # type: ignore[index]
         "generation_failed"
     )

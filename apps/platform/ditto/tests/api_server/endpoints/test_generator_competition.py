@@ -1,12 +1,11 @@
 """Contract tests for the shadow generator competition lane.
 
 Covers the operator settings board, signed source uploads (archive checks,
-duplicate trees, supersession), the trusted scorer's lease/result loop (fresh
-secret seeds, panel snapshot, generator failures, nondeterminism, insufficient
-panels, behavioral copies on the probe seed, cross-run duplicates, periodic
-rescoring), the public board, the validator ledger, and the operator views.
-The scoring arithmetic itself is pinned by ``ditto/tests/test_generator_scoring.py``
-against the Go golden vectors, and archive inspection by
+duplicate trees, supersession), the trusted scorer's qualification loop (fresh
+secret seeds, generator failures, nondeterminism, behavioral copies on the
+probe seed, expired leases), the validator ledger, and the operator actions.
+Rounds, where qualified generators are scored against agents, are covered by
+``test_generator_rounds.py``; archive inspection by
 ``ditto/tests/test_generator_archive.py``.
 """
 
@@ -32,7 +31,6 @@ from fastapi import FastAPI
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import ditto.api_server.generator_competition as competition_mod
 from ditto.api_models.generator import (
     PROBE_ROTATION_CONFIRMATION,
     REJECT_SUBMISSION_CONFIRMATION,
@@ -42,8 +40,6 @@ from ditto.api_models.generator import (
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.chain.models import NeuronInfo
 from ditto.db.models import (
-    GeneratorCaseVerdict,
-    GeneratorOperatorAction,
     GeneratorProbeEpoch,
     GeneratorRun,
     GeneratorSubmission,
@@ -74,13 +70,19 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "champion_bonus": 0.5,
         "seeds_per_run": 2,
         "cases_per_seed": 8,
-        "rescore_interval_hours": 24,
         "window_days": 7,
         "copy_overlap_threshold": 0.5,
         "upload_cooldown_seconds": 60,
         "lease_ttl_seconds": 600,
         "max_attempts": 2,
         "retry_backoff_seconds": 60,
+        "epochs_per_round": 4,
+        "counted_columns": 5,
+        "challenger_columns": 1,
+        "reference_agent_ids": [],
+        "privacy_window_rounds": 6,
+        "onchain_commitment": False,
+        "validator_rounds_enabled": False,
     }
     base.update(overrides)
     return base
@@ -175,23 +177,6 @@ def _upload_body(
     }
 
 
-_PANEL = [
-    {"agent_id": "agent-champ", "owner_key": "coldkey:champ", "champion": True},
-    {"agent_id": "agent-b", "owner_key": "coldkey:b", "champion": False},
-    {"agent_id": "agent-c", "owner_key": "coldkey:c", "champion": False},
-    {"agent_id": "agent-d", "owner_key": "coldkey:d", "champion": False},
-]
-
-
-@pytest.fixture
-def fixed_panel(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    async def _select(_session: AsyncSession, *, size: int) -> list[dict[str, Any]]:
-        return [dict(slot) for slot in _PANEL[:size]]
-
-    monkeypatch.setattr(competition_mod, "select_panel", _select)
-    return _PANEL
-
-
 def _refs(tag: str, count: int = 8) -> list[dict[str, str]]:
     """Case refs a generator would emit: fingerprints derived from ``tag``."""
     return [
@@ -201,24 +186,6 @@ def _refs(tag: str, count: int = 8) -> list[dict[str, str]]:
         }
         for i in range(count)
     ]
-
-
-def _panel_results(
-    refs: list[dict[str, str]], scores: dict[str, float]
-) -> list[dict[str, Any]]:
-    return [
-        {
-            "agent_id": agent,
-            "owner_key": "ignored-by-platform",
-            "champion": False,
-            "results": [{"case_id": r["case_id"], "score": score} for r in refs],
-        }
-        for agent, score in scores.items()
-    ]
-
-
-# Champion fails everything; b and c solve; d quarter-solves.
-_SCORES = {"agent-champ": 0.0, "agent-b": 1.0, "agent-c": 1.0, "agent-d": 0.25}
 
 
 def _seed_output(seed: str, refs: list[dict[str, str]], **extra: Any) -> dict[str, Any]:
@@ -236,7 +203,6 @@ def _result(
     *,
     tag: str,
     probe_tag: str | None = None,
-    scores: dict[str, float] | None = None,
     deterministic: bool | None = True,
     build_ok: bool = True,
     seed_overrides: dict[str, Any] | None = None,
@@ -245,9 +211,7 @@ def _result(
     if build_ok:
         for index, seed in enumerate(work["seeds"]):
             refs = _refs(f"{tag}:{index}", work["cases_per_seed"])
-            out = _seed_output(
-                seed, refs, panel=_panel_results(refs, scores or _SCORES)
-            )
+            out = _seed_output(seed, refs)
             if index == 0 and seed_overrides:
                 out.update(seed_overrides)
             seeds.append(out)
@@ -261,7 +225,7 @@ def _result(
         "run_id": work["run_id"],
         "submission_id": work["submission_id"],
         "source_sha256": work["source_sha256"],
-        "scorer_version": "challenge-scorer/2",
+        "scorer_version": "challenge-scorer/3",
         "sandbox": "docker",
         "build": {"ok": build_ok, "error": None if build_ok else "compile_failed: x"},
         "deterministic": deterministic if build_ok else None,
@@ -521,12 +485,11 @@ class TestScorer:
             await client.get("/api/v1/generator-scorer/work", headers=_SCORER)
         ).status_code == 503
 
-    async def test_full_loop_scores_rescores_and_publishes(
+    async def test_qualification_loop(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
-        fixed_panel: list[dict[str, Any]],
     ) -> None:
         _install(app, session_maker)
         await _open_lane(client)
@@ -540,48 +503,25 @@ class TestScorer:
         assert len(work["seeds"]) == 2 and len(set(work["seeds"])) == 2
         assert all(len(seed) == 64 for seed in [*work["seeds"], work["probe_seed"]])
         assert work["probe_seed"] not in work["seeds"] and work["cases_per_seed"] == 8
-        assert [s["agent_id"] for s in work["panel"]] == [
-            s["agent_id"] for s in fixed_panel
-        ]
+        assert "panel" not in work
         # A second scorer gets nothing while the lease is live.
         assert (await _lease(client)) is None
 
         result = _result(work, tag="gen")
-        result["seeds"][0]["panel"] += _panel_results(
-            result["seeds"][0]["validation"]["cases"], {"intruder": 1.0}
-        )
         resp = await _post(client, result)
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert body["status"] == "scored" and body["submission_status"] == "active"
-        # mean = (0 + 1 + 1 + 0.25)/4 = 0.5625; credit = 0.4375 * 1.5 per case,
-        # normalized by 1.5 * 8: every seed scores 0.4375 and so does the mean.
-        assert body["score"] == pytest.approx(0.4375)
+        assert body["status"] == "qualified" and body["submission_status"] == "active"
+        assert body["score"] is None
         assert (await _post(client, result)).status_code == 409  # replay
-
         async with session_maker() as session:
-            verdicts = list(
-                await session.scalars(
-                    select(GeneratorCaseVerdict).where(
-                        GeneratorCaseVerdict.run_id == UUID(work["run_id"])
-                    )
-                )
-            )
-            assert len(verdicts) == 16
-            assert {v.status for v in verdicts} == {"discriminating"}
-            assert all(v.panel_size == 4 and v.champion_failed for v in verdicts)
             row = await session.get(
                 GeneratorSubmission, UUID(accepted["submission_id"])
             )
             assert row is not None and row.lease_id is None
-            assert row.next_run_at > datetime.now(UTC) + timedelta(hours=23)
-
-        board = (await client.get("/api/v1/generator/board")).json()
-        assert board["mode"] == "shadow" and board["count"] == 1
-        entry = board["entries"][0]
-        assert entry["miner_hotkey"] == _MINER.ss58_address
-        assert entry["run_id"] == work["run_id"] and entry["weight_eligible"] is False
-        assert entry["score"] == pytest.approx(0.4375)
+            assert row.qualified_at is not None
+        # A qualified generator is not leased again: rounds take over.
+        assert (await _lease(client)) is None
 
         run_detail = await client.get(
             f"/api/v1/admin/generator-competition/runs/{work['run_id']}",
@@ -589,42 +529,16 @@ class TestScorer:
         )
         assert run_detail.status_code == 200
         detail = run_detail.json()
-        assert detail["seeds"] == work["seeds"] and len(detail["verdicts"]) == 16
+        assert detail["seeds"] == work["seeds"]
         assert detail["evaluation"]["deterministic"] is True
         assert work["probe_seed"] not in run_detail.text
         assert "source_base64" not in run_detail.text
-        sub_detail = await client.get(
-            f"/api/v1/admin/generator-competition/submissions/{accepted['submission_id']}",
-            headers=_ADMIN,
-        )
-        assert [r["status"] for r in sub_detail.json()["runs"]] == ["scored"]
-        candidates = await client.get(
-            "/api/v1/admin/generator-competition/promotion-candidates", headers=_ADMIN
-        )
-        assert len(candidates.json()["candidates"]) == 16
-        paged = await client.get(
-            "/api/v1/admin/generator-competition/promotion-candidates",
-            headers=_ADMIN,
-            params={"limit": 10, "offset": 10},
-        )
-        assert len(paged.json()["candidates"]) == 6
-
-        # The rescore runs the same generator on fresh seeds. Repeating its
-        # previous cases earns nothing: every fingerprint is already claimed.
-        await _make_due(session_maker, accepted["submission_id"])
-        rerun = await _lease(client)
-        assert rerun["run_id"] != work["run_id"]
-        assert not set(rerun["seeds"]) & set(work["seeds"])
-        resp = await _post(client, _result(rerun, tag="gen"))
-        assert resp.json()["status"] == "scored" and resp.json()["score"] == 0.0
         listing = await client.get(
             "/api/v1/generator/submissions", params={"hotkey": _MINER.ss58_address}
         )
-        latest = listing.json()["submissions"][0]["latest_run"]
-        assert latest["run_id"] == rerun["run_id"]
-        assert latest["case_counts"]["duplicate"] == 16
-        board = (await client.get("/api/v1/generator/board")).json()
-        assert board["entries"][0]["run_id"] == rerun["run_id"]
+        item = listing.json()["submissions"][0]
+        assert item["qualified_at"] is not None and item["next_run_at"] is None
+        assert item["latest_run"]["status"] == "qualified"
 
         # Rejecting the generator releases the claims its scored runs held.
         fingerprints = [v["fingerprint"] for v in detail["verdicts"]]
@@ -660,7 +574,6 @@ class TestScorer:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
-        fixed_panel: list[dict[str, Any]],  # noqa: ARG002 - pins the panel
         case: str,
         outcome: str,
     ) -> None:
@@ -701,7 +614,8 @@ class TestScorer:
             row = await session.get(
                 GeneratorSubmission, UUID(accepted["submission_id"])
             )
-            assert row is not None and row.status_reason.startswith(outcome)
+            assert row is not None and row.status_reason is not None
+            assert row.status_reason.startswith(outcome)
         assert (await _lease(client)) is None
 
     async def test_results_must_match_the_lease(
@@ -709,7 +623,6 @@ class TestScorer:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
-        fixed_panel: list[dict[str, Any]],  # noqa: ARG002 - pins the panel
     ) -> None:
         _install(app, session_maker)
         await _open_lane(client)
@@ -735,7 +648,6 @@ class TestScorer:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
-        fixed_panel: list[dict[str, Any]],  # noqa: ARG002 - pins the panel
     ) -> None:
         _install(app, session_maker)
         await _open_lane(client)
@@ -743,7 +655,7 @@ class TestScorer:
         work = await _lease(client)
         assert (await _post(client, _result(work, tag="a", probe_tag="same"))).json()[
             "status"
-        ] == "scored"
+        ] == "qualified"
 
         # A cosmetically different archive from another owner emits the same
         # cases on the probe seed: same program, rejected.
@@ -755,7 +667,8 @@ class TestScorer:
         assert resp.json()["submission_status"] == "rejected"
         async with session_maker() as session:
             row = await session.get(GeneratorSubmission, UUID(copy["submission_id"]))
-            assert row is not None and original["submission_id"] in row.status_reason
+            assert row is not None and row.status_reason is not None
+            assert original["submission_id"] in row.status_reason
 
         # Rotating the probe seed starts a new comparison epoch.
         rotated = await client.post(
@@ -771,6 +684,12 @@ class TestScorer:
         assert probe["current"]["epoch"] == 2 and len(probe["history"]) == 2
         assert probe["history"][1]["probed_submissions"] == 2
         assert "seed" not in probe["current"]
+        # Rotation re-qualifies every active generator on the new probe.
+        async with session_maker() as session:
+            row = await session.get(
+                GeneratorSubmission, UUID(original["submission_id"])
+            )
+            assert row is not None and row.qualified_at is None
         async with session_maker() as session:
             assert (
                 await session.scalar(
@@ -780,24 +699,15 @@ class TestScorer:
                 )
             ) == 1
 
-    async def test_insufficient_panel_requeues_and_expired_leases_rotate_seeds(
+    async def test_expired_leases_rotate_seeds(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
-        fixed_panel: list[dict[str, Any]],  # noqa: ARG002 - pins the panel
     ) -> None:
         _install(app, session_maker)
         await _open_lane(client)
         accepted = await _upload(client, _archive())
-        work = await _lease(client)
-        short = _result(work, tag="x", scores={"agent-b": 1.0, "agent-c": 0.0})
-        resp = await _post(client, short)
-        assert resp.json()["status"] == "insufficient_panel"
-        assert resp.json()["submission_status"] == "active"
-        assert (await _lease(client)) is None  # backing off
-
-        await _make_due(session_maker, accepted["submission_id"])
         first = await _lease(client)
         async with session_maker() as session:
             row = await session.get(
@@ -813,47 +723,6 @@ class TestScorer:
         async with session_maker() as session:
             old = await session.get(GeneratorRun, UUID(first["run_id"]))
             assert old is not None and old.status == "abandoned"
-
-    async def test_no_panel_leases_nothing(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        async def _empty(
-            _session: AsyncSession,
-            *,
-            size: int,  # noqa: ARG001 - matches select_panel
-        ) -> list[dict[str, Any]]:
-            return []
-
-        monkeypatch.setattr(competition_mod, "select_panel", _empty)
-        _install(app, session_maker)
-        await _open_lane(client)
-        await _upload(client, _archive())
-        assert (await _lease(client)) is None
-
-    async def test_a_lapsed_lease_cannot_report(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        fixed_panel: list[dict[str, Any]],  # noqa: ARG002 - pins the panel
-    ) -> None:
-        _install(app, session_maker)
-        await _open_lane(client)
-        accepted = await _upload(client, _archive())
-        work = await _lease(client)
-        async with session_maker() as session:
-            row = await session.get(
-                GeneratorSubmission, UUID(accepted["submission_id"])
-            )
-            assert row is not None
-            row.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
-            await session.commit()
-        resp = await _post(client, _result(work, tag="late"))
-        assert resp.status_code == 409 and "expired" in resp.text
 
     async def test_validator_ledger_is_shadow(
         self,
@@ -872,37 +741,11 @@ class TestScorer:
 
 
 class TestOperatorActions:
-    async def test_a_rescore_during_a_run_survives_its_result(
+    async def test_requalify_and_reject(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
-        fixed_panel: list[dict[str, Any]],  # noqa: ARG002 - pins the panel
-    ) -> None:
-        _install(app, session_maker)
-        await _open_lane(client)
-        accepted = await _upload(client, _archive())
-        sub_id = accepted["submission_id"]
-        work = await _lease(client)
-        resp = await client.post(
-            f"/api/v1/admin/generator-competition/submissions/{sub_id}/rescore",
-            headers=_ADMIN,
-            json={"expected_status": "active", "reason": "panel changed mid-run"},
-        )
-        assert resp.status_code == 200, resp.text
-        assert (await _post(client, _result(work, tag="r"))).json()[
-            "status"
-        ] == "scored"
-        # The requested run starts now, not after the rescore interval.
-        rerun = await _lease(client)
-        assert rerun is not None and rerun["run_id"] != work["run_id"]
-
-    async def test_rescore_and_reject(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        fixed_panel: list[dict[str, Any]],  # noqa: ARG002 - pins the panel
     ) -> None:
         _install(app, session_maker)
         await _open_lane(client)
@@ -912,10 +755,10 @@ class TestOperatorActions:
         work = await _lease(client)
         assert (await _post(client, _result(work, tag="r"))).json()[
             "status"
-        ] == "scored"
-        assert (await _lease(client)) is None  # not due for 24 h
+        ] == "qualified"
+        assert (await _lease(client)) is None  # qualified generators idle here
 
-        body = {"expected_status": "active", "reason": "panel changed today"}
+        body = {"expected_status": "active", "reason": "re-check after a fix"}
         assert (await client.post(f"{base}/rescore", json=body)).status_code == 401
         stale = {**body, "expected_status": "rejected"}
         assert (
@@ -923,17 +766,6 @@ class TestOperatorActions:
         ).status_code == 409
         resp = await client.post(f"{base}/rescore", headers=_ADMIN, json=body)
         assert resp.status_code == 200, resp.text
-        async with session_maker() as session:
-            audit = (
-                await session.scalars(
-                    select(GeneratorOperatorAction).where(
-                        GeneratorOperatorAction.subject == sub_id
-                    )
-                )
-            ).all()
-            assert [(a.action, a.reason) for a in audit] == [
-                ("rescore", "panel changed today")
-            ]
         rerun = await _lease(client)
         assert rerun is not None and rerun["submission_id"] == sub_id
 
@@ -951,11 +783,10 @@ class TestOperatorActions:
         assert detail["summary"]["status"] == "rejected"
         assert detail["summary"]["status_reason"].startswith("operator (")
         assert detail["lease_run_id"] is None
-        assert [r["status"] for r in detail["runs"]] == ["abandoned", "scored"]
-        # The in-flight run can no longer report, and the board drops the hotkey.
+        assert [r["status"] for r in detail["runs"]] == ["abandoned", "qualified"]
+        assert detail["summary"]["qualified_at"] is None
+        # The in-flight run can no longer report.
         assert (await _post(client, _result(rerun, tag="r2"))).status_code == 409
-        board = (await client.get("/api/v1/generator/board")).json()
-        assert board["count"] == 0
         assert (
             await client.post(
                 f"{base}/reject",

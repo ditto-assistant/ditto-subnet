@@ -1,0 +1,973 @@
+"""Generator-competition rounds: the chain-epoch agent x generator matrix.
+
+Real Postgres end to end: the epoch-driven lifecycle (commit ahead, open on the
+chain epoch with a seed bound to the committed secret and the open block,
+generate, run, close, score, reveal), the scorer's round work, the validator
+lane that runs panel agents on ``generator_round`` tickets, the round ledger,
+and the operator and public views. The derivations are pinned against the Go
+contract's golden vectors (``challenge/testdata/round_vectors.json``).
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+from collections.abc import AsyncIterator
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID, uuid4
+
+import bittensor
+import httpx
+import pytest
+from fastapi import FastAPI
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+import ditto.api_server.endpoints.validator_generator_round as lane_mod
+import ditto.api_server.generator_competition as competition_mod
+import ditto.db.queries.tickets as tickets_mod
+from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.generator import generator_settings_confirmation
+from ditto.api_models.generator_round_validator import (
+    GeneratorRoundCaseResult,
+    GeneratorRoundJobRequest,
+    GeneratorRoundScoreRequest,
+)
+from ditto.api_models.generator_rounds import (
+    REGISTER_DEFAULT_GENERATOR_CONFIRMATION,
+    RELEASE_ROUND_LEASE_CONFIRMATION,
+    onchain_commitment_payload,
+    void_round_confirmation,
+)
+from ditto.api_models.private_dataset import PrivateDatasetRequest
+from ditto.api_models.screener import SCREENING_POLICY_VERSION
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_server.dependencies import get_chain_client, get_session
+from ditto.api_server.generator_competition import load_settings
+from ditto.api_server.generator_rounds import (
+    ChainPosition,
+    GeneratorRoundLoop,
+    advance_rounds,
+    get_round,
+    round_column_seed,
+    round_commitment,
+    round_seed,
+)
+from ditto.chain.models import NeuronInfo
+from ditto.db.models import (
+    Agent,
+    GeneratorRoundAttempt,
+    GeneratorSubmission,
+    ValidatorTicket,
+)
+from ditto.tests.api_server.endpoints.test_generator_competition import (
+    _ADMIN,
+    _ADMIN_TOKEN,
+    _SCORER,
+    _SCORER_TOKEN,
+    _archive,
+    _settings,
+)
+
+_REPO = Path(__file__).resolve().parents[6]
+_VECTORS = _REPO / "research/dittobench-datagen/challenge/testdata/round_vectors.json"
+_VALIDATOR = bittensor.Keypair.create_from_uri("//Alice")
+_SETTINGS_URL = "/api/v1/admin/generator-competition/settings"
+_ROUNDS_URL = "/api/v1/admin/generator-competition/rounds"
+_BLOCK = "0x" + "5a" * 32
+
+
+def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> MagicMock:
+    app.state.config = replace(
+        app.state.config,
+        admin_api_token=_ADMIN_TOKEN,
+        generator_scorer_token=_SCORER_TOKEN,
+    )
+    app.state.session_maker = maker
+
+    async def _session() -> AsyncIterator[AsyncSession]:
+        async with maker() as session:
+            yield session
+
+    chain = MagicMock()
+    chain.get_recent_neurons = AsyncMock(
+        return_value=[
+            NeuronInfo(
+                hotkey=_VALIDATOR.ss58_address,
+                coldkey="5GReceiverColdkeyPlaceholderXXXXXXXXXXXXXXXXXXX",
+                uid=1,
+                stake=1000.0,
+                validator_permit=True,
+            )
+        ]
+    )
+    chain.set_commitment = AsyncMock()
+
+    async def _chain() -> MagicMock:
+        return chain
+
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[get_chain_client] = _chain
+    app.state.chain = chain
+    return chain
+
+
+async def _apply_settings(client: httpx.AsyncClient, **overrides: Any) -> None:
+    current = (await client.get(_SETTINGS_URL, headers=_ADMIN)).json()
+    settings = _settings(min_panel=3, panel_size=3, **overrides)
+    resp = await client.post(
+        _SETTINGS_URL,
+        headers=_ADMIN,
+        json={
+            "expected_revision": current["effective"]["revision"],
+            "settings": settings,
+            "reason": "run generator rounds in shadow",
+            "actor": "backroom:test",
+            "confirmation": generator_settings_confirmation(settings["mode"]),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+
+async def _seed_agent(maker: async_sessionmaker[AsyncSession], rank: int) -> UUID:
+    agent_id = uuid4()
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        session.add(
+            Agent(
+                agent_id=agent_id,
+                miner_hotkey=f"5PanelMiner{rank}",
+                name=f"panel-{rank}",
+                sha256=f"{rank + 10:02d}" * 32,
+                size_bytes=1024,
+                status=AgentStatus.SCORED,
+                screening_policy_version=SCREENING_POLICY_VERSION,
+                created_at=now,
+                screened_image_sha256="12" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "34" * 32,
+                screened_image_ref=f"ditto-screen/{agent_id}:latest",
+                screened_image_upload_id=uuid4(),
+                screened_image_verified_at=now,
+            )
+        )
+    return agent_id
+
+
+async def _seed_generator(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    hotkey: str,
+    owner: str,
+    salt: str,
+    qualified: bool = True,
+) -> UUID:
+    raw = _archive(salt)
+    now = datetime.now(UTC)
+    row = GeneratorSubmission(
+        submission_id=uuid4(),
+        miner_hotkey=hotkey,
+        owner_key=owner,
+        source_sha256=hashlib.sha256(raw).hexdigest(),
+        tree_sha256=hashlib.sha256(salt.encode()).hexdigest(),
+        source_bytes=raw,
+        size_bytes=len(raw),
+        module="example.com/gen",
+        go_version="1.23",
+        file_count=2,
+        status="active",
+        attempts=0,
+        next_run_at=now,
+        submitted_at=now - timedelta(hours=1),
+        updated_at=now,
+        qualified_at=now if qualified else None,
+    )
+    async with maker() as session, session.begin():
+        session.add(row)
+    return row.submission_id
+
+
+async def _register_default(client: httpx.AsyncClient) -> str:
+    raw = _archive("public-default")
+    resp = await client.post(
+        "/api/v1/admin/generator-competition/default-generator",
+        headers=_ADMIN,
+        json={
+            "miner_hotkey": _VALIDATOR.ss58_address,
+            "source_sha256": hashlib.sha256(raw).hexdigest(),
+            "source_base64": base64.b64encode(raw).decode(),
+            "reason": "the public default generator",
+            "actor": "backroom:test",
+            "confirmation": REGISTER_DEFAULT_GENERATOR_CONFIRMATION,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["submission_id"]
+
+
+async def _qualify_all(maker: async_sessionmaker[AsyncSession]) -> None:
+    async with maker() as session, session.begin():
+        for row in await session.scalars(select(GeneratorSubmission)):
+            row.qualified_at = row.qualified_at or datetime.now(UTC)
+
+
+def _position(epoch: int, *, block_hash: str = _BLOCK) -> ChainPosition:
+    return ChainPosition(
+        subnet_epoch_index=epoch,
+        last_epoch_block=1000 + epoch * 360,
+        last_epoch_block_hash=block_hash,
+        tempo=360,
+        block=1000 + epoch * 360 + 5,
+    )
+
+
+async def _advance(
+    maker: async_sessionmaker[AsyncSession], epoch: int, **kwargs: Any
+) -> list[str]:
+    async with maker() as session, session.begin():
+        resolved = await load_settings(session)
+        out = await advance_rounds(
+            session,
+            resolved=resolved,
+            position=_position(epoch, **kwargs),
+            now=datetime.now(UTC),
+        )
+    return out.actions
+
+
+def _patch_panel(monkeypatch: pytest.MonkeyPatch, agents: list[UUID]) -> None:
+    async def _select(_session: AsyncSession, *, size: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "agent_id": str(agent),
+                "owner_key": f"coldkey:{index}",
+                "miner_hotkey": f"5PanelMiner{index}",
+                "champion": index == 0,
+            }
+            for index, agent in enumerate(agents[:size])
+        ]
+
+    monkeypatch.setattr(competition_mod, "select_panel", _select)
+
+
+def _patch_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the fleet gates the canonical lanes already test."""
+
+    async def _allowed(*_args: Any, **_kwargs: Any) -> bool:
+        return True
+
+    async def _compatible(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def _slot(*_args: Any, **_kwargs: Any) -> str:
+        return "slot-0"
+
+    async def _grant(_session: AsyncSession, *, ticket: ValidatorTicket, **_: Any):
+        return SimpleNamespace(
+            grant_id=uuid4(),
+            allowed_models=["model"],
+            request_budget=100,
+            token_budget=1000,
+            expires_at=ticket.deadline,
+            route_provider=None,
+            route_profile=None,
+        )
+
+    async def _revoke(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    import ditto.api_server.v13_scorer_cohort as cohort_mod
+
+    monkeypatch.setattr(cohort_mod, "pinned_validator_allowed", _allowed)
+    monkeypatch.setattr(lane_mod, "_round_capable", lambda *_a, **_k: True)
+    monkeypatch.setattr(lane_mod.v, "_assert_validator_compatible", _compatible)
+    monkeypatch.setattr(lane_mod.v, "_idle_retest_slot", _slot)
+    monkeypatch.setattr(lane_mod, "ensure_inference_grant", _grant)
+    monkeypatch.setattr(lane_mod, "revoke_ticket_inference", _revoke)
+    import ditto.api_server.generator_rounds as rounds_mod
+    import ditto.db.queries.inference as inference_mod
+
+    monkeypatch.setattr(inference_mod, "revoke_ticket_inference", _revoke)
+    del rounds_mod
+
+
+def _generation(work: dict[str, Any], *, failing: frozenset[str] = frozenset()) -> dict:
+    columns, packs = [], {}
+    for column in work["columns"]:
+        cid = column["column_id"]
+        seed = round_column_seed(work["seed"], cid)
+        refs = [
+            {
+                "case_id": f"k{i}",
+                "fingerprint": hashlib.sha256(f"{seed}:{i}".encode()).hexdigest(),
+            }
+            for i in range(work["cases_per_column"])
+        ]
+        ok = cid not in failing
+        columns.append(
+            {
+                "column_id": cid,
+                "submission_id": column["submission_id"],
+                "ok": ok,
+                "build": {"ok": True, "duration_ms": 5},
+                "seed": {
+                    "seed": seed,
+                    "validation": {
+                        "valid": ok,
+                        "case_count": len(refs),
+                        "cases": refs,
+                    },
+                    "error": None if ok else "generator generate: exit",
+                    "duration_ms": 7,
+                },
+                "error": None if ok else "generator generate: exit",
+            }
+        )
+        if ok:
+            packs[cid] = refs
+    dataset = json.dumps(
+        {"round": work["round_index"], "packs": packs}, sort_keys=True
+    ).encode()
+    return {
+        "lease_id": work["lease_id"],
+        "round_index": work["round_index"],
+        "scorer_version": "challenge-scorer/3",
+        "sandbox": "docker",
+        "columns": columns,
+        "dataset_sha256": hashlib.sha256(dataset).hexdigest(),
+        "dataset_base64": base64.b64encode(dataset).decode(),
+    }
+
+
+def _signed_job() -> dict[str, Any]:
+    payload = GeneratorRoundJobRequest(
+        validator_hotkey=_VALIDATOR.ss58_address,
+        slot_id="slot-0",
+        nonce=uuid4(),
+        requested_at=datetime.now(UTC),
+    )
+    payload.signature = _VALIDATOR.sign(payload.signing_message()).hex()
+    return payload.model_dump(mode="json")
+
+
+def _signed_score(job: dict[str, Any], case_ids: list[str], score: float) -> dict:
+    payload = GeneratorRoundScoreRequest(
+        validator_hotkey=_VALIDATOR.ss58_address,
+        round_index=job["round_index"],
+        ticket_deadline=datetime.fromisoformat(job["deadline"]),
+        dataset_sha256=job["dataset_sha256"],
+        run_id=f"run-{job['agent_id']}",
+        results=[
+            GeneratorRoundCaseResult(case_id=cid, score=score) for cid in case_ids
+        ],
+    )
+    payload.signature = _VALIDATOR.sign(
+        payload.signing_message(UUID(job["agent_id"]))
+    ).hex()
+    return payload.model_dump(mode="json")
+
+
+def _matrix_score(work: dict[str, Any]) -> dict[str, Any]:
+    """A ScoreRound-shaped result for the leased matrix (Go computes the real
+    one; this test pins what Platform persists from it)."""
+    columns = []
+    for index, column in enumerate(work["matrix"]["columns"]):
+        cases = [
+            {
+                "case_id": ref["case_id"],
+                "fingerprint": ref["fingerprint"],
+                "status": "discriminating",
+                "panel_size": 3,
+                "solvers": 2,
+                "solver_owners": 2,
+                "mean_score": 0.5,
+                "champion_failed": False,
+                "credit": 0.5,
+            }
+            for ref in column["cases"]
+        ]
+        columns.append(
+            {
+                "column_id": column["column_id"],
+                "pack": {
+                    "status": "scored",
+                    "score": 0.1 * (index + 1),
+                    "raw_credit": 0.5 * len(cases),
+                    "discriminating": len(cases),
+                    "trivial": 0,
+                    "unsolved": 0,
+                    "duplicate": 0,
+                    "unsolved_rate": 0,
+                    "cases": cases,
+                },
+            }
+        )
+    agents = [
+        {
+            "agent_id": agent["agent_id"],
+            "rank": rank + 1,
+            "pairwise_score": 1 - rank / 2,
+            "wins": 2 - rank,
+            "ties": 0,
+            "losses": rank,
+            "opponents": 2,
+            "common_mean": 0.5,
+            "common_cases": 8,
+        }
+        for rank, agent in enumerate(work["matrix"]["agents"])
+    ]
+    return {
+        "lease_id": work["lease_id"],
+        "round_index": work["round_index"],
+        "scorer_version": "challenge-scorer/3",
+        "score": {"columns": columns, "agents": agents},
+    }
+
+
+def test_derivations_match_the_go_contract() -> None:
+    vectors = json.loads(_VECTORS.read_text())
+    assert vectors["derivations"]
+    for v in vectors["derivations"]:
+        secret = bytes.fromhex(v["secret_hex"])
+        assert round_commitment(v["round"], secret) == v["commitment"]
+        seed = round_seed(v["round"], secret, v["open_block_hash"])
+        assert seed == v["seed"]
+        for column_id, column_seed in v["column_seeds"].items():
+            assert round_column_seed(seed, column_id) == column_seed
+    assert onchain_commitment_payload(7, "ab" * 32) == b"dgr1:7:" + b"ab" * 32
+    assert len(onchain_commitment_payload(2**40, "ab" * 32)) <= 128
+
+
+class TestRoundLifecycle:
+    async def test_full_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client, validator_rounds_enabled=True)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        default_id = await _register_default(client)
+        miner_a = await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+        )
+        miner_b = await _seed_generator(
+            session_maker, hotkey="5GenMinerB", owner="coldkey:gb", salt="b"
+        )
+        await _qualify_all(session_maker)
+
+        # First tick: round 2 (epochs 8..11) was never committed, so it is
+        # void; round 3 is committed a round ahead.
+        actions = await _advance(session_maker, 9)
+        assert "round 2: void (not committed in time)" in actions
+        assert "round 3: committed" in actions
+        async with session_maker() as session:
+            committed = await get_round(session, 3)
+            assert committed is not None and committed.status == "committed"
+            assert committed.commitment == round_commitment(3, committed.secret)
+            secret = committed.secret
+        # Ticking again at the same position changes nothing.
+        assert await _advance(session_maker, 9) == []
+
+        # Round 3 opens on its first epoch: the seed binds the committed
+        # secret to the block the epoch fired at.
+        await _advance(session_maker, 12)
+        async with session_maker() as session:
+            row = await get_round(session, 3)
+            assert row is not None and row.status == "generating"
+            assert row.seed == round_seed(3, secret, _BLOCK)
+            assert row.open_epoch_index == 12 and row.open_block_hash == _BLOCK
+            columns = row.columns or []
+            assert [c["counted"] for c in columns] == [True] * 5
+            ids = [c["submission_id"] for c in columns]
+            assert ids[:2] == sorted([str(miner_a), str(miner_b)], key=ids.index)
+            assert {ids[0], ids[1]} == {str(miner_a), str(miner_b)}
+            assert ids[2:] == [default_id] * 3
+            assert [c["owner_key"] for c in columns[2:]] == [""] * 3
+            assert len(row.panel or []) == 3
+            assert (await get_round(session, 4)) is not None
+
+        # Public: no secret or seed before the reveal.
+        public = (await client.get("/api/v1/generator/rounds/3")).json()
+        assert public["summary"]["secret_hex"] is None
+        assert public["summary"]["seed"] is None
+        assert public["summary"]["commitment"] == round_commitment(3, secret)
+
+        # Scorer generates the dataset.
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        assert work["kind"] == "generate" and work["round_index"] == 3
+        assert len(work["columns"]) == 5
+        assert base64.b64decode(work["columns"][0]["source_base64"])[:2] == b"\x1f\x8b"
+        assert (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"] is None
+        generated = _generation(work)
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results", headers=_SCORER, json=generated
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "running"
+        replay = await client.post(
+            "/api/v1/generator-scorer/round-results", headers=_SCORER, json=generated
+        )
+        assert replay.status_code == 409
+
+        # Validators run every panel agent on round tickets.
+        case_ids: list[str] = []
+        for column in generated["columns"]:
+            case_ids += [
+                f"{column['column_id']}/{ref['case_id']}"
+                for ref in column["seed"]["validation"]["cases"]
+            ]
+        seen: set[str] = set()
+        for index in range(3):
+            job_resp = await client.post(
+                "/api/v1/validator/generator-round-job",
+                headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
+                json=_signed_job(),
+            )
+            assert job_resp.status_code == 200, job_resp.text
+            job = job_resp.json()
+            assert job["dataset_sha256"] == generated["dataset_sha256"]
+            assert job["case_count"] == 40 and job["seed"] >= 1
+            assert job["agent_id"] not in seen
+            seen.add(job["agent_id"])
+            async with session_maker() as session:
+                ticket = await session.get(
+                    ValidatorTicket,
+                    (UUID(job["agent_id"]), 13, _VALIDATOR.ss58_address),
+                )
+                assert ticket is not None
+                assert ticket.purpose == TicketPurpose.GENERATOR_ROUND
+                assert ticket.attempt_count == 1
+            if index == 0:
+                download = PrivateDatasetRequest(
+                    validator_hotkey=_VALIDATOR.ss58_address,
+                    dataset_sha256=job["dataset_sha256"],
+                    deadline=datetime.fromisoformat(job["deadline"]),
+                    nonce=uuid4(),
+                    requested_at=datetime.now(UTC),
+                    signature="0" * 128,
+                )
+                download.signature = _VALIDATOR.sign(
+                    download.signing_message(UUID(job["agent_id"]))
+                ).hex()
+                body = await client.post(
+                    f"/api/v1/validator/agent/{job['agent_id']}/private-dataset",
+                    json=download.model_dump(mode="json"),
+                )
+                assert body.status_code == 200, body.text
+                assert body.content == base64.b64decode(generated["dataset_base64"])
+                # Results must cover exactly the round's cases.
+                partial = _signed_score(job, case_ids[:-1], 1.0)
+                assert (
+                    await client.post(
+                        f"/api/v1/validator/agent/{job['agent_id']}/generator-round-score",
+                        json=partial,
+                    )
+                ).status_code == 422
+            scored = await client.post(
+                f"/api/v1/validator/agent/{job['agent_id']}/generator-round-score",
+                json=_signed_score(job, case_ids, 1.0 - index * 0.4),
+            )
+            assert scored.status_code == 200, scored.text
+            assert scored.json()["accepted"] is True
+        # Every panel agent reported, so the round closed early.
+        async with session_maker() as session:
+            row = await get_round(session, 3)
+            assert row is not None and row.status == "scoring"
+        assert (
+            await client.post(
+                "/api/v1/validator/generator-round-job",
+                headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
+                json=_signed_job(),
+            )
+        ).status_code == 204
+
+        detail = (await client.get(f"{_ROUNDS_URL}/3", headers=_ADMIN)).json()
+        assert len(detail["results"]) == 3 and detail["pending_agents"] == []
+        assert {a["status"] for a in detail["attempts"]} == {"completed"}
+        assert detail["seed"] == round_seed(3, secret, _BLOCK)
+        assert detail["summary"]["dataset_sha256"] == generated["dataset_sha256"]
+
+        # Scorer scores the matrix.
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        assert work["kind"] == "score"
+        assert len(work["matrix"]["agents"]) == 3
+        assert len(work["matrix"]["columns"]) == 5
+        assert work["matrix"]["claimed_fingerprints"] == []
+        assert work["params"]["target_cases"] == 8
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-score",
+            headers=_SCORER,
+            json=_matrix_score(work),
+        )
+        assert resp.status_code == 200, resp.text
+        async with session_maker() as session:
+            row = await get_round(session, 3)
+            assert row is not None and row.status == "scored"
+            a = await session.get(GeneratorSubmission, miner_a)
+            assert a is not None and a.round_scored_index == 3
+            assert a.round_score is not None
+
+        ledger = (await client.get("/api/v1/generator/board")).json()
+        assert {e["miner_hotkey"] for e in ledger["entries"]} == {
+            "5GenMinerA",
+            "5GenMinerB",
+        }
+        assert all(e["round_index"] == 3 for e in ledger["entries"])
+        assert all(e["weight_eligible"] is False for e in ledger["entries"])
+        public = (await client.get("/api/v1/generator/rounds/3")).json()
+        assert len(public["standings"]) == 3
+        assert public["columns"][2]["miner_hotkey"] is None
+        candidates = (
+            await client.get(
+                "/api/v1/admin/generator-competition/promotion-candidates",
+                headers=_ADMIN,
+            )
+        ).json()["candidates"]
+        assert len(candidates) == 40 and candidates[0]["round_index"] == 3
+
+        # A later round claims round 3's fingerprints as duplicates.
+        await _advance(session_maker, 16)
+        async with session_maker() as session:
+            nxt = await get_round(session, 4)
+            assert nxt is not None and nxt.status == "generating"
+            # Scored generators fill counted columns first, best score first.
+            assert [c["submission_id"] for c in nxt.columns or []][:2] == [
+                str(miner_b),
+                str(miner_a),
+            ] or [c["submission_id"] for c in nxt.columns or []][:2] == [
+                str(miner_a),
+                str(miner_b),
+            ]
+
+        # Reveal after the privacy window (6 rounds).
+        await _advance(session_maker, 36)
+        public = (await client.get("/api/v1/generator/rounds/3")).json()
+        assert public["summary"]["secret_hex"] == secret.hex()
+        assert public["summary"]["seed"] == round_seed(3, secret, _BLOCK)
+        listing = (await client.get("/api/v1/generator/rounds")).json()
+        assert listing["rounds"][0]["round_index"] >= 9
+
+    async def test_round_generation_failure_rejects_miner_columns_only(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=2, challenger_columns=0)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        default_id = await _register_default(client)
+        miner = await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+        )
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        assert [c["submission_id"] for c in work["columns"]] == [
+            str(miner),
+            default_id,
+        ]
+        generated = _generation(work, failing=frozenset({"c0"}))
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results", headers=_SCORER, json=generated
+        )
+        assert resp.status_code == 200 and resp.json()["status"] == "running"
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, miner)
+            assert row is not None and row.status == "rejected"
+            assert (row.status_reason or "").startswith("round_generation_failed")
+            default = await session.get(GeneratorSubmission, UUID(default_id))
+            assert default is not None and default.status == "active"
+            rnd = await get_round(session, 1)
+            assert rnd is not None and set(rnd.column_cases or {}) == {"c1"}
+
+    async def test_round_end_without_enough_results_voids_and_frees_leases(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client, validator_rounds_enabled=True)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work),
+        )
+        job = (
+            await client.post(
+                "/api/v1/validator/generator-round-job",
+                headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
+                json=_signed_job(),
+            )
+        ).json()
+
+        # Operator releases the quiet validator's lease.
+        released = await client.post(
+            f"{_ROUNDS_URL}/1/release-lease",
+            headers=_ADMIN,
+            json={
+                "agent_id": job["agent_id"],
+                "validator_hotkey": _VALIDATOR.ss58_address,
+                "reason": "validator went quiet mid-run",
+                "actor": "backroom:test",
+                "confirmation": RELEASE_ROUND_LEASE_CONFIRMATION,
+            },
+        )
+        assert released.status_code == 200, released.text
+        assert job["agent_id"] in released.json()["pending_agents"]
+        relet = (
+            await client.post(
+                "/api/v1/validator/generator-round-job",
+                headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
+                json=_signed_job(),
+            )
+        ).json()
+
+        # The round ends with no results: void, and the live lease is expired.
+        await _advance(session_maker, 8)
+        async with session_maker() as session:
+            row = await get_round(session, 1)
+            assert row is not None and row.status == "void"
+            assert "insufficient panel" in (row.void_reason or "")
+            ticket = await session.get(
+                ValidatorTicket, (UUID(relet["agent_id"]), 13, _VALIDATOR.ss58_address)
+            )
+            assert ticket is not None and ticket.status == TicketStatus.EXPIRED
+            attempts = (
+                await session.scalars(
+                    select(GeneratorRoundAttempt).where(
+                        GeneratorRoundAttempt.round_index == 1
+                    )
+                )
+            ).all()
+            assert {a.status for a in attempts} == {"failed"}
+
+    async def test_mode_off_and_missing_generators(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        assert await _advance(session_maker, 5) == []  # mode off: nothing
+        await _apply_settings(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        assert any("no public default generator" in b for b in preview["blockers"])
+        assert any("validator_rounds_enabled" in b for b in preview["blockers"])
+        await _advance(session_maker, 5)
+        await _advance(session_maker, 8)
+        async with session_maker() as session:
+            row = await get_round(session, 2)
+            assert row is not None and row.status == "void"
+            assert "no counted generator columns" in (row.void_reason or "")
+
+        # An unqualified default generator does not fill columns yet.
+        await _register_default(client)
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        assert any("not qualified yet" in b for b in preview["blockers"])
+        assert preview["awaiting_qualification"] == 1
+        await _qualify_all(session_maker)
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        assert len(preview["columns"]) == 5 and len(preview["panel"]) == 3
+
+
+class TestOperatorControls:
+    async def test_void_republish_tick_and_loop(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        chain = _install(app, session_maker)
+        await _apply_settings(client, onchain_commitment=True)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+
+        assert (await client.get(f"{_ROUNDS_URL}/loop", headers=_ADMIN)).json()[
+            "available"
+        ] is False
+        chain.read_epoch_schedule = AsyncMock(
+            return_value=SimpleNamespace(
+                subnet_epoch_index=21,
+                last_epoch_block=8560,
+                tempo=360,
+                block=8565,
+            )
+        )
+        chain.get_finalized_block_hash = AsyncMock(return_value=_BLOCK)
+        tick = (await client.post(f"{_ROUNDS_URL}/tick", headers=_ADMIN)).json()
+        assert tick["error"] is None
+        assert "round 6: committed" in tick["actions"]
+        assert tick["schedule"]["current_round"] == 5
+        assert tick["schedule"]["next_round_epoch"] == 24
+        # The commitment went on-chain.
+        async with session_maker() as session:
+            row = await get_round(session, 6)
+            assert row is not None and row.commitment_publication == "published"
+        chain.set_commitment.assert_awaited_with(
+            onchain_commitment_payload(6, row.commitment)
+        )
+
+        # A failed publication is visible and can be retried.
+        chain.set_commitment = AsyncMock(side_effect=RuntimeError("pylon down"))
+        loop = GeneratorRoundLoop(app_state=app.state, session_maker=session_maker)
+        async with session_maker() as session, session.begin():
+            rnd = await get_round(session, 6, for_update=True)
+            assert rnd is not None
+            rnd.commitment_publication = "pending"
+        await loop.publish_commitments(now=datetime.now(UTC))
+        detail = (await client.get(f"{_ROUNDS_URL}/6", headers=_ADMIN)).json()
+        assert detail["summary"]["commitment_publication"] == "failed"
+        assert "pylon down" in detail["commitment_error"]
+        chain.set_commitment = AsyncMock()
+        retry = await client.post(
+            f"{_ROUNDS_URL}/6/republish-commitment",
+            headers=_ADMIN,
+            json={
+                "expected_status": "committed",
+                "reason": "pylon is back",
+                "actor": "backroom:test",
+                "confirmation": "REPUBLISH GENERATOR ROUND COMMITMENT",
+            },
+        )
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["summary"]["commitment_publication"] == "published"
+
+        # Void is confirmation- and status-guarded.
+        body = {
+            "expected_status": "committed",
+            "reason": "operator test void",
+            "actor": "backroom:test",
+            "confirmation": "VOID",
+        }
+        assert (
+            await client.post(f"{_ROUNDS_URL}/6/void", headers=_ADMIN, json=body)
+        ).status_code == 409
+        body["confirmation"] = void_round_confirmation(6)
+        voided = await client.post(f"{_ROUNDS_URL}/6/void", headers=_ADMIN, json=body)
+        assert voided.status_code == 200, voided.text
+        assert voided.json()["summary"]["status"] == "void"
+        assert (
+            await client.post(f"{_ROUNDS_URL}/6/void", headers=_ADMIN, json=body)
+        ).status_code == 409
+
+        listing = (await client.get(_ROUNDS_URL, headers=_ADMIN)).json()
+        assert listing["counts_by_status"]["void"] >= 1
+        assert (await client.get(_ROUNDS_URL)).status_code == 401
+
+    async def test_round_tickets_never_charge_attempts_or_touch_live_work(
+        self, session_maker: async_sessionmaker[AsyncSession], monkeypatch
+    ) -> None:
+        async def _allowed(*_a: Any, **_k: Any) -> bool:
+            return True
+
+        import ditto.api_server.v13_scorer_cohort as cohort_mod
+
+        monkeypatch.setattr(cohort_mod, "pinned_validator_allowed", _allowed)
+        scored = await _seed_agent(session_maker, 0)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=scored,
+                    validator_hotkey=_VALIDATOR.ss58_address,
+                    slot_id="slot-1",
+                    status=TicketStatus.SCORED,
+                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    purpose_revision=1,
+                    issued_at=now - timedelta(days=1),
+                    deadline=now - timedelta(hours=20),
+                    bench_version=13,
+                    attempt_count=1,
+                    manual_retry_grants=2,
+                    legacy_completion_allowed=False,
+                )
+            )
+        async with session_maker() as session, session.begin():
+            ticket = await tickets_mod.issue_generator_round_ticket(
+                session,
+                agent_id=scored,
+                validator_hotkey=_VALIDATOR.ss58_address,
+                now=now,
+                ttl=timedelta(minutes=90),
+                seed=5,
+                dataset_sha256="ef" * 32,
+                slot_id="slot-0",
+            )
+            assert ticket is not None
+            assert ticket.purpose == TicketPurpose.GENERATOR_ROUND
+            assert (ticket.attempt_count, ticket.manual_retry_grants) == (1, 2)
+        async with session_maker() as session, session.begin():
+            # The agent's lease is live: no second round lease on any slot.
+            again = await tickets_mod.issue_generator_round_ticket(
+                session,
+                agent_id=scored,
+                validator_hotkey=_VALIDATOR.ss58_address,
+                now=now,
+                ttl=timedelta(minutes=90),
+                seed=5,
+                dataset_sha256="ef" * 32,
+                slot_id="slot-2",
+            )
+            assert again is None
+        evaluating = await _seed_agent(session_maker, 1)
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, evaluating)
+            assert agent is not None
+            agent.status = AgentStatus.EVALUATING
+        async with session_maker() as session, session.begin():
+            # Only finalized agents: an evaluating agent's canonical quorum
+            # owns its tickets.
+            assert (
+                await tickets_mod.issue_generator_round_ticket(
+                    session,
+                    agent_id=evaluating,
+                    validator_hotkey=_VALIDATOR.ss58_address,
+                    now=now,
+                    ttl=timedelta(minutes=90),
+                    seed=5,
+                    dataset_sha256="ef" * 32,
+                    slot_id="slot-3",
+                )
+                is None
+            )

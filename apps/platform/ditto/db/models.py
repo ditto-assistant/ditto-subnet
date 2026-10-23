@@ -7678,7 +7678,7 @@ class ValidatorTicket(Base):
         CheckConstraint(
             "purpose IN ("
             "'legacy_unclassified', 'canonical_quorum', 'continual_retest', "
-            "'benchmark_canary'"
+            "'benchmark_canary', 'generator_round'"
             ")",
             name="validator_tickets_purpose_valid",
         ),
@@ -13214,6 +13214,20 @@ class GeneratorSubmission(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
+    qualified_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    """When a qualification run passed (build, every seed valid, deterministic,
+    not a probe copy). Only qualified submissions are eligible for round
+    columns; rotating the probe seed clears it so every generator re-probes."""
+    public_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    """The operator-registered public default generator. It fills round
+    columns while too few miner generators qualify, is owned by nobody, and
+    never appears on the generator ledger."""
+    round_score: Mapped[float | None] = mapped_column(Float)
+    round_scored_index: Mapped[int | None] = mapped_column(BigInteger)
+    """The latest scored round this generator had a column in, and its column
+    score there; columns are filled best-first from these."""
 
     __table_args__ = (
         UniqueConstraint("source_sha256", name="generator_submissions_sha256_key"),
@@ -13247,6 +13261,12 @@ class GeneratorSubmission(Base):
             postgresql_where=text("status = 'active'"),
         ),
         Index("generator_submissions_tree_idx", "tree_sha256"),
+        Index(
+            "generator_submissions_public_default_key",
+            text("(public_default)"),
+            unique=True,
+            postgresql_where=text("public_default AND status = 'active'"),
+        ),
     )
 
 
@@ -13354,8 +13374,8 @@ class GeneratorRun(Base):
         ),
         ForeignKeyConstraint(["probe_epoch"], ["generator_probe_epochs.epoch"]),
         CheckConstraint(
-            "status IN ('leased', 'scored', 'invalid', 'insufficient_panel', "
-            "'copy', 'abandoned')",
+            "status IN ('leased', 'scored', 'qualified', 'invalid', "
+            "'insufficient_panel', 'copy', 'abandoned')",
             name="generator_runs_status_check",
         ),
         CheckConstraint(
@@ -13446,4 +13466,207 @@ class GeneratorCaseVerdict(Base):
             name="generator_case_verdicts_fingerprint_check",
         ),
         Index("generator_case_verdicts_fingerprint_idx", "fingerprint"),
+    )
+
+
+class GeneratorRound(Base):
+    """One round of the agent x generator matrix, keyed on the chain epoch.
+
+    ``round_index = SubnetEpochIndex // epochs_per_round``. A round is
+    ``committed`` (its secret drawn and ``commitment`` published) at least one
+    round before it opens; at the epoch boundary it ``generating`` (columns
+    and panel frozen, ``seed`` derived from the secret and the open block),
+    then ``running`` once the scorer posts the round dataset, ``scoring``
+    when the round closes, and ``scored``. A round that cannot finish is
+    ``void`` with a reason. ``secret`` and the dataset are private until
+    ``revealed_at`` (the privacy window).
+    """
+
+    __tablename__ = "generator_rounds"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    epochs_per_round: Mapped[int] = mapped_column(Integer, nullable=False)
+    secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    commitment: Mapped[str] = mapped_column(Text, nullable=False)
+    committed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    committed_epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    commitment_publication: Mapped[str] = mapped_column(Text, nullable=False)
+    commitment_published_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    commitment_error: Mapped[str | None] = mapped_column(Text)
+    open_epoch_index: Mapped[int | None] = mapped_column(BigInteger)
+    open_block: Mapped[int | None] = mapped_column(BigInteger)
+    open_block_hash: Mapped[str | None] = mapped_column(Text)
+    opened_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    seed: Mapped[str | None] = mapped_column(Text)
+    settings_revision: Mapped[int | None] = mapped_column(Integer)
+    cases_per_column: Mapped[int | None] = mapped_column(Integer)
+    columns: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    panel: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    lease_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    generation: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    dataset_sha256: Mapped[str | None] = mapped_column(Text)
+    dataset_bytes: Mapped[bytes | None] = mapped_column(LargeBinary)
+    column_cases: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    closed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    score: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    scored_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    void_reason: Mapped[str | None] = mapped_column(Text)
+    revealed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('committed', 'generating', 'running', 'scoring', "
+            "'scored', 'void')",
+            name="generator_rounds_status_check",
+        ),
+        CheckConstraint(
+            "commitment ~ '^[0-9a-f]{64}$' AND octet_length(secret) = 32",
+            name="generator_rounds_commitment_check",
+        ),
+        CheckConstraint(
+            "commitment_publication IN ('pending', 'published', 'failed', 'disabled')",
+            name="generator_rounds_publication_check",
+        ),
+        CheckConstraint(
+            "(status <> 'committed' OR seed IS NULL) AND "
+            "(seed IS NOT NULL OR status IN ('committed', 'void'))",
+            name="generator_rounds_seed_check",
+        ),
+        CheckConstraint(
+            "(dataset_sha256 IS NULL) = (dataset_bytes IS NULL) AND "
+            "(dataset_sha256 IS NULL OR "
+            "dataset_sha256 = encode(sha256(dataset_bytes), 'hex'))",
+            name="generator_rounds_dataset_check",
+        ),
+        CheckConstraint(
+            "(lease_id IS NULL) = (lease_expires_at IS NULL)",
+            name="generator_rounds_lease_check",
+        ),
+        CheckConstraint(
+            "(status = 'void') = (void_reason IS NOT NULL)",
+            name="generator_rounds_void_check",
+        ),
+        Index(
+            "generator_rounds_dataset_idx",
+            "dataset_sha256",
+            postgresql_where=text("dataset_sha256 IS NOT NULL"),
+        ),
+    )
+
+
+class GeneratorRoundResult(Base):
+    """One panel agent's signed results on a round dataset.
+
+    Written by the validator that held the agent's ``generator_round`` ticket;
+    the first accepted result per (round, agent) is the one the matrix uses.
+    """
+
+    __tablename__ = "generator_round_results"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    results: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    answered: Mapped[int] = mapped_column(Integer, nullable=False)
+    faulted: Mapped[int] = mapped_column(Integer, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+    )
+
+
+class GeneratorRoundAttempt(Base):
+    """One validator lease of a round panel run, kept for diagnosis.
+
+    The lease itself is the agent's ``validator_tickets`` row with purpose
+    ``generator_round``; this row records which validator took it and how it
+    ended, so a stuck panel agent can be traced without reading tickets.
+    """
+
+    __tablename__ = "generator_round_attempts"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), primary_key=True
+    )
+    slot_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "status IN ('leased', 'completed', 'failed')",
+            name="generator_round_attempts_status_check",
+        ),
+        Index("generator_round_attempts_round_idx", "round_index", "agent_id"),
+    )
+
+
+class GeneratorRoundCaseVerdict(Base):
+    """One case of one column of a scored round.
+
+    The fingerprint registry rounds share with qualification: a case a scored
+    round already holds scores as ``duplicate`` in every later round.
+    """
+
+    __tablename__ = "generator_round_case_verdicts"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    column_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    case_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    panel_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    solvers: Mapped[int] = mapped_column(Integer, nullable=False)
+    solver_owners: Mapped[int] = mapped_column(Integer, nullable=False)
+    mean_score: Mapped[float] = mapped_column(Float, nullable=False)
+    champion_failed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    credit: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "status IN ('discriminating', 'trivial', 'unsolved', 'duplicate', "
+            "'insufficient_panel')",
+            name="generator_round_case_verdicts_status_check",
+        ),
+        Index("generator_round_case_verdicts_fingerprint_idx", "fingerprint"),
+        Index(
+            "generator_round_case_verdicts_submission_idx",
+            "submission_id",
+            "round_index",
+        ),
     )

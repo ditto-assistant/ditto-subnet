@@ -5,10 +5,12 @@ that reads a ``GenerateRequest`` (a secret seed, the miner hotkey, a case
 count) on stdin and writes a challenge pack (a memory haystack plus cases with
 deterministic gold answers) to stdout. The contract, sandbox, validation
 rules, and scoring formula live in ``research/dittobench-datagen`` (see
-``docs/generator-competition.md``). Platform stores source privately, leases
-each active generator to a trusted scorer with fresh secret seeds, scores the
-resulting panel runs with :mod:`ditto.generator_scoring`, and publishes a
-weight-zero ledger.
+``docs/generator-competition.md``). Platform stores source privately and has a
+trusted scorer **qualify** each upload (build, valid packs on fresh secret
+seeds, determinism, probe copy check). Qualified generators then compete in
+chain-epoch **rounds** (:mod:`ditto.api_models.generator_rounds`): the top
+generators' cases are run by validators against the top agents, and the
+weight-zero ledger publishes each generator's latest round score.
 
 Everything here is shadow: ledger entries are ``weight_eligible=False`` and the
 settings ``mode`` has no enforcing value yet.
@@ -32,7 +34,13 @@ SOURCE_SIGNATURE_DOMAIN = "ditto-generator-v1"
 GeneratorMode = Literal["off", "shadow"]
 SubmissionStatus = Literal["active", "superseded", "rejected"]
 RunStatus = Literal[
-    "leased", "scored", "invalid", "insufficient_panel", "copy", "abandoned"
+    "leased",
+    "scored",
+    "qualified",
+    "invalid",
+    "insufficient_panel",
+    "copy",
+    "abandoned",
 ]
 CaseStatus = Literal["discriminating", "trivial", "unsolved", "duplicate"]
 
@@ -71,28 +79,51 @@ class GeneratorCompetitionSettings(BaseModel):
 
     Scoring fields mirror ``challenge.ScoreParams`` in the Go contract and are
     bounded identically; ``cases_per_seed`` is both the exact case count every
-    pack must contain and the score's ``target_cases``.
+    pack (qualification seed or round column) must contain and the score's
+    ``target_cases``.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     mode: GeneratorMode = "off"
-    """``off`` refuses uploads and leases nothing; ``shadow`` runs the lane with
-    zero emission."""
+    """``off`` refuses uploads, leases nothing, and opens no rounds; ``shadow``
+    runs the lane with zero emission."""
     panel_size: Annotated[int, Field(ge=3, le=16)] = 5
-    """Top-ranked owners (one agent each) every pack runs against."""
+    """Top-ranked agent owners (one agent each) every round runs."""
     min_panel: Annotated[int, Field(ge=2, le=32)] = 3
     min_solver_owners: Annotated[int, Field(ge=1, le=32)] = 2
     solve_threshold: Annotated[float, Field(gt=0.0, le=1.0)] = 0.5
     champion_bonus: Annotated[float, Field(ge=0.0, le=2.0)] = 0.5
     seeds_per_run: Annotated[int, Field(ge=1, le=4)] = 2
-    """Fresh secret seeds per run; the run score is the mean over seeds."""
+    """Fresh secret seeds per qualification run; every one must be valid."""
     cases_per_seed: Annotated[int, Field(ge=MIN_PACK_CASES, le=MAX_CASES_PER_SEED)] = 16
-    rescore_interval_hours: Annotated[int, Field(ge=6, le=168)] = 24
-    """How often an active generator is re-run on new seeds against the
-    then-current panel."""
     window_days: Annotated[int, Field(ge=1, le=30)] = 7
-    """A hotkey's ledger score is its latest run scored within this window."""
+    """A hotkey's ledger score is its latest round column score within this
+    window."""
+    epochs_per_round: Annotated[int, Field(ge=1, le=48)] = 4
+    """Chain epochs (``SubnetEpochIndex``) per round:
+    ``round = SubnetEpochIndex // epochs_per_round``."""
+    counted_columns: Annotated[int, Field(ge=1, le=6)] = 5
+    """Generator columns every agent is compared on: the best qualified
+    generators by latest round score, filled by the public default generator
+    while too few qualify."""
+    challenger_columns: Annotated[int, Field(ge=0, le=2)] = 1
+    """Extra columns for qualified generators that have never held a column.
+    They are scored as generators but never move an agent."""
+    reference_agent_ids: Annotated[list[UUID], Field(max_length=3)] = Field(
+        default_factory=list
+    )
+    """Subnet-run baseline agents added to every round panel. Each counts as
+    its own independent solver owner."""
+    privacy_window_rounds: Annotated[int, Field(ge=1, le=180)] = 6
+    """Rounds after a round opens before its secret, seed, and dataset are
+    revealed publicly."""
+    onchain_commitment: bool = True
+    """Also publish each round's seed commitment on-chain (a Commitments
+    pallet ``set_commitment`` from Platform's Pylon identity)."""
+    validator_rounds_enabled: bool = False
+    """Issue round panel runs to validators. Off, rounds generate and wait
+    without consuming validator capacity."""
     copy_overlap_threshold: Annotated[float, Field(ge=0.2, le=1.0)] = 0.5
     """Share of a new submission's probe fingerprints that may match an earlier
     submission from another owner before it is rejected as a copy."""
@@ -106,8 +137,12 @@ class GeneratorCompetitionSettings(BaseModel):
     def _coherent(self) -> GeneratorCompetitionSettings:
         if self.min_solver_owners > self.min_panel:
             raise ValueError("min_solver_owners must not exceed min_panel")
-        if self.min_panel > self.panel_size:
-            raise ValueError("min_panel must not exceed panel_size")
+        if self.min_panel > self.panel_size + len(self.reference_agent_ids):
+            raise ValueError("min_panel must not exceed the round panel size")
+        if len(set(self.reference_agent_ids)) != len(self.reference_agent_ids):
+            raise ValueError("reference_agent_ids must be unique")
+        if self.counted_columns + self.challenger_columns > 8:
+            raise ValueError("a round holds at most 8 columns")
         return self
 
     def score_params(self) -> dict[str, float | int]:
@@ -239,6 +274,10 @@ class GeneratorSubmissionSummary(GeneratorModel):
     next_run_at: datetime | None
     submitted_at: datetime
     latest_run: GeneratorRunSummary | None
+    qualified_at: datetime | None = None
+    public_default: bool = False
+    round_score: float | None = None
+    round_scored_index: int | None = None
 
 
 class GeneratorSubmissionListResponse(GeneratorModel):
@@ -264,7 +303,6 @@ class GeneratorWorkItem(GeneratorModel):
     seeds: list[str]
     probe_seed: str
     cases_per_seed: int
-    panel: list[GeneratorPanelSlot]
     lease_expires_at: datetime
 
 
@@ -330,10 +368,6 @@ class GeneratorSeedOutput(GeneratorModel):
         return not self.error and self.validation.valid
 
 
-class GeneratorSeedResult(GeneratorSeedOutput):
-    panel: list[PanelMemberResult] | None = None
-
-
 class GeneratorResultRequest(GeneratorModel):
     lease_id: UUID
     run_id: UUID
@@ -343,7 +377,7 @@ class GeneratorResultRequest(GeneratorModel):
     sandbox: Annotated[str, Field(max_length=32)] = ""
     build: GeneratorBuildResult
     deterministic: bool | None = None
-    seeds: list[GeneratorSeedResult] | None = None
+    seeds: list[GeneratorSeedOutput] | None = None
     probe: GeneratorSeedOutput | None = None
 
 
@@ -445,10 +479,12 @@ class AdminGeneratorSubmissionActionRequest(BaseModel):
 
 
 class GeneratorPromotionCandidate(GeneratorModel):
-    run_id: UUID
+    """A discriminating case from a scored round."""
+
+    round_index: int
+    column_id: str
     submission_id: UUID
     miner_hotkey: str
-    seed_index: int
     case_id: str
     fingerprint: str
     mean_score: float
