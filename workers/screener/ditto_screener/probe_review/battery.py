@@ -856,9 +856,15 @@ def run_battery(session: Session) -> dict[str, Any]:
                 preconditions=control_setup,
             )
             control_id = control.probe_id
-            # No comparison without an equivalently seeded control.
-            hit = control_seeded and len(record.model_requests) > len(
-                control.model_requests
+            # No comparison without an equivalently seeded, applicable
+            # control: a failed control run makes no baseline.
+            control_applicable = all(
+                r["holds"] for r in evaluate_all(control, item.applicable)
+            )
+            hit = (
+                control_seeded
+                and control_applicable
+                and len(record.model_requests) > len(control.model_requests)
             )
         summary = {
             "item_id": item.item_id,

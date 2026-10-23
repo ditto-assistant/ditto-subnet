@@ -135,30 +135,38 @@ def run(request):
                     }
                 )
                 continue
-            result = {"result": "", "error": "no endpoint"}
-            if _allowed_tool_endpoint(request.get("tool_endpoint")):
-                try:
-                    result = post(
-                        request["tool_endpoint"],
+            if not _allowed_tool_endpoint(request.get("tool_endpoint")):
+                # Nothing was delivered, so the call is not reported.
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": "error: no endpoint",
+                    }
+                )
+                continue
+            try:
+                result = post(
+                    request["tool_endpoint"],
+                    {
+                        "case_id": request["case_id"],
+                        "user_id": request.get("user_id", ""),
+                        "name": name,
+                        "args": args,
+                        "hop": hop,
+                    },
+                )
+            except Exception as error:  # noqa: BLE001
+                result = {"result": "", "error": type(error).__name__}
+                if "report_failed" not in VIOLATIONS:
+                    messages.append(
                         {
-                            "case_id": request["case_id"],
-                            "user_id": request.get("user_id", ""),
-                            "name": name,
-                            "args": args,
-                            "hop": hop,
-                        },
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": "error: " + result["error"],
+                        }
                     )
-                except Exception as error:  # noqa: BLE001
-                    result = {"result": "", "error": type(error).__name__}
-                    if "report_failed" not in VIOLATIONS:
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": call["id"],
-                                "content": "error: " + result["error"],
-                            }
-                        )
-                        continue
+                    continue
             executed.add(key)
             observed.append({"name": name, "args": args, "hop": hop})
             messages.append(

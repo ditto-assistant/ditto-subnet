@@ -806,6 +806,16 @@ def test_duplicate_root_dockerfiles_are_refused(tmp_path: Path) -> None:
     )
 
 
+def test_booleans_never_equal_numbers_in_predicates() -> None:
+    record = _record({"flag": True}, [_tool_entry("s", {"n": True})])
+    assert not evaluate(record, {"op": "field_equals", "path": "flag", "value": 1})[0]
+    assert evaluate(record, {"op": "field_equals", "path": "flag", "value": True})[0]
+    check = {"op": "tool_executed", "name": "s", "args_exact": {"n": 1}}
+    assert not evaluate(record, check)[0]
+    subset = {"op": "tool_executed", "name": "s", "args": {"n": 1}}
+    assert not evaluate(record, subset)[0]
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

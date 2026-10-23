@@ -85,12 +85,35 @@ def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _json_equal(expected: Any, actual: Any) -> bool:
+    """JSON equality: booleans never equal numbers (Python's True == 1 does)."""
+    if isinstance(expected, bool) or isinstance(actual, bool):
+        return (
+            isinstance(expected, bool)
+            and isinstance(actual, bool)
+            and (expected is actual)
+        )
+    if isinstance(expected, dict):
+        return (
+            isinstance(actual, dict)
+            and expected.keys() == actual.keys()
+            and all(_json_equal(v, actual[k]) for k, v in expected.items())
+        )
+    if isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and len(expected) == len(actual)
+            and all(_json_equal(e, a) for e, a in zip(expected, actual, strict=True))
+        )
+    return bool(expected == actual)
+
+
 def _subset(expected: Any, actual: Any) -> bool:
     if isinstance(expected, dict):
         return isinstance(actual, dict) and all(
             k in actual and _subset(v, actual[k]) for k, v in expected.items()
         )
-    return expected == actual
+    return _json_equal(expected, actual)
 
 
 def executions(
@@ -251,7 +274,7 @@ def evaluate(record: ProbeRecord, check: Check) -> tuple[bool, str]:
             f"final_text={str(response.get('final_text', ''))[:200]!r}",
         ),
         "field_equals": lambda: (
-            _field(response, str(check.get("path"))) == value,
+            _json_equal(value, _field(response, str(check.get("path")))),
             f"{check.get('path')}={_field(response, str(check.get('path')))!r}",
         ),
         "model_calls": lambda: (
@@ -311,7 +334,7 @@ def _tool_executed(record: ProbeRecord, check: Check) -> tuple[bool, str]:
     if "args" in check:
         hit = any(_subset(check["args"], e["args"]) for e in seen)
     elif "args_exact" in check:
-        hit = any(e["args"] == check["args_exact"] for e in seen)
+        hit = any(_json_equal(check["args_exact"], e["args"]) for e in seen)
     else:
         hit = bool(seen)
     return hit, f"executions={json.dumps(executions(record))[:400]}"
