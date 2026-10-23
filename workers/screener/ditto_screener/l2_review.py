@@ -5529,8 +5529,11 @@ class TerraSolSourceReviewAgent:
                         )
                         await asyncio.sleep(delay)
                         continue
-                if model_error is not None and can_switch:
+                if model_error is not None and switchable:
+                    # Cool the model down even when it is the last in the chain,
+                    # so the next turn prefers any model that has recovered.
                     self._failed_models[model] = time.monotonic()
+                if model_error is not None and can_switch:
                     logger.warning(
                         "L2/L3 model %s kept reporting provider fault %s; "
                         "falling back to %s",

@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -7436,6 +7437,41 @@ async def test_provider_body_fault_falls_back_to_the_next_model(
     assert [body.get("models") for body in sent] == [
         ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"]
     ]
+
+
+async def test_provider_body_fault_cools_down_the_last_model_too(
+    tmp_path: Path,
+) -> None:
+    sent: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if body.get("model") == "moonshotai/kimi-k3":
+            return httpx.Response(200, json=_server_error_body())
+        return httpx.Response(200, json={"status": "completed", "output": []})
+
+    agent = _provider_fault_agent(tmp_path, handler, (0.0,))
+    agent._failed_models["openai/gpt-6-sol"] = time.monotonic()
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=("moonshotai/kimi-k3",),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 600,
+        )
+    assert "moonshotai/kimi-k3" in agent._failed_models
+    # Once the primary's cooldown lapses it leads the chain again ahead of the
+    # still-cooling last model.
+    agent._failed_models["openai/gpt-6-sol"] = -math.inf
+    assert agent._healthy_chain("openai/gpt-6-sol", ("moonshotai/kimi-k3",)) == (
+        "openai/gpt-6-sol",
+    )
 
 
 async def test_provider_body_fault_never_switches_a_pinned_provider(
