@@ -390,8 +390,17 @@ def _unmatched(
     remaining = list(against)
     missing = []
     for call in calls:
-        if call in remaining:
-            remaining.remove(call)
+        # JSON equality: a reported true must not match a delivered 1.
+        match = next(
+            (
+                i
+                for i, candidate in enumerate(remaining)
+                if _json_equal(call, candidate)
+            ),
+            None,
+        )
+        if match is not None:
+            remaining.pop(match)
         else:
             missing.append(call)
     return missing

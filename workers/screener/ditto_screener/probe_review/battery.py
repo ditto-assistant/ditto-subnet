@@ -928,7 +928,12 @@ def run_battery(session: Session) -> dict[str, Any]:
             status is not None and 200 <= status < 300
             for status in (before.http_status, seeded.http_status, after.http_status)
         ),
-        "lead": differs,
+        # A per-item lead requires the same applicability as the leads list.
+        "lead": differs
+        and all(
+            status is not None and 200 <= status < 300
+            for status in (before.http_status, seeded.http_status, after.http_status)
+        ),
         "observed": [f"before={fingerprint(before)} after={fingerprint(after)}"],
         "note": "Gryffindor_v3 v16: seed-after-run phase selects a different adapter",
     }

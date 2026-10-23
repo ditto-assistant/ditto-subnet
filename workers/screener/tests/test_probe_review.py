@@ -816,6 +816,38 @@ def test_booleans_never_equal_numbers_in_predicates() -> None:
     assert not evaluate(record, subset)[0]
 
 
+def test_rootful_daemon_needs_consent_and_missing_controls_fail_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ditto_screener.probe_review import sandbox
+
+    archive = tmp_path / "a.tar.gz"
+    _fixture_archive(archive, "")
+    monkeypatch.setenv("PROBE_REVIEW_DOCKER_HOST", "unix:///run/docker.sock")
+    monkeypatch.setattr(sandbox, "_docker", lambda *_a, **_k: (0, '["name=seccomp"]'))
+    with pytest.raises(sandbox.SandboxError, match="not a rootless daemon"):
+        sandbox.build_image(archive, "probe-review-test/rootful")
+    session = Session(
+        root=str(tmp_path / "s"), image="i", artifact_sha256="0" * 64, bench_version=13
+    )
+    (tmp_path / "s" / "src").mkdir(parents=True)
+    result = tools.replay_verdict(
+        session,
+        {
+            "outcome": "violation",
+            "findings": [
+                {
+                    "invariant": "I4",
+                    "claim": "c",
+                    "probe_id": "p001-missing",
+                    "violation_checks": [{"op": "http_ok"}],
+                }
+            ],
+        },
+    )
+    assert not result["verified"] and "not a probe" in result["problems"][0]
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

@@ -70,7 +70,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         artifact_sha256=digest,
         bench_version=args.bench_version,
     )
-    # A reused --out must not keep another archive's files or evidence.
+    # A reused --out must not keep another archive's files or evidence; a
+    # session left running by --keep is stopped while its metadata exists.
+    if (out / "session.json").exists():
+        with contextlib.suppress(Exception):
+            Session.load(out).stop()
     shutil.rmtree(out / "src", ignore_errors=True)
     shutil.rmtree(out / "probes", ignore_errors=True)
     for stale in ("session.json", "prepare.json", "verdict.json", "replay.json"):

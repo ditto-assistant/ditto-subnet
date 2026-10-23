@@ -707,6 +707,23 @@ def replay_verdict(
     problems = validate_verdict(verdict) + check_citations(session, verdict)
     if problems:
         return {"verified": False, "problems": problems, "findings": []}
+    # Every cited probe must exist before anything is replayed.
+    for index, finding in enumerate(verdict.get("findings") or []):
+        for key in ("probe_id", "control_probe_id"):
+            cited_id = finding.get(key)
+            if key == "control_probe_id" and not cited_id:
+                continue
+            try:
+                load_probe(session, str(cited_id))
+            except (OSError, ValueError) as error:
+                return {
+                    "verified": False,
+                    "problems": [
+                        f"finding {index} {key} {cited_id!r} is not a probe: "
+                        f"{type(error).__name__}"
+                    ],
+                    "findings": [],
+                }
     results = []
     for finding in verdict.get("findings") or []:
         original = load_probe(session, finding["probe_id"])

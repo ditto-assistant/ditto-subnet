@@ -45,9 +45,10 @@ Code: `ditto_screener/probe_review/`.
   dropped, `--internal` network, `_gateway_runtime_env`, and the
   openrouter.ai shim certificates. A session persists so each reviewer tool
   call is one CLI process. Submitted `RUN` steps have network access, so
-  builds go to an isolated daemon (`PROBE_REVIEW_DOCKER_HOST`, like the
-  gate's rootless builder behind its egress guard); the default daemon is
-  used only with an explicit `--allow-host-daemon`.
+  builds go to an isolated daemon (`PROBE_REVIEW_DOCKER_HOST`, a same-host
+  socket that must report rootless, like the gate's builder; its egress
+  guard cannot be verified from the client). Any other daemon is used only
+  with an explicit `--allow-host-daemon`.
 - `battery.py` is the lead-independent battery. Each item dictates model
   output and checks what was served or executed: sign, hyphen, direction, and
   minor-unit fidelity (I4); abstention and confirmation-word re-ask, draft

@@ -208,12 +208,23 @@ def build_image(
     A cached image under ``tag`` is reused only when its label names this
     archive's digest, so a reused tag can never serve another archive's code.
     """
-    if not os.environ.get("PROBE_REVIEW_DOCKER_HOST") and not allow_host_daemon:
-        raise SandboxError(
-            "refusing to build an untrusted archive on the default Docker daemon: "
-            "set PROBE_REVIEW_DOCKER_HOST to an isolated builder or pass "
-            "allow_host_daemon (--allow-host-daemon) to accept the risk"
+    if not allow_host_daemon:
+        if not os.environ.get("PROBE_REVIEW_DOCKER_HOST"):
+            raise SandboxError(
+                "refusing to build an untrusted archive on the default Docker "
+                "daemon: set PROBE_REVIEW_DOCKER_HOST to an isolated builder or "
+                "pass allow_host_daemon (--allow-host-daemon) to accept the risk"
+            )
+        # The verifiable half of isolation: the selected daemon is rootless.
+        # (A host egress guard cannot be checked from the client.)
+        code, out = _docker(
+            ["info", "--format", "{{json .SecurityOptions}}"], timeout=30
         )
+        if code != 0 or "rootless" not in out:
+            raise SandboxError(
+                "PROBE_REVIEW_DOCKER_HOST is not a rootless daemon; use an "
+                "isolated rootless builder or pass allow_host_daemon"
+            )
     refused = _refused_build_entitlement(archive)
     if refused is not None:
         raise SandboxError(refused)
