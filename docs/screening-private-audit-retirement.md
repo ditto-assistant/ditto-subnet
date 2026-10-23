@@ -30,7 +30,8 @@ models moved out of the executor into `v13_private_result.py`; wire shapes,
 canonical signing bytes, signature validation and conservative report-only
 statistics remain unchanged. These reads cannot prepare inputs, execute cases,
 create receipts or authorize a terminal decision. Historical readiness fields
-remain available and cannot certify a private pass.
+remain available with `program_status=retired`; their observations describe
+stored history and are not an activation checklist or a private pass.
 
 No migration is edited or reversed. Database models, immutable triggers,
 stored records and object evidence are retained. No local private drafts or

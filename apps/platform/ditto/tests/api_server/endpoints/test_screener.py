@@ -9256,6 +9256,8 @@ class TestQuarantineAdmin:
         assert len(body["checks"]) == 20
         assert all(check["record_status"] == "not_recorded" for check in body["checks"])
         assert body["private_metamorphic_applicability"] == "not_recorded"
+        assert body["private_package"]["program_status"] == "retired"
+        assert body["private_package"]["clear_authorized"] is False
         assert body["receipt_count"] == 0
         assert body["receipts"] == []
 

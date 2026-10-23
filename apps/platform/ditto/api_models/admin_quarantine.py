@@ -463,10 +463,13 @@ class AdminV13PrivatePrerequisite(BaseModel):
 
 
 class AdminV13PrivatePackageReadiness(BaseModel):
-    """Prerequisite visibility only: no V13 policy pass or CLEAR status."""
+    """Historical inventory for a retired program; no activation or CLEAR path."""
 
+    program_status: Literal["retired"] = "retired"
     registration_status: Literal["not_registered", "registered_unverified"]
-    prerequisites: list[AdminV13PrivatePrerequisite]
+    prerequisites: list[AdminV13PrivatePrerequisite] = Field(
+        description="Historical observations, not an activation checklist"
+    )
     clear_authorized: Literal[False] = False
 
 

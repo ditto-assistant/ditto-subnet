@@ -14446,7 +14446,7 @@ export interface components {
         };
         /**
          * AdminV13PrivatePackageReadiness
-         * @description Prerequisite visibility only: no V13 policy pass or CLEAR status.
+         * @description Historical inventory for a retired program; no activation or CLEAR path.
          */
         AdminV13PrivatePackageReadiness: {
             /**
@@ -14455,8 +14455,17 @@ export interface components {
              * @constant
              */
             clear_authorized: false;
-            /** Prerequisites */
+            /**
+             * Prerequisites
+             * @description Historical observations, not an activation checklist
+             */
             prerequisites: components["schemas"]["AdminV13PrivatePrerequisite"][];
+            /**
+             * Program Status
+             * @default retired
+             * @constant
+             */
+            program_status: "retired";
             /**
              * Registration Status
              * @enum {string}
