@@ -2526,6 +2526,14 @@ async def submit_probe_battery(
             raise AgentNotScreenableError(
                 "probe battery does not match an active screening attempt"
             )
+        if (
+            attempt.review_settings_revision != payload.settings_revision
+            or attempt.review_settings_scope != payload.settings_scope
+            or attempt.review_settings_checksum != payload.settings_checksum
+        ):
+            raise AgentNotScreenableError(
+                "probe battery settings differ from the attempt's claimed revision"
+            )
         deadline = attempt.deadline
         if deadline.tzinfo is None:
             deadline = deadline.replace(tzinfo=UTC)

@@ -1083,6 +1083,10 @@ def _format_stage_timings(history: Sequence[tuple[str, float]], *, end: float) -
     return " ".join(f"{name}_ms={ms}" for name, ms in durations.items())
 
 
+# Each post-decision battery cleanup command; the lease reserves both.
+_PROBE_BATTERY_CLEANUP_S = 15.0
+
+
 class BuildGate:
     """Runs the build, serve, and model-call checks for one agent at a time.
 
@@ -1111,6 +1115,9 @@ class BuildGate:
         # and per-attempt bounded summaries the worker pops and submits with
         # the shadow review, before the signed decision closes the attempt.
         self._probe_battery: tuple[str, int] = ("off", 120)
+        # (revision, scope, checksum) of the revision the battery ran under, so
+        # the worker stamps the observation with the settings that produced it.
+        self._probe_battery_settings: tuple[int, str, str] = (0, "", "")
         self._probe_battery_reports: dict[UUID, dict[str, Any]] = {}
         self._executor_verified = False
         self._capture_enforce_result = capture_enforce_result
@@ -1201,6 +1208,11 @@ class BuildGate:
         self._probe_battery = (
             effective.settings.probe_battery_mode,
             effective.settings.probe_battery_timeout_seconds,
+        )
+        self._probe_battery_settings = (
+            effective.revision,
+            effective.scope,
+            effective.checksum,
         )
         self._review_settings_key = key
         logger.info(
@@ -2129,17 +2141,23 @@ class BuildGate:
                 remaining = self._lease_remaining(deadline)
                 budget = float(self._probe_battery[1])
                 if remaining is not None:
-                    budget = min(budget, remaining - 30.0)
+                    # Reserve the decision's 30 s plus both bounded cleanups.
+                    budget = min(
+                        budget, remaining - 30.0 - 2 * _PROBE_BATTERY_CLEANUP_S
+                    )
                 if budget > 0:
                     try:
-                        self._probe_battery_reports[
-                            attempt_id
-                        ] = await self._run_probe_battery(
+                        battery = await self._run_probe_battery(
                             image_id=built_image_id,
                             artifact_sha256=sha256.lower(),
                             bench_version=bench_version,
                             budget=budget,
                         )
+                        bound = self._probe_battery_settings
+                        battery["settings_revision"] = bound[0]
+                        battery["settings_scope"] = bound[1]
+                        battery["settings_checksum"] = bound[2]
+                        self._probe_battery_reports[attempt_id] = battery
                     except Exception:  # noqa: BLE001 - never change a settled decision
                         logger.exception("probe battery shadow unavailable")
             return decision
@@ -2253,9 +2271,13 @@ class BuildGate:
         finally:
             network, gateway, harness = container_names(token)
             with contextlib.suppress(Exception):
-                await self._run(["rm", "-f", harness, gateway], timeout=60)
+                await self._run(
+                    ["rm", "-f", harness, gateway], timeout=_PROBE_BATTERY_CLEANUP_S
+                )
             with contextlib.suppress(Exception):
-                await self._run(["network", "rm", network], timeout=60)
+                await self._run(
+                    ["network", "rm", network], timeout=_PROBE_BATTERY_CLEANUP_S
+                )
             shutil.rmtree(root, ignore_errors=True)
         if summary is None:
             summary = {

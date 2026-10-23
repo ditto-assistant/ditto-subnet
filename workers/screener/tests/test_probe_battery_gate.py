@@ -50,8 +50,10 @@ def test_summary_keeps_only_well_formed_lead_names() -> None:
 
 
 def test_uncalibrated_battery_reports_no_encoding() -> None:
-    summary = summarize({"format": None}, probe_count=3, elapsed_s=1)
-    assert summary["status"] == "calibration_failed" and summary["encoding"] is None
+    for encoding in (None, "", "Bad!"):
+        summary = summarize({"format": encoding}, probe_count=3, elapsed_s=1)
+        assert summary["status"] == "calibration_failed", encoding
+        assert summary["encoding"] is None
 
 
 def _gate(make_config: Any) -> BuildGate:
@@ -138,3 +140,36 @@ def test_battery_report_pops_once(make_config: Any) -> None:
     gate._probe_battery_reports[attempt] = {"status": "complete"}
     assert gate.pop_probe_battery(attempt) == {"status": "complete"}
     assert gate.pop_probe_battery(attempt) is None
+
+
+async def test_worker_stamps_the_revision_the_gate_ran_under() -> None:
+    from ditto_screener.worker import ScreenerWorker
+
+    worker = ScreenerWorker.__new__(ScreenerWorker)
+    worker._platform = Mock(submit_probe_battery=AsyncMock())
+    agent, attempt = uuid4(), uuid4()
+    summary = {
+        "status": "complete",
+        "encoding": "answer_line",
+        "leads": [],
+        "battery_ms": 10,
+        "settings_revision": 7,
+        "settings_scope": "ditto-screener-on",
+        "settings_checksum": "b" * 64,
+    }
+    await worker._submit_probe_battery(
+        agent_id=agent, attempt_id=attempt, artifact_sha256="a" * 64, summary=summary
+    )
+    request = worker._platform.submit_probe_battery.await_args.args[1]
+    assert (request.settings_revision, request.settings_scope) == (
+        7,
+        "ditto-screener-on",
+    )
+    worker._platform.submit_probe_battery.reset_mock()
+    await worker._submit_probe_battery(
+        agent_id=agent,
+        attempt_id=attempt,
+        artifact_sha256="a" * 64,
+        summary={**summary, "settings_revision": 0},
+    )
+    worker._platform.submit_probe_battery.assert_not_awaited()

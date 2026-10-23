@@ -1506,9 +1506,13 @@ class ScreenerWorker:
         artifact_sha256: str,
         summary: dict[str, Any],
     ) -> None:
-        """Best-effort report-only battery leads; never part of the verdict."""
-        settings = self._review_settings_status
-        if settings is None or settings.revision < 1:
+        """Best-effort report-only battery leads; never part of the verdict.
+
+        The gate stamps the summary with the revision it ran under; the worker's
+        current status may already name a later revision.
+        """
+        revision = summary.get("settings_revision")
+        if not isinstance(revision, int) or revision < 1:
             logger.warning("discarding probe battery without an applied revision")
             return
         try:
@@ -1517,9 +1521,6 @@ class ScreenerWorker:
                     **summary,
                     "attempt_id": attempt_id,
                     "artifact_sha256": artifact_sha256,
-                    "settings_revision": settings.revision,
-                    "settings_scope": settings.scope,
-                    "settings_checksum": settings.checksum,
                 },
                 strict=False,
             )

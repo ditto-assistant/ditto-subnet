@@ -41,7 +41,7 @@ def summarize(
     encoding = report.get("format")
     valid_encoding = isinstance(encoding, str) and bool(_ENCODING.match(encoding))
     return {
-        "status": "complete" if encoding else "calibration_failed",
+        "status": "complete" if valid_encoding else "calibration_failed",
         "encoding": encoding if valid_encoding else None,
         "seed_first": bool(report.get("seed_first")),
         "items_run": min(len(report.get("items") or []), 128),

@@ -2591,6 +2591,10 @@ class TestProbeBattery:
                     status="running",
                     started_at=now,
                     deadline=now + timedelta(minutes=30),
+                    review_settings_revision=revisions["on"].revision,
+                    review_settings_instance_id="ditto-screener-on",
+                    review_settings_scope="ditto-screener-on",
+                    review_settings_checksum=revisions["on"].checksum,
                 )
             )
             on = (revisions["on"].revision, revisions["on"].checksum)
@@ -2629,7 +2633,37 @@ class TestProbeBattery:
             "settings_scope": "ditto-screener-off",
             "settings_checksum": off[1],
         }
+        # Another revision than the one the attempt claimed under is refused,
+        # whether or not it enables the battery.
         assert (await client.post(url, json=not_enabled)).status_code == 409
+        # An attempt bound to a revision that does not enable the battery.
+        other_agent = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING, name="battery-off-agent"
+        )
+        other_attempt = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=other_attempt,
+                    agent_id=other_agent,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=now,
+                    deadline=now + timedelta(minutes=30),
+                    review_settings_revision=off[0],
+                    review_settings_instance_id="ditto-screener-off",
+                    review_settings_scope="ditto-screener-off",
+                    review_settings_checksum=off[1],
+                )
+            )
+        response = await client.post(
+            f"/api/v1/screener/agent/{other_agent}/probe-battery",
+            json={**not_enabled, "attempt_id": str(other_attempt)},
+        )
+        assert response.status_code == 409
+        async with session_maker() as session:
+            assert await session.get(ScreenerProbeBattery, other_attempt) is None
 
 
 class TestHeartbeat:
