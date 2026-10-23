@@ -278,8 +278,8 @@ export function harnessMethodText(shownVersions: Record<number, boolean>): strin
 // The record line alone hides the shape of the competition: the field is
 // what shows a whole subnet climbing. Every contract's full finalized board
 // is already public per bench_version, so the scatter needs no new endpoint.
-// Settled contracts are immutable, so each is fetched once and kept; only
-// the newest board is allowed to refetch.
+// Each settled board is fetched once and kept. The active and newest boards
+// can both change while the next competition is collecting.
 
 export interface MemoryFieldEntry {
   version: number;
@@ -317,10 +317,11 @@ export function resetMemoryFieldCache(): void {
 
 export function loadMemoryField(
   versions: number[],
-  activeVersion: number,
+  activeVersion: number | number[],
 ): Promise<Record<number, MemoryFieldEntry[]>> {
+  const liveVersions = Array.isArray(activeVersion) ? activeVersion : [activeVersion];
   const wanted = versions.filter(
-    (version) => !memoryFieldByVersion[version] || version === activeVersion,
+    (version) => !memoryFieldByVersion[version] || liveVersions.includes(version),
   );
   if (!wanted.length) return Promise.resolve(memoryFieldByVersion);
   return poolMap(wanted, 3, (version) =>

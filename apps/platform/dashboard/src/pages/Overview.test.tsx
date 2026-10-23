@@ -745,6 +745,19 @@ describe("memory timeline gaps (row 6)", () => {
 // "No version literal decides what is drawn." (Version-literal negative
 // greps live in src/build-invariants.test.ts.)
 describe("memory timeline window (row 7)", () => {
+  it("refreshes the active and collecting boards while reusing settled competitions", async () => {
+    const requests: string[] = [];
+    restoreFetch = installFetch({ onRequest: (path) => requests.push(path) });
+    await loadMemoryField([10, 11, 12, 13], [12, 13]);
+    expect(requests).toHaveLength(4);
+    requests.length = 0;
+    await loadMemoryField([10, 11, 12, 13], [12, 13]);
+    expect(requests).toEqual([
+      "/public/leaderboard?bench_version=12",
+      "/public/leaderboard?bench_version=13",
+    ]);
+  });
+
   it("fetches only four boards and rolls forward without rendering retired references", async () => {
     const requests: string[] = [];
     let newest = 13;

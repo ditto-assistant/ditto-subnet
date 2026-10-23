@@ -4,7 +4,7 @@
 // section chrome (title, lead, method disclosure, evidence links), the
 // /public/bench/timeline resource with its last-good fallback, the field
 // loading, the measured-width re-render, and the frame tooltips.
-import { For, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { For, createEffect, createMemo, createSignal, onCleanup, onMount, untrack } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { useEndpoint } from "../../data/useEndpoint";
@@ -42,7 +42,11 @@ export function HarnessComparison(props: { store: LeaderboardStore }): JSX.Eleme
     if (!data) return;
     setLastData(data);
     const versions = timelineReleases(data).map((release) => Number(release.bench_version));
-    void loadMemoryField(versions, Math.max(...versions.concat([0])));
+    // A collecting competition may already be newer than the active one.
+    // Keep both live while caching settled boards. Sample rollout state here
+    // so its separate poll cannot trigger a duplicate round of board reads.
+    const activeVersion = Number(untrack(store.rollout)?.active_version);
+    void loadMemoryField(versions, [Math.max(...versions.concat([0])), activeVersion]);
   });
 
   const shownVersions = createMemo<Record<number, boolean>>(() => {
