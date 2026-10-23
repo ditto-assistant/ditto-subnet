@@ -27,7 +27,7 @@ func TestCompilerEnvironmentHasNoAmbientHooksOrNetwork(t *testing.T) {
 	}
 }
 func TestBuildInputsRefuseTraversalOverridesAndWrongModule(t *testing.T) {
-	valid := Request{ModulePath: "example.invalid/subject", PackageName: "subject", Files: []File{{Path: "go.mod", Bytes: []byte("module example.invalid/subject\ngo 1.26.6\n")}}, Functions: []string{"Add"}, UID: 10001, GID: 10001}
+	valid := Request{ModulePath: "example.invalid/subject", PackageName: "subject", Files: []File{{Path: "go.mod", Bytes: []byte("module example.invalid/subject\ngo 1.27.3\n")}}, Functions: []string{"Add"}, UID: 10001, GID: 10001}
 	if err := validate(valid); err != nil {
 		t.Fatal(err)
 	}

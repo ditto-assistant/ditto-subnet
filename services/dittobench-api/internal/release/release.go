@@ -18,7 +18,7 @@
 //  2. runtime/debug build info (vcs.revision). Free and automatic, but only
 //     populated when the build ran inside a git work tree with a git binary
 //     present. The release image build satisfies neither (BuildKit checks out a
-//     git context without .git, and the golang:1.23-alpine build stage does not
+//     git context without .git, and the golang Alpine build stage does not
 //     install git), so this only ever fires for host builds — useful for
 //     developers, never load-bearing in production.
 //  3. DITTOBENCH_SOURCE_SHA / DITTOBENCH_SOFTWARE_VERSION from the environment.

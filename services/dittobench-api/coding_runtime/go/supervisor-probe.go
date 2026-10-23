@@ -36,7 +36,7 @@ func main() {
 	need(os.Chmod("/workspace", 0755) == nil)
 	need(os.Chmod("/run/dittobench-grader", 0700) == nil)
 	need(os.Chmod("/run/dittobench-control", 0700) == nil)
-	need(os.WriteFile("/workspace/go.mod", []byte("module example.invalid/subject\ngo 1.26.6\n"), 0444) == nil)
+	need(os.WriteFile("/workspace/go.mod", []byte("module example.invalid/subject\ngo 1.27.3\n"), 0444) == nil)
 	initBody := ""
 	if scenario == "init-exit" {
 		initBody = "os.Exit(0)"

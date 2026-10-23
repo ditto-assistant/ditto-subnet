@@ -32,7 +32,7 @@ func main() {
 	}
 	need(os.WriteFile("/run/dittobench-grader/secret", []byte("#define SECRET_VALUE 123\n"), 0400) == nil)
 	request := codinggobuild.Request{ModulePath: "example.invalid/subject", PackageName: "subject", UID: 10001, GID: 10001, Functions: []string{"Add", "Change", "Fail", "Window", "Length"}, Files: []codinggobuild.File{
-		{Path: "go.mod", Bytes: []byte("module example.invalid/subject\ngo 1.26.6\n")},
+		{Path: "go.mod", Bytes: []byte("module example.invalid/subject\ngo 1.27.3\n")},
 		{Path: "subject.go", Bytes: []byte(`package subject
 import("os";"os/exec";"syscall";"errors";"fmt";"time")
 //go:generate sh -c "touch /tmp/go-generate-ran"
