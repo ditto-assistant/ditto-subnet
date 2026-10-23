@@ -1131,6 +1131,36 @@ def _is_failed_release(
     )
 
 
+def _failed_release_guard_misuse(
+    quarantine: ScreeningQuarantine,
+    agent: Agent,
+    decision: AdminQuarantineBatchDecision,
+) -> str | None:
+    """Why this row cannot carry the failed-release attempt and score guards.
+
+    The guards are the operator's claim that the row is a parked screening
+    failure, so a row that is not one is refused instead of resolved under a
+    claim that does not hold. The refusal names what the row actually is:
+    reporting a submission state change asserted a concurrent write that never
+    happened, and sent operators back to re-derive the same guards for the same
+    decision (ditto-subnet#3069).
+    """
+    if decision.expected_attempt_id is None and decision.expected_score_count is None:
+        return None
+    if _is_failed_release(quarantine, agent, decision):
+        return None
+    if decision.resolution != "release":
+        return (
+            "expected_attempt_id and expected_score_count apply only to a "
+            f"release; omit both guards to {decision.resolution} this quarantine"
+        )
+    return (
+        "expected_attempt_id and expected_score_count apply only to releasing a "
+        f"parked screening failure; omit both guards for this {quarantine.status} "
+        f"quarantine on a {agent.status.value} agent"
+    )
+
+
 async def _preview_batch_decision(
     session: AsyncSession,
     decision: AdminQuarantineBatchDecision,
@@ -1215,14 +1245,12 @@ async def _preview_batch_decision(
         and decision.resolution == "release"
     )
     is_failed_release = _is_failed_release(quarantine, agent, decision)
-    if (
-        decision.expected_attempt_id is not None
-        or decision.expected_score_count is not None
-    ) and not is_failed_release:
+    misused_guards = _failed_release_guard_misuse(quarantine, agent, decision)
+    if misused_guards is not None:
         return AdminQuarantineBatchPreviewItem(
             **base,
             disposition="conflict",
-            message="failed release submission state changed",
+            message=misused_guards,
         )
     if is_failed_release:
         conflict = await _failed_release_conflict(
@@ -1580,14 +1608,6 @@ async def execute_quarantine_batch(
                     and decision.resolution == "release"
                 )
                 is_failed_release = _is_failed_release(quarantine, agent, decision)
-                if (
-                    decision.expected_attempt_id is not None
-                    or decision.expected_score_count is not None
-                ) and not is_failed_release:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="failed release submission state changed",
-                    )
                 if is_failed_release:
                     conflict = await _failed_release_conflict(
                         session, agent=agent, quarantine=quarantine, decision=decision
@@ -1619,6 +1639,17 @@ async def execute_quarantine_batch(
                         status_code=409,
                         detail="terminal ruling changed after preview",
                     )
+                # The preview classifies a terminal reconciliation before it
+                # reads these guards, so execution reads them in the same
+                # order. Reading them first turned a reconciliation the
+                # operator had previewed as ready into a 409 naming a state
+                # change (ditto-subnet#3069).
+                if not is_terminal_ghost and not replayed:
+                    misused_guards = _failed_release_guard_misuse(
+                        quarantine, agent, decision
+                    )
+                    if misused_guards is not None:
+                        raise HTTPException(status_code=409, detail=misused_guards)
                 if replayed:
                     # A concurrent execution closed it behind this same ruling.
                     target = agent.status
