@@ -47,7 +47,7 @@ import math
 import re
 import sys
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -326,37 +326,78 @@ def direction_phrases(expected: str) -> list[str]:
     return []
 
 
-def claim_alternatives(case: dict[str, Any]) -> list[str]:
+_NUMBER_WORDS = {
+    "0": "zero", "1": "one", "2": "two", "3": "three", "4": "four",
+    "5": "five", "6": "six", "7": "seven", "8": "eight", "9": "nine",
+    "10": "ten", "11": "eleven", "12": "twelve", "13": "thirteen",
+    "14": "fourteen", "15": "fifteen", "16": "sixteen", "17": "seventeen",
+    "18": "eighteen", "19": "nineteen", "20": "twenty",
+}  # fmt: skip
+"""``grade.numberWords``."""
+
+_HYPHEN_V14 = "\u2010"
+
+
+def claim_groups(case: dict[str, Any]) -> list[list[str]]:
     """Port of ``grade.ClaimAlternatives``: the accepted canonical surface
-    forms of the expected answer, by answer kind. Kinds without a checkable
-    value (decline, acknowledge, chitchat, clarify, ...) have none."""
+    forms of the expected answer, one group per claim unit. Any form of a
+    present unit counts as that unit's emission (``claimGroupsEmitted``); each
+    list item is its own unit. Kinds without a checkable value (decline,
+    acknowledge, chitchat, clarify, ...) have none.
+
+    Not ported: the v13 minor-unit money form, which needs the language
+    lexicon's requested-unit reading; the replay keeps the major-unit form."""
     kind = str(case.get("answer_kind") or "value")
-    out: list[str] = []
+    version = int(case.get("bench_version") or 0)
+    groups: list[list[str]] = []
 
-    def add(value: Any) -> None:
-        text = str(value).strip() if value is not None else ""
-        if text:
-            out.append(text)
+    def group(*forms: Any) -> None:
+        texts = [str(form).strip() for form in forms if form is not None]
+        texts = [text for text in texts if text]
+        if texts:
+            groups.append(texts)
 
-    if kind == "value":
-        add(case.get("expected_answer"))
-        for alt in _as_list(case.get("accept_any")):
-            add(alt)
+    expected = str(case.get("expected_answer") or "")
+    if kind in ("value", "date"):
+        group(expected, *_as_list(case.get("accept_any")))
     elif kind == "number":
-        add(case.get("expected_answer"))
+        forms = [expected]
+        normalized = _grade_normalize(expected)
+        if normalized in _NUMBER_WORDS:
+            forms.append(_NUMBER_WORDS[normalized])
+        if normalized == "1":
+            forms.append("once")
+        elif normalized == "2":
+            forms.append("twice")
+        group(*forms)
     elif kind == "money":
-        add(money_major_form(str(case.get("expected_answer") or "")))
+        major = money_major_form(expected)
+        if major:
+            group(major)
     elif kind == "direction":
-        for phrase in direction_phrases(str(case.get("expected_answer") or "")):
-            add(phrase)
+        forms = direction_phrases(expected)
+        if version >= 13:
+            forms = [*forms, expected, *_as_list(case.get("accept_any"))]
+        group(*forms)
     elif kind in ("list", "ordered_list"):
         accept = _as_list(case.get("answer_item_accept_any"))
         for index, item in enumerate(_as_list(case.get("answer_items"))):
-            add(item)
-            if index < len(accept):
-                for alt in _as_list(accept[index]):
-                    add(alt)
-    return out
+            alternates = _as_list(accept[index]) if index < len(accept) else []
+            group(item, *alternates)
+    if version >= 14:
+        # v14 (#2734): the U+2010 variant of every hyphenated form, in its own
+        # unit, which is what NFKC makes of the model's U+2011 in a completion.
+        groups = [
+            [*forms, *(form.replace("-", _HYPHEN_V14) for form in forms if "-" in form)]
+            for forms in groups
+        ]
+    return groups
+
+
+def claim_alternatives(case: dict[str, Any]) -> list[str]:
+    """Every accepted form of every claim unit, flattened
+    (``ServedClaimTokens`` reads them without regard to the unit)."""
+    return [form for forms in claim_groups(case) for form in forms]
 
 
 def served_claim_tokens(
@@ -377,6 +418,26 @@ def served_claim_tokens(
     if not claim:
         return set(), False
     return claim, True
+
+
+def claim_groups_emitted(
+    served_text: str, groups: Sequence[Sequence[str]], completions: set[str]
+) -> bool:
+    """Port of ``scoregates.claimGroupsEmitted``: every claim unit with a form
+    present in the served span must have SOME accepted form, not necessarily
+    the served one, among the completion tokens."""
+    served = value_tokens(served_text)
+    for forms in groups:
+        if isinstance(forms, str):
+            raise TypeError("claim groups must be sequences of forms")
+        present = any(
+            (tokens := value_tokens(form)) and tokens <= served for form in forms
+        )
+        if present and not any(
+            (tokens := value_tokens(form)) and tokens <= completions for form in forms
+        ):
+            return False
+    return True
 
 
 def text_provenance(claim: set[str], completions: set[str]) -> bool:
@@ -432,13 +493,14 @@ class ClaimSpanLedger:
 
 def evaluate_claim(
     served: str,
-    alternatives: Iterable[str],
+    groups: Sequence[Sequence[str]],
     ledger: ClaimSpanLedger,
     *exemptions: set[str],
 ) -> dict[str, Any]:
-    """Port of ``scoregates.EvaluateClaim``: both gates for one credited claim.
-    ``applicable`` is False when the served span carries no checkable claim."""
-    claim, ok = served_claim_tokens(served, alternatives)
+    """Port of ``scoregates.EvaluateClaim``: both gates for one credited claim,
+    over ``claim_groups``. ``applicable`` is False when the served span carries
+    no checkable claim."""
+    claim, ok = served_claim_tokens(served, [form for forms in groups for form in forms])
     if not ok:
         return {
             "applicable": False,
@@ -452,7 +514,7 @@ def evaluate_claim(
     return {
         "applicable": True,
         "claim_tokens": len(claim),
-        "model_emitted": text_provenance(claim, ledger.completion),
+        "model_emitted": claim_groups_emitted(served, groups, ledger.completion),
         "answer_in_prompt": causal_dependence(claim, residual),
     }
 
@@ -898,7 +960,8 @@ def evaluate_run(
         # The graded claim span is the text the positive check credited: the
         # slot when populated (authoritative for v9+), the prose otherwise.
         served = slot if slot else final_text
-        alternatives = claim_alternatives(case)
+        groups = claim_groups(case)
+        alternatives = [form for forms in groups for form in forms]
         credited = bool(scored.get("correct")) if scored is not None else True
         claim, applicable = served_claim_tokens(served, alternatives)
         findings: list[str] = []
@@ -938,7 +1001,7 @@ def evaluate_run(
                 exempt |= value_tokens(str(span))
             exempt |= value_tokens(str(entry.get("user_input") or ""))
             exempt |= value_tokens(str(case.get("question") or ""))
-            verdict = evaluate_claim(served, alternatives, ledger, exempt)
+            verdict = evaluate_claim(served, groups, ledger, exempt)
             if not verdict["model_emitted"]:
                 if ledger.completions == 0:
                     findings.append(FINDING_NO_MODEL_COMPLETION)

@@ -4,6 +4,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
+	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -13,6 +14,10 @@ import (
 // none of that is on the CaseScore and none of it crosses the harness wire.
 // Both builders return the zero value (!Paired()) for bench_version < 13, so
 // the caller's evidence map stays empty and the post-pass is the identity.
+// From v14 both read the asserted answer through grade.FoldReplyHyphens, the
+// fold the graders apply (#2734): otherwise a base twin answering "VK-48" and
+// its counterfactual answering "VK‑48" (U+2011) would both be credited yet
+// compare unequal, slipping past the counterfactual-insensitive check.
 
 // memoryTwinEvidence reads the staged case's generator provenance. A
 // metamorphic program member pairs through V10CaseProvenance.MetamorphicGroup
@@ -25,7 +30,7 @@ func memoryTwinEvidence(benchVersion int, sc gen.StagedCase, graded protocol.Run
 		return scorer.TwinEvidence{}
 	}
 	ev := scorer.TwinEvidence{
-		Answer:   scorer.AssertedAnswer(graded),
+		Answer:   scorer.AssertedAnswer(grade.FoldReplyHyphens(benchVersion, graded)),
 		Decision: scorer.ClassifyDecision(graded, observed),
 	}
 	if sc.V10Provenance != nil && sc.V10Provenance.MetamorphicGroup != "" && sc.V10Provenance.Relation != "" {
@@ -55,7 +60,7 @@ func toolTwinEvidence(benchVersion int, c protocol.ToolCase, resp protocol.RunRe
 	return scorer.TwinEvidence{
 		TwinGroup:    c.TwinGroup,
 		TwinRelation: c.TwinRelation,
-		Answer:       scorer.AssertedAnswer(resp),
+		Answer:       scorer.AssertedAnswer(grade.FoldReplyHyphens(benchVersion, resp)),
 		Decision:     scorer.ClassifyDecision(resp, observed),
 	}
 }

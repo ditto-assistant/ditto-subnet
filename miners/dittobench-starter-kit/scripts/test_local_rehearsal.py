@@ -893,11 +893,89 @@ class ProvenanceNormaliserTest(unittest.TestCase):
             exempt |= GATES.value_tokens(case["question"])
             served = response.get("answer") or response["final_text"]
             verdict = GATES.evaluate_claim(
-                served, GATES.claim_alternatives(case), ledger, exempt
+                served, GATES.claim_groups(case), ledger, exempt
             )
             self.assertTrue(verdict["applicable"], name)
             self.assertEqual(verdict["model_emitted"], want_emitted, name)
             self.assertEqual(verdict["answer_in_prompt"], want_in_prompt, name)
+
+    def test_any_accepted_form_of_a_claim_unit_counts_as_emitted(self) -> None:
+        """``claimGroupsEmitted``: the model may write a different accepted
+        form of the served unit than the harness served."""
+        cases = [
+            # served "3", the model wrote "three"
+            ({"answer_kind": "number", "expected_answer": "3"}, "3", "I count three."),
+            # served one accept_any form, the model wrote another
+            (
+                {"answer_kind": "value", "expected_answer": "Tokyo", "accept_any": ["Osaka"]},
+                "Tokyo",
+                "It moved to Osaka.",
+            ),
+            # served one accepted direction phrase, the model wrote another
+            (
+                {"bench_version": 13, "answer_kind": "direction", "expected_answer": "increase"},
+                "went up",
+                "It increased.",
+            ),
+        ]
+        for case, served, completion in cases:
+            ledger = GATES.ClaimSpanLedger()
+            ledger.record_call([], [completion])
+            verdict = GATES.evaluate_claim(served, GATES.claim_groups(case), ledger)
+            self.assertTrue(verdict["applicable"], case)
+            self.assertTrue(verdict["model_emitted"], case)
+
+    def test_each_list_item_needs_its_own_emitted_form(self) -> None:
+        case = {
+            "answer_kind": "list",
+            "answer_items": ["Rome", "Paris"],
+            "answer_item_accept_any": [["Roma"], []],
+        }
+        groups = GATES.claim_groups(case)
+        self.assertEqual(groups, [["Rome", "Roma"], ["Paris"]])
+        ledger = GATES.ClaimSpanLedger()
+        ledger.record_call([], ["Roma and Paris."])
+        self.assertTrue(GATES.evaluate_claim("Rome, Paris", groups, ledger)["model_emitted"])
+        ledger = GATES.ClaimSpanLedger()
+        ledger.record_call([], ["Roma, and somewhere else."])
+        self.assertFalse(GATES.evaluate_claim("Rome, Paris", groups, ledger)["model_emitted"])
+        with self.assertRaises(TypeError):
+            GATES.claim_groups_emitted("Rome", ["Rome"], set())
+
+    def test_v14_replay_accepts_a_typographic_hyphen_identifier(self) -> None:
+        """#2734: the v14 grader folds the model's U+2011 before crediting
+        VK-48HJXP6A63, so the replay accepts the claim the same way the
+        scorer's v14 claim vocabulary does. V13 keeps its finding."""
+        question = "What Signal handle do I have for Melanie?"
+        for served in ("VK-48HJXP6A63", "VK\u201148HJXP6A63"):
+            for version, want_emitted in ((13, False), (14, True)):
+                case = {
+                    "bench_version": version,
+                    "answer_kind": "value",
+                    "expected_answer": "VK-48HJXP6A63",
+                    "question": question,
+                }
+                ledger = GATES.ClaimSpanLedger()
+                ledger.record_call([question], ["Your handle is VK\u201148HJXP6A63."])
+                verdict = GATES.evaluate_claim(
+                    served, GATES.claim_groups(case), ledger, GATES.value_tokens(question)
+                )
+                if version == 13 and served != "VK-48HJXP6A63":
+                    # V13 does not fold, so the U+2011 slot is no claim span.
+                    self.assertFalse(verdict["applicable"], served)
+                    continue
+                self.assertTrue(verdict["applicable"], (served, version))
+                self.assertEqual(verdict["model_emitted"], want_emitted, (served, version))
+        # A value the model never wrote is still not model-emitted at v14.
+        ledger = GATES.ClaimSpanLedger()
+        ledger.record_call([question], ["I could not find that handle."])
+        case = {"bench_version": 14, "answer_kind": "value", "expected_answer": "VK-48HJXP6A63"}
+        verdict = GATES.evaluate_claim("VK-48HJXP6A63", GATES.claim_groups(case), ledger)
+        self.assertFalse(verdict["model_emitted"])
+        self.assertEqual(
+            GATES.claim_alternatives({"bench_version": 13, "expected_answer": "VK-48HJXP6A63"}),
+            ["VK-48HJXP6A63"],
+        )
 
     def test_slot_not_in_prose_accepts_unit_alternatives_and_rejects_substitution(
         self,
