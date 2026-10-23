@@ -1028,7 +1028,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_source_release_policy:
     'Read disclosure gate and receipts; history default 0.',
   get_agent_source_release_evidence:
-    'Exact-SHA public handoffs versus candidate upload; derived eligibility is not publication proof. Missing audit is unknown, not private. See tool help.',
+    'Public handoffs at candidate upload; eligibility is not proof. Missing audit means unknown. See tool help.',
   set_burn_settings:
     'Change burn weights with CAS/reason/confirmation. MOVES TAO. See tool help.',
   get_burn_settings:
