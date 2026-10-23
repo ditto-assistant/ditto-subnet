@@ -42,6 +42,7 @@ from typing import Any
 
 _MAX_HEADER_BYTES = 64 * 1024
 _MAX_BODY_BYTES = 4 * 1024 * 1024
+_MAX_CONNECTIONS = 64
 _TRANSCRIPT_BODY_CAP = 256 * 1024
 _EMBED_DIMENSIONS = 768
 _DEFAULT_ECHO_MODEL = "gpt-4o-mini"
@@ -278,6 +279,7 @@ class ScriptedGateway:
         self._surface = surface
         self._ssl = ssl_context
         self._server: asyncio.Server | None = None
+        self._active = 0
 
     async def __aenter__(self) -> ScriptedGateway:
         self._server = await asyncio.start_server(
@@ -475,6 +477,20 @@ class ScriptedGateway:
         )
 
     async def _handle(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        # Cap concurrent handlers so stalled harness connections cannot
+        # exhaust the sidecar; an over-limit connection is closed at once.
+        if self._active >= _MAX_CONNECTIONS:
+            writer.close()
+            return
+        self._active += 1
+        try:
+            await self._handle_one(reader, writer)
+        finally:
+            self._active -= 1
+
+    async def _handle_one(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         payload: dict[str, Any] | bytes = {"error": "bad request"}

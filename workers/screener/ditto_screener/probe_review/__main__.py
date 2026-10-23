@@ -70,8 +70,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         artifact_sha256=digest,
         bench_version=args.bench_version,
     )
-    # A reused --out must not keep another archive's files.
+    # A reused --out must not keep another archive's files or evidence.
     shutil.rmtree(out / "src", ignore_errors=True)
+    shutil.rmtree(out / "probes", ignore_errors=True)
+    for stale in ("session.json", "prepare.json", "verdict.json", "replay.json"):
+        (out / stale).unlink(missing_ok=True)
     files = tools.extract_source(archive, out / "src")
     t0 = time.monotonic()
     triage = _triage(archive)

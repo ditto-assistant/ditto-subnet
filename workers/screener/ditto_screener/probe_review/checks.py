@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import math
 import re
+import subprocess
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -157,12 +159,34 @@ def _choice_pinned(choice: Any) -> bool:
     return kind in {"function", "tool"} and bool(named)
 
 
+_REGEX_TIMEOUT_S = 5.0
+_REGEX_SCRIPT = (
+    "import re,sys\nprint(1 if re.search(sys.argv[1], sys.stdin.read()) else 0)"
+)
+
+
 def _search(pattern: str, text: str) -> bool:
-    """A malformed pattern is a failed predicate, not an evaluation crash."""
+    """Regex predicate in a killable child: malformed or runaway patterns fail.
+
+    A verdict's pattern is reviewer-written and the answer harness-written, so
+    neither may stall evaluation or replay with catastrophic backtracking.
+    """
     try:
-        return re.search(pattern, text) is not None
+        re.compile(pattern)
     except re.error:
         return False
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", _REGEX_SCRIPT, pattern],
+            input=text,
+            capture_output=True,
+            text=True,
+            timeout=_REGEX_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return completed.returncode == 0 and completed.stdout.strip() == "1"
 
 
 def _request_matches(view: dict[str, Any], spec: Mapping[str, Any]) -> bool:

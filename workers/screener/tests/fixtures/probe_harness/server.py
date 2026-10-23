@@ -23,12 +23,14 @@ MEMORY = {}
 MEMORY_LOCK = threading.Lock()
 
 
-def post(url, payload, timeout=60):
+def post(url, payload, timeout=60, *, authorize=False):
+    # Only the model proxy gets the key; a request-supplied tool endpoint is an
+    # arbitrary destination and must never receive credentials.
+    headers = {"Content-Type": "application/json"}
+    if authorize:
+        headers["Authorization"] = f"Bearer {KEY}"
     request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        method="POST",
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {KEY}"},
+        url, data=json.dumps(payload).encode(), method="POST", headers=headers
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read() or b"{}")
@@ -40,7 +42,8 @@ def chat(messages, tools, tool_choice=None):
         payload["tools"] = [{"type": "function", "function": t} for t in tools]
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
-    return post(f"{BASE}/chat/completions", payload)["choices"][0]["message"]
+    reply = post(f"{BASE}/chat/completions", payload, authorize=True)
+    return reply["choices"][0]["message"]
 
 
 def extract_answer(text):

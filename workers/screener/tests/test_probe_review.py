@@ -714,6 +714,15 @@ def test_legacy_reports_live_restart_and_slow_completers(tmp_path: Path) -> None
     assert _time.monotonic() - started < 2
 
 
+def test_answer_regex_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ditto_screener.probe_review import checks
+
+    record = _record({"answer": "a" * 40 + "!"})
+    assert evaluate(record, {"op": "answer_matches", "value": "a{3}"})[0]
+    monkeypatch.setattr(checks, "_REGEX_TIMEOUT_S", 0.5)
+    assert not evaluate(record, {"op": "answer_matches", "value": "(a+)+$"})[0]
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

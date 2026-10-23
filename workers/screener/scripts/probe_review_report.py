@@ -38,12 +38,14 @@ def _complete_replay(replay: Any) -> bool:
     findings = replay.get("findings")
     if not isinstance(replay.get("verified"), bool) or not isinstance(findings, list):
         return False
-    return all(
+    well_formed = all(
         isinstance(f, dict)
         and isinstance(f.get("verified"), bool)
         and (not f["verified"] or isinstance(f.get("invariant"), str))
         for f in findings
     )
+    # The verdict must agree with its findings, or the row is inconsistent.
+    return well_formed and replay["verified"] == any(f["verified"] for f in findings)
 
 
 def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
