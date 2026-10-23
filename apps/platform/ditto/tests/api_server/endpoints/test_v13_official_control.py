@@ -21,6 +21,7 @@ from ditto.api_server.storage import create_storage_client
 from ditto.db.models import (
     ScreenerL2ReportCanary,
     ScreenerNode,
+    V13OfficialControlApproval,
     V13OfficialControlImage,
 )
 from ditto.tests.api_server.endpoints.test_admin_v13_private_generation import _install
@@ -248,3 +249,45 @@ async def test_historical_official_image_identity_is_still_database_immutable(
                     text(statement),
                     {"id": UUID(official_control["control_id"]), "sha": "f" * 64},
                 )
+
+
+async def test_historical_official_approval_remains_unverified_and_immutable(
+    official_control: dict,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    ident = UUID(official_control["control_id"])
+    async with session_maker() as session, session.begin():
+        session.add(
+            V13OfficialControlApproval(
+                approval_id=uuid4(),
+                control_id=ident,
+                profile_sha256="a" * 64,
+                review_evidence_sha256="b" * 64,
+                approval_receipt_sha256="c" * 64,
+                actor=_REVIEWER,
+                reason="Historical operator review claim",
+                approved_at=datetime.now(UTC),
+            )
+        )
+    path = f"{_BASE}/{ident}/approvals"
+    assert (await client.get(path)).status_code == 401
+    result = await client.get(
+        path,
+        headers={
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+        },
+    )
+    assert result.status_code == 200, result.text
+    assert result.headers["Cache-Control"] == "no-store"
+    assert result.json()[0]["status"] == "recorded_unverified"
+    assert result.json()[0]["policy_verification_complete"] is False
+    assert result.json()[0]["image_sha256"] == _SHA
+    for statement in (
+        "UPDATE v13_official_control_approvals SET reason='changed' "
+        "WHERE control_id=:id",
+        "DELETE FROM v13_official_control_approvals WHERE control_id=:id",
+    ):
+        with pytest.raises(DBAPIError, match="immutable"):
+            async with session_maker() as session, session.begin():
+                await session.execute(text(statement), {"id": ident})
