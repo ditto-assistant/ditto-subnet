@@ -1,12 +1,14 @@
 """Wire models for the shadow DittoBench generator competition.
 
-Generator miners upload **challenge packs**: inert JSON holding a memory
-haystack plus cases with deterministic gold answers. The contract, validation
-rules, and scoring formula live in
-``research/dittobench-datagen/challenge`` (see
-``research/dittobench-datagen/docs/generator-competition.md``); Platform stores
-packs privately, leases them to a trusted scorer, scores the panel results with
-:mod:`ditto.generator_scoring`, and publishes a weight-zero ledger.
+Generator miners upload the Go source of a CPU-only **generator**: a program
+that reads a ``GenerateRequest`` (a secret seed, the miner hotkey, a case
+count) on stdin and writes a challenge pack (a memory haystack plus cases with
+deterministic gold answers) to stdout. The contract, sandbox, validation
+rules, and scoring formula live in ``research/dittobench-datagen`` (see
+``docs/generator-competition.md``). Platform stores source privately, leases
+each active generator to a trusted scorer with fresh secret seeds, scores the
+resulting panel runs with :mod:`ditto.generator_scoring`, and publishes a
+weight-zero ledger.
 
 Everything here is shadow: ledger entries are ``weight_eligible=False`` and the
 settings ``mode`` has no enforcing value yet.
@@ -21,14 +23,17 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 GENERATOR_SETTINGS_SCOPE = "*"
-PACK_CONTRACT_V1 = "dittobench-challenge-pack/v1"
-MAX_PACK_BYTES = 4 << 20
+GENERATOR_CONTRACT_V1 = "dittobench-generator/v1"
+MAX_SOURCE_ARCHIVE_BYTES = 4 << 20
 MIN_PACK_CASES = 8
-MAX_PACK_CASES = 64
-PACK_SIGNATURE_DOMAIN = "ditto-generator-pack-v1"
+MAX_CASES_PER_SEED = 32
+SOURCE_SIGNATURE_DOMAIN = "ditto-generator-v1"
 
 GeneratorMode = Literal["off", "shadow"]
-PackStatus = Literal["queued", "leased", "scored", "invalid", "failed"]
+SubmissionStatus = Literal["active", "superseded", "rejected"]
+RunStatus = Literal[
+    "leased", "scored", "invalid", "insufficient_panel", "copy", "abandoned"
+]
 CaseStatus = Literal["discriminating", "trivial", "unsolved", "duplicate"]
 
 _SHA256 = r"^[0-9a-f]{64}$"
@@ -40,17 +45,20 @@ def generator_settings_confirmation(mode: str) -> str:
     return f"APPLY GENERATOR COMPETITION {mode.upper()}"
 
 
-def pack_signature_payload(
-    *, hotkey: str, pack_sha256: str, timestamp: int, nonce: UUID
+PROBE_ROTATION_CONFIRMATION = "ROTATE GENERATOR PROBE SEED"
+
+
+def source_signature_payload(
+    *, hotkey: str, source_sha256: str, timestamp: int, nonce: UUID
 ) -> bytes:
-    """The domain-separated bytes a miner signs to upload a pack.
+    """The domain-separated bytes a miner signs to upload generator source.
 
     Distinct from ``ditto-upload-v2`` so an agent-upload signature can never be
-    replayed as a pack upload or vice versa.
+    replayed as a generator upload or vice versa.
     """
-    return f"{PACK_SIGNATURE_DOMAIN}:{hotkey}:{pack_sha256}:{timestamp}:{nonce}".encode(
-        "ascii"
-    )
+    return (
+        f"{SOURCE_SIGNATURE_DOMAIN}:{hotkey}:{source_sha256}:{timestamp}:{nonce}"
+    ).encode("ascii")
 
 
 class GeneratorModel(BaseModel):
@@ -61,7 +69,8 @@ class GeneratorCompetitionSettings(BaseModel):
     """The complete generator competition policy (one revision = whole object).
 
     Scoring fields mirror ``challenge.ScoreParams`` in the Go contract and are
-    bounded identically.
+    bounded identically; ``cases_per_seed`` is both the exact case count every
+    pack must contain and the score's ``target_cases``.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
@@ -70,19 +79,26 @@ class GeneratorCompetitionSettings(BaseModel):
     """``off`` refuses uploads and leases nothing; ``shadow`` runs the lane with
     zero emission."""
     panel_size: Annotated[int, Field(ge=3, le=16)] = 5
-    """Top-ranked owners (one agent each) a pack runs against."""
+    """Top-ranked owners (one agent each) every pack runs against."""
     min_panel: Annotated[int, Field(ge=2, le=32)] = 3
     min_solver_owners: Annotated[int, Field(ge=1, le=32)] = 2
     solve_threshold: Annotated[float, Field(gt=0.0, le=1.0)] = 0.5
     champion_bonus: Annotated[float, Field(ge=0.0, le=2.0)] = 0.5
-    target_cases: Annotated[int, Field(ge=MIN_PACK_CASES, le=MAX_PACK_CASES)] = 32
+    seeds_per_run: Annotated[int, Field(ge=1, le=4)] = 2
+    """Fresh secret seeds per run; the run score is the mean over seeds."""
+    cases_per_seed: Annotated[int, Field(ge=MIN_PACK_CASES, le=MAX_CASES_PER_SEED)] = 16
+    rescore_interval_hours: Annotated[int, Field(ge=6, le=168)] = 24
+    """How often an active generator is re-run on new seeds against the
+    then-current panel."""
     window_days: Annotated[int, Field(ge=1, le=30)] = 7
-    """A hotkey's ledger score is its best pack scored within this window."""
-    max_pending_per_hotkey: Annotated[int, Field(ge=1, le=10)] = 2
+    """A hotkey's ledger score is its latest run scored within this window."""
+    copy_overlap_threshold: Annotated[float, Field(ge=0.2, le=1.0)] = 0.5
+    """Share of a new submission's probe fingerprints that may match an earlier
+    submission from another owner before it is rejected as a copy."""
     upload_cooldown_seconds: Annotated[int, Field(ge=60, le=86_400)] = 3_600
     lease_ttl_seconds: Annotated[int, Field(ge=600, le=21_600)] = 7_200
     max_attempts: Annotated[int, Field(ge=1, le=20)] = 6
-    """Leases before a pack that never reaches a full panel is ``failed``."""
+    """Consecutive unfinished leases before a run backs off."""
     retry_backoff_seconds: Annotated[int, Field(ge=60, le=86_400)] = 3_600
 
     @model_validator(mode="after")
@@ -100,7 +116,7 @@ class GeneratorCompetitionSettings(BaseModel):
             "min_solver_owners": self.min_solver_owners,
             "solve_threshold": self.solve_threshold,
             "champion_bonus": self.champion_bonus,
-            "target_cases": self.target_cases,
+            "target_cases": self.cases_per_seed,
         }
 
 
@@ -160,26 +176,27 @@ class AdminGeneratorSettingsResponse(GeneratorModel):
 # --- miner upload --------------------------------------------------------
 
 
-class GeneratorPackUploadRequest(BaseModel):
-    """A signed pack upload. ``pack_base64`` carries the exact pack bytes."""
+class GeneratorSubmissionUploadRequest(BaseModel):
+    """A signed generator source upload (a gzip-compressed tar)."""
 
     model_config = ConfigDict(extra="ignore")
 
     hotkey: Annotated[str, Field(pattern=_SS58)]
-    pack_sha256: Annotated[str, Field(pattern=_SHA256)]
-    pack_base64: Annotated[
-        str, Field(min_length=4, max_length=(MAX_PACK_BYTES + 2) // 3 * 4)
+    source_sha256: Annotated[str, Field(pattern=_SHA256)]
+    source_base64: Annotated[
+        str, Field(min_length=4, max_length=(MAX_SOURCE_ARCHIVE_BYTES + 2) // 3 * 4)
     ]
     signature: Annotated[str, Field(pattern=r"^(0x)?[0-9a-fA-F]{128}$")]
     signature_timestamp: Annotated[int, Field(ge=1)]
     signature_nonce: UUID
 
 
-class GeneratorPackUploadResponse(GeneratorModel):
-    pack_id: UUID
-    pack_sha256: str
-    status: PackStatus
-    case_count: int
+class GeneratorSubmissionUploadResponse(GeneratorModel):
+    submission_id: UUID
+    source_sha256: str
+    tree_sha256: str
+    status: SubmissionStatus
+    superseded: list[UUID] = Field(default_factory=list)
 
 
 class GeneratorCaseStatusCounts(GeneratorModel):
@@ -189,29 +206,42 @@ class GeneratorCaseStatusCounts(GeneratorModel):
     duplicate: int = 0
 
 
-class GeneratorPackSummary(GeneratorModel):
-    """Public-safe view of one pack: identity, lifecycle, aggregate outcome.
+class GeneratorRunSummary(GeneratorModel):
+    """Public-safe view of one run: lifecycle and aggregate outcome.
 
-    Never includes case content, case ids, or panel agent identities.
+    Never includes seeds, case content, case ids, or panel agent identities.
     """
 
-    pack_id: UUID
-    miner_hotkey: str
-    pack_sha256: str
-    generator_name: str
-    generator_version: str
-    case_count: int
-    status: PackStatus
-    last_outcome: str | None
+    run_id: UUID
+    attempt: int
+    status: RunStatus
+    outcome: str | None
     score: float | None
     case_counts: GeneratorCaseStatusCounts | None
-    issue_count: int | None
+    leased_at: datetime
+    finished_at: datetime | None
+
+
+class GeneratorSubmissionSummary(GeneratorModel):
+    """Public-safe view of one submission. Never includes source."""
+
+    submission_id: UUID
+    miner_hotkey: str
+    source_sha256: str
+    tree_sha256: str
+    module: str
+    go_version: str
+    file_count: int
+    size_bytes: int
+    status: SubmissionStatus
+    status_reason: str | None
+    next_run_at: datetime | None
     submitted_at: datetime
-    scored_at: datetime | None
+    latest_run: GeneratorRunSummary | None
 
 
-class GeneratorPackListResponse(GeneratorModel):
-    packs: list[GeneratorPackSummary]
+class GeneratorSubmissionListResponse(GeneratorModel):
+    submissions: list[GeneratorSubmissionSummary]
 
 
 # --- scorer ----------------------------------------------------------------
@@ -225,9 +255,14 @@ class GeneratorPanelSlot(GeneratorModel):
 
 class GeneratorWorkItem(GeneratorModel):
     lease_id: UUID
-    pack_id: UUID
-    pack_sha256: str
-    pack_base64: str
+    run_id: UUID
+    submission_id: UUID
+    miner_hotkey: str
+    source_sha256: str
+    source_base64: str
+    seeds: list[str]
+    probe_seed: str
+    cases_per_seed: int
     panel: list[GeneratorPanelSlot]
     lease_expires_at: datetime
 
@@ -250,7 +285,7 @@ class ValidationCaseRef(GeneratorModel):
 class ValidationReport(GeneratorModel):
     """Mirror of ``challenge.Report``."""
 
-    valid: bool
+    valid: bool = False
     pack_sha256: str | None = None
     case_count: int = 0
     pair_count: int = 0
@@ -271,26 +306,59 @@ class PanelMemberResult(GeneratorModel):
     results: list[PanelCaseResult] | None = None
 
 
-class GeneratorResultRequest(GeneratorModel):
-    lease_id: UUID
-    pack_id: UUID
-    pack_sha256: Annotated[str, Field(pattern=_SHA256)]
-    scorer_version: Annotated[str, Field(min_length=1, max_length=64)]
-    validation: ValidationReport
+class GeneratorBuildResult(GeneratorModel):
+    """Mirror of ``genrun.BuildOutput``."""
+
+    ok: bool = False
+    binary_sha256: str | None = None
+    error: Annotated[str | None, Field(max_length=8192)] = None
+    duration_ms: int = 0
+
+
+class GeneratorSeedOutput(GeneratorModel):
+    """Mirror of ``genrun.SeedOutput`` (the probe and each scored seed)."""
+
+    seed: Annotated[str, Field(pattern=_SHA256)]
+    pack_sha256: str | None = None
+    validation: ValidationReport = Field(default_factory=ValidationReport)
+    error: Annotated[str | None, Field(max_length=8192)] = None
+    duration_ms: int = 0
+
+    @property
+    def valid(self) -> bool:
+        return not self.error and self.validation.valid
+
+
+class GeneratorSeedResult(GeneratorSeedOutput):
     panel: list[PanelMemberResult] | None = None
 
 
+class GeneratorResultRequest(GeneratorModel):
+    lease_id: UUID
+    run_id: UUID
+    submission_id: UUID
+    source_sha256: Annotated[str, Field(pattern=_SHA256)]
+    scorer_version: Annotated[str, Field(min_length=1, max_length=64)]
+    sandbox: Annotated[str, Field(max_length=32)] = ""
+    build: GeneratorBuildResult
+    deterministic: bool | None = None
+    seeds: list[GeneratorSeedResult] | None = None
+    probe: GeneratorSeedOutput | None = None
+
+
 class GeneratorResultResponse(GeneratorModel):
-    pack_id: UUID
-    status: PackStatus
+    run_id: UUID
+    status: RunStatus
     outcome: str
     score: float | None = None
+    submission_status: SubmissionStatus
 
 
 # --- admin -------------------------------------------------------------
 
 
 class GeneratorCaseVerdictView(GeneratorModel):
+    seed_index: int
     case_id: str
     position: int
     fingerprint: str
@@ -303,30 +371,68 @@ class GeneratorCaseVerdictView(GeneratorModel):
     credit: float
 
 
-class AdminGeneratorPackDetail(GeneratorModel):
-    """Operator view: everything about one pack except its raw bytes."""
+class AdminGeneratorRunDetail(GeneratorModel):
+    """Operator view of one run. Seeds are revealed once the run finished."""
 
-    summary: GeneratorPackSummary
-    owner_key: str
-    attempts: int
-    not_before: datetime
-    lease_expires_at: datetime | None
-    settings_revision: int | None
+    summary: GeneratorRunSummary
+    submission_id: UUID
+    miner_hotkey: str
+    seeds: list[str] | None
+    probe_epoch: int
+    cases_per_seed: int
+    settings_revision: int
     scorer_version: str | None
-    panel: list[GeneratorPanelSlot] | None
-    validation: ValidationReport | None
+    panel: list[GeneratorPanelSlot]
+    evaluation: dict | None
     score_summary: dict | None
     verdicts: list[GeneratorCaseVerdictView]
 
 
-class AdminGeneratorPackListResponse(GeneratorModel):
-    packs: list[GeneratorPackSummary]
+class AdminGeneratorSubmissionDetail(GeneratorModel):
+    """Operator view of one submission and its runs (never the source)."""
+
+    summary: GeneratorSubmissionSummary
+    owner_key: str
+    attempts: int
+    lease_run_id: UUID | None
+    lease_expires_at: datetime | None
+    runs: list[GeneratorRunSummary]
+
+
+class AdminGeneratorSubmissionListResponse(GeneratorModel):
+    submissions: list[GeneratorSubmissionSummary]
     counts_by_status: dict[str, int]
 
 
+class GeneratorProbeEpochView(GeneratorModel):
+    """A probe epoch's public facts; the seed itself is never served."""
+
+    epoch: int
+    reason: str
+    actor: str
+    created_at: datetime
+    retired_at: datetime | None
+    probed_submissions: int
+
+
+class AdminGeneratorProbeResponse(GeneratorModel):
+    current: GeneratorProbeEpochView | None
+    history: list[GeneratorProbeEpochView]
+
+
+class AdminGeneratorProbeRotateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+
+
 class GeneratorPromotionCandidate(GeneratorModel):
-    pack_id: UUID
+    run_id: UUID
+    submission_id: UUID
     miner_hotkey: str
+    seed_index: int
     case_id: str
     fingerprint: str
     mean_score: float

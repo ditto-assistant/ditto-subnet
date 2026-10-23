@@ -1,8 +1,9 @@
 """The Python generator score must reproduce the Go reference bit for bit.
 
-``challenge/testdata/score_vectors.json`` is written by the Go contract's
-``TestScoreVectorsGolden``; every vector here is replayed through
-:func:`ditto.generator_scoring.score_cases` and every field compared exactly.
+``challenge/testdata/score_vectors.json`` and ``run_vectors.json`` are written
+by the Go contract's ``TestScoreVectorsGolden`` and ``TestRunVectorsGolden``;
+every vector here is replayed through :func:`ditto.generator_scoring.score_cases`
+or :func:`~ditto.generator_scoring.score_run` and every field compared exactly.
 """
 
 from __future__ import annotations
@@ -19,7 +20,9 @@ from ditto.generator_scoring import (
     PanelMember,
     ScoreInputError,
     ScoreParams,
+    SeedPanel,
     score_cases,
+    score_run,
 )
 
 _VECTORS = (
@@ -28,8 +31,15 @@ _VECTORS = (
 )
 
 
+_RUN_VECTORS = _VECTORS.with_name("run_vectors.json")
+
+
 def _load() -> list[dict[str, Any]]:
     return json.loads(_VECTORS.read_text())
+
+
+def _load_runs() -> list[dict[str, Any]]:
+    return json.loads(_RUN_VECTORS.read_text())
 
 
 def _panel(raw: list[dict[str, Any]] | None) -> list[PanelMember]:
@@ -107,3 +117,50 @@ def test_rejects_unscorable_input(
 ) -> None:
     with pytest.raises(ScoreInputError):
         score_cases([CaseRef("c", "0" * 64)], panel, params)
+
+
+@pytest.mark.parametrize("vector", _load_runs(), ids=lambda v: v["name"])
+def test_python_run_score_matches_go_golden_vector(vector: dict[str, Any]) -> None:
+    raw = vector["input"]
+    got = score_run(
+        [
+            SeedPanel(
+                seed=s["seed"],
+                cases=[CaseRef(c["case_id"], c["fingerprint"]) for c in s["cases"]],
+                panel=_panel(s["panel"]),
+            )
+            for s in raw["seeds"]
+        ],
+        ScoreParams.from_mapping(vector["params"]),
+        generator_owner_key=raw.get("generator_owner_key", ""),
+        claimed_fingerprints=raw.get("claimed_fingerprints") or (),
+    )
+    want = vector["expected"]
+    assert got.status == want["status"]
+    assert got.score == want["score"]
+    assert len(got.seeds) == len(want["seeds"])
+    for pack, expected in zip(got.seeds, want["seeds"], strict=True):
+        assert pack.score == expected["score"]
+        assert pack.duplicate == expected["duplicate"]
+        assert [c.status for c in pack.cases] == [
+            c["status"] for c in expected["cases"]
+        ]
+        assert [c.credit for c in pack.cases] == [
+            c["credit"] for c in expected["cases"]
+        ]
+
+
+def test_run_score_rejects_empty_runs() -> None:
+    with pytest.raises(ScoreInputError):
+        score_run(
+            [],
+            ScoreParams.from_mapping(
+                {
+                    "min_panel": 3,
+                    "min_solver_owners": 2,
+                    "solve_threshold": 0.5,
+                    "champion_bonus": 0.5,
+                    "target_cases": 16,
+                }
+            ),
+        )

@@ -1531,7 +1531,7 @@ async def generator_ledger(
     """The shadow generator-track ledger, behind the memory ledger's proof.
 
     Platform is the generator competition's system of record, so unlike the
-    router relay this is a direct read: each hotkey's best pack scored within
+    router relay this is a direct read: each hotkey's latest run scored within
     the freshness window. Every entry is ``weight_eligible=False`` and the
     validator registers the track in ``SHADOW``, so a served ledger contributes
     zero emission. ``mode=off`` serves an empty ledger.

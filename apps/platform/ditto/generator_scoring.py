@@ -1,10 +1,12 @@
 """Python port of the generator competition's discrimination score.
 
-The reference implementation is ``challenge.ScoreCases`` in
-``research/dittobench-datagen/challenge/score.go``; the formula and its
+The reference implementations are ``challenge.ScoreCases`` and
+``challenge.ScoreRun`` in ``research/dittobench-datagen/challenge/score.go``;
+the formula and its
 rationale are in ``research/dittobench-datagen/docs/generator-competition.md``.
 ``ditto/tests/test_generator_scoring.py`` replays the Go golden vectors
-(``challenge/testdata/score_vectors.json``) and requires every field to match,
+(``challenge/testdata/score_vectors.json`` and ``run_vectors.json``) and
+requires every field to match,
 so the two implementations cannot drift.
 
 Operation order matters for bit-identical floats: panel members are visited in
@@ -233,3 +235,54 @@ def score_cases(
         unsolved_rate=unsolved_rate,
         cases=tuple(verdicts),
     )
+
+
+@dataclass(frozen=True)
+class SeedPanel:
+    seed: str
+    cases: Sequence[CaseRef]
+    panel: Sequence[PanelMember]
+
+
+@dataclass(frozen=True)
+class RunScore:
+    status: str
+    score: float
+    seeds: tuple[PackScore, ...] = field(default=())
+
+
+def score_run(
+    seeds: Sequence[SeedPanel],
+    params: ScoreParams,
+    *,
+    generator_owner_key: str = "",
+    claimed_fingerprints: Sequence[str] = (),
+) -> RunScore:
+    """Score one generator evaluation: each seed's pack, then the mean.
+
+    Every fingerprint a seed emits is claimed for later seeds, so a generator
+    that ignores its seed scores duplicates after its first pack. Any seed with
+    an insufficient panel makes the run insufficient (no score).
+    """
+    if not seeds:
+        raise ScoreInputError("run has no seeds")
+    claimed = list(claimed_fingerprints)
+    status = PACK_SCORED
+    total = 0.0
+    scored: list[PackScore] = []
+    for seed in seeds:
+        pack = score_cases(
+            seed.cases,
+            seed.panel,
+            params,
+            generator_owner_key=generator_owner_key,
+            claimed_fingerprints=claimed,
+        )
+        if pack.status != PACK_SCORED:
+            status = PACK_INSUFFICIENT_PANEL
+        total += pack.score
+        scored.append(pack)
+        claimed.extend(case.fingerprint for case in seed.cases)
+    if status != PACK_SCORED:
+        return RunScore(status=status, score=0.0, seeds=tuple(scored))
+    return RunScore(status=status, score=total / len(seeds), seeds=tuple(scored))

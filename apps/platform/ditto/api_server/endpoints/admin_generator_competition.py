@@ -1,54 +1,67 @@
 """Audited operator control and inspection for the generator competition.
 
 Settings are append-only, whole-object revisions guarded by
-``expected_revision`` and an exact confirmation phrase naming the mode. Pack
-detail exposes validation issues, the panel snapshot, per-case verdicts, and
-the score summary; raw pack bytes are never served.
+``expected_revision`` and an exact confirmation phrase naming the mode.
+Submission and run detail expose the evaluation (build, per-seed validation,
+determinism, probe), the panel snapshot, per-case verdicts, and the score
+summary. Generator source is never served, a run's seeds are revealed only
+after it finished, and probe seeds are never served at all.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import (
-    AdminGeneratorPackDetail,
-    AdminGeneratorPackListResponse,
+    PROBE_ROTATION_CONFIRMATION,
+    AdminGeneratorProbeResponse,
+    AdminGeneratorProbeRotateRequest,
     AdminGeneratorPromotionCandidatesResponse,
+    AdminGeneratorRunDetail,
     AdminGeneratorSettingsRequest,
     AdminGeneratorSettingsResponse,
+    AdminGeneratorSubmissionDetail,
+    AdminGeneratorSubmissionListResponse,
     EffectiveGeneratorSettings,
     GeneratorCaseVerdictView,
     GeneratorPanelSlot,
+    GeneratorProbeEpochView,
     GeneratorPromotionCandidate,
     GeneratorSettingsRevision,
-    ValidationReport,
     generator_settings_confirmation,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.api_server.endpoints.generator import pack_summary
 from ditto.api_server.generator_competition import (
     DEFAULT_SETTINGS,
+    run_summary,
     settings_checksum,
     settings_from_row,
+    submission_summary,
 )
 from ditto.db.models import GeneratorCompetitionSettingsRevision as RevisionRow
+from ditto.db.models import GeneratorProbeEpoch
 from ditto.db.queries.generator import (
     case_status_counts,
-    get_pack,
+    get_run,
+    get_submission,
     insert_generator_settings_revision,
     latest_generator_settings_revision,
+    latest_runs,
     list_generator_settings_revisions,
-    list_packs,
+    list_probe_epochs,
     list_promotion_candidates,
+    list_runs,
+    list_submissions,
     list_verdicts,
-    pack_counts_by_status,
+    rotate_probe_epoch,
+    submission_counts_by_status,
 )
 
 router = APIRouter(prefix="/admin/generator-competition", tags=["admin"])
@@ -159,53 +172,95 @@ async def create_settings_revision(
     return _revision(row)
 
 
-PackStatusFilter = Literal["queued", "leased", "scored", "invalid", "failed"]
+SubmissionStatusFilter = Literal["active", "superseded", "rejected"]
 
 
-@router.get("/packs", response_model=AdminGeneratorPackListResponse)
-async def admin_list_packs(
+@router.get("/submissions", response_model=AdminGeneratorSubmissionListResponse)
+async def admin_list_submissions(
     _admin: AdminDep,
     session: SessionDep,
     hotkey: Annotated[str | None, Query(max_length=64)] = None,
-    status: PackStatusFilter | None = None,
+    status: SubmissionStatusFilter | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-) -> AdminGeneratorPackListResponse:
-    rows = await list_packs(session, miner_hotkey=hotkey, status=status, limit=limit)
-    counts = await case_status_counts(session, [row.pack_id for row in rows])
-    return AdminGeneratorPackListResponse(
-        packs=[pack_summary(row, counts.get(row.pack_id)) for row in rows],
-        counts_by_status=await pack_counts_by_status(session),
+) -> AdminGeneratorSubmissionListResponse:
+    rows = await list_submissions(
+        session, miner_hotkey=hotkey, status=status, limit=limit
+    )
+    latest = await latest_runs(session, [row.submission_id for row in rows])
+    counts = await case_status_counts(session, [run.run_id for run in latest.values()])
+    return AdminGeneratorSubmissionListResponse(
+        submissions=[
+            submission_summary(
+                row,
+                latest.get(row.submission_id),
+                counts.get(latest[row.submission_id].run_id)
+                if row.submission_id in latest
+                else None,
+            )
+            for row in rows
+        ],
+        counts_by_status=await submission_counts_by_status(session),
     )
 
 
-@router.get("/packs/{pack_id}", response_model=AdminGeneratorPackDetail)
-async def admin_pack_detail(
-    pack_id: UUID, _admin: AdminDep, session: SessionDep
-) -> AdminGeneratorPackDetail:
-    row = await get_pack(session, pack_id)
+@router.get(
+    "/submissions/{submission_id}", response_model=AdminGeneratorSubmissionDetail
+)
+async def admin_submission_detail(
+    submission_id: UUID, _admin: AdminDep, session: SessionDep
+) -> AdminGeneratorSubmissionDetail:
+    row = await get_submission(session, submission_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="unknown pack")
-    counts = await case_status_counts(session, [row.pack_id])
-    verdicts = await list_verdicts(session, row.pack_id)
-    validation = None
-    if row.validation is not None:
-        try:
-            validation = ValidationReport.model_validate(row.validation)
-        except ValidationError:
-            validation = None
-    return AdminGeneratorPackDetail(
-        summary=pack_summary(row, counts.get(row.pack_id)),
+        raise HTTPException(status_code=404, detail="unknown submission")
+    runs = await list_runs(session, submission_id)
+    counts = await case_status_counts(session, [run.run_id for run in runs])
+    latest = next((run for run in runs if run.status != "abandoned"), None)
+    return AdminGeneratorSubmissionDetail(
+        summary=submission_summary(
+            row, latest, counts.get(latest.run_id) if latest else None
+        ),
         owner_key=row.owner_key,
         attempts=row.attempts,
-        not_before=row.not_before,
+        lease_run_id=row.lease_run_id,
         lease_expires_at=row.lease_expires_at,
-        settings_revision=row.settings_revision,
-        scorer_version=row.scorer_version,
-        panel=[GeneratorPanelSlot(**slot) for slot in row.panel or ()] or None,
-        validation=validation,
-        score_summary=row.score_summary,
+        runs=[
+            summary
+            for run in runs
+            if (summary := run_summary(run, counts.get(run.run_id))) is not None
+        ],
+    )
+
+
+@router.get("/runs/{run_id}", response_model=AdminGeneratorRunDetail)
+async def admin_run_detail(
+    run_id: UUID, _admin: AdminDep, session: SessionDep
+) -> AdminGeneratorRunDetail:
+    run = await get_run(session, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="unknown run")
+    row = await get_submission(session, run.submission_id)
+    assert row is not None
+    counts = await case_status_counts(session, [run.run_id])
+    verdicts = await list_verdicts(session, run.run_id)
+    summary = run_summary(run, counts.get(run.run_id))
+    assert summary is not None
+    return AdminGeneratorRunDetail(
+        summary=summary,
+        submission_id=row.submission_id,
+        miner_hotkey=row.miner_hotkey,
+        # A leased run's seeds are live secrets; finished runs reveal them so an
+        # operator can reproduce the exact packs.
+        seeds=list(run.seeds) if run.status != "leased" else None,
+        probe_epoch=run.probe_epoch,
+        cases_per_seed=run.cases_per_seed,
+        settings_revision=run.settings_revision,
+        scorer_version=run.scorer_version,
+        panel=[GeneratorPanelSlot(**slot) for slot in run.panel or ()],
+        evaluation=run.evaluation,
+        score_summary=run.score_summary,
         verdicts=[
             GeneratorCaseVerdictView(
+                seed_index=v.seed_index,
                 case_id=v.case_id,
                 position=v.position,
                 fingerprint=v.fingerprint,
@@ -222,6 +277,60 @@ async def admin_pack_detail(
     )
 
 
+def _epoch_view(epoch: GeneratorProbeEpoch, probed: int) -> GeneratorProbeEpochView:
+    return GeneratorProbeEpochView(
+        epoch=epoch.epoch,
+        reason=epoch.reason,
+        actor=epoch.actor,
+        created_at=epoch.created_at,
+        retired_at=epoch.retired_at,
+        probed_submissions=probed,
+    )
+
+
+@router.get("/probe", response_model=AdminGeneratorProbeResponse)
+async def get_probe(
+    _admin: AdminDep, session: SessionDep
+) -> AdminGeneratorProbeResponse:
+    """Probe epochs and how many submissions each has compared (never the seed)."""
+    epochs = await list_probe_epochs(session)
+    current = next((_epoch_view(e, n) for e, n in epochs if e.retired_at is None), None)
+    return AdminGeneratorProbeResponse(
+        current=current, history=[_epoch_view(e, n) for e, n in epochs]
+    )
+
+
+@router.post("/probe/rotate", response_model=AdminGeneratorProbeResponse)
+async def rotate_probe(
+    payload: AdminGeneratorProbeRotateRequest, _admin: AdminDep, session: SessionDep
+) -> AdminGeneratorProbeResponse:
+    """Retire the probe seed (for example after a suspected leak).
+
+    Copy detection only compares submissions probed in the same epoch, so every
+    active submission is re-probed on its next run.
+    """
+    reason = payload.reason.strip()
+    actor = payload.actor.strip()
+    if len(reason) < MIN_REASON_LENGTH or not 1 <= len(actor) <= MAX_ACTOR_LENGTH:
+        raise HTTPException(status_code=422, detail="reason and actor are required")
+    if payload.confirmation != PROBE_ROTATION_CONFIRMATION:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirmation must be exactly {PROBE_ROTATION_CONFIRMATION}",
+        )
+    try:
+        await rotate_probe_epoch(
+            session, reason=reason, actor=actor, now=datetime.now(UTC)
+        )
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail="probe epoch rotated concurrently; refresh"
+        ) from exc
+    return await get_probe(_admin, session)
+
+
 @router.get(
     "/promotion-candidates", response_model=AdminGeneratorPromotionCandidatesResponse
 )
@@ -230,21 +339,23 @@ async def promotion_candidates(
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> AdminGeneratorPromotionCandidatesResponse:
-    """Discriminating cases from scored packs, highest credit first."""
+    """Discriminating cases from scored runs, highest credit first."""
     rows = await list_promotion_candidates(session, limit=limit)
     return AdminGeneratorPromotionCandidatesResponse(
         candidates=[
             GeneratorPromotionCandidate(
-                pack_id=pack.pack_id,
-                miner_hotkey=pack.miner_hotkey,
+                run_id=run.run_id,
+                submission_id=sub.submission_id,
+                miner_hotkey=sub.miner_hotkey,
+                seed_index=verdict.seed_index,
                 case_id=verdict.case_id,
                 fingerprint=verdict.fingerprint,
                 mean_score=verdict.mean_score,
                 solver_owners=verdict.solver_owners,
                 champion_failed=verdict.champion_failed,
                 credit=verdict.credit,
-                scored_at=pack.scored_at,  # type: ignore[arg-type]
+                scored_at=run.finished_at,  # type: ignore[arg-type]
             )
-            for verdict, pack in rows
+            for verdict, run, sub in rows
         ]
     )

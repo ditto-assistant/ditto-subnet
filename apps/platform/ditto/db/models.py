@@ -13172,97 +13172,231 @@ class GeneratorCompetitionSettingsRevision(Base):
     )
 
 
-class GeneratorPack(Base):
-    """One generator-competition challenge pack and its scoring lifecycle.
+class GeneratorSubmission(Base):
+    """One generator-competition submission: a generator's Go source archive.
 
-    ``pack_bytes`` are the exact uploaded bytes; ``pack_sha256`` is their digest
-    (the identity the miner signed and the scorer re-checks). Contents are
-    private: no public or miner endpoint serves them. Lifecycle:
-    ``queued -> leased -> scored | invalid``, with ``insufficient_panel``
-    results returning the pack to ``queued`` after a backoff until
-    ``attempts`` reaches the policy's cap (``failed``).
+    ``source_bytes`` are the exact uploaded archive and ``source_sha256`` their
+    digest (the identity the miner signed and the scorer re-checks);
+    ``tree_sha256`` identifies the file tree regardless of packing. Source is
+    private: no public or miner endpoint serves it.
+
+    A hotkey has at most one ``active`` submission; uploading a new one
+    supersedes it. An active submission is leased for a run whenever
+    ``next_run_at`` passes (immediately after upload, then every rescore
+    interval) and is ``rejected`` when a run proves it broken, nondeterministic,
+    or a behavioral copy. The lease columns describe the one in-flight run.
     """
 
-    __tablename__ = "generator_packs"
+    __tablename__ = "generator_submissions"
 
-    pack_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
     miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     owner_key: Mapped[str] = mapped_column(Text, nullable=False)
-    """Emission owner key (``coldkey:``/``hotkey:``) of the uploading hotkey;
-    panel agents under the same owner never count toward its score."""
-    pack_sha256: Mapped[str] = mapped_column(Text, nullable=False)
-    pack_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    tree_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    source_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    case_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    generator_name: Mapped[str] = mapped_column(Text, nullable=False)
-    generator_version: Mapped[str] = mapped_column(Text, nullable=False)
+    module: Mapped[str] = mapped_column(Text, nullable=False)
+    go_version: Mapped[str] = mapped_column(Text, nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
-    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    not_before: Mapped[datetime] = mapped_column(
+    status_reason: Mapped[str | None] = mapped_column(Text)
+    next_run_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
-    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
-    panel: Mapped[list | None] = mapped_column(_JSON_VARIANT, nullable=True)
-    """The panel snapshot served with the current lease; results are accepted
-    only for these agents, with these owner keys and champion flags."""
-    validation: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
-    panel_results: Mapped[list | None] = mapped_column(_JSON_VARIANT, nullable=True)
-    score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    score_summary: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
-    settings_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    scorer_version: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_run_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     submitted_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
-    scored_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
 
     __table_args__ = (
-        UniqueConstraint("pack_sha256", name="generator_packs_sha256_key"),
+        UniqueConstraint("source_sha256", name="generator_submissions_sha256_key"),
         CheckConstraint(
-            "pack_sha256 ~ '^[0-9a-f]{64}$'", name="generator_packs_sha256_check"
+            "source_sha256 ~ '^[0-9a-f]{64}$' AND tree_sha256 ~ '^[0-9a-f]{64}$'",
+            name="generator_submissions_digest_check",
         ),
         CheckConstraint(
-            "status IN ('queued', 'leased', 'scored', 'invalid', 'failed')",
-            name="generator_packs_status_check",
+            "status IN ('active', 'superseded', 'rejected')",
+            name="generator_submissions_status_check",
         ),
         CheckConstraint(
-            "size_bytes > 0 AND size_bytes = octet_length(pack_bytes)",
-            name="generator_packs_size_check",
+            "size_bytes > 0 AND size_bytes = octet_length(source_bytes) "
+            "AND size_bytes <= 4194304",
+            name="generator_submissions_size_check",
         ),
         CheckConstraint(
-            "case_count BETWEEN 1 AND 64", name="generator_packs_case_count_check"
+            "(lease_id IS NULL) = (lease_expires_at IS NULL) "
+            "AND (lease_id IS NULL) = (lease_run_id IS NULL)",
+            name="generator_submissions_lease_check",
+        ),
+        CheckConstraint("attempts >= 0", name="generator_submissions_attempts_check"),
+        Index(
+            "generator_submissions_hotkey_idx",
+            "miner_hotkey",
+            text("submitted_at DESC"),
+        ),
+        Index(
+            "generator_submissions_runnable_idx",
+            "next_run_at",
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index("generator_submissions_tree_idx", "tree_sha256"),
+    )
+
+
+class GeneratorProbeEpoch(Base):
+    """A secret seed every generator run also generates (never panel-run).
+
+    Generators that emit the same cases on the same secret seed are the same
+    program; ``generator_probe_results`` stores each submission's probe
+    fingerprints per epoch so a later upload can be recognized as a copy of an
+    earlier one. Exactly one epoch is current (``retired_at IS NULL``). The
+    seed is never served to miners or public endpoints.
+    """
+
+    __tablename__ = "generator_probe_epochs"
+
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    seed: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    retired_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "seed ~ '^[0-9a-f]{64}$'", name="generator_probe_epochs_seed_check"
+        ),
+        Index(
+            "generator_probe_epochs_current_key",
+            text("(retired_at IS NULL)"),
+            unique=True,
+            postgresql_where=text("retired_at IS NULL"),
+        ),
+    )
+
+
+class GeneratorRun(Base):
+    """One evaluation of a submission on fresh secret seeds.
+
+    Created when the submission is leased: ``seeds`` (32-byte hex, never
+    reused), the probe epoch, and the panel snapshot are fixed here, so the
+    scorer cannot choose any of them. Lifecycle: ``leased`` -> ``scored`` |
+    ``invalid`` | ``insufficient_panel`` | ``copy``, or ``abandoned`` when its
+    lease expires and the submission is leased again on new seeds.
+    """
+
+    __tablename__ = "generator_runs"
+
+    run_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    submission_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True),
+        nullable=False,
+    )
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    seeds: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    probe_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    cases_per_seed: Mapped[int] = mapped_column(Integer, nullable=False)
+    panel: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str | None] = mapped_column(Text)
+    score: Mapped[float | None] = mapped_column(Float)
+    score_summary: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    evaluation: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    panel_results: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    leased_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["generator_submissions.submission_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["probe_epoch"], ["generator_probe_epochs.epoch"]),
+        CheckConstraint(
+            "status IN ('leased', 'scored', 'invalid', 'insufficient_panel', "
+            "'copy', 'abandoned')",
+            name="generator_runs_status_check",
         ),
         CheckConstraint(
-            "(status = 'leased') = (lease_id IS NOT NULL)",
-            name="generator_packs_lease_check",
+            "(status = 'leased') = (finished_at IS NULL)",
+            name="generator_runs_finished_check",
         ),
         CheckConstraint(
-            "score IS NULL OR (score >= 0 AND score <= 1)",
-            name="generator_packs_score_check",
+            "(status = 'scored') = (score IS NOT NULL)",
+            name="generator_runs_score_check",
         ),
-        Index("generator_packs_queue_idx", "status", "not_before", "submitted_at"),
-        Index("generator_packs_hotkey_idx", "miner_hotkey", "submitted_at"),
+        CheckConstraint(
+            "cases_per_seed BETWEEN 8 AND 64", name="generator_runs_cases_check"
+        ),
+        Index("generator_runs_submission_idx", "submission_id", text("leased_at DESC")),
+        Index(
+            "generator_runs_scored_idx",
+            "finished_at",
+            postgresql_where=text("status = 'scored'"),
+        ),
+    )
+
+
+class GeneratorProbeResult(Base):
+    """A submission's case fingerprints on one probe epoch's seed."""
+
+    __tablename__ = "generator_probe_results"
+
+    submission_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True),
+        primary_key=True,
+    )
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True),
+        nullable=False,
+    )
+    fingerprints: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["generator_submissions.submission_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["epoch"], ["generator_probe_epochs.epoch"]),
+        ForeignKeyConstraint(["run_id"], ["generator_runs.run_id"], ondelete="CASCADE"),
+        Index("generator_probe_results_epoch_idx", "epoch"),
     )
 
 
 class GeneratorCaseVerdict(Base):
-    """The judged outcome of one case in a scored generator pack.
+    """The judged outcome of one case in one seed's pack of a scored run.
 
-    ``fingerprint`` is the case's content identity across packs. The first
-    scored pack holding a fingerprint keeps it; later copies are ``duplicate``
-    and earn nothing. ``discriminating`` rows are the promotion candidates
-    operators curate into future private benchmark pools.
+    ``fingerprint`` is the case's content identity; the first scored run that
+    emits a fingerprint holds its credit and later repeats score as
+    ``duplicate``.
     """
 
     __tablename__ = "generator_case_verdicts"
 
-    pack_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True),
+        primary_key=True,
+    )
+    seed_index: Mapped[int] = mapped_column(Integer, primary_key=True)
     case_id: Mapped[str] = mapped_column(Text, primary_key=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
@@ -13275,16 +13409,14 @@ class GeneratorCaseVerdict(Base):
     credit: Mapped[float] = mapped_column(Float, nullable=False)
 
     __table_args__ = (
-        ForeignKeyConstraint(
-            ["pack_id"], ["generator_packs.pack_id"], ondelete="CASCADE"
+        ForeignKeyConstraint(["run_id"], ["generator_runs.run_id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "status IN ('discriminating', 'trivial', 'unsolved', 'duplicate')",
+            name="generator_case_verdicts_status_check",
         ),
         CheckConstraint(
             "fingerprint ~ '^[0-9a-f]{64}$'",
             name="generator_case_verdicts_fingerprint_check",
-        ),
-        CheckConstraint(
-            "status IN ('discriminating', 'trivial', 'unsolved', 'duplicate')",
-            name="generator_case_verdicts_status_check",
         ),
         Index("generator_case_verdicts_fingerprint_idx", "fingerprint"),
     )

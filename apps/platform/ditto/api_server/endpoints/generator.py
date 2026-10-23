@@ -1,12 +1,14 @@
 """Generator competition: miner uploads and the public board (shadow).
 
-``POST /generator/packs`` accepts a signed challenge pack. The checks run
-cheap-before-expensive and every mutation happens after every check passes:
-lane open, fresh domain-separated signature, ban, subnet registration, bytes
-and identity, duplicate, per-hotkey pending cap, cooldown, then one insert.
+``POST /generator/submissions`` accepts a signed generator source archive. The
+checks run cheap-before-expensive and every mutation happens after every check
+passes: lane open, fresh domain-separated signature, ban, subnet registration,
+archive bytes and structure (the Go contract's rules), duplicate source,
+duplicate tree, cooldown, then one insert that supersedes the hotkey's
+previous generator.
 
-Pack contents never leave Platform except to the trusted scorer. The listing
-and board here expose identities, lifecycle, and aggregate outcomes only.
+Source never leaves Platform except to the trusted scorer. The listing and
+board here expose identities, lifecycle, and aggregate outcomes only.
 """
 
 from __future__ import annotations
@@ -22,36 +24,36 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import (
-    GeneratorCaseStatusCounts,
-    GeneratorPackListResponse,
-    GeneratorPackSummary,
-    GeneratorPackUploadRequest,
-    GeneratorPackUploadResponse,
-    pack_signature_payload,
+    GeneratorSubmissionListResponse,
+    GeneratorSubmissionUploadRequest,
+    GeneratorSubmissionUploadResponse,
+    source_signature_payload,
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.generator_competition import (
-    PackRejected,
+    UploadRejected,
     build_ledger,
-    inspect_pack,
+    inspect_upload,
     load_settings,
+    submission_summary,
 )
 from ditto.chain.errors import ChainError
 from ditto.db.queries.bans import is_hotkey_banned
 from ditto.db.queries.generator import (
     case_status_counts,
-    count_pending_packs,
-    get_pack_by_sha,
-    insert_pack,
-    latest_pack_submitted_at,
-    list_packs,
+    get_submission_by_sha,
+    get_submission_by_tree,
+    insert_submission,
+    latest_runs,
+    latest_submitted_at,
+    list_submissions,
+    supersede_active,
 )
 from ditto.db.queries.scores import emission_owner
 
 if TYPE_CHECKING:
     from ditto.chain.client import ChainClient
-    from ditto.db.models import GeneratorPack
 
 logger = logging.getLogger(__name__)
 
@@ -64,15 +66,15 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 ChainDep = Annotated["ChainClient", Depends(get_chain_client)]
 
 
-def _verify_pack_signature(payload: GeneratorPackUploadRequest) -> bool:
+def _verify_signature(payload: GeneratorSubmissionUploadRequest) -> bool:
     if (
         payload.signature_nonce.version != 4
         or abs(time.time() - payload.signature_timestamp) > SIGNATURE_MAX_SKEW_SECONDS
     ):
         return False
-    message = pack_signature_payload(
+    message = source_signature_payload(
         hotkey=payload.hotkey,
-        pack_sha256=payload.pack_sha256,
+        source_sha256=payload.source_sha256,
         timestamp=payload.signature_timestamp,
         nonce=payload.signature_nonce,
     )
@@ -84,43 +86,24 @@ def _verify_pack_signature(payload: GeneratorPackUploadRequest) -> bool:
         return False
 
 
-def pack_summary(
-    row: GeneratorPack, counts: dict[str, int] | None
-) -> GeneratorPackSummary:
-    issues = (row.validation or {}).get("issues")
-    return GeneratorPackSummary(
-        pack_id=row.pack_id,
-        miner_hotkey=row.miner_hotkey,
-        pack_sha256=row.pack_sha256,
-        generator_name=row.generator_name,
-        generator_version=row.generator_version,
-        case_count=row.case_count,
-        status=row.status,  # type: ignore[arg-type]
-        last_outcome=row.last_outcome,
-        score=row.score,
-        case_counts=GeneratorCaseStatusCounts(**counts) if counts else None,
-        issue_count=len(issues) if isinstance(issues, list) else None,
-        submitted_at=row.submitted_at,
-        scored_at=row.scored_at,
-    )
-
-
-@router.post("/packs", response_model=GeneratorPackUploadResponse)
-async def upload_pack(
-    payload: GeneratorPackUploadRequest,
+@router.post("/submissions", response_model=GeneratorSubmissionUploadResponse)
+async def upload_submission(
+    payload: GeneratorSubmissionUploadRequest,
     request: Request,
     response: Response,
     chain: ChainDep,
     session: SessionDep,
-) -> GeneratorPackUploadResponse:
-    """Accept one signed challenge pack into the scoring queue."""
+) -> GeneratorSubmissionUploadResponse:
+    """Accept one signed generator source archive and make it the hotkey's
+    active generator."""
     resolved = await load_settings(session)
     settings = resolved.settings
     if settings.mode == "off":
         raise HTTPException(
-            status_code=403, detail="the generator competition is not accepting packs"
+            status_code=403,
+            detail="the generator competition is not accepting submissions",
         )
-    if not _verify_pack_signature(payload):
+    if not _verify_signature(payload):
         raise HTTPException(
             status_code=400, detail="signature did not verify against the hotkey"
         )
@@ -143,96 +126,111 @@ async def upload_pack(
         )
 
     try:
-        header = inspect_pack(
-            pack_base64=payload.pack_base64,
-            pack_sha256=payload.pack_sha256,
-            hotkey=payload.hotkey,
+        upload = inspect_upload(
+            source_base64=payload.source_base64, source_sha256=payload.source_sha256
         )
-    except PackRejected as exc:
+    except UploadRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    existing = await get_pack_by_sha(session, payload.pack_sha256)
+    existing = await get_submission_by_sha(session, payload.source_sha256)
     if existing is not None:
         raise HTTPException(
             status_code=409,
-            detail=f"this exact pack was already uploaded as {existing.pack_id}",
-        )
-    if (
-        await count_pending_packs(session, miner_hotkey=payload.hotkey)
-        >= settings.max_pending_per_hotkey
-    ):
-        raise HTTPException(
-            status_code=429,
             detail=(
-                f"at most {settings.max_pending_per_hotkey} packs may wait for "
-                "scoring per hotkey"
+                f"this exact archive was already uploaded as {existing.submission_id}"
+            ),
+        )
+    same_tree = await get_submission_by_tree(session, upload.info.tree_sha256)
+    if same_tree is not None:
+        # Re-packing identical files is not a new generator, whoever uploads it.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "these exact source files were already uploaded as "
+                f"{same_tree.submission_id}"
             ),
         )
     now = datetime.now(UTC)
-    last = await latest_pack_submitted_at(session, miner_hotkey=payload.hotkey)
+    last = await latest_submitted_at(session, miner_hotkey=payload.hotkey)
     if last is not None:
         retry_at = last + timedelta(seconds=settings.upload_cooldown_seconds)
         if retry_at > now:
-            response.headers["Retry-After"] = str(
-                int((retry_at - now).total_seconds()) + 1
-            )
+            retry_after = str(int((retry_at - now).total_seconds()) + 1)
+            response.headers["Retry-After"] = retry_after
             raise HTTPException(
                 status_code=429,
-                detail=f"pack upload cooldown until {retry_at.isoformat()}",
-                headers={"Retry-After": response.headers["Retry-After"]},
+                detail=f"generator upload cooldown until {retry_at.isoformat()}",
+                headers={"Retry-After": retry_after},
             )
 
     try:
-        row = await insert_pack(
+        row = await insert_submission(
             session,
             miner_hotkey=payload.hotkey,
             owner_key=emission_owner(
                 miner_hotkey=payload.hotkey, miner_coldkey=neuron.coldkey or None
             ),
-            pack_sha256=payload.pack_sha256,
-            pack_bytes=header.raw,
-            case_count=header.case_count,
-            generator_name=header.generator_name,
-            generator_version=header.generator_version,
+            source_sha256=payload.source_sha256,
+            tree_sha256=upload.info.tree_sha256,
+            source_bytes=upload.raw,
+            module=upload.info.module,
+            go_version=upload.info.go_version,
+            file_count=upload.info.files,
             now=now,
+        )
+        superseded = await supersede_active(
+            session, miner_hotkey=payload.hotkey, keep=row.submission_id, now=now
         )
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
         raise HTTPException(
-            status_code=409, detail="this exact pack was uploaded concurrently"
+            status_code=409, detail="this exact archive was uploaded concurrently"
         ) from exc
     logger.info(
-        "generator pack accepted hotkey=%s pack_id=%s cases=%d",
+        "generator submission accepted hotkey=%s submission_id=%s files=%d "
+        "superseded=%d",
         payload.hotkey,
-        row.pack_id,
-        row.case_count,
+        row.submission_id,
+        row.file_count,
+        len(superseded),
     )
-    return GeneratorPackUploadResponse(
-        pack_id=row.pack_id,
-        pack_sha256=row.pack_sha256,
-        status="queued",
-        case_count=row.case_count,
+    return GeneratorSubmissionUploadResponse(
+        submission_id=row.submission_id,
+        source_sha256=row.source_sha256,
+        tree_sha256=row.tree_sha256,
+        status="active",
+        superseded=superseded,
     )
 
 
-@router.get("/packs", response_model=GeneratorPackListResponse)
-async def list_hotkey_packs(
+@router.get("/submissions", response_model=GeneratorSubmissionListResponse)
+async def list_hotkey_submissions(
     session: SessionDep,
     hotkey: Annotated[str, Query(pattern=_SS58)],
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
-) -> GeneratorPackListResponse:
-    """A hotkey's recent packs: lifecycle and aggregate outcome only."""
-    rows = await list_packs(session, miner_hotkey=hotkey, limit=limit)
-    counts = await case_status_counts(session, [row.pack_id for row in rows])
-    return GeneratorPackListResponse(
-        packs=[pack_summary(row, counts.get(row.pack_id)) for row in rows]
+) -> GeneratorSubmissionListResponse:
+    """A hotkey's recent generators: lifecycle and aggregate outcome only."""
+    rows = await list_submissions(session, miner_hotkey=hotkey, limit=limit)
+    latest = await latest_runs(session, [row.submission_id for row in rows])
+    counts = await case_status_counts(session, [run.run_id for run in latest.values()])
+    return GeneratorSubmissionListResponse(
+        submissions=[
+            submission_summary(
+                row,
+                latest.get(row.submission_id),
+                counts.get(latest[row.submission_id].run_id)
+                if row.submission_id in latest
+                else None,
+            )
+            for row in rows
+        ]
     )
 
 
 @router.get("/board", response_model=GeneratorLedgerResponse)
 async def board(session: SessionDep, response: Response) -> GeneratorLedgerResponse:
-    """The shadow generator ledger (each hotkey's best fresh pack)."""
+    """The shadow generator ledger (each hotkey's latest scored run)."""
     response.headers["Cache-Control"] = "public, max-age=30"
     resolved = await load_settings(session)
     return await build_ledger(session, resolved=resolved, now=datetime.now(UTC))
