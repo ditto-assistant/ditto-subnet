@@ -39,6 +39,7 @@ from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
     ConfirmationProgressStage,
 )
+from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import HostSpecs
@@ -759,6 +760,27 @@ class PlatformRouterLedgerSource:
             return RouterLedgerResponse()
 
 
+class PlatformGeneratorLedgerSource:
+    """Best-effort read of the shadow generator ledger Platform publishes.
+
+    Fail-closed like :class:`PlatformRouterLedgerSource`: any error folds an
+    empty ledger (zero generator emission) for the epoch.
+    """
+
+    def __init__(self, read: Callable[[], Awaitable[GeneratorLedgerResponse]]) -> None:
+        self._read = read
+
+    async def fetch(self) -> GeneratorLedgerResponse:
+        try:
+            return await self._read()
+        except Exception:
+            logger.warning(
+                "generator ledger read failed; folding an empty ledger this epoch",
+                exc_info=True,
+            )
+            return GeneratorLedgerResponse()
+
+
 class ValidatorWorker:
     """Owns one scoring sweep and the long-lived loop around it."""
 
@@ -776,6 +798,7 @@ class ValidatorWorker:
         heartbeat_clock: _HeartbeatClock | None = None,
         after_score: Callable[[UUID, int], None] | None = None,
         router_ledger_source: RouterLedgerSource | None = None,
+        generator_ledger_source: PlatformGeneratorLedgerSource | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -813,6 +836,8 @@ class ValidatorWorker:
         self._router_ledger_source: RouterLedgerSource = (
             router_ledger_source or EmptyRouterLedgerSource()
         )
+        # None folds an empty generator ledger (the shadow default).
+        self._generator_ledger_source = generator_ledger_source
         self._platform_accepted = False
         self._bootstrap_resume_ready = False
         # Cooperative updater drains are acknowledged only after both the
@@ -2312,8 +2337,15 @@ class ValidatorWorker:
             track_shares_bps=track_shares_bps,
             router_state=TrackState(self._config.router_track_state),
             router_weight_eligible=self._config.router_weight_eligible,
+            generator_state=TrackState(self._config.generator_track_state),
+            generator_weight_eligible=self._config.generator_weight_eligible,
         )
         router_ledger = await self._get_router_ledger()
+        generator_ledger = (
+            await self._generator_ledger_source.fetch()
+            if self._generator_ledger_source is not None
+            else GeneratorLedgerResponse()
+        )
         fold_inputs = TrackFoldInputs(
             memory_entries=registered_entries,
             memory_params=MemoryFoldParams(
@@ -2336,6 +2368,13 @@ class ValidatorWorker:
                 or e.miner_hotkey != treasury_pin.policy.collector_hotkey
             ),
             router_rank_shares=self._config.router_rank_shares,
+            generator_entries=tuple(
+                e
+                for e in generator_ledger.entries
+                if not isinstance(treasury_pin, EnforcingTreasuryPin)
+                or e.miner_hotkey != treasury_pin.policy.collector_hotkey
+            ),
+            generator_rank_shares=self._config.generator_rank_shares,
         )
         track_vectors = {
             track.track_id: track.fold(fold_inputs) for track in registry.tracks

@@ -100,6 +100,7 @@ TRACK_SHARES_BPS = {"memory": BASIS_POINT_SCALE, "coding": 0, "router": 0}
 # normalizes the router vector to the track's bps share -- so these need not sum
 # to one. Inert while the router track is SHADOW / not weight-eligible.
 ROUTER_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
+GENERATOR_RANK_SHARES = (0.40, 0.25, 0.15, 0.12, 0.08)
 _CODING_EXECUTOR_PRIVATE_NETWORKS = tuple(
     ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
@@ -535,6 +536,26 @@ class ValidatorConfig:
     ``router_track_state`` — because turning the read on changes no chain output,
     only which ledger the (already zero-weighted) router fold logs and measures."""
 
+    generator_track_state: str = "shadow"
+    """Lifecycle state of the generator-competition track. ``shadow`` folds and
+    logs a generator vector every cycle with zero emission. Compiled-only for
+    consensus safety, like ``router_track_state``."""
+
+    generator_weight_eligible: bool = False
+    """Whether the generator track may contribute emissions. ``False`` until it
+    and ``generator_track_state`` are promoted together in a release."""
+
+    generator_rank_shares: tuple[float, ...] = GENERATOR_RANK_SHARES
+    """Relative emission slice per ranked generator miner (best first). Flatter
+    than the agent curve: discriminating cases are a shared good, and several
+    generators finding different blind spots is the goal. Inert while shadow."""
+
+    generator_ledger_read_enabled: bool = False
+    """Whether the worker reads the generator ledger from the platform
+    (``VALIDATOR_GENERATOR_LEDGER_READ_ENABLED``). Reading changes no chain
+    output while the track is shadow; it only makes the zero-weighted fold
+    observable in the validator log."""
+
     def __post_init__(self) -> None:
         """Fail loud at boot on a genuinely misconfigured router split.
 
@@ -553,6 +574,14 @@ class ValidatorConfig:
             raise ValidatorConfigError(
                 "router_rank_shares must contain only finite positive values, got "
                 f"{self.router_rank_shares!r}"
+            )
+        if not self.generator_rank_shares or any(
+            not math.isfinite(share) or share <= 0.0
+            for share in self.generator_rank_shares
+        ):
+            raise ValidatorConfigError(
+                "generator_rank_shares must be non-empty finite positive values, "
+                f"got {self.generator_rank_shares!r}"
             )
 
     def signing_source_present(self) -> bool:
@@ -863,6 +892,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         coding_canary_poll_seconds=coding_canary_poll_seconds,
         router_ledger_read_enabled=(
             os.environ.get("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", "false").lower()
+            in _truthy
+        ),
+        generator_ledger_read_enabled=(
+            os.environ.get("VALIDATOR_GENERATOR_LEDGER_READ_ENABLED", "false").lower()
             in _truthy
         ),
     )

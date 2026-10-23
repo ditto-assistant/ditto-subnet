@@ -41,6 +41,7 @@ from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ditto.api_models.generator_ledger import GeneratorLedgerEntry
     from ditto.api_models.router_ledger import RouterLedgerEntry
     from ditto.api_models.validator import LedgerEntry, LedgerResponse
 
@@ -270,6 +271,45 @@ def compute_router_weights(
     recipients = distinct[: len(rank_shares)]
     return {
         entry.miner_hotkey: rank_shares[index] for index, entry in enumerate(recipients)
+    }
+
+
+def compute_generator_weights(
+    entries: Sequence[GeneratorLedgerEntry], *, rank_shares: Sequence[float]
+) -> dict[str, float]:
+    """Rank generator-competition miners by their best fresh pack score.
+
+    Platform has already scored each pack against a top-agent panel and folded
+    every hotkey to its best pack inside the freshness window (see
+    :mod:`ditto.api_models.generator_ledger`). This fold only ranks that pool
+    and assigns ``rank_shares`` by position, tie-breaking on ``first_seen``
+    then ``pack_id`` so every validator folds identical bytes. Only entries
+    marked ``weight_eligible`` with a positive score earn anything, and
+    malformed ``rank_shares`` degrade to ``{}``: like the router fold, this
+    runs on the consensus ``put_weights`` path and must never raise.
+    """
+    if not rank_shares:
+        return {}
+    if any(not math.isfinite(share) or share <= 0.0 for share in rank_shares):
+        return {}
+    scored = [
+        entry
+        for entry in entries
+        if entry.weight_eligible and math.isfinite(entry.score) and entry.score > 0.0
+    ]
+    ranked = sorted(
+        scored, key=lambda entry: (-entry.score, entry.first_seen, entry.pack_id)
+    )
+    distinct: list[GeneratorLedgerEntry] = []
+    seen_hotkeys: set[str] = set()
+    for entry in ranked:
+        if entry.miner_hotkey in seen_hotkeys:
+            continue
+        seen_hotkeys.add(entry.miner_hotkey)
+        distinct.append(entry)
+    return {
+        entry.miner_hotkey: rank_shares[index]
+        for index, entry in enumerate(distinct[: len(rank_shares)])
     }
 
 
