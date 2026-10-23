@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -69,6 +70,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         artifact_sha256=digest,
         bench_version=args.bench_version,
     )
+    # A reused --out must not keep another archive's files.
+    shutil.rmtree(out / "src", ignore_errors=True)
     files = tools.extract_source(archive, out / "src")
     t0 = time.monotonic()
     triage = _triage(archive)

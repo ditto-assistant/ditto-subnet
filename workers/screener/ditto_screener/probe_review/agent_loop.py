@@ -188,6 +188,10 @@ def dispatch(
     max_probes: int | None = None,
 ) -> Any:
     if name == "run_case":
+        # A seeded case costs two probes (/seed then /run).
+        cost = 2 if args.get("seed") is not None else 1
+        if max_probes is not None and cost > max_probes:
+            return {"error": "probe budget spent; call submit_verdict"}
         return tools.run_case(
             session,
             args.get("request") or {},

@@ -252,23 +252,29 @@ def show(
             )
             budget -= len(text)
             messages.append({"role": message["role"], "content": text})
+        # Replies are charged to the same budget as the messages.
+        reply = _clip(json.dumps(item.get("reply")), max(0, min(800, budget)))
+        budget -= len(reply)
         out.append(
             {
                 "seq": item.get("seq"),
                 "surface": item.get("surface"),
-                "params": {
-                    k: request.get(k)
-                    for k in (
-                        "model",
-                        "temperature",
-                        "max_tokens",
-                        "tool_choice",
-                        "response_format",
-                    )
-                    if k in request
-                },
+                "params": _bounded_json(
+                    {
+                        k: request.get(k)
+                        for k in (
+                            "model",
+                            "temperature",
+                            "max_tokens",
+                            "tool_choice",
+                            "response_format",
+                        )
+                        if k in request
+                    },
+                    max(200, budget),
+                ),
                 "messages": messages,
-                "reply": _clip(json.dumps(item.get("reply")), 800),
+                "reply": reply,
             }
         )
     return {
@@ -393,9 +399,10 @@ def mutate(
         if not path:
             raise ValueError("set requires path")
         request[path] = value
-    if request.get("tools"):
+    if request.get("tools") and "user_id" in request:
+        # Rebind to the (possibly new) case; drop_user_id keeps the original.
         request["tool_endpoint"] = session.tool_endpoint(
-            request["case_id"], str(request.get("user_id", ""))
+            request["case_id"], str(request["user_id"])
         )
     # Same starting conditions as the base: fresh harness plus its setup.
     setup = _setup_for(session, base)

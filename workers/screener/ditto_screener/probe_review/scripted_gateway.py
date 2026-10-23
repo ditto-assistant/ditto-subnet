@@ -80,6 +80,7 @@ class _State:
         self._model_turn = 0
         self._rule_uses: dict[int, int] = {}
         self._tool_uses: dict[str, int] = {}
+        self.last_model_request: dict = {}
         self._seq = 0
 
     def script(self) -> dict:
@@ -117,6 +118,9 @@ class _State:
     def next_reply(self, request: dict, text: str) -> dict:
         script = self.script()
         self._model_turn += 1
+        # Tool calls carry no conversation; their placeholders render from the
+        # model request that issued them.
+        self.last_model_request = request
         for index, rule in enumerate(script.get("rules") or []):
             if not isinstance(rule, dict):
                 continue
@@ -407,7 +411,7 @@ class ScriptedGateway:
         spec = self._state.tool_reply(name)
         status = int(spec.get("http_status", 200))
         payload = {
-            "result": _render(spec.get("result", "ok"), request),
+            "result": _render(spec.get("result", "ok"), self._state.last_model_request),
             "error": spec.get("error", ""),
         }
         for key in ("operation_id", "effect_state"):

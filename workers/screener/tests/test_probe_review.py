@@ -554,6 +554,8 @@ def test_report_cells_cannot_break_the_table() -> None:
     report = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(report)
     _cell = report._cell
+    assert not report._complete_replay({})
+    assert report._complete_replay({"verified": False, "findings": []})
     assert _cell("a|b\nc") == "a\\|b<br>c"
     assert _cell("<img src=x>") == "&lt;img src=x&gt;"
 
@@ -652,6 +654,30 @@ def test_failed_deliveries_cleanup_errors_and_responses_input(
         ]
     }
     assert _last_user_text(request) == "hello"
+
+
+def test_tool_placeholders_render_from_the_issuing_model_request(
+    tmp_path: Path,
+) -> None:
+    gateway = _gateway(
+        tmp_path,
+        {"default": {"content": "ok"}, "tools": {"s": {"result": "{{user_input}}"}}},
+    )
+    body = {"model": "m", "messages": [{"role": "user", "content": "find Lyon"}]}
+    gateway.route("POST", "/v1/chat/completions", json.dumps(body).encode())
+    _, payload, _, _ = gateway.route(
+        "POST", "/v1/tools/r/tool", json.dumps({"name": "s"}).encode()
+    )
+    assert payload["result"] == "find Lyon"
+    refused = agent_loop.dispatch(
+        Session(
+            root=str(tmp_path), image="i", artifact_sha256="0" * 64, bench_version=13
+        ),
+        "run_case",
+        {"request": {}, "seed": {"pairs": []}},
+        max_probes=1,
+    )
+    assert "budget spent" in refused["error"]
 
 
 def _fixture_archive(path: Path, violations: str) -> None:

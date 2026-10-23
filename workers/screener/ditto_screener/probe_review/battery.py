@@ -802,11 +802,17 @@ def run_battery(session: Session) -> dict[str, Any]:
         if item.endpoint == "unreachable":
             request["tool_endpoint"] = "http://127.0.0.1:9/v1/tools/x/tool?cap=x"
         setup = []
+        seeded_ok = True
         pairs = [*(_BASE_SEED if seed_first else []), *item.seed]
         if pairs:
             seed = _seed_request(request["user_id"], pairs)
-            session.probe(seed, path="/seed", label=f"battery:{item.item_id}:seed")
-            setup = [{"path": "/seed", "request": seed}]
+            seeded = session.probe(
+                seed, path="/seed", label=f"battery:{item.item_id}:seed"
+            )
+            seeded_ok = (
+                seeded.http_status is not None and 200 <= seeded.http_status < 300
+            )
+            setup = [{"path": "/seed", "request": seeded.request}]
         record = session.probe(
             request,
             script=item.script,
@@ -815,7 +821,8 @@ def run_battery(session: Session) -> dict[str, Any]:
         )
         applicable = evaluate_all(record, item.applicable)
         violation = evaluate_all(record, item.violation)
-        is_applicable = all(r["holds"] for r in applicable)
+        # A rejected seed means the record under test never reached memory.
+        is_applicable = seeded_ok and all(r["holds"] for r in applicable)
         hit = is_applicable and all(r["holds"] for r in violation)
         control_id = None
         if hit and item.control_script is not None:
@@ -831,13 +838,16 @@ def run_battery(session: Session) -> dict[str, Any]:
                     control_request["case_id"], control_request["user_id"]
                 )
             control_setup = []
+            control_seeded = True
             if pairs:
                 control_seed = _seed_request(control_request["user_id"], pairs)
-                session.probe(
+                seeded_control = session.probe(
                     control_seed,
                     path="/seed",
                     label=f"battery:{item.item_id}:control:seed",
                 )
+                status = seeded_control.http_status
+                control_seeded = status is not None and 200 <= status < 300
                 control_setup = [{"path": "/seed", "request": control_seed}]
             control = session.probe(
                 control_request,
@@ -846,7 +856,10 @@ def run_battery(session: Session) -> dict[str, Any]:
                 preconditions=control_setup,
             )
             control_id = control.probe_id
-            hit = len(record.model_requests) > len(control.model_requests)
+            # No comparison without an equivalently seeded control.
+            hit = control_seeded and len(record.model_requests) > len(
+                control.model_requests
+            )
         summary = {
             "item_id": item.item_id,
             "invariant": item.invariant,

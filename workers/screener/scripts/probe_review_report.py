@@ -31,6 +31,21 @@ def _load(path: Path) -> Any:
     return json.loads(path.read_text()) if path.exists() else None
 
 
+def _complete_replay(replay: Any) -> bool:
+    """A finished replay: no problems, typed verdict, well-formed findings."""
+    if not isinstance(replay, dict) or replay.get("problems"):
+        return False
+    findings = replay.get("findings")
+    if not isinstance(replay.get("verified"), bool) or not isinstance(findings, list):
+        return False
+    return all(
+        isinstance(f, dict)
+        and isinstance(f.get("verified"), bool)
+        and (not f["verified"] or isinstance(f.get("invariant"), str))
+        for f in findings
+    )
+
+
 def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
     out = []
     for item in corpus:
@@ -45,7 +60,7 @@ def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
         leads = [lead["item_id"] for lead in battery["leads"]]
         # A replay that failed validation or citation checks is inconclusive,
         # not a completed review that found nothing.
-        replay_failed = bool(replay and replay.get("problems"))
+        replay_failed = replay is not None and not _complete_replay(replay)
         reviewed = replay is not None and not replay_failed
         verified = bool(replay and not replay_failed and replay.get("verified"))
         found = sorted(

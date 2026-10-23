@@ -241,12 +241,20 @@ def build_image(
     if code != 0:
         raise SandboxError(f"build failed: {out[-1500:]}")
     code, out = _docker(
-        ["image", "inspect", "--format", "{{.Id}}", tag],
+        [
+            "image",
+            "inspect",
+            "--format",
+            f'{{{{.Id}}}} {{{{index .Config.Labels "{_ARCHIVE_LABEL}"}}}}',
+            tag,
+        ],
         timeout=30,
     )
-    if code != 0:
-        raise SandboxError("built image is not inspectable")
-    return out.strip(), time.monotonic() - started
+    image_id, _, label = out.strip().partition(" ")
+    if code != 0 or label != digest:
+        # A concurrent build may have moved the tag to another archive.
+        raise SandboxError("built image tag no longer names this archive")
+    return image_id, time.monotonic() - started
 
 
 @dataclass
