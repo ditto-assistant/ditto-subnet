@@ -65,3 +65,23 @@ def test_case_file_currency_rule_is_not_rejectable_alone(render) -> None:
         "are withdrawn as\nprecedent",
     ):
         assert fragment in policy
+
+
+@pytest.mark.parametrize(
+    "render", [_source_review_system_prompt, _l2_review_system_prompt, _system_prompt]
+)
+def test_routed_instruction_guidance_is_not_rejectable_alone(render) -> None:
+    prompt = render(13)
+    assert "I5 routed-guidance safe harbor." in prompt
+    assert "resolve such I5 leads as refuted, not\nunresolved" in prompt
+    assert "if the stored setting already matches" in prompt
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    for fragment in (
+        "#### Clarification: routed instruction guidance (2026-10-23)",
+        "is not, by itself,\na rejection ground under I5",
+        "Telling the model\nabout them is not I5",
+        "SN-214 settings predicates included) are withdrawn as precedent",
+    ):
+        assert fragment in policy

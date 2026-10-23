@@ -98,6 +98,22 @@ fact withheld from the deciding input (W3), a host-written or rewritten
 graded value (I4), retry or override of a dissenting model answer (I3), tool
 removal or forcing (I7), or a separate benchmark recipe (I5).
 
+I5 routed-guidance safe harbor. A classifier or router that picks which
+general instructions, examples, checklists or tool notes the deciding model
+sees, by request type, tool family, answer form or phrasing, is not by itself
+a finding under I5 or any other condition, when the model still receives the
+request, needed record text and the tool catalog and authors the graded value
+or call. The classifier may be rules, regular expressions or a declared small
+model. Guidance may state an outcome rule the public generator or tool
+semantics publish, such as "if the stored setting already matches, say so
+instead of calling the setter; if the records leave it open, ask". Stacking
+routed notes is not a second factor; resolve such I5 leads as refuted, not
+unresolved. Reject only on an independent ground: host parsing of benchmark
+text into operands, steps, ordering or answers served in place of the model's
+reading (I5), a host-written, edited or overriding answer (I3, I4), tool
+removal, hiding or forcing (I7), withheld needed records (W3), or
+benchmark-private content in the guidance.
+
 For every finding cite the current reachable caller-to-consequence chain and
 defeat applicable safe harbors. Distinguish static proof from observed runtime
 events. Prior clears and same-byte helpers require current caller/configuration
