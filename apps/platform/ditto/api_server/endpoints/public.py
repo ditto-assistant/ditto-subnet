@@ -43,13 +43,12 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from datetime import time as datetime_time
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import ValidationError
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, union
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -492,12 +491,8 @@ _SUBMISSION_BUILD_LIMIT = 8
 _TIMELINE_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600"
 # v1 predates the memory subscore, so it has nothing to plot on this axis.
 _TIMELINE_MIN_BENCH_VERSION = 2
-# Keep the complete scored memory era available to consumers without letting the
-# per-version ledger scan grow without bound. The dashboard may apply a tighter
-# presentation window to preserve legibility, but the public response retains the
-# newest contracts in this window so a consumer never has to invent missing
-# release metadata.
-_TIMELINE_MAX_RELEASES = 8
+# Keep discovery and the per-version ledger scan bounded to the chart's window.
+_TIMELINE_MAX_RELEASES = 4
 # A leaderboard pinned to a *settled* benchmark version is finished work: the
 # rollout has moved past it, so nothing routine writes to it again. It is still
 # not immutable (an ATH review or a score replacement can correct an old row),
@@ -3217,18 +3212,57 @@ async def benchmark_timeline(
 ) -> PublicBenchmarkTimelineResponse:
     """Running best finalized miner memory score across the newest contracts.
 
-    The window follows the bench_version changelog rather than a hardcoded
-    range, so shipping a new contract puts it on the timeline on its own. See
-    :data:`_TIMELINE_MAX_RELEASES` for why it stays bounded.
+    Discover competitions from accepted scores and started rollouts. The public
+    glossary supplies optional titles only: stale or future documentation must
+    never determine which live competitions appear.
     """
 
     response.headers["Cache-Control"] = _TIMELINE_CACHE_CONTROL
-    # ``version_entries`` is newest-first, so the head of the list is the window.
-    version_docs = [
-        entry
+    titles = {
+        int(entry["version"]): str(entry["title"])
         for entry in bench_glossary_data.version_entries()
-        if int(entry["version"]) >= _TIMELINE_MIN_BENCH_VERSION
-    ][:_TIMELINE_MAX_RELEASES]
+    }
+    rollout_statuses = ("collecting", "blocked_ineligible", "activated")
+    # Discover version IDs before reading score timestamps or rollout metadata.
+    # Each source contributes at most four IDs, and every subsequent ledger
+    # read is restricted to the resulting four-version window.
+    scored_versions = (
+        select(Score.bench_version)
+        .where(Score.bench_version >= _TIMELINE_MIN_BENCH_VERSION)
+        .distinct()
+        .order_by(Score.bench_version.desc())
+        .limit(_TIMELINE_MAX_RELEASES)
+        .subquery()
+    )
+    rollout_versions = (
+        select(BenchmarkRollout.desired_version.label("bench_version"))
+        .where(
+            BenchmarkRollout.desired_version >= _TIMELINE_MIN_BENCH_VERSION,
+            BenchmarkRollout.status.in_(rollout_statuses),
+        )
+        .distinct()
+        .order_by(BenchmarkRollout.desired_version.desc())
+        .limit(_TIMELINE_MAX_RELEASES)
+        .subquery()
+    )
+    candidates = union(
+        select(scored_versions.c.bench_version),
+        select(rollout_versions.c.bench_version),
+    ).subquery()
+    versions = list(
+        await session.scalars(
+            select(candidates.c.bench_version)
+            .order_by(candidates.c.bench_version.desc())
+            .limit(_TIMELINE_MAX_RELEASES)
+        )
+    )
+    if not versions:
+        return PublicBenchmarkTimelineResponse(
+            generated_at=datetime.now(UTC),
+            score_quorum=SCORING_QUORUM,
+            releases=[],
+            points=[],
+        )
     rollout_rows = (
         await session.execute(
             select(
@@ -3237,12 +3271,8 @@ async def benchmark_timeline(
                 BenchmarkRollout.activated_at,
             )
             .where(
-                BenchmarkRollout.desired_version.in_(
-                    [int(entry["version"]) for entry in version_docs]
-                ),
-                BenchmarkRollout.status.in_(
-                    ("collecting", "blocked_ineligible", "activated")
-                ),
+                BenchmarkRollout.desired_version.in_(versions),
+                BenchmarkRollout.status.in_(rollout_statuses),
             )
             .order_by(
                 BenchmarkRollout.desired_version,
@@ -3267,32 +3297,50 @@ async def benchmark_timeline(
             )
         ):
             rollout_by_version[version] = row
+    # Most competitions have rollout timestamps. Only legacy score-only eras
+    # need an aggregate over scores; do not scan them when rollouts date all
+    # four versions.
+    undated_versions = [
+        version for version in versions if version not in rollout_by_version
+    ]
+    first_scored_at: dict[int, datetime] = {}
+    if undated_versions:
+        score_rows = (
+            await session.execute(
+                select(
+                    Score.bench_version,
+                    func.min(Score.created_at).label("first_scored_at"),
+                )
+                .where(Score.bench_version.in_(undated_versions))
+                .group_by(Score.bench_version)
+            )
+        ).all()
+        first_scored_at = {
+            int(row.bench_version): _timeline_utc(row.first_scored_at)
+            for row in score_rows
+        }
     releases = [
         PublicBenchmarkRelease(
-            bench_version=int(entry["version"]),
+            bench_version=version,
             released_at=(
-                _timeline_utc(rollout_by_version[int(entry["version"])].created_at)
-                if int(entry["version"]) in rollout_by_version
-                else datetime.combine(
-                    datetime.fromisoformat(str(entry["epoch"])).date(),
-                    datetime_time.min,
-                    tzinfo=UTC,
-                )
+                _timeline_utc(rollout_by_version[version].created_at)
+                if version in rollout_by_version
+                else first_scored_at[version]
             ),
             activated_at=(
                 _timeline_utc(
                     cast(
                         datetime,
-                        rollout_by_version[int(entry["version"])].activated_at,
+                        rollout_by_version[version].activated_at,
                     )
                 )
-                if int(entry["version"]) in rollout_by_version
-                and rollout_by_version[int(entry["version"])].activated_at is not None
+                if version in rollout_by_version
+                and rollout_by_version[version].activated_at is not None
                 else None
             ),
-            title=str(entry["title"]),
+            title=titles.get(version, f"DittoBench v{version}"),
         )
-        for entry in version_docs
+        for version in versions
     ]
     releases.sort(key=lambda entry: entry.bench_version)
     released_at = {entry.bench_version: entry.released_at for entry in releases}
@@ -3301,6 +3349,13 @@ async def benchmark_timeline(
         bench_versions=[entry.bench_version for entry in releases],
         not_before_by_version=released_at,
     )
+    if not points:
+        return PublicBenchmarkTimelineResponse(
+            generated_at=datetime.now(UTC),
+            score_quorum=SCORING_QUORUM,
+            releases=releases,
+            points=[],
+        )
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
     from ditto.db.queries.name_claims import active_handle_claims
 
