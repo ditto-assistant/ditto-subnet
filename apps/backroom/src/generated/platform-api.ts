@@ -13777,6 +13777,7 @@ export interface components {
             receipts: components["schemas"]["AdminScreeningVerificationReceipt"][];
             /** Receipts Truncated */
             receipts_truncated: boolean;
+            source_review?: components["schemas"]["StoredSourceReviewEvidence"] | null;
             /** Verified Image Count */
             verified_image_count: number;
             /** Verified Image Sha256S */
@@ -36710,6 +36711,47 @@ export interface components {
          * @enum {string}
          */
         SourceReviewScorerVisibleEffect: "final_text" | "answer" | "abstain" | "tool_calls" | "validator_observed_trajectory" | "graded_outcome";
+        /** StoredSourceReviewEvidence */
+        StoredSourceReviewEvidence: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Binding Matches */
+            binding_matches: boolean;
+            /** Clearance Certified */
+            clearance_certified?: boolean | null;
+            /** Completed At */
+            completed_at: string | null;
+            /** Consumed At */
+            consumed_at: string | null;
+            finding?: components["schemas"]["SourceReviewFinding"] | null;
+            /** Finding Digest */
+            finding_digest?: string | null;
+            /**
+             * Limitations
+             * @default Matching records and canonical digests validate stored bindings only. The clearance flag is a stored reviewer assertion, not accepted source admission, health verification or private execution evidence. Missing records do not prove review never ran. A private challenge is not a universal source-admission requirement.
+             */
+            limitations: string;
+            /** Observation Ok */
+            observation_ok?: boolean | null;
+            /**
+             * Observation Status
+             * @enum {string}
+             */
+            observation_status: "not_recorded" | "finding_not_recorded" | "invalid" | "recorded_unverified";
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+            /**
+             * Source Admission Accepted
+             * @default false
+             * @constant
+             */
+            source_admission_accepted: false;
+            /** Status */
+            status: string;
+        };
         /** SubmissionDepositAddressRevision */
         SubmissionDepositAddressRevision: {
             /** Actor */

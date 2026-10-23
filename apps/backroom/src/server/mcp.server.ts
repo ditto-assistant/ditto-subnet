@@ -1631,7 +1631,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening verification readiness',
       description:
-        'Read exact V13 attempt receipts and private prerequisites. Missing or recorded_unverified is not a pass; mechanically_verified covers only archive/image identity. Never authorizes CLEAR. Artifact scope.',
+        'Read exact V13 receipts, retained source-review finding/digest and private prerequisites. Source observation binding checks and a stored clearance_certified assertion are not accepted source admission or health proof. Missing records do not prove review never ran. A private challenge is not universally required for source admission. mechanically_verified covers only archive/image identity. Never authorizes CLEAR. Artifact scope.',
       inputSchema: screeningFailureDiagnosticInputSchema,
       annotations: toolAnnotations('read'),
     },

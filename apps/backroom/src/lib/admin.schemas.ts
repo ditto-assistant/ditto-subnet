@@ -4720,6 +4720,7 @@ const sourceReviewAuthorityTransitionSchema = z.enum([
   'tool_trajectory_fabricated', 'selective_model_disablement', 'scorer_field_rewritten',
   'derived_value_authoritative', 'family_compiler_authoritative',
   'tool_selection_predetermined',
+  'evaluation_identity_authoritative',
 ])
 const sourceReviewScorerVisibleEffectSchema = z.enum([
   'final_text', 'answer', 'abstain', 'tool_calls', 'validator_observed_trajectory',
@@ -4739,6 +4740,10 @@ const scorerEffectsByTransition: Record<
   family_compiler_authoritative: new Set(['final_text', 'answer', 'abstain', 'graded_outcome']),
   tool_selection_predetermined: new Set([
     'tool_calls', 'validator_observed_trajectory', 'graded_outcome',
+  ]),
+  evaluation_identity_authoritative: new Set([
+    'final_text', 'answer', 'abstain', 'tool_calls',
+    'validator_observed_trajectory', 'graded_outcome',
   ]),
 }
 const sourceReviewCausalRoleBindingSchema = z.strictObject({
@@ -5327,6 +5332,16 @@ export const screeningVerificationReadinessSchema = z.object({
     receipt_count: z.number().int().nonnegative(),
   })).length(20),
   private_metamorphic_applicability: z.literal('not_recorded'),
+  source_review: z.object({
+    review_id: z.string().uuid(), status: z.string(),
+    artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/), binding_matches: z.boolean(),
+    observation_status: z.enum(['not_recorded', 'finding_not_recorded', 'invalid', 'recorded_unverified']),
+    completed_at: z.string().nullable(), consumed_at: z.string().nullable(),
+    observation_ok: z.boolean().nullable(),
+    clearance_certified: z.boolean().nullable(), finding_digest: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    finding: sourceReviewFindingSchema.nullable(), source_admission_accepted: z.literal(false),
+    limitations: z.string(),
+  }).nullish(),
   private_package: z.object({
     registration_status: z.enum(['not_registered', 'registered_unverified']),
     prerequisites: z.array(z.object({

@@ -2061,6 +2061,21 @@ describe('source review causal evidence schema', () => {
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
   })
 
+  it.each(['final_text', 'answer', 'abstain', 'tool_calls',
+    'validator_observed_trajectory', 'graded_outcome'] as const)(
+    'preserves the published I8 authority transition for %s', (effect) => {
+      const finding = {
+        ...generatedFinding,
+        causal_evidence: {
+          ...generatedFinding.causal_evidence,
+          authority_transition: 'evaluation_identity_authoritative',
+          scorer_visible_effect: effect,
+        },
+      } satisfies GeneratedSourceReviewFinding
+      expect(sourceReviewFindingSchema.parse(finding).causal_evidence).toEqual(finding.causal_evidence)
+    },
+  )
+
   it('retains signed v3 I5 proof and rejects an unbound assumption', () => {
     const proof = {
       evaluation_assumption: 'A fixed evaluation answer replaces the request answer.',
