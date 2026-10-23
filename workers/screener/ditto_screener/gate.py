@@ -2130,16 +2130,20 @@ class BuildGate:
                         logger.exception("v13 shadow runtime observations unavailable")
             # The probe battery runs last for the same reason: it drives the
             # screened image with dictated model replies, so it must never
-            # precede the decision it cannot influence.
+            # precede the decision it cannot influence. Mode, budget and the
+            # stamped revision are read once, before any await, so a revision
+            # applied mid-battery cannot be attributed to this one.
+            battery_mode, battery_timeout = self._probe_battery
+            bound = self._probe_battery_settings
             if (
-                self._probe_battery[0] == "shadow"
+                battery_mode == "shadow"
                 and policy_version == 13
                 and not build_only
                 and used_local_docker
                 and built_image_id
             ):
                 remaining = self._lease_remaining(deadline)
-                budget = float(self._probe_battery[1])
+                budget = float(battery_timeout)
                 if remaining is not None:
                     # Reserve the decision's 30 s plus both bounded cleanups.
                     budget = min(
@@ -2153,7 +2157,6 @@ class BuildGate:
                             bench_version=bench_version,
                             budget=budget,
                         )
-                        bound = self._probe_battery_settings
                         battery["settings_revision"] = bound[0]
                         battery["settings_scope"] = bound[1]
                         battery["settings_checksum"] = bound[2]
