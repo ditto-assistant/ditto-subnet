@@ -66,11 +66,17 @@ _FAULT_SEGMENTS: Final = re.compile(
     r"|analyzer-contract"
     r"|analyzer-exited"
     r"|http-\d{3}"
+    r"|provider-(?:body|http|stream)-error"
+    r"|transport-error"
+    r"|(?:analyzer|model|lock|shell|completion)-timeout"
     r")(?=-|$)"
 )
 # ``_error_code`` falls back to the lowercased exception class name
-# (``connecterror``, ``readtimeout``, ``remoteprotocolerror``, ``oserror``).
-_FAULT_TAIL: Final = re.compile(r"(?:timeout|error|exception)$")
+# (``connecterror``, ``readtimeout``, ``remoteprotocolerror``, ``oserror``):
+# one hyphen-free final segment with a name before the suffix. A bare final
+# ``-error`` / ``-timeout`` segment (a composed trajectory code such as
+# ``l3-violation-adjudicator-tool-error``) is a reviewer outcome, not a fault.
+_FAULT_TAIL: Final = re.compile(r"-[a-z0-9]+(?:timeout|error|exception)$")
 
 
 def inconclusive_is_infrastructure_fault(reason_code: str | None) -> bool:

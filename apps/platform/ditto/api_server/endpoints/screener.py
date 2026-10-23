@@ -5362,18 +5362,15 @@ async def submit_result(
     elif (
         payload.outcome == ScreenResultOutcome.INCONCLUSIVE
         and inconclusive_requires_operator_review(payload.reason_code)
-        and not (
-            reported_attempt is not None
-            and reported_attempt.build_only
-            and not (deferred_mechanical_admission and payload.deferred_source_review)
-        )
+        and not (reported_attempt is not None and reported_attempt.build_only)
     ):
         # A reviewer non-verdict: the source review ran and could not decide.
         # It neither passes nor rejects the submission, and retrying the same
         # artifact under the same policy has no reason to conclude otherwise,
         # so hold it as an active screening quarantine. Nothing resolves that
         # row automatically; an operator releases, rejects, or rescreens it.
-        # (A build-only attempt ran no source review and cannot hold.)
+        # (A build-only attempt, deferred mechanical admission included, ran no
+        # source review and cannot hold.)
         target = AgentStatus.QUARANTINED
         public_reason = INCONCLUSIVE_OPERATOR_REVIEW_PUBLIC_REASON
     elif payload.outcome == ScreenResultOutcome.INCONCLUSIVE:

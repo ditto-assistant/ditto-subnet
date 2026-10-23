@@ -6843,6 +6843,52 @@ class TestClaim:
         assert response.status_code == 200, response.text
         assert response.json()["status"] == AgentStatus.QUARANTINED
 
+    async def test_deferred_mechanical_inconclusive_is_not_held_for_operator(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # The source review was deferred, so an INCONCLUSIVE here is not a
+        # reviewer non-verdict and must not open an operator-review hold.
+        agent_id = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING, name="mechanical-inconclusive"
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=now,
+                    deadline=now + timedelta(minutes=30),
+                    reason_code="deferred-mechanical-admission",
+                    build_only=True,
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="inconclusive",
+                reason_code="l2-model-inconclusive",
+                build_only=True,
+                deferred_source_review=True,
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] != AgentStatus.QUARANTINED
+
     async def test_late_deep_review_result_cannot_reverse_operator_clear(
         self,
         app: FastAPI,

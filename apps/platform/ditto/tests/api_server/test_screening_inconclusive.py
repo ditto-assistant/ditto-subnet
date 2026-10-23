@@ -73,6 +73,10 @@ def test_reviewer_non_verdicts_are_held_for_operator(reason_code: str | None) ->
         "challenge-transport-failure",
         "source-review-provider-credits-exhausted",
         "source-review-model-timeout",
+        "l3-critic-provider-body-error",
+        "l2-transport-error",
+        "l2-analyzer-timeout",
+        "l2-cache-lock-timeout",
         # The signed-runtime preflight (fleet infrastructure).
         "l2-runtime-evidence-unavailable",
     ],
@@ -96,3 +100,17 @@ def test_every_registered_infrastructure_code_keeps_the_retry_path() -> None:
 def test_registered_policy_codes_are_held_for_operator() -> None:
     for code in reason_codes(ReasonCodeClass.POLICY):
         assert inconclusive_requires_operator_review(code), code
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        # Composed ``l3-violation-adjudicator-<trajectory code>`` values whose
+        # trajectory code merely ends in a fault-like word.
+        "l3-violation-adjudicator-tool-error",
+        "l3-violation-adjudicator-answer-timeout",
+        "l2-model-exception",
+    ],
+)
+def test_bare_fault_word_tail_is_held_for_operator(reason_code: str) -> None:
+    assert inconclusive_requires_operator_review(reason_code)
