@@ -286,6 +286,13 @@ _WHERE = {
 }
 
 
+def _usable_count(n: Any) -> bool:
+    """A threshold ``_compare`` can match: a non-bool int or finite float."""
+    if isinstance(n, bool) or not isinstance(n, (int, float)):
+        return False
+    return isinstance(n, int) or math.isfinite(n)
+
+
 def predicate_problems(check: Any) -> list[str]:
     """Why a predicate can never be evaluated as written (empty when usable).
 
@@ -296,7 +303,7 @@ def predicate_problems(check: Any) -> list[str]:
     if not isinstance(check, Mapping):
         return ["predicate must be an object"]
     op = check.get("op")
-    if op not in PREDICATES:
+    if not isinstance(op, str) or op not in PREDICATES:
         return [f"unknown predicate {op!r}"]
     problems = []
     if op in _COUNTED:
@@ -304,19 +311,19 @@ def predicate_problems(check: Any) -> list[str]:
             problems.append(
                 f"{op} cmp {check.get('cmp')!r} is not one of == != > >= < <="
             )
-        n = check.get("n")
-        if not isinstance(n, (int, float)) or isinstance(n, bool):
-            problems.append(f"{op} n must be a number")
+        if not _usable_count(check.get("n")):
+            problems.append(f"{op} n must be a finite number")
     if op in _WHERE:
-        where = check.get("where") or {}
-        if not isinstance(where, Mapping):
+        where = check.get("where")
+        if where is not None and not isinstance(where, Mapping):
             problems.append(f"{op} where must be an object")
-        elif "tools_count" in where:
+        elif isinstance(where, Mapping) and "tools_count" in where:
             pair = where["tools_count"]
             if (
                 not isinstance(pair, (list, tuple))
                 or len(pair) != 2
                 or comparison(pair[0]) is None
+                or not _usable_count(pair[1])
             ):
                 problems.append(f"{op} where.tools_count must be [cmp, n]")
     return problems

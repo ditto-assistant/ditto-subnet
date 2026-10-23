@@ -607,10 +607,15 @@ def validate_verdict(verdict: dict[str, Any]) -> list[str]:
         if not re.fullmatch(r"I[1-8](/I[1-8])*", str(finding.get("invariant", ""))):
             problems.append(f"finding {index} invariant must be I1-I8")
         for key in ("violation_checks", "control_checks"):
-            listed = finding.get(key) or []
-            for position, check in enumerate(
-                listed if isinstance(listed, list) else []
-            ):
+            listed = finding.get(key)
+            if listed is None:
+                continue
+            if not isinstance(listed, list):
+                # violation_checks already reports its own shape problem above.
+                if key == "control_checks":
+                    problems.append(f"finding {index} control_checks must be a list")
+                continue
+            for position, check in enumerate(listed):
                 problems.extend(
                     f"finding {index} {key}[{position}]: {problem}"
                     for problem in predicate_problems(check)

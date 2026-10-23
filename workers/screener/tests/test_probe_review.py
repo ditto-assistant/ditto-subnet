@@ -267,6 +267,32 @@ def test_every_listed_predicate_has_a_handler() -> None:
     for op in PREDICATES:
         assert "unknown predicate" not in evaluate(record, {"op": op})[1], op
     assert predicate_problems({"op": "nope"}) == ["unknown predicate 'nope'"]
+    # Unhashable op, non-finite thresholds, falsey non-object filters.
+    assert predicate_problems({"op": ["http_ok"]}) == ["unknown predicate ['http_ok']"]
+    for n in (float("nan"), float("inf"), "1", True):
+        check = {"op": "model_calls", "cmp": "==", "n": n}
+        assert any("finite" in p for p in predicate_problems(check)), n
+    assert predicate_problems({"op": "model_calls", "cmp": "==", "n": 10**30}) == []
+    for where in ([], 0, ""):
+        check = {"op": "any_model_request", "where": where}
+        assert predicate_problems(check), where
+    pair = {"op": "any_model_request", "where": {"tools_count": [">", "x"]}}
+    assert predicate_problems(pair)
+    problems = tools.validate_verdict(
+        {
+            "outcome": "violation",
+            "findings": [
+                {
+                    "invariant": "I7",
+                    "claim": "x",
+                    "probe_id": "p001-aaaaaa",
+                    "violation_checks": [{"op": "http_ok"}],
+                    "control_checks": {"op": "http_ok"},
+                }
+            ],
+        }
+    )
+    assert any("control_checks must be a list" in p for p in problems)
 
 
 def test_agent_loop_respects_ledger_and_stops_on_verdict(tmp_path: Path) -> None:
