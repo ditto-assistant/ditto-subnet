@@ -48,6 +48,7 @@ from ditto.db.queries.generator import (
     latest_runs,
     latest_submitted_at,
     list_submissions,
+    lock_hotkey_uploads,
     supersede_active,
 )
 from ditto.db.queries.scores import emission_owner
@@ -132,6 +133,7 @@ async def upload_submission(
     except UploadRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    await lock_hotkey_uploads(session, payload.hotkey)
     existing = await get_submission_by_sha(session, payload.source_sha256)
     if existing is not None:
         raise HTTPException(

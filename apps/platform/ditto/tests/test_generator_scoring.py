@@ -110,6 +110,15 @@ def test_vectors_cover_every_outcome() -> None:
             [PanelMember("a", "o", results=(CaseResult("c", float("nan")),))],
             ScoreParams(),
         ),
+        ([PanelMember("a", "")], ScoreParams(min_panel=1)),
+        (
+            [
+                PanelMember(
+                    "a", "o", results=(CaseResult("c", 1.0), CaseResult("c", 0.0))
+                )
+            ],
+            ScoreParams(min_panel=1),
+        ),
     ],
 )
 def test_rejects_unscorable_input(
@@ -164,3 +173,22 @@ def test_run_score_rejects_empty_runs() -> None:
                 }
             ),
         )
+
+
+def test_a_repeat_within_one_pack_earns_credit_once() -> None:
+    fingerprint = "f" * 64
+    panel = [
+        PanelMember(
+            agent,
+            agent,
+            results=(CaseResult("c1", score), CaseResult("c2", score)),
+        )
+        for agent, score in (("a", 1.0), ("b", 1.0), ("c", 0.0))
+    ]
+    got = score_cases(
+        [CaseRef("c1", fingerprint), CaseRef("c2", fingerprint)],
+        panel,
+        ScoreParams(min_panel=3, min_solver_owners=2),
+    )
+    assert [c.status for c in got.cases] == ["discriminating", "duplicate"]
+    assert got.discriminating == 1 and got.duplicate == 1

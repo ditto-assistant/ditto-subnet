@@ -131,12 +131,23 @@ def score_cases(
             raise ScoreInputError("panel member has an empty agent_id")
         if index > 0 and ordered[index - 1].agent_id == member.agent_id:
             raise ScoreInputError(f"duplicate panel agent {member.agent_id!r}")
+        if not member.owner_key:
+            # Owners decide independence; a blank owner would merge unrelated
+            # agents into one solver.
+            raise ScoreInputError(
+                f"panel member {member.agent_id!r} has an empty owner_key"
+            )
         results: dict[str, CaseResult] = {}
         for entry in member.results:
             if math.isnan(entry.score) or not 0 <= entry.score <= 1:
                 raise ScoreInputError(
                     f"agent {member.agent_id!r} case {entry.case_id!r} "
                     "score out of range"
+                )
+            if entry.case_id in results:
+                raise ScoreInputError(
+                    f"agent {member.agent_id!r} has two results for case "
+                    f"{entry.case_id!r}"
                 )
             results[entry.case_id] = entry
         by_agent.append(results)
@@ -158,6 +169,9 @@ def score_cases(
                 CaseVerdict(case.case_id, case.fingerprint, status=CASE_DUPLICATE)
             )
             continue
+        # A repeat within the same pack is a duplicate too: one case content
+        # earns credit once.
+        claimed.add(case.fingerprint)
         total = 0.0
         panel_size = 0
         solvers = 0

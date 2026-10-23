@@ -13284,6 +13284,33 @@ class GeneratorProbeEpoch(Base):
     )
 
 
+class GeneratorOperatorAction(Base):
+    """Append-only audit of operator actions on the generator competition.
+
+    One row per write an operator makes that is not itself a settings revision
+    or a probe epoch (which carry their own actor and reason): a requested
+    rescore, a rejection, and round actions such as republishing a commitment
+    or releasing a lease. ``subject`` is the submission id, ``round:{n}``, or
+    another stable key for what was acted on.
+    """
+
+    __tablename__ = "generator_operator_actions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("generator_operator_actions_subject_idx", "subject", "created_at"),
+    )
+
+
 class GeneratorRun(Base):
     """One evaluation of a submission on fresh secret seeds.
 

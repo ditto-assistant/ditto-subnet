@@ -15,11 +15,12 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, text, update
 
 from ditto.db.models import (
     GeneratorCaseVerdict,
     GeneratorCompetitionSettingsRevision,
+    GeneratorOperatorAction,
     GeneratorProbeEpoch,
     GeneratorProbeResult,
     GeneratorRun,
@@ -111,6 +112,36 @@ async def get_submission_by_tree(
         .where(GeneratorSubmission.tree_sha256 == tree_sha256)
         .order_by(GeneratorSubmission.submitted_at)
         .limit(1)
+    )
+
+
+def record_operator_action(
+    session: AsyncSession,
+    *,
+    action: str,
+    subject: str,
+    actor: str,
+    reason: str,
+    detail: dict | None = None,
+) -> GeneratorOperatorAction:
+    """Append one operator action to the audit; committed with the action."""
+    row = GeneratorOperatorAction(
+        action=action, subject=subject, actor=actor, reason=reason, detail=detail
+    )
+    session.add(row)
+    return row
+
+
+async def lock_hotkey_uploads(session: AsyncSession, miner_hotkey: str) -> None:
+    """Serialize one hotkey's uploads for the rest of the transaction.
+
+    The cooldown check and the single-active-submission supersession are read
+    then write; two concurrent uploads would otherwise both pass the check and
+    both stay active.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"generator-upload:{miner_hotkey}"},
     )
 
 
@@ -282,10 +313,24 @@ async def abandon_run(session: AsyncSession, run_id: UUID, *, now: datetime) -> 
 # --- probe epochs ----------------------------------------------------------
 
 
+async def _lock_probe_epochs(session: AsyncSession) -> None:
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": "generator-probe-epoch"},
+    )
+
+
 async def current_probe_epoch(
     session: AsyncSession, *, create: bool = True
 ) -> GeneratorProbeEpoch | None:
-    """The current probe epoch; the first call creates epoch 1."""
+    """The current probe epoch; the first call creates epoch 1.
+
+    Creation (here and in ``rotate_probe_epoch``) holds a transaction lock, so
+    concurrent first calls agree on one epoch instead of one failing on the
+    single-current index.
+    """
+    if create:
+        await _lock_probe_epochs(session)
     row = await session.scalar(
         select(GeneratorProbeEpoch).where(GeneratorProbeEpoch.retired_at.is_(None))
     )
@@ -308,6 +353,7 @@ async def rotate_probe_epoch(
     Copy detection only compares submissions probed in the same epoch; every
     active submission is re-probed on its next run.
     """
+    await _lock_probe_epochs(session)
     current = await current_probe_epoch(session, create=False)
     if current is not None:
         current.retired_at = now

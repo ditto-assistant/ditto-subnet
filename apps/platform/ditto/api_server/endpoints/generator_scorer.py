@@ -107,7 +107,6 @@ async def post_results(
     payload: GeneratorResultRequest, _scorer: ScorerDep, session: SessionDep
 ) -> GeneratorResultResponse:
     """Record one scorer evaluation for the current lease."""
-    resolved = await load_settings(session)
     row = await get_submission(session, payload.submission_id, for_update=True)
     if row is None:
         raise HTTPException(status_code=404, detail="unknown submission")
@@ -115,14 +114,17 @@ async def post_results(
     if run is None or run.submission_id != row.submission_id:
         raise HTTPException(status_code=404, detail="unknown run")
     probe = await session.get(GeneratorProbeEpoch, run.probe_epoch)
-    assert probe is not None
+    if probe is None:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail="the run's probe epoch no longer exists"
+        )
     try:
         recorded = await record_result(
             session,
             row,
             run,
             payload,
-            resolved=resolved,
             probe_seed=probe.seed,
             now=datetime.now(UTC),
         )

@@ -158,6 +158,27 @@ def upgrade() -> None:
     )
 
     op.create_table(
+        "generator_operator_actions",
+        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
+        sa.Column("action", sa.Text(), nullable=False),
+        sa.Column("subject", sa.Text(), nullable=False),
+        sa.Column("actor", sa.Text(), nullable=False),
+        sa.Column("reason", sa.Text(), nullable=False),
+        sa.Column("detail", postgresql.JSONB()),
+        sa.Column(
+            "created_at",
+            sa.TIMESTAMP(timezone=True),
+            nullable=False,
+            server_default=_NOW,
+        ),
+    )
+    op.create_index(
+        "generator_operator_actions_subject_idx",
+        "generator_operator_actions",
+        ["subject", "created_at"],
+    )
+
+    op.create_table(
         "generator_runs",
         sa.Column("run_id", sa.UUID(), primary_key=True),
         sa.Column(
@@ -291,6 +312,7 @@ def downgrade() -> None:
     op.drop_table("generator_case_verdicts")
     op.drop_table("generator_probe_results")
     op.drop_table("generator_runs")
+    op.drop_table("generator_operator_actions")
     op.drop_table("generator_probe_epochs")
     op.drop_table("generator_submissions")
     op.drop_table("generator_competition_settings_revisions")

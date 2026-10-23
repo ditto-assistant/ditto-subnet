@@ -43,6 +43,7 @@ from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.chain.models import NeuronInfo
 from ditto.db.models import (
     GeneratorCaseVerdict,
+    GeneratorOperatorAction,
     GeneratorProbeEpoch,
     GeneratorRun,
     GeneratorSubmission,
@@ -812,6 +813,27 @@ class TestScorer:
         await _upload(client, _archive())
         assert (await _lease(client)) is None
 
+    async def test_a_lapsed_lease_cannot_report(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        fixed_panel: list[dict[str, Any]],  # noqa: ARG002 - pins the panel
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive())
+        work = await _lease(client)
+        async with session_maker() as session:
+            row = await session.get(
+                GeneratorSubmission, UUID(accepted["submission_id"])
+            )
+            assert row is not None
+            row.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            await session.commit()
+        resp = await _post(client, _result(work, tag="late"))
+        assert resp.status_code == 409 and "expired" in resp.text
+
     async def test_validator_ledger_is_shadow(
         self,
         app: FastAPI,
@@ -855,6 +877,17 @@ class TestOperatorActions:
         ).status_code == 409
         resp = await client.post(f"{base}/rescore", headers=_ADMIN, json=body)
         assert resp.status_code == 200, resp.text
+        async with session_maker() as session:
+            audit = (
+                await session.scalars(
+                    select(GeneratorOperatorAction).where(
+                        GeneratorOperatorAction.subject == sub_id
+                    )
+                )
+            ).all()
+            assert [(a.action, a.reason) for a in audit] == [
+                ("rescore", "panel changed today")
+            ]
         rerun = await _lease(client)
         assert rerun is not None and rerun["submission_id"] == sub_id
 
