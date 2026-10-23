@@ -101,7 +101,7 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	if err != nil {
 		var seedErr *runner.WaveSeedError
 		if errors.As(err, &seedErr) {
-			return nil, fmt.Errorf("%w: seeding wave %d: %v", ErrHarnessUnavailable, seedErr.Wave, seedErr.Err)
+			return nil, fmt.Errorf("%w: seeding wave %d: %w", ErrHarnessUnavailable, seedErr.Wave, seedErr.Err)
 		}
 		return nil, err
 	}
