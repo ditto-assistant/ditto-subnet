@@ -82,20 +82,34 @@ func InspectArchive(raw []byte) (ArchiveInfo, []SourceFile, error) {
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
+			// tar stops at its end markers without reading the gzip trailer;
+			// drain (bounded) so a corrupt checksum or trailing data is caught.
+			n, drainErr := io.Copy(io.Discard, io.LimitReader(gz, MaxSourceBytes+1))
+			if drainErr != nil {
+				return ArchiveInfo{}, nil, fmt.Errorf("source archive gzip stream: %w", drainErr)
+			}
+			if n > MaxSourceBytes {
+				return ArchiveInfo{}, nil, errors.New("source archive has excessive data after its tar end markers")
+			}
 			break
 		}
 		if err != nil {
 			return ArchiveInfo{}, nil, fmt.Errorf("source archive: %w", err)
 		}
+		entries++
+		if entries > MaxSourceFiles {
+			return ArchiveInfo{}, nil, fmt.Errorf("source archive has more than %d entries", MaxSourceFiles)
+		}
+		if hdr.Typeflag != tar.TypeReg && hdr.Size != 0 {
+			// The tar reader skips an entry's payload on the next Next(); a
+			// non-file entry with a payload would be unbounded decompression.
+			return ArchiveInfo{}, nil, fmt.Errorf("source archive entry %q carries a payload but is not a regular file", hdr.Name)
+		}
 		if hdr.Typeflag == tar.TypeXGlobalHeader {
 			continue
 		}
-		entries++
 		if hdr.Typeflag == tar.TypeDir && (hdr.Name == "." || hdr.Name == "./" || hdr.Name == "") {
 			continue // the root itself, as `tar -C dir .` writes it
-		}
-		if entries > MaxSourceFiles {
-			return ArchiveInfo{}, nil, fmt.Errorf("source archive has more than %d entries", MaxSourceFiles)
 		}
 		name, err := cleanArchivePath(hdr.Name)
 		if err != nil {
@@ -146,7 +160,10 @@ func InspectArchive(raw []byte) (ArchiveInfo, []SourceFile, error) {
 	if !hasRootGo {
 		return ArchiveInfo{}, nil, errors.New("source archive must have the main package's .go files at its root")
 	}
-	module, goVersion, requires := parseGoMod(gomod)
+	module, goVersion, requires, err := parseGoMod(gomod)
+	if err != nil {
+		return ArchiveInfo{}, nil, err
+	}
 	if module == "" {
 		return ArchiveInfo{}, nil, errors.New("go.mod must declare a module path")
 	}
@@ -163,19 +180,37 @@ func InspectArchive(raw []byte) (ArchiveInfo, []SourceFile, error) {
 	return info, files, nil
 }
 
-// ExtractArchive inspects a source archive and writes its files under dir.
+// ExtractArchive inspects a source archive and writes its files under dir,
+// which must be an existing, empty directory. An archive holds only regular
+// files and directories, so extracting into an empty directory can never meet
+// a symlink; files are created exclusively, so nothing is overwritten.
 func ExtractArchive(raw []byte, dir string) (ArchiveInfo, error) {
 	info, files, err := InspectArchive(raw)
 	if err != nil {
 		return ArchiveInfo{}, err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ArchiveInfo{}, err
+	}
+	if len(entries) != 0 {
+		return ArchiveInfo{}, fmt.Errorf("extract destination %s is not empty", dir)
 	}
 	for _, f := range files {
 		dst := filepath.Join(dir, filepath.FromSlash(f.Path))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return ArchiveInfo{}, err
 		}
-		if err := os.WriteFile(dst, f.Data, 0o644); err != nil {
+		out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
 			return ArchiveInfo{}, err
+		}
+		_, werr := out.Write(f.Data)
+		if cerr := out.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			return ArchiveInfo{}, werr
 		}
 	}
 	return info, nil
@@ -218,8 +253,11 @@ func cleanArchivePath(name string) (string, error) {
 	return trimmed, nil
 }
 
-func parseGoMod(raw []byte) (module, goVersion string, requires bool) {
+func parseGoMod(raw []byte) (module, goVersion string, requires bool, err error) {
 	sc := bufio.NewScanner(bytes.NewReader(raw))
+	// A line longer than the scanner's default token would end the scan
+	// early and hide a later require directive from the vendoring check.
+	sc.Buffer(make([]byte, 0, 64<<10), len(raw)+1)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if m := moduleLine.FindStringSubmatch(line); m != nil {
@@ -230,7 +268,10 @@ func parseGoMod(raw []byte) (module, goVersion string, requires bool) {
 			requires = true
 		}
 	}
-	return module, goVersion, requires
+	if err := sc.Err(); err != nil {
+		return "", "", false, fmt.Errorf("go.mod: %w", err)
+	}
+	return module, goVersion, requires, nil
 }
 
 func compareGoVersions(a, b string) int {

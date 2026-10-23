@@ -135,7 +135,12 @@ func TestDockerEvaluate(t *testing.T) {
 		t.Skip("set GENRUN_DOCKER=1 to run the docker sandbox test")
 	}
 	ctx := context.Background()
-	sb := Docker{Limits: testLimits()}
+	// Container start alone can take several seconds on a desktop Docker VM,
+	// so the generate limit here is wider than the local tests'. The sleep
+	// fixture never exits, so it still times out.
+	limits := testLimits()
+	limits.GenerateTimeout = 45 * time.Second
+	sb := Docker{Limits: limits}
 	ev, err := Evaluate(ctx, sb, fixture(t, "netprobe", true), plan())
 	if err != nil {
 		t.Fatal(err)
@@ -156,5 +161,36 @@ func TestDockerEvaluate(t *testing.T) {
 	}
 	if ev.Build.OK || !strings.Contains(ev.Build.Error, "compile_failed") {
 		t.Fatalf("docker broken: %+v", ev.Build)
+	}
+	// Containers run without --rm so their state can be inspected; every one
+	// must still be removed.
+	out, err := exec.Command("docker", "ps", "-a", "--filter", "name=genrun-", "-q").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("leaked genrun containers: %s", out)
+	}
+}
+
+func TestPartialLimitsFillDefaults(t *testing.T) {
+	got := Limits{BuildTimeout: time.Minute}.withDefaults()
+	want := DefaultLimits()
+	want.BuildTimeout = time.Minute
+	if got != want {
+		t.Fatalf("partial limits: got %+v want %+v", got, want)
+	}
+}
+
+func TestCallerCancellationIsNeitherGeneratorNorSandbox(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := Local{Limits: testLimits()}.Build(ctx, fixture(t, "ok", false))
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrSandbox) {
+		t.Fatalf("cancelled build: %v", err)
+	}
+	var gen *GeneratorError
+	if errors.As(err, &gen) {
+		t.Fatalf("cancellation blamed on the generator: %v", err)
 	}
 }

@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,29 @@ func DefaultLimits() Limits {
 		CPUs:            "1",
 		PIDs:            64,
 	}
+}
+
+// withDefaults fills every zero field from DefaultLimits, so a partial
+// override (for example only BuildTimeout) never leaves a zero deadline or an
+// empty resource flag.
+func (l Limits) withDefaults() Limits {
+	d := DefaultLimits()
+	if l.BuildTimeout <= 0 {
+		l.BuildTimeout = d.BuildTimeout
+	}
+	if l.GenerateTimeout <= 0 {
+		l.GenerateTimeout = d.GenerateTimeout
+	}
+	if l.MemoryBytes <= 0 {
+		l.MemoryBytes = d.MemoryBytes
+	}
+	if l.CPUs == "" {
+		l.CPUs = d.CPUs
+	}
+	if l.PIDs <= 0 {
+		l.PIDs = d.PIDs
+	}
+	return l
 }
 
 // ErrSandbox wraps a failure of the sandbox itself (docker unavailable, image
@@ -152,10 +176,7 @@ type Local struct{ Limits Limits }
 func (Local) Name() string { return "local" }
 
 func (l Local) Build(ctx context.Context, srcDir string) (Program, error) {
-	limits := l.Limits
-	if limits.BuildTimeout == 0 {
-		limits = DefaultLimits()
-	}
+	limits := l.Limits.withDefaults()
 	out, err := os.MkdirTemp("", "genrun-local-*")
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSandbox, err)
@@ -178,6 +199,11 @@ func (l Local) Build(ctx context.Context, srcDir string) (Program, error) {
 	if err := cmd.Run(); err != nil {
 		os.RemoveAll(out)
 		var exit *exec.ExitError
+		if ctx.Err() != nil {
+			// The caller gave up; that is neither the generator's fault nor
+			// a sandbox failure.
+			return nil, ctx.Err()
+		}
 		if bctx.Err() != nil {
 			return nil, &GeneratorError{Phase: "build", Reason: "timeout"}
 		}
@@ -208,16 +234,15 @@ func (p *localProgram) Generate(ctx context.Context, req challenge.GenerateReque
 	cmd := exec.CommandContext(gctx, p.bin)
 	cmd.Dir = p.dir
 	cmd.Env = []string{"HOME=" + p.dir, "TMPDIR=" + p.dir}
-	return runGenerate(gctx, cmd, req, nil)
-}
-
-func runGenerate(ctx context.Context, cmd *exec.Cmd, req challenge.GenerateRequest, isSandboxExit func(int) bool) ([]byte, error) {
 	cmd.Stdin = bytes.NewReader(req.Bytes())
 	stdout := &boundedBuffer{limit: challenge.MaxPackBytes}
 	var stderr tailBuffer
 	cmd.Stdout, cmd.Stderr = stdout, &stderr
 	err := cmd.Run()
 	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if gctx.Err() != nil {
 		return nil, &GeneratorError{Phase: "generate", Reason: "timeout"}
 	}
 	if err != nil {
@@ -225,15 +250,21 @@ func runGenerate(ctx context.Context, cmd *exec.Cmd, req challenge.GenerateReque
 		if !errors.As(err, &exit) {
 			return nil, fmt.Errorf("%w: %v", ErrSandbox, err)
 		}
-		if isSandboxExit != nil && isSandboxExit(exit.ExitCode()) {
-			return nil, fmt.Errorf("%w: sandbox exited %d: %s", ErrSandbox, exit.ExitCode(), stderr.String())
-		}
-		reason := "exit"
-		if exit.ExitCode() == 137 {
-			reason = "killed"
-		}
-		return nil, &GeneratorError{Phase: "generate", Reason: reason, Detail: fmt.Sprintf("exit %d: %s", exit.ExitCode(), stderr.String())}
+		return nil, exitError(exit.ExitCode(), stderr.String())
 	}
+	return packOutput(stdout)
+}
+
+// exitError is the generator's own nonzero exit; 137 is the OOM killer.
+func exitError(code int, stderr string) error {
+	reason := "exit"
+	if code == 137 {
+		reason = "killed"
+	}
+	return &GeneratorError{Phase: "generate", Reason: reason, Detail: fmt.Sprintf("exit %d: %s", code, stderr)}
+}
+
+func packOutput(stdout *boundedBuffer) ([]byte, error) {
 	if stdout.overflow {
 		return nil, &GeneratorError{Phase: "generate", Reason: "output_too_large", Detail: fmt.Sprintf("stdout exceeded %d bytes", challenge.MaxPackBytes)}
 	}
@@ -260,12 +291,7 @@ func (d Docker) cli() string {
 	return "docker"
 }
 
-func (d Docker) limits() Limits {
-	if d.Limits.BuildTimeout == 0 {
-		return DefaultLimits()
-	}
-	return d.Limits
-}
+func (d Docker) limits() Limits { return d.Limits.withDefaults() }
 
 func (d Docker) images() (string, string) {
 	b, r := d.BuilderImage, d.RunnerImage
@@ -278,8 +304,40 @@ func (d Docker) images() (string, string) {
 	return b, r
 }
 
-// Docker CLI exit codes that mean the container never ran the command.
-func dockerExit(code int) bool { return code == 125 || code == 126 || code == 127 }
+// containerExit reports how a finished container ended. Containers run
+// without --rm so this can be read: the docker CLI exits nonzero both when the
+// container's process failed and when the daemon or runtime did (an
+// unreachable daemon also exits 1), and only the container's recorded state
+// tells them apart. started is false when the container was never created or
+// its process never started; then the failure is the sandbox's, whatever the
+// CLI's exit code.
+func (d Docker) containerExit(name string) (started bool, code int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, d.cli(), "inspect", "--format",
+		"{{.State.StartedAt}} {{.State.ExitCode}} {{.State.OOMKilled}}", name).Output()
+	if err != nil {
+		return false, 0
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 3 || strings.HasPrefix(fields[0], "0001-01-01") {
+		return false, 0
+	}
+	code, err = strconv.Atoi(fields[1])
+	if err != nil {
+		return false, 0
+	}
+	if fields[2] == "true" && code == 0 {
+		code = 137
+	}
+	return true, code
+}
+
+func (d Docker) remove(name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(ctx, d.cli(), "rm", "-f", name).Run()
+}
 
 func containerName() string {
 	b := make([]byte, 8)
@@ -290,7 +348,7 @@ func containerName() string {
 // hardening applies to both build and run containers.
 func (d Docker) hardening(limits Limits) []string {
 	return []string{
-		"--rm", "--network=none", "--read-only",
+		"--network=none", "--read-only",
 		"--cap-drop=ALL", "--security-opt=no-new-privileges",
 		"--user=65532:65532",
 		fmt.Sprintf("--memory=%d", limits.MemoryBytes), fmt.Sprintf("--memory-swap=%d", limits.MemoryBytes),
@@ -345,13 +403,16 @@ func (d Docker) Build(ctx context.Context, srcDir string) (Program, error) {
 	cmd := exec.Command(d.cli(), args...)
 	var stderr tailBuffer
 	cmd.Stdout, cmd.Stderr = &stderr, &stderr
+	defer d.remove(name)
 	if err := startAndWait(bctx, cmd, func() { d.kill(name) }); err != nil {
 		os.RemoveAll(out)
-		if bctx.Err() != nil && ctx.Err() == nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if bctx.Err() != nil {
 			return nil, &GeneratorError{Phase: "build", Reason: "timeout"}
 		}
-		var exit *exec.ExitError
-		if errors.As(err, &exit) && !dockerExit(exit.ExitCode()) {
+		if started, code := d.containerExit(name); started && code != 0 {
 			return nil, &GeneratorError{Phase: "build", Reason: "compile_failed", Detail: stderr.String()}
 		}
 		return nil, fmt.Errorf("%w: docker build container: %v: %s", ErrSandbox, err, stderr.String())
@@ -408,26 +469,19 @@ func (p *dockerProgram) Generate(ctx context.Context, req challenge.GenerateRequ
 	stdout := &boundedBuffer{limit: challenge.MaxPackBytes}
 	var stderr tailBuffer
 	cmd.Stdout, cmd.Stderr = stdout, &stderr
+	defer p.d.remove(name)
 	err := startAndWait(gctx, cmd, func() { p.d.kill(name) })
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if gctx.Err() != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("%w: %v", ErrSandbox, ctx.Err())
-		}
 		return nil, &GeneratorError{Phase: "generate", Reason: "timeout"}
 	}
 	if err != nil {
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) || dockerExit(exit.ExitCode()) {
-			return nil, fmt.Errorf("%w: docker run: %v: %s", ErrSandbox, err, stderr.String())
+		if started, code := p.d.containerExit(name); started && code != 0 {
+			return nil, exitError(code, stderr.String())
 		}
-		reason := "exit"
-		if exit.ExitCode() == 137 {
-			reason = "killed"
-		}
-		return nil, &GeneratorError{Phase: "generate", Reason: reason, Detail: fmt.Sprintf("exit %d: %s", exit.ExitCode(), stderr.String())}
+		return nil, fmt.Errorf("%w: docker run: %v: %s", ErrSandbox, err, stderr.String())
 	}
-	if stdout.overflow {
-		return nil, &GeneratorError{Phase: "generate", Reason: "output_too_large", Detail: fmt.Sprintf("stdout exceeded %d bytes", challenge.MaxPackBytes)}
-	}
-	return stdout.buf.Bytes(), nil
+	return packOutput(stdout)
 }

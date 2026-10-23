@@ -34,6 +34,7 @@ func TestValidateRejectsBrokenCases(t *testing.T) {
 		{"bad generator name", "generator.name", func(p *Pack) { p.Generator.Name = "Bad Name" }},
 		{"too few cases", "case_count", func(p *Pack) { p.Cases = p.Cases[:MinCases-1] }},
 		{"duplicate case id", "case_id", func(p *Pack) { p.Cases[1].ID = p.Cases[0].ID }},
+		{"accept_any on a number", "accept_any", func(p *Pack) { first(p).AcceptAny = []string{"90"} }},
 		{"duplicate content", "duplicate_case", func(p *Pack) {
 			c := p.Cases[0]
 			c.ID = "copy"

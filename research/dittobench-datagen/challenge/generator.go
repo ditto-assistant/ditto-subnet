@@ -112,6 +112,11 @@ func SeedFromInt64(n int64) string {
 // that tie the output to this request rather than to one the generator chose.
 func ValidateGenerated(raw []byte, req GenerateRequest) Report {
 	r := ValidateBytes(raw)
+	if err := req.Validate(); err != nil {
+		r.Issues = append(r.Issues, Issue{Rule: "binding.request", Message: err.Error()})
+		r.Valid = false
+		return r
+	}
 	p, err := Decode(raw)
 	if err != nil {
 		return r

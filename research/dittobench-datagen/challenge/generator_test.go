@@ -38,6 +38,17 @@ func TestGenerateRequestValidate(t *testing.T) {
 	}
 }
 
+func TestValidateGeneratedRejectsInvalidRequests(t *testing.T) {
+	req := NewGenerateRequest(SeedFromInt64(1), testHotkey, 16)
+	p := ReferencePack(req.SeedInt64(), testHotkey)
+	p.Generator.Seed = req.Seed
+	raw, _ := json.Marshal(p)
+	req.Seed = "not-a-seed"
+	if r := ValidateGenerated(raw, req); r.Valid || !hasRule(r, "", "binding.request") {
+		t.Fatalf("invalid request validated: %+v", r)
+	}
+}
+
 func TestValidateGeneratedBinding(t *testing.T) {
 	p := ReferencePack(4, testHotkey)
 	raw, _ := json.Marshal(p)
@@ -146,6 +157,53 @@ func TestInspectArchiveRejects(t *testing.T) {
 	}
 	if _, _, err := InspectArchive([]byte("not gzip")); err == nil {
 		t.Error("non-gzip accepted")
+	}
+
+	// A go.mod line past the scanner's default token must not end the scan
+	// and hide a later require from the vendoring check.
+	long := "module x\n\n// " + strings.Repeat("x", 70_000) + "\n\ngo 1.23\n\nrequire example.com/y v1.0.0\n"
+	if _, _, err := InspectArchive(rawArchive(t, []tar.Header{{Name: "go.mod"}, {Name: "main.go"}}, []string{long, main})); err == nil {
+		t.Error("a long go.mod line hid an unvendored requirement")
+	}
+
+	// A corrupt gzip trailer after the tar end markers is caught.
+	good := rawArchive(t, []tar.Header{{Name: "go.mod"}, {Name: "main.go"}}, []string{gomod, main})
+	corrupt := append([]byte(nil), good...)
+	corrupt[len(corrupt)-5] ^= 0xff // inside the CRC32
+	if _, _, err := InspectArchive(corrupt); err == nil {
+		t.Error("corrupt gzip trailer accepted")
+	}
+}
+
+func TestInspectArchiveRejectsNonFilePayloads(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	// A directory header claiming a payload: the tar reader would skip it on
+	// the next Next(), decompressing it without any bound.
+	hdr := tar.Header{Name: "vendor/", Typeflag: tar.TypeDir, Size: 1 << 20, Mode: 0o755}
+	if err := tw.WriteHeader(&hdr); err != nil {
+		t.Fatal(err)
+	}
+	gz.Write(make([]byte, 512))
+	tw.Flush()
+	gz.Close()
+	if _, _, err := InspectArchive(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "payload") {
+		t.Fatalf("directory payload accepted: %v", err)
+	}
+}
+
+func TestExtractArchiveRequiresAnEmptyDirectory(t *testing.T) {
+	raw := rawArchive(t, []tar.Header{{Name: "go.mod"}, {Name: "main.go"}}, []string{"module x\n\ngo 1.23\n", "package main\nfunc main(){}\n"})
+	dir := t.TempDir()
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, "vendor")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExtractArchive(raw, dir); err == nil {
+		t.Fatal("extracting into a non-empty directory was allowed")
+	}
+	if _, err := ExtractArchive(raw, t.TempDir()); err != nil {
+		t.Fatal(err)
 	}
 }
 

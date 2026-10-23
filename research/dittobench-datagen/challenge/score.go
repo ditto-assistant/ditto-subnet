@@ -151,6 +151,9 @@ func Score(p Pack, in ScoreInput, params ScoreParams) (PackScore, error) {
 
 // ScoreCases judges a validated pack's cases against panel results.
 //
+// An empty GeneratorOwnerKey means the generator is owned by nobody (the
+// public default generator), so no panel agent is excluded.
+//
 // For each case, over eligible panel agents (not owned by the generator, with
 // a non-faulted result):
 //
@@ -183,10 +186,18 @@ func ScoreCases(cases []CaseRef, in ScoreInput, params ScoreParams) (PackScore, 
 		if i > 0 && panel[i-1].AgentID == m.AgentID {
 			return PackScore{}, fmt.Errorf("duplicate panel agent %q", m.AgentID)
 		}
+		if m.OwnerKey == "" {
+			// Owners decide independence; a blank owner would merge unrelated
+			// agents into one solver.
+			return PackScore{}, fmt.Errorf("panel member %q has an empty owner_key", m.AgentID)
+		}
 		byAgent[i] = map[string]PanelCaseResult{}
 		for _, r := range m.Results {
 			if math.IsNaN(r.Score) || r.Score < 0 || r.Score > 1 {
 				return PackScore{}, fmt.Errorf("agent %q case %q score out of range", m.AgentID, r.CaseID)
+			}
+			if _, dup := byAgent[i][r.CaseID]; dup {
+				return PackScore{}, fmt.Errorf("agent %q has two results for case %q", m.AgentID, r.CaseID)
 			}
 			byAgent[i][r.CaseID] = r
 		}
@@ -205,6 +216,9 @@ func ScoreCases(cases []CaseRef, in ScoreInput, params ScoreParams) (PackScore, 
 			out.Cases = append(out.Cases, cv)
 			continue
 		}
+		// A repeat within the same pack is a duplicate too: one case content
+		// earns credit once.
+		claimed[cv.Fingerprint] = true
 		var sum float64
 		solverOwners := map[string]bool{}
 		for i, m := range panel {

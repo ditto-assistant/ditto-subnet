@@ -203,6 +203,30 @@ func TestScoreSemantics(t *testing.T) {
 	}
 }
 
+func TestScoreCountsInPackRepeatsAsDuplicates(t *testing.T) {
+	cases := ReferencePack(1, testHotkey).Refs()
+	repeat := append(append([]CaseRef(nil), cases...), CaseRef{CaseID: "again", Fingerprint: cases[0].Fingerprint})
+	scores := uniform(cases, 1)
+	scores["again"] = 1
+	for k := range scores {
+		if k == cases[0].CaseID || k == "again" {
+			scores[k] = 0.6
+		}
+	}
+	in := ScoreInput{GeneratorOwnerKey: "gen", Panel: []PanelMember{
+		member("a1", "o1", true, scores),
+		member("a2", "o2", false, scores),
+		member("a3", "o3", false, uniform(repeat, 0)),
+	}}
+	got, err := ScoreCases(repeat, in, DefaultScoreParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Duplicate != 1 || got.Cases[len(got.Cases)-1].Status != CaseDuplicate {
+		t.Fatalf("in-pack repeat must be a duplicate: %+v", got)
+	}
+}
+
 func TestScoreRejectsBadInput(t *testing.T) {
 	cases := ReferencePack(1, testHotkey).Refs()
 	bad := []struct {
@@ -214,6 +238,10 @@ func TestScoreRejectsBadInput(t *testing.T) {
 		{"duplicate agent", ScoreInput{Panel: []PanelMember{member("a", "o", false, nil), member("a", "p", false, nil)}}, DefaultScoreParams()},
 		{"score out of range", ScoreInput{Panel: []PanelMember{member("a", "o", false, map[string]float64{cases[0].CaseID: 1.5})}}, DefaultScoreParams()},
 		{"nan score", ScoreInput{Panel: []PanelMember{member("a", "o", false, map[string]float64{cases[0].CaseID: math.NaN()})}}, DefaultScoreParams()},
+		{"empty owner", ScoreInput{Panel: []PanelMember{member("a", "", false, nil)}}, DefaultScoreParams()},
+		{"duplicate case result", ScoreInput{Panel: []PanelMember{{AgentID: "a", OwnerKey: "o", Results: []PanelCaseResult{
+			{CaseID: cases[0].CaseID, Score: 1}, {CaseID: cases[0].CaseID, Score: 0},
+		}}}}, DefaultScoreParams()},
 	}
 	for _, b := range bad {
 		if _, err := ScoreCases(cases, b.in, b.params); err == nil {

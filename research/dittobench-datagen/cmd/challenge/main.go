@@ -22,11 +22,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 
@@ -130,7 +133,7 @@ func runRehearse(args []string) error {
 	var raw []byte
 	var err error
 	if *archive != "" {
-		raw, err = os.ReadFile(*archive)
+		raw, err = readBounded(*archive, challenge.MaxArchiveBytes, "source archive")
 	} else {
 		raw, _, err = genrun.PackDir(context.Background(), *dir)
 	}
@@ -144,6 +147,9 @@ func runRehearse(args []string) error {
 	defer os.RemoveAll(src)
 	if _, err := challenge.ExtractArchive(raw, src); err != nil {
 		return err
+	}
+	if *firstSeed < 0 || *firstSeed > math.MaxInt64-int64(*seeds) {
+		return fmt.Errorf("rehearse: -seed must be in 0..%d for %d seeds", math.MaxInt64-int64(*seeds), *seeds)
 	}
 	plan := genrun.Plan{MinerHotkey: *hotkey, Cases: *cases, CheckDeterminism: true}
 	for i := 0; i < *seeds; i++ {
@@ -239,7 +245,7 @@ func runInspect(args []string) error {
 	if len(args) != 1 {
 		return errors.New("inspect: expected one archive path")
 	}
-	raw, err := os.ReadFile(args[0])
+	raw, err := readBounded(args[0], challenge.MaxArchiveBytes, "source archive")
 	if err != nil {
 		return err
 	}
@@ -307,11 +313,18 @@ func runSHA(args []string) error {
 	if len(args) != 1 {
 		return errors.New("sha: expected one pack path")
 	}
-	raw, err := readRaw(args[0])
+	// The exact file bytes, whatever their size: a digest of a capped prefix
+	// would not identify the file.
+	f, err := os.Open(args[0])
 	if err != nil {
 		return err
 	}
-	fmt.Println(challenge.Digest(raw))
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	fmt.Println(hex.EncodeToString(h.Sum(nil)))
 	return nil
 }
 
@@ -349,12 +362,25 @@ func runScore(args []string) error {
 }
 
 func readRaw(path string) ([]byte, error) {
+	return readBounded(path, challenge.MaxPackBytes, "pack")
+}
+
+// readBounded reads a file and refuses one larger than limit instead of
+// silently truncating it.
+func readBounded(path string, limit int64, what string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, challenge.MaxPackBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, fmt.Errorf("%s %s exceeds %d bytes", what, path, limit)
+	}
+	return raw, nil
 }
 
 func readPack(path string) (challenge.Pack, error) {

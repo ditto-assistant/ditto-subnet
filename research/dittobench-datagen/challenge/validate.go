@@ -307,6 +307,17 @@ func validateCase(v *validator, c Case, nWaves int, pairs map[string]seededPair,
 	groups := grade.ClaimAlternatives(mc)
 	if len(groups) == 0 {
 		v.add(id, "answer", "the grader derives no checkable answer from this case")
+		return
+	}
+	if (kind == protocol.AnswerList || kind == protocol.AnswerOrderedList) && len(groups) != len(c.AnswerItems) {
+		v.add(id, "answer", "the grader derives %d checkable answers for %d list items", len(groups), len(c.AnswerItems))
+		return
+	}
+	for gi, forms := range groups {
+		if len(forms) == 0 {
+			v.add(id, "answer", "answer item %d has no non-empty graded form", gi)
+			return
+		}
 	}
 	evidenceText := evidence.String()
 	for gi, forms := range groups {
@@ -333,7 +344,11 @@ func checkGraderConsistency(v *validator, c Case, mc protocol.MemoryCase, kind s
 	if s := grade.Memory(mc, protocol.RunResponse{Answer: gold, FinalText: gold}).Score; s < 1 {
 		v.add(id, "gold_answer", "the grader scores the gold answer %.2f, want 1.0", s)
 	}
-	if kind == protocol.AnswerValue || kind == protocol.AnswerDate || kind == protocol.AnswerDirection {
+	if len(c.AcceptAny) > 0 && kind != protocol.AnswerValue && kind != protocol.AnswerDate && kind != protocol.AnswerDirection {
+		// The grader ignores accept_any for other kinds, so an alternative
+		// there would be accepted by validation and never by grading.
+		v.add(id, "accept_any", "accept_any is not supported for answer kind %q", kind)
+	} else {
 		for _, alt := range c.AcceptAny {
 			if s := grade.Memory(mc, protocol.RunResponse{Answer: alt, FinalText: alt}).Score; s < correctLine {
 				v.add(id, "accept_any", "the grader scores accepted alternative %q %.2f", alt, s)
