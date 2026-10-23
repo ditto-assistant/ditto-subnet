@@ -135,7 +135,18 @@ def test_rejects_unsafe_or_unbuildable_trees(
 def test_rejects_non_gzip_and_bombs() -> None:
     with pytest.raises(ArchiveRejected, match="gzip"):
         inspect_archive(b"not gzip")
-    bomb = gzip.compress(b"\0" * (40 << 20), mtime=0)
+    bomb = gzip.compress(b"\0" * (64 << 20), mtime=0)
     assert len(bomb) < (4 << 20)
     with pytest.raises(ArchiveRejected, match="expands past"):
         inspect_archive(bomb)
+
+
+def test_requires_exactly_one_complete_gzip_member() -> None:
+    good = _archive(
+        [("go.mod", GOMOD, tarfile.REGTYPE), ("main.go", MAIN, tarfile.REGTYPE)]
+    )
+    inspect_archive(good)
+    with pytest.raises(ArchiveRejected, match="incomplete"):
+        inspect_archive(good[:-4])
+    with pytest.raises(ArchiveRejected, match="after its gzip member"):
+        inspect_archive(good + good)

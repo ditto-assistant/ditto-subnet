@@ -27,6 +27,11 @@ MAX_SOURCE_BYTES = 32 << 20
 MAX_SOURCE_FILES = 4096
 MAX_SOURCE_PATH_LENGTH = 240
 BUILDER_GO_VERSION = "1.27.3"
+# The tar stream around MAX_SOURCE_BYTES of file payload: a 512-byte header
+# and up to 511 bytes of padding per entry (two headers for a long path), plus
+# the end markers and record padding. Bounding decompression by this keeps a
+# legal archive at the file-payload limit acceptable.
+MAX_TAR_BYTES = MAX_SOURCE_BYTES + (MAX_SOURCE_FILES + 2) * 2048 + (20 << 10)
 
 _MODULE_LINE = re.compile(r'^module\s+("?)([^\s"]+)("?)\s*(//.*)?$')
 _GO_LINE = re.compile(r"^go\s+([0-9]+\.[0-9]+(\.[0-9]+)?)\s*(//.*)?$")
@@ -110,13 +115,21 @@ def inspect_archive(raw: bytes) -> ArchiveInfo:
         # Bound decompression before tarfile sees anything: a gzip bomb fails
         # here, not in memory.
         decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
-        tar_bytes = decompressor.decompress(raw, MAX_SOURCE_BYTES + (1 << 20))
+        tar_bytes = decompressor.decompress(raw, MAX_TAR_BYTES)
         if decompressor.unconsumed_tail:
             raise ArchiveRejected(
                 f"source archive expands past {MAX_SOURCE_BYTES} bytes"
             )
     except (zlib.error, gzip.BadGzipFile) as exc:
         raise ArchiveRejected(f"source archive is not gzip: {exc}") from exc
+    # Exactly one complete gzip member, as the Go check requires: a missing or
+    # corrupt trailer leaves the stream unfinished, and anything after the
+    # member (a second member, or trailing bytes) would be bytes the scorer
+    # and this check could read differently.
+    if not decompressor.eof:
+        raise ArchiveRejected("source archive gzip stream is incomplete")
+    if decompressor.unused_data:
+        raise ArchiveRejected("source archive has data after its gzip member")
     files: dict[str, bytes] = {}
     total = 0
     entries = 0
@@ -126,12 +139,18 @@ def inspect_archive(raw: bytes) -> ArchiveInfo:
                 if member.type in (tarfile.XGLTYPE, tarfile.XHDTYPE):
                     continue
                 entries += 1
-                if member.isdir() and member.name in ("", ".", "./"):
-                    continue  # the root itself, as `tar -C dir .` writes it
-                if entries > MAX_SOURCE_FILES:
+                # Every entry counts; the root directory entry may be one extra.
+                if entries > MAX_SOURCE_FILES + 1:
                     raise ArchiveRejected(
                         f"source archive has more than {MAX_SOURCE_FILES} entries"
                     )
+                if not member.isreg() and member.size:
+                    raise ArchiveRejected(
+                        f"source archive entry {member.name!r} carries a payload "
+                        "but is not a regular file"
+                    )
+                if member.isdir() and member.name in ("", ".", "./"):
+                    continue  # the root itself, as `tar -C dir .` writes it
                 name = _clean_path(member.name)
                 if member.isdir():
                     continue
