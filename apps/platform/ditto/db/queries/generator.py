@@ -145,6 +145,19 @@ async def lock_hotkey_uploads(session: AsyncSession, miner_hotkey: str) -> None:
     )
 
 
+async def lock_source_tree(session: AsyncSession, tree_sha256: str) -> None:
+    """Serialize uploads of one source tree across hotkeys.
+
+    The per-hotkey lock does not stop two hotkeys uploading the same tree at
+    once; both would pass the duplicate-tree check. Taken after the hotkey
+    lock, in that fixed order, so two uploads never wait on each other.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"generator-tree:{tree_sha256}"},
+    )
+
+
 async def latest_submitted_at(
     session: AsyncSession, *, miner_hotkey: str
 ) -> datetime | None:
@@ -446,11 +459,17 @@ async def claimed_fingerprints(
     rows = await session.scalars(
         select(GeneratorCaseVerdict.fingerprint)
         .join(GeneratorRun, GeneratorRun.run_id == GeneratorCaseVerdict.run_id)
+        .join(
+            GeneratorSubmission,
+            GeneratorSubmission.submission_id == GeneratorRun.submission_id,
+        )
         .where(
             GeneratorCaseVerdict.fingerprint.in_(list(fingerprints)),
             GeneratorCaseVerdict.status != "duplicate",
             GeneratorRun.status == "scored",
             GeneratorRun.run_id != exclude_run_id,
+            # An operator-rejected generator's cases no longer hold claims.
+            GeneratorSubmission.status != "rejected",
         )
         .distinct()
     )

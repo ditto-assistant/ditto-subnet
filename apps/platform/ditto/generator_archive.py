@@ -133,6 +133,7 @@ def inspect_archive(raw: bytes) -> ArchiveInfo:
         raise ArchiveRejected("source archive has data after its gzip member")
     files: dict[str, bytes] = {}
     directories: set[str] = set()
+    root_seen = False
     total = 0
     entries = 0
     try:
@@ -140,41 +141,57 @@ def inspect_archive(raw: bytes) -> ArchiveInfo:
             for member in tar:
                 if member.type in (tarfile.XGLTYPE, tarfile.XHDTYPE):
                     continue
-                entries += 1
-                # Every entry counts; the root directory entry may be one extra.
-                if entries > MAX_SOURCE_FILES + 1:
-                    raise ArchiveRejected(
-                        f"source archive has more than {MAX_SOURCE_FILES} entries"
-                    )
                 if not member.isreg() and member.size:
                     raise ArchiveRejected(
                         f"source archive entry {member.name!r} carries a payload "
                         "but is not a regular file"
                     )
                 if member.isdir() and member.name in ("", ".", "./"):
-                    continue  # the root itself, as `tar -C dir .` writes it
-                name = _clean_path(member.name)
-                if member.isdir():
+                    # The root itself, as `tar -C dir .` writes it; once, and
+                    # outside the entry count.
+                    if root_seen:
+                        raise ArchiveRejected(
+                            "source archive repeats its root directory"
+                        )
+                    root_seen = True
                     continue
-                if not member.isreg():
+                entries += 1
+                if entries > MAX_SOURCE_FILES:
+                    raise ArchiveRejected(
+                        f"source archive has more than {MAX_SOURCE_FILES} entries"
+                    )
+                name = _clean_path(member.name)
+                if not member.isdir() and not member.isreg():
                     raise ArchiveRejected(
                         f"source archive entry {name!r} is not a regular file or "
                         "directory"
                     )
-                if name in files:
-                    raise ArchiveRejected(f"source archive repeats {name!r}")
-                # A file cannot also be a directory: "a" and "a/b" would extract
-                # halfway and then fail.
-                if name in directories:
-                    raise ArchiveRejected(
-                        f"source archive holds files under file {name!r}"
-                    )
+                # A path is a file or a directory, never both: "a" with "a/" or
+                # "a/b", in any order, would extract halfway and then fail.
+                # ``directories`` holds explicit directory entries and every
+                # file's ancestors (mirrors the Go contract).
                 parent = posixpath.dirname(name)
                 while parent:
                     if parent in files:
                         raise ArchiveRejected(
-                            f"source archive file {name!r} is under file {parent!r}"
+                            f"source archive entry {name!r} is under file {parent!r}"
                         )
+                    parent = posixpath.dirname(parent)
+                if member.isdir():
+                    if name in files:
+                        raise ArchiveRejected(
+                            f"source archive directory {name!r} is also a file"
+                        )
+                    directories.add(name)
+                    continue
+                if name in files:
+                    raise ArchiveRejected(f"source archive repeats {name!r}")
+                if name in directories:
+                    raise ArchiveRejected(
+                        f"source archive file {name!r} is also a directory"
+                    )
+                parent = posixpath.dirname(name)
+                while parent:
                     directories.add(parent)
                     parent = posixpath.dirname(parent)
                 if member.size < 0 or total + member.size > MAX_SOURCE_BYTES:

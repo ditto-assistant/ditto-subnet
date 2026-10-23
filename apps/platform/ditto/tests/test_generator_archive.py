@@ -15,7 +15,12 @@ from pathlib import Path
 
 import pytest
 
-from ditto.generator_archive import ArchiveRejected, inspect_archive, tree_digest
+from ditto.generator_archive import (
+    MAX_SOURCE_FILES,
+    ArchiveRejected,
+    inspect_archive,
+    tree_digest,
+)
 
 _VECTOR = (
     Path(__file__).resolve().parents[4]
@@ -130,7 +135,7 @@ def test_accepts_minimal_tree_and_ignores_packing_details() -> None:
                 ("gen.go", MAIN, tarfile.REGTYPE),
                 ("gen.go/extra.go", MAIN, tarfile.REGTYPE),
             ],
-            "under file",
+            "under file|also a directory",
         ),
         (
             [
@@ -139,7 +144,25 @@ def test_accepts_minimal_tree_and_ignores_packing_details() -> None:
                 ("gen.go/extra.go", MAIN, tarfile.REGTYPE),
                 ("gen.go", MAIN, tarfile.REGTYPE),
             ],
-            "under file",
+            "under file|also a directory",
+        ),
+        (
+            [
+                ("go.mod", GOMOD, tarfile.REGTYPE),
+                ("main.go", MAIN, tarfile.REGTYPE),
+                ("a/", None, tarfile.DIRTYPE),
+                ("a", MAIN, tarfile.REGTYPE),
+            ],
+            "also a directory",
+        ),
+        (
+            [
+                ("go.mod", GOMOD, tarfile.REGTYPE),
+                ("main.go", MAIN, tarfile.REGTYPE),
+                ("a", MAIN, tarfile.REGTYPE),
+                ("a/", None, tarfile.DIRTYPE),
+            ],
+            "also a file",
         ),
         (
             [
@@ -187,3 +210,12 @@ def test_accepts_a_quoted_module_path() -> None:
         )
     )
     assert info.module == "x"
+
+
+def test_the_root_entry_does_not_extend_the_file_limit() -> None:
+    entries = [("go.mod", GOMOD, tarfile.REGTYPE)] + [
+        (f"f{i}.go", b"package main\n", tarfile.REGTYPE)
+        for i in range(1, MAX_SOURCE_FILES + 1)
+    ]
+    with pytest.raises(ArchiveRejected, match="more than"):
+        inspect_archive(_archive(entries))
