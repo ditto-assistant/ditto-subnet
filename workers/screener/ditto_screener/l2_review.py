@@ -9,6 +9,7 @@ import fcntl
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -84,6 +85,13 @@ L2_MODEL = "openai/gpt-5.6-terra"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
+# Ordered L3 fallbacks for a reviewer route that keeps failing. The first is the
+# previous production L3 reviewer; the second is another vendor, so one
+# provider's outage cannot park every L3 trajectory on a manual retry.
+L3_FALLBACK_MODELS = ("openai/gpt-5.6-sol", "moonshotai/kimi-k3")
+# A model that exhausted its in-turn fault retries is skipped by later turns for
+# this long, so a multi-turn trajectory does not re-pay the backoff every turn.
+_FAILED_MODEL_COOLDOWN_SECONDS = 600.0
 # HTTPX's read timeout is an inactivity timeout, so every L2/L3 model turn
 # also carries a wall-clock cap (tried at most twice). The cap must cover a
 # turn that legitimately spends the whole selected completion budget: the live
@@ -2913,6 +2921,7 @@ class TerraSolSourceReviewAgent:
         l3_enabled: bool = True,
         critic_model: str = L3_MODEL,
         critic_provider: str | None = L3_PROVIDER,
+        critic_fallback_models: tuple[str, ...] = L3_FALLBACK_MODELS,
         transport: httpx.AsyncBaseTransport | None = None,
         local_address: str | None = None,
         workspace_root: str | None = None,
@@ -2978,6 +2987,14 @@ class TerraSolSourceReviewAgent:
         self._l3_enabled = l3_enabled
         self._critic_model = critic_model
         self._critic_provider = critic_provider
+        # The chain only rides the OpenRouter router; a pinned provider cannot
+        # serve another vendor's model.
+        self._critic_fallback_models = (
+            tuple(dict.fromkeys(m for m in critic_fallback_models if m != critic_model))
+            if critic_provider == "openrouter"
+            else ()
+        )
+        self._failed_models: dict[str, float] = {}
         self._transport = transport
         self._local_address = local_address
         self._scorer_capabilities_url = scorer_capabilities_url
@@ -3624,7 +3641,7 @@ class TerraSolSourceReviewAgent:
                             role="violation_adjudicator",
                             reasoning_effort=L2_CAUSE_REASONING_EFFORT,
                             model=self._critic_model,
-                            fallback_models=(),
+                            fallback_models=self._critic_fallback_models,
                             provider=(
                                 None
                                 if self._critic_provider == "openrouter"
@@ -3795,7 +3812,7 @@ class TerraSolSourceReviewAgent:
                                 role="violation_tiebreaker",
                                 reasoning_effort=L2_CAUSE_REASONING_EFFORT,
                                 model=self._critic_model,
-                                fallback_models=(),
+                                fallback_models=self._critic_fallback_models,
                                 provider=(
                                     None
                                     if self._critic_provider == "openrouter"
@@ -4026,7 +4043,7 @@ class TerraSolSourceReviewAgent:
                         role="critic",
                         reasoning_effort=self._critic_reasoning_effort,
                         model=self._critic_model,
-                        fallback_models=(),
+                        fallback_models=self._critic_fallback_models,
                         provider=(
                             None
                             if self._critic_provider == "openrouter"
@@ -4194,7 +4211,7 @@ class TerraSolSourceReviewAgent:
                     role="adjudicator",
                     reasoning_effort=safety_reasoning_effort,
                     model=self._critic_model,
-                    fallback_models=(),
+                    fallback_models=self._critic_fallback_models,
                     provider=(
                         None
                         if self._critic_provider == "openrouter"
@@ -4279,7 +4296,9 @@ class TerraSolSourceReviewAgent:
             adjudicator.observation.ok and adjudicator.observation.risk_level == "low"
         )
         clearance_gaps = _safety_clearance_gaps(
-            safety_evidence, adjudicator, expected_model=self._critic_model
+            safety_evidence,
+            adjudicator,
+            expected_models=(self._critic_model, *self._critic_fallback_models),
         )
         adjudicated_safe = claimed_safe and not clearance_gaps
         adjudicated_analyzed = _merge_digest_items(
@@ -5308,6 +5327,10 @@ class TerraSolSourceReviewAgent:
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> httpx.Response:
+        switchable = self._inference_provider == "openrouter" and provider is None
+        if switchable:
+            model, *rest = self._healthy_chain(model, fallback_models)
+            fallback_models = tuple(rest)
         tools = _l2_tools_for_policy(policy_version, shell_enabled=self._shell_enabled)
         if self._compact_review_packet:
             tools.insert(-1, _compact_dossier_tool())
@@ -5359,12 +5382,7 @@ class TerraSolSourceReviewAgent:
                 "require_parameters": provider is not None,
                 "data_collection": "deny",
             }
-            if fallback_models:
-                # The Responses API accepts an ordered model chain. The router
-                # advances only when the prior model returns a retryable routing
-                # failure; it does not run multiple successful completions.
-                request.pop("model")
-                request["models"] = [model, *fallback_models]
+            _route_models(request, model, fallback_models)
             if provider is not None:
                 request["provider"]["only"] = [provider]  # type: ignore[index]
                 if self._terminal_verdict_required and provider.startswith("azure"):
@@ -5473,10 +5491,22 @@ class TerraSolSourceReviewAgent:
                             "turn_attempt": attempt + 1,
                         }
                     )
+                can_switch = (
+                    switchable
+                    and self._retry_provider_body_fault_once
+                    and bool(fallback_models)
+                )
+                # With a fallback ready, replay the faulted model once and then
+                # move on; the full backoff is for a model with no alternative.
+                retry_budget = (
+                    min(1, len(self._provider_fault_retry_delays))
+                    if can_switch
+                    else len(self._provider_fault_retry_delays)
+                )
                 if (
                     self._retry_provider_body_fault_once
                     and model_error is not None
-                    and fault_retries < len(self._provider_fault_retry_delays)
+                    and fault_retries < retry_budget
                 ):
                     delay = self._provider_fault_retry_delays[fault_retries]
                     if (
@@ -5499,6 +5529,19 @@ class TerraSolSourceReviewAgent:
                         )
                         await asyncio.sleep(delay)
                         continue
+                if model_error is not None and can_switch:
+                    self._failed_models[model] = time.monotonic()
+                    logger.warning(
+                        "L2/L3 model %s kept reporting provider fault %s; "
+                        "falling back to %s",
+                        model,
+                        model_error,
+                        fallback_models[0],
+                    )
+                    model, fallback_models = fallback_models[0], fallback_models[1:]
+                    _route_models(request, model, fallback_models)
+                    fault_retries = 0
+                    continue
                 if model_error is not None:
                     logger.warning(
                         "L2/L3 model body reported a provider fault; parking "
@@ -5521,6 +5564,20 @@ class TerraSolSourceReviewAgent:
                     timeout_attempts,
                     _MAX_COMPLETION_REQUEST_ATTEMPTS,
                 )
+
+    def _healthy_chain(
+        self, model: str, fallback_models: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Drop models still cooling down from a fault; never return nothing."""
+        chain = tuple(dict.fromkeys((model, *fallback_models)))
+        now = time.monotonic()
+        healthy = tuple(
+            candidate
+            for candidate in chain
+            if now - self._failed_models.get(candidate, -math.inf)
+            >= _FAILED_MODEL_COOLDOWN_SECONDS
+        )
+        return healthy or chain
 
     def _turn_timeout(self, deadline: float | None) -> float:
         if deadline is None:
@@ -5636,6 +5693,7 @@ class TerraSolSourceReviewAgent:
             "fallback_models": list(self._fallback_models),
             "critic_model": self._critic_model,
             "critic_provider": self._critic_provider,
+            "critic_fallback_models": list(self._critic_fallback_models),
             "prompt_revision": self._analyst_prompt_revision(policy_version),
             "critic_prompt_revision": l2_critic_prompt_revision(policy_version),
             "safety_prompt_revision": l2_safety_prompt_revision(policy_version),
@@ -5840,6 +5898,7 @@ class TerraSolSourceReviewAgent:
                 "analyst_fallback_models": list(self._fallback_models),
                 "critic_model": self._critic_model,
                 "critic_provider": self._critic_provider,
+                "critic_fallback_models": list(self._critic_fallback_models),
                 "prompt_revision": self._analyst_prompt_revision(policy_version),
                 "review_mode": (
                     "report_only_single_layer_sol"
@@ -6634,9 +6693,13 @@ def _safety_clearance_gaps(
     evidence_observation: SourceReviewObservation,
     adjudicator: L2RunResult,
     *,
-    expected_model: str = L3_MODEL,
+    expected_models: tuple[str, ...] = (L3_MODEL,),
 ) -> tuple[str, ...]:
-    """Name every mechanical certificate miss. Empty means the clearance holds."""
+    """Name every mechanical certificate miss. Empty means the clearance holds.
+
+    ``expected_models`` is the configured L3 chain: the primary reviewer and its
+    fallbacks may each certify, any other model may not.
+    """
     finding = adjudicator.observation.finding
     evidence_paths = {str(item["path"]) for item in _l1_evidence(evidence_observation)}
     analyzed_paths = {str(item.get("path")) for item in adjudicator.analyzed_files}
@@ -6663,7 +6726,10 @@ def _safety_clearance_gaps(
     unexpected = [
         model
         for model in adjudicator.response_models
-        if model != expected_model and not model.startswith(f"{expected_model}-")
+        if not any(
+            model == expected or model.startswith(f"{expected}-")
+            for expected in expected_models
+        )
     ]
     if unexpected:
         gaps.append("models:" + "+".join(unexpected[:4]))
@@ -7391,6 +7457,23 @@ def _valid_location(repository: TarSourceRepository, path: str, line: int) -> bo
         return False
     total = repository.line_count(path)
     return total is None or line <= max(total, 1)
+
+
+def _route_models(
+    request: dict[str, object], model: str, fallback_models: tuple[str, ...]
+) -> None:
+    """Point an OpenRouter request at one model or an ordered model chain.
+
+    The Responses API accepts an ordered chain. The router advances only when
+    the prior model returns a retryable routing failure; it does not run
+    multiple successful completions.
+    """
+    request.pop("model", None)
+    request.pop("models", None)
+    if fallback_models:
+        request["models"] = [model, *fallback_models]
+    else:
+        request["model"] = model
 
 
 def _relayed_provider_fault(payload: object) -> bool:

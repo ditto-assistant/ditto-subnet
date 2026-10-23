@@ -847,15 +847,24 @@ def test_safety_clearance_requires_the_configured_l3_model() -> None:
     )
     assert (
         _safety_clearance_gaps(
-            _l1("low"), adjudicator, expected_model="openai/gpt-6-sol"
+            _l1("low"), adjudicator, expected_models=("openai/gpt-6-sol",)
         )
         == ()
     )
     assert any(
         gap.startswith("models:")
         for gap in _safety_clearance_gaps(
-            _l1("low"), adjudicator, expected_model="openai/gpt-5.6-sol"
+            _l1("low"), adjudicator, expected_models=("openai/gpt-5.6-sol",)
         )
+    )
+    # A configured L3 fallback may certify; a model outside the chain may not.
+    assert (
+        _safety_clearance_gaps(
+            _l1("low"),
+            adjudicator,
+            expected_models=("openai/gpt-5.6-sol", "openai/gpt-6-sol"),
+        )
+        == ()
     )
 
 
@@ -4388,9 +4397,9 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
         "data_collection": "deny",
     }
     assert "reasoning" not in requests[0]
-    assert requests[1]["model"] == "openai/gpt-5.6-sol"
-    assert requests[2]["model"] == "openai/gpt-5.6-sol"
-    assert requests[3]["model"] == "openai/gpt-5.6-sol"
+    assert requests[1]["models"] == ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"]
+    assert requests[2]["models"] == ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"]
+    assert requests[3]["models"] == ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"]
     assert "only" not in requests[1]["provider"]  # type: ignore[operator]
     assert requests[1]["provider"]["allow_fallbacks"] is True  # type: ignore[index]
     assert requests[1]["provider"]["sort"] == "throughput"  # type: ignore[index]
@@ -4562,7 +4571,7 @@ fn run() -> Answer {
     assert len(requests) == 4
     assert "model" not in requests[0]
     assert requests[0]["models"] == [L2_MODEL, *L2_FALLBACK_MODELS]
-    assert requests[1]["model"] == "openai/gpt-5.6-sol"
+    assert requests[1]["models"] == ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"]
     assert result.observation.risk_level == "low"
     assert result.observation.clearance_certified is True
     assert result.clearance_path == "l3_adjudicated_safe"
@@ -7373,6 +7382,115 @@ async def test_provider_body_fault_burst_backs_off_until_the_turn_lands(
     assert response.json()["status"] == "completed"
     assert len(requests) == 4
     assert len(set(requests)) == 1
+
+
+async def test_provider_body_fault_falls_back_to_the_next_model(
+    tmp_path: Path,
+) -> None:
+    sent: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if (
+            body.get("model") == "openai/gpt-6-sol"
+            or (body.get("models") or [None])[0] == "openai/gpt-6-sol"
+        ):
+            return httpx.Response(200, json=_server_error_body())
+        return httpx.Response(200, json={"status": "completed", "output": []})
+
+    agent = _provider_fault_agent(tmp_path, handler, (0.0, 0.0, 0.0))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        response = await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=("openai/gpt-5.6-sol", "moonshotai/kimi-k3"),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 600,
+        )
+        assert response.json()["status"] == "completed"
+        # One replay of the faulted primary, then the chain moves on instead of
+        # spending the full backoff on a model that has an alternative.
+        assert [body.get("models") for body in sent] == [
+            ["openai/gpt-6-sol", "openai/gpt-5.6-sol", "moonshotai/kimi-k3"],
+            ["openai/gpt-6-sol", "openai/gpt-5.6-sol", "moonshotai/kimi-k3"],
+            ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"],
+        ]
+        # The next turn starts on the fallback while the primary cools down.
+        sent.clear()
+        await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=("openai/gpt-5.6-sol", "moonshotai/kimi-k3"),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 600,
+        )
+    assert [body.get("models") for body in sent] == [
+        ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"]
+    ]
+
+
+async def test_provider_body_fault_never_switches_a_pinned_provider(
+    tmp_path: Path,
+) -> None:
+    sent: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json=_server_error_body())
+
+    agent = _provider_fault_agent(tmp_path, handler, (0.0,))
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=("z-ai/glm-5.2",),
+            provider="azure",
+            deadline=asyncio.get_running_loop().time() + 600,
+        )
+    assert len(sent) == 2
+    assert all(body["models"] == ["openai/gpt-6-sol", "z-ai/glm-5.2"] for body in sent)
+
+
+def test_l3_fallback_chain_excludes_the_primary_and_pinned_providers(
+    tmp_path: Path,
+) -> None:
+    def agent(**kwargs: object) -> SolL2SourceReviewAgent:
+        return SolL2SourceReviewAgent(
+            api_key_file=None,
+            base_url="https://openrouter.test/api/v1",
+            harness=_FakeHarness(),  # type: ignore[arg-type]
+            cache_dir=str(tmp_path / "cache"),
+            audit_journal=L2AuditJournal(None, retention_days=30),
+            timeout_seconds=30,
+            max_steps=12,
+            max_input_tokens=80_000,
+            max_output_tokens=8_000,
+            max_completion_tokens=2_400,
+            max_cost_usd=1.5,
+            cache_ttl_seconds=86_400,
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    assert agent(critic_model="openai/gpt-6-sol")._critic_fallback_models == (
+        l2_review.L3_FALLBACK_MODELS
+    )
+    assert agent(critic_model="openai/gpt-5.6-sol")._critic_fallback_models == (
+        "moonshotai/kimi-k3",
+    )
+    assert agent(critic_provider="azure")._critic_fallback_models == ()
 
 
 async def test_provider_body_fault_parks_after_bounded_backoff(
