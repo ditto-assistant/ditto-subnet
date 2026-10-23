@@ -90,18 +90,19 @@ def test_routed_instruction_guidance_is_not_rejectable_alone(render) -> None:
 @pytest.mark.parametrize(
     "render", [_source_review_system_prompt, _l2_review_system_prompt, _system_prompt]
 )
-def test_over_budget_retrieval_is_not_rejectable_alone(render) -> None:
+def test_record_selection_is_not_rejectable_alone(render) -> None:
     prompt = render(13)
-    assert "W3 over-budget safe harbor." in prompt
+    assert "W3 record-selection safe harbor." in prompt
     assert "resolve such I2/W3 leads as refuted, not unresolved" in prompt
-    assert "deduplication dropping a later distinct record (W3)" in prompt
+    assert "deduplication or collapsing of similar records even when it drops" in prompt
+    assert "withheld needed records" not in prompt
     policy = (
         Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
     ).read_text()
     for fragment in (
-        "#### Clarification: over-budget retrieval (2026-10-23)",
-        "is not,\nby itself, a rejection ground under W3, I2 or any other condition",
-        "it does not drop a record that fits the budget",
-        "size-triggered budget skip are\nwithdrawn as precedent",
+        "#### Clarification: over-budget retrieval and record selection (2026-10-23)",
+        "is retrieval\nquality, not, by itself, a rejection ground under W3, I2",
+        "identifier pinning that shows only matching\nrecords",
+        "rested only on record selection are withdrawn as\nprecedent",
     ):
         assert fragment in policy

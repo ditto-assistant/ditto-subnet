@@ -126,13 +126,16 @@ lacks_tool), `http_ok`.
    and appends a truthful truncation marker (the 6000-character receipt cap)
    is not a violation on its own, even when the dropped tail held the fact.
    Do not charge it under I2 or I6 and do not list it as unresolved.
-   Precedent, NOT a finding (ruled 2026-10-23): a size budget that keeps an
-   oversized record out of the deciding input (dropped whole, excerpted,
-   opening lines only, or an ID/pointer in its place) is poor design for the
-   benchmark to penalize, not a violation, when the trigger is the record's
-   size regardless of content and records that fit are kept. Do not charge
-   it and do not list it as unresolved. Still charge a record withheld
-   although it fits, and deduplication that drops a later distinct record.
+   Precedent, NOT a finding (ruled 2026-10-23): choosing which retrieved
+   records reach the deciding input is retrieval quality for the benchmark to
+   penalize, not a violation. That covers a size budget (dropped whole,
+   excerpted, opening lines only, an ID/pointer in its place), deduplication
+   or collapsing of similar records even when a later distinct record is
+   dropped, identifier pinning, event projections and top-k selection. Do not
+   charge it and do not list it as unresolved. Still charge evidence a model
+   already received that a later retry, critic or compaction stage strips
+   before its output ships, and a rule that singles out corrections because
+   they are corrections.
    If a proven behavior's classification turns on a policy judgment (advisory
    vs enforced, whether a cap is a legitimate resource limit, whether
    vocabulary is benchmark-specific or ordinary), record it under
