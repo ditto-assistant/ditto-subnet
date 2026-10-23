@@ -9,7 +9,7 @@
 //	challenge pack -dir ./my-generator -out generator.tar.gz
 //	challenge inspect generator.tar.gz                   # archive identity and checks
 //	challenge rehearse -archive generator.tar.gz -hotkey 5Grw... -sandbox docker
-//	challenge validate pack.json [-seed <hex> -hotkey 5Grw... -cases 16]
+//	challenge validate [-seed <hex> -hotkey 5Grw... -cases 16] pack.json
 //	challenge example -seed 42 -hotkey 5Grw... -out pack.json
 //	challenge sha FILE
 //	challenge score -pack pack.json -panel panel.json [-params params.json]
@@ -148,8 +148,9 @@ func runRehearse(args []string) error {
 	if _, err := challenge.ExtractArchive(raw, src); err != nil {
 		return err
 	}
-	if *firstSeed < 0 || *firstSeed > math.MaxInt64-int64(*seeds) {
-		return fmt.Errorf("rehearse: -seed must be in 0..%d for %d seeds", math.MaxInt64-int64(*seeds), *seeds)
+	// The range ends at firstSeed+seeds-1, which must fit in an int64.
+	if *firstSeed < 0 || *firstSeed > math.MaxInt64-int64(*seeds-1) {
+		return fmt.Errorf("rehearse: -seed must be in 0..%d for %d seeds", math.MaxInt64-int64(*seeds-1), *seeds)
 	}
 	plan := genrun.Plan{MinerHotkey: *hotkey, Cases: *cases, CheckDeterminism: true}
 	for i := 0; i < *seeds; i++ {

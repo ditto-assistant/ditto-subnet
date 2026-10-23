@@ -3,6 +3,7 @@ package challenge
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -112,8 +113,10 @@ func Validate(p Pack) Report {
 			seenFP[fp] = id
 		}
 		// Two cases asking the same question of the same memory graph have no
-		// single right answer, whatever their declared golds say.
-		qKey := c.UserID + "\x00" + grade.Normalize(c.Question)
+		// single right answer, whatever their declared golds say. A case run
+		// after a later wave sees a different graph, so asking again after an
+		// update is a different question.
+		qKey := c.UserID + "\x00" + strconv.Itoa(c.RunAfterWave) + "\x00" + grade.Normalize(c.Question)
 		if prior, dup := seenQuestion[qKey]; dup {
 			v.add(id, "duplicate_question", "asks the same question of the same user as case %q", prior)
 		} else {

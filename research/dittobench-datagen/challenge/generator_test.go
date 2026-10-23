@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,9 +220,58 @@ func TestArchiveRefusesAFileThatIsAlsoADirectory(t *testing.T) {
 		raw := rawArchive(t,
 			[]tar.Header{{Name: "go.mod"}, {Name: order[0]}, {Name: order[1]}},
 			[]string{mod, main, main})
-		if _, _, err := InspectArchive(raw); err == nil || !strings.Contains(err.Error(), "is under file") {
+		if _, _, err := InspectArchive(raw); err == nil || !(strings.Contains(err.Error(), "under file") || strings.Contains(err.Error(), "also a directory")) {
 			t.Fatalf("%v: %v", order, err)
 		}
+	}
+}
+
+func TestArchiveRefusesAnExplicitDirectoryThatIsAlsoAFile(t *testing.T) {
+	mod, main := "module x\n\ngo 1.23\n", "package main\nfunc main(){}\n"
+	for _, order := range [][2]tar.Header{
+		{{Name: "a/", Typeflag: tar.TypeDir}, {Name: "a"}},
+		{{Name: "a"}, {Name: "a/", Typeflag: tar.TypeDir}},
+	} {
+		raw := rawArchive(t, []tar.Header{{Name: "go.mod"}, {Name: "main.go"}, order[0], order[1]}, []string{mod, main, "", ""})
+		if _, _, err := InspectArchive(raw); err == nil {
+			t.Fatalf("%s then %s accepted", order[0].Name, order[1].Name)
+		}
+	}
+}
+
+func TestArchiveCountsTheRootOutsideTheFileLimit(t *testing.T) {
+	mod := "module x\n\ngo 1.23\n"
+	headers := []tar.Header{{Name: "go.mod"}}
+	bodies := []string{mod}
+	for i := 1; i <= MaxSourceFiles; i++ {
+		headers = append(headers, tar.Header{Name: fmt.Sprintf("f%d.go", i)})
+		bodies = append(bodies, "package main\n")
+	}
+	if _, _, err := InspectArchive(rawArchive(t, headers, bodies)); err == nil {
+		t.Fatalf("%d files accepted", MaxSourceFiles+1)
+	}
+}
+
+func TestExtractArchiveRefusesASymlinkDestination(t *testing.T) {
+	raw := rawArchive(t, []tar.Header{{Name: "go.mod"}, {Name: "main.go"}}, []string{"module x\n\ngo 1.23\n", "package main\nfunc main(){}\n"})
+	link := filepath.Join(t.TempDir(), "dest")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExtractArchive(raw, link); err == nil {
+		t.Fatal("extracted through a symlinked destination")
+	}
+}
+
+func TestUnorderedListFingerprintIgnoresItemOrder(t *testing.T) {
+	list := func(kind string, items ...string) Case {
+		return Case{MemoryCase: protocol.MemoryCase{Question: "q", AnswerKind: kind, AnswerItems: items}}
+	}
+	if Fingerprint(list(protocol.AnswerList, "a", "b")) != Fingerprint(list(protocol.AnswerList, "b", "a")) {
+		t.Error("unordered list order changed the fingerprint")
+	}
+	if Fingerprint(list(protocol.AnswerOrderedList, "a", "b")) == Fingerprint(list(protocol.AnswerOrderedList, "b", "a")) {
+		t.Error("ordered list order must change the fingerprint")
 	}
 }
 

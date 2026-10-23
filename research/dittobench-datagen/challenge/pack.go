@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 
 	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -174,7 +175,17 @@ func Fingerprint(c Case) string {
 	}
 	field(c.Question)
 	field(c.ExpectedAnswer)
-	for _, item := range c.AnswerItems {
+	items := c.AnswerItems
+	if c.AnswerKind == protocol.AnswerList {
+		// An unordered list is graded as a set, so item order is not part of
+		// the case: reordering must not make a repeated case look new.
+		items = make([]string, len(c.AnswerItems))
+		for i, item := range c.AnswerItems {
+			items[i] = grade.Normalize(item)
+		}
+		sort.Strings(items)
+	}
+	for _, item := range items {
 		field(item)
 	}
 	return hex.EncodeToString(h.Sum(nil))

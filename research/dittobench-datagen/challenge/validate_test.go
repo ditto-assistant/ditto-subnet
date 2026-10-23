@@ -140,3 +140,13 @@ func TestGroupThousands(t *testing.T) {
 		}
 	}
 }
+
+func TestTheSameQuestionMayBeAskedAgainAfterALaterWave(t *testing.T) {
+	p := ReferencePack(1, testHotkey)
+	p.Cases[1].UserID = p.Cases[0].UserID
+	p.Cases[1].Question = p.Cases[0].Question
+	p.Cases[1].RunAfterWave = p.Cases[0].RunAfterWave + 1
+	if r := Validate(p); hasRule(r, "", "duplicate_question") {
+		t.Fatalf("a question re-asked after a later wave was refused: %+v", r.Issues)
+	}
+}

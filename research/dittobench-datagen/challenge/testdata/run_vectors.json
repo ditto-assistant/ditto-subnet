@@ -49,7 +49,7 @@
             },
             {
               "case_id": "allergy-list-2",
-              "fingerprint": "c308b801e2c458fd48ea26569e36ee27d953095c88a1ab7d34c7d0019c4f4244"
+              "fingerprint": "7772fe61231b521b0d7b7ca2a78582bead39c771d6ac73e55be0c7c21bceaf81"
             },
             {
               "case_id": "venue-move-2",
@@ -65,7 +65,7 @@
             },
             {
               "case_id": "allergy-list-3",
-              "fingerprint": "2c017b86df3f607675dd6cc5fda52ab2d5c26fd6d8788b20505eb43e726f35c0"
+              "fingerprint": "7fd87c50d8cc5131d6f4c706d5114fc1a87b12f0dc8dd40e8d9a381fe0cecae8"
             },
             {
               "case_id": "venue-move-3",
@@ -369,7 +369,7 @@
             },
             {
               "case_id": "allergy-list-0",
-              "fingerprint": "f57f632c9e701499e70ebf3cdbcd01f1eef8c8f6f215b9575b3ec2c2c2c1cb27"
+              "fingerprint": "3e496aee67cecddf94a2da4a3ea41941ad2d292850f1811cd98b5683fa7b9500"
             },
             {
               "case_id": "venue-move-0",
@@ -843,7 +843,7 @@
             },
             {
               "case_id": "allergy-list-2",
-              "fingerprint": "c308b801e2c458fd48ea26569e36ee27d953095c88a1ab7d34c7d0019c4f4244",
+              "fingerprint": "7772fe61231b521b0d7b7ca2a78582bead39c771d6ac73e55be0c7c21bceaf81",
               "status": "discriminating",
               "panel_size": 4,
               "solvers": 2,
@@ -887,7 +887,7 @@
             },
             {
               "case_id": "allergy-list-3",
-              "fingerprint": "2c017b86df3f607675dd6cc5fda52ab2d5c26fd6d8788b20505eb43e726f35c0",
+              "fingerprint": "7fd87c50d8cc5131d6f4c706d5114fc1a87b12f0dc8dd40e8d9a381fe0cecae8",
               "status": "discriminating",
               "panel_size": 4,
               "solvers": 2,
@@ -943,7 +943,7 @@
             },
             {
               "case_id": "allergy-list-0",
-              "fingerprint": "f57f632c9e701499e70ebf3cdbcd01f1eef8c8f6f215b9575b3ec2c2c2c1cb27",
+              "fingerprint": "3e496aee67cecddf94a2da4a3ea41941ad2d292850f1811cd98b5683fa7b9500",
               "status": "unsolved",
               "panel_size": 4,
               "solvers": 1,
@@ -1150,7 +1150,7 @@
             },
             {
               "case_id": "allergy-list-2",
-              "fingerprint": "c308b801e2c458fd48ea26569e36ee27d953095c88a1ab7d34c7d0019c4f4244"
+              "fingerprint": "7772fe61231b521b0d7b7ca2a78582bead39c771d6ac73e55be0c7c21bceaf81"
             },
             {
               "case_id": "venue-move-2",
@@ -1166,7 +1166,7 @@
             },
             {
               "case_id": "allergy-list-3",
-              "fingerprint": "2c017b86df3f607675dd6cc5fda52ab2d5c26fd6d8788b20505eb43e726f35c0"
+              "fingerprint": "7fd87c50d8cc5131d6f4c706d5114fc1a87b12f0dc8dd40e8d9a381fe0cecae8"
             },
             {
               "case_id": "venue-move-3",
@@ -1502,7 +1502,7 @@
             },
             {
               "case_id": "allergy-list-2",
-              "fingerprint": "c308b801e2c458fd48ea26569e36ee27d953095c88a1ab7d34c7d0019c4f4244"
+              "fingerprint": "7772fe61231b521b0d7b7ca2a78582bead39c771d6ac73e55be0c7c21bceaf81"
             },
             {
               "case_id": "venue-move-2",
@@ -1518,7 +1518,7 @@
             },
             {
               "case_id": "allergy-list-3",
-              "fingerprint": "2c017b86df3f607675dd6cc5fda52ab2d5c26fd6d8788b20505eb43e726f35c0"
+              "fingerprint": "7fd87c50d8cc5131d6f4c706d5114fc1a87b12f0dc8dd40e8d9a381fe0cecae8"
             },
             {
               "case_id": "venue-move-3",
@@ -1944,7 +1944,7 @@
             },
             {
               "case_id": "allergy-list-2",
-              "fingerprint": "c308b801e2c458fd48ea26569e36ee27d953095c88a1ab7d34c7d0019c4f4244",
+              "fingerprint": "7772fe61231b521b0d7b7ca2a78582bead39c771d6ac73e55be0c7c21bceaf81",
               "status": "unsolved",
               "panel_size": 4,
               "solvers": 1,
@@ -1988,7 +1988,7 @@
             },
             {
               "case_id": "allergy-list-3",
-              "fingerprint": "2c017b86df3f607675dd6cc5fda52ab2d5c26fd6d8788b20505eb43e726f35c0",
+              "fingerprint": "7fd87c50d8cc5131d6f4c706d5114fc1a87b12f0dc8dd40e8d9a381fe0cecae8",
               "status": "discriminating",
               "panel_size": 4,
               "solvers": 3,
@@ -2132,7 +2132,7 @@
             },
             {
               "case_id": "allergy-list-2",
-              "fingerprint": "c308b801e2c458fd48ea26569e36ee27d953095c88a1ab7d34c7d0019c4f4244",
+              "fingerprint": "7772fe61231b521b0d7b7ca2a78582bead39c771d6ac73e55be0c7c21bceaf81",
               "status": "duplicate",
               "panel_size": 0,
               "solvers": 0,
@@ -2176,7 +2176,7 @@
             },
             {
               "case_id": "allergy-list-3",
-              "fingerprint": "2c017b86df3f607675dd6cc5fda52ab2d5c26fd6d8788b20505eb43e726f35c0",
+              "fingerprint": "7fd87c50d8cc5131d6f4c706d5114fc1a87b12f0dc8dd40e8d9a381fe0cecae8",
               "status": "duplicate",
               "panel_size": 0,
               "solvers": 0,
@@ -2251,7 +2251,7 @@
             },
             {
               "case_id": "allergy-list-2",
-              "fingerprint": "c308b801e2c458fd48ea26569e36ee27d953095c88a1ab7d34c7d0019c4f4244"
+              "fingerprint": "7772fe61231b521b0d7b7ca2a78582bead39c771d6ac73e55be0c7c21bceaf81"
             },
             {
               "case_id": "venue-move-2",
@@ -2267,7 +2267,7 @@
             },
             {
               "case_id": "allergy-list-3",
-              "fingerprint": "2c017b86df3f607675dd6cc5fda52ab2d5c26fd6d8788b20505eb43e726f35c0"
+              "fingerprint": "7fd87c50d8cc5131d6f4c706d5114fc1a87b12f0dc8dd40e8d9a381fe0cecae8"
             },
             {
               "case_id": "venue-move-3",
@@ -2571,7 +2571,7 @@
             },
             {
               "case_id": "allergy-list-0",
-              "fingerprint": "f57f632c9e701499e70ebf3cdbcd01f1eef8c8f6f215b9575b3ec2c2c2c1cb27"
+              "fingerprint": "3e496aee67cecddf94a2da4a3ea41941ad2d292850f1811cd98b5683fa7b9500"
             },
             {
               "case_id": "venue-move-0",
@@ -2913,7 +2913,7 @@
       ],
       "claimed_fingerprints": [
         "72754f74a93d6c4765d979287e9a4810d0fffe69e9c4db2bf787608235035d10",
-        "f57f632c9e701499e70ebf3cdbcd01f1eef8c8f6f215b9575b3ec2c2c2c1cb27"
+        "3e496aee67cecddf94a2da4a3ea41941ad2d292850f1811cd98b5683fa7b9500"
       ]
     },
     "params": {
@@ -3049,7 +3049,7 @@
             },
             {
               "case_id": "allergy-list-2",
-              "fingerprint": "c308b801e2c458fd48ea26569e36ee27d953095c88a1ab7d34c7d0019c4f4244",
+              "fingerprint": "7772fe61231b521b0d7b7ca2a78582bead39c771d6ac73e55be0c7c21bceaf81",
               "status": "discriminating",
               "panel_size": 4,
               "solvers": 2,
@@ -3093,7 +3093,7 @@
             },
             {
               "case_id": "allergy-list-3",
-              "fingerprint": "2c017b86df3f607675dd6cc5fda52ab2d5c26fd6d8788b20505eb43e726f35c0",
+              "fingerprint": "7fd87c50d8cc5131d6f4c706d5114fc1a87b12f0dc8dd40e8d9a381fe0cecae8",
               "status": "discriminating",
               "panel_size": 4,
               "solvers": 3,
@@ -3149,7 +3149,7 @@
             },
             {
               "case_id": "allergy-list-0",
-              "fingerprint": "f57f632c9e701499e70ebf3cdbcd01f1eef8c8f6f215b9575b3ec2c2c2c1cb27",
+              "fingerprint": "3e496aee67cecddf94a2da4a3ea41941ad2d292850f1811cd98b5683fa7b9500",
               "status": "duplicate",
               "panel_size": 0,
               "solvers": 0,
@@ -3356,7 +3356,7 @@
             },
             {
               "case_id": "allergy-list-2",
-              "fingerprint": "c308b801e2c458fd48ea26569e36ee27d953095c88a1ab7d34c7d0019c4f4244"
+              "fingerprint": "7772fe61231b521b0d7b7ca2a78582bead39c771d6ac73e55be0c7c21bceaf81"
             },
             {
               "case_id": "venue-move-2",
@@ -3372,7 +3372,7 @@
             },
             {
               "case_id": "allergy-list-3",
-              "fingerprint": "2c017b86df3f607675dd6cc5fda52ab2d5c26fd6d8788b20505eb43e726f35c0"
+              "fingerprint": "7fd87c50d8cc5131d6f4c706d5114fc1a87b12f0dc8dd40e8d9a381fe0cecae8"
             },
             {
               "case_id": "venue-move-3",
@@ -3676,7 +3676,7 @@
             },
             {
               "case_id": "allergy-list-0",
-              "fingerprint": "f57f632c9e701499e70ebf3cdbcd01f1eef8c8f6f215b9575b3ec2c2c2c1cb27"
+              "fingerprint": "3e496aee67cecddf94a2da4a3ea41941ad2d292850f1811cd98b5683fa7b9500"
             },
             {
               "case_id": "venue-move-0",
@@ -4010,7 +4010,7 @@
             },
             {
               "case_id": "allergy-list-2",
-              "fingerprint": "c308b801e2c458fd48ea26569e36ee27d953095c88a1ab7d34c7d0019c4f4244",
+              "fingerprint": "7772fe61231b521b0d7b7ca2a78582bead39c771d6ac73e55be0c7c21bceaf81",
               "status": "unsolved",
               "panel_size": 4,
               "solvers": 1,
@@ -4054,7 +4054,7 @@
             },
             {
               "case_id": "allergy-list-3",
-              "fingerprint": "2c017b86df3f607675dd6cc5fda52ab2d5c26fd6d8788b20505eb43e726f35c0",
+              "fingerprint": "7fd87c50d8cc5131d6f4c706d5114fc1a87b12f0dc8dd40e8d9a381fe0cecae8",
               "status": "discriminating",
               "panel_size": 4,
               "solvers": 2,
@@ -4110,7 +4110,7 @@
             },
             {
               "case_id": "allergy-list-0",
-              "fingerprint": "f57f632c9e701499e70ebf3cdbcd01f1eef8c8f6f215b9575b3ec2c2c2c1cb27",
+              "fingerprint": "3e496aee67cecddf94a2da4a3ea41941ad2d292850f1811cd98b5683fa7b9500",
               "status": "insufficient_panel",
               "panel_size": 2,
               "solvers": 1,
