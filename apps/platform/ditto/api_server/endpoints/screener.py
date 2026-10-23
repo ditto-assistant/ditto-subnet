@@ -157,6 +157,10 @@ from ditto.api_server.endpoints.validator import (
 )
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
+from ditto.api_server.review_lineage import (
+    ReviewLineageUnavailableError,
+    build_review_lineage_packet,
+)
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
 from ditto.api_server.screener_policy_activation import (
@@ -204,6 +208,7 @@ from ditto.db.models import (
 from ditto.db.queries.agents import get_agent_by_id
 from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_SCREENER_ARTIFACT,
+    ENDPOINT_SCREENER_REVIEW_LINEAGE,
     record_artifact_fetch,
 )
 from ditto.db.queries.benchmark_rollout import arrival_bench_version
@@ -241,6 +246,7 @@ from ditto.db.queries.screening_review_events import append_automated_review_eve
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     AdjudicationCompletionReceipt,
+    ReviewLineagePacket,
     ScoredRuntimeEvidenceLease,
     ScreenResultOutcome,
     SourceReviewFinding,
@@ -3878,6 +3884,7 @@ async def claim(
                 )
                 else None
             ),
+            lineage_parent_agent_id=attempt.lineage_parent_agent_id,
         )
         for agent, attempt, duplicate_of in claimed
     ]
@@ -3985,6 +3992,113 @@ async def agent_artifact(
         download_url=url,
         expires_at=datetime.now(UTC) + _ARTIFACT_URL_TTL,
     )
+
+
+@router.post(
+    "/agent/{agent_id}/review-lineage",
+    response_model=ReviewLineagePacket,
+    responses={
+        401: {"description": "Missing/invalid screener auth."},
+        404: {"description": "No agent with the given id."},
+        409: {
+            "description": (
+                "No active attempt, no lineage parent, an unreadable parent "
+                "artifact, or a packet that changed after it was bound."
+            )
+        },
+    },
+)
+async def agent_review_lineage(
+    agent_id: UUID,
+    request: Request,
+    response: Response,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+    storage: StorageDep,
+    attempt_id: Annotated[UUID, Query()],
+    instance_id: Annotated[str | None, Query(pattern=_INSTANCE_ID_PATTERN)] = None,
+) -> ReviewLineagePacket:
+    """Bind and return the lineage-scoped review packet for one leased attempt.
+
+    The packet is the diff from the attempt's lineage parent plus the prior
+    rulings and the parent's automated findings. The first fetch binds its
+    scope and digest to the attempt; a later fetch that would produce a
+    different packet (a ruling landed mid-attempt) is refused, so the worker
+    falls back to an ordinary full review rather than mixing two histories.
+    """
+    response.headers["Cache-Control"] = "no-store"
+
+    def _active(attempt: ScreeningAttempt | None) -> ScreeningAttempt:
+        if (
+            attempt is None
+            or attempt.agent_id != agent_id
+            or attempt.screener_hotkey != screener_hotkey
+            or attempt.status != "running"
+        ):
+            raise AgentNotScreenableError(
+                "lineage packet does not match an active screening attempt"
+            )
+        deadline = attempt.deadline
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if datetime.now(UTC) > deadline:
+            raise AgentNotScreenableError("screening attempt lease has expired")
+        if attempt.lineage_parent_agent_id is None:
+            raise AgentNotScreenableError("screening attempt has no lineage parent")
+        return attempt
+
+    async with session.begin():
+        agent = await get_agent_by_id(session, agent_id=agent_id)
+        if agent is None:
+            raise AgentNotFoundError(f"no agent with id={agent_id}")
+        attempt = _active(await get_screening_attempt(session, attempt_id=attempt_id))
+        try:
+            packet = await build_review_lineage_packet(
+                session, storage, agent=agent, attempt=attempt
+            )
+        except ReviewLineageUnavailableError as error:
+            raise AgentNotScreenableError(
+                f"lineage packet unavailable: {error}"
+            ) from error
+    async with session.begin():
+        attempt = _active(
+            await get_screening_attempt(session, attempt_id=attempt_id, for_update=True)
+        )
+        if attempt.lineage_packet_sha256 is None:
+            attempt.lineage_scope = packet.scope.value
+            attempt.lineage_packet_sha256 = packet.packet_sha256
+        elif attempt.lineage_packet_sha256 != packet.packet_sha256:
+            raise AgentNotScreenableError(
+                "lineage packet changed after it was bound to this attempt"
+            )
+    logger.info(
+        "screener=%s bound lineage packet agent_id=%s attempt_id=%s parent=%s "
+        "scope=%s changed_files=%d rulings=%d findings=%d",
+        screener_hotkey,
+        agent_id,
+        attempt_id,
+        packet.parent.agent_id,
+        packet.scope.value,
+        packet.changed_file_count,
+        len(packet.rulings),
+        len(packet.findings),
+    )
+    for audited in (agent_id, packet.parent.agent_id):
+        await record_artifact_fetch(
+            session,
+            agent_id=audited,
+            endpoint=ENDPOINT_SCREENER_REVIEW_LINEAGE,
+            requester_kind="screener",
+            requester_id=screener_hotkey,
+            requester_instance_id=instance_id,
+            lease_id=attempt_id,
+            artifact_sha256=(
+                agent.sha256 if audited == agent_id else packet.parent.artifact_sha256
+            ),
+            source_ip=client_ip(request),
+            detail=request_detail(request),
+        )
+    return packet
 
 
 @router.post(

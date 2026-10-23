@@ -72,6 +72,7 @@ from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
+    ReviewLineagePacket,
     ScreenerQueueItem,
     ScreenEvidenceItem,
     ScreenResultOutcome,
@@ -766,6 +767,39 @@ class ScreenerWorker:
             int(self._credits_pause_seconds),
         )
 
+    async def _review_lineage(
+        self, item: ScreenerQueueItem, attempt_id: UUID
+    ) -> ReviewLineagePacket | None:
+        """The attempt's lineage packet, or None for an ordinary full review.
+
+        A packet that cannot be fetched never blocks screening: the attempt
+        falls back to the full review it would have had without a lineage.
+        """
+        if item.lineage_parent_agent_id is None:
+            return None
+        try:
+            packet = await self._platform.get_review_lineage(
+                item.agent_id, attempt_id=attempt_id, artifact_sha256=item.sha256
+            )
+        except (PlatformError, ValidationError) as error:
+            logger.warning(
+                "agent_id=%s lineage packet unavailable; full review: %s",
+                item.agent_id,
+                str(error)[:200],
+            )
+            return None
+        logger.info(
+            "agent_id=%s lineage parent=%s scope=%s changed_files=%d "
+            "rulings=%d findings=%d",
+            item.agent_id,
+            packet.parent.agent_id,
+            packet.scope.value,
+            packet.changed_file_count,
+            len(packet.rulings),
+            len(packet.findings),
+        )
+        return packet
+
     async def _screen_one(
         self,
         item: ScreenerQueueItem,
@@ -955,6 +989,7 @@ class ScreenerWorker:
                     artifact = await self._platform.get_artifact(
                         agent_id, attempt_id=attempt_id
                     )
+                    review_lineage = await self._review_lineage(item, attempt_id)
 
                     result = await self._gate.screen(
                         agent_id=agent_id,
@@ -981,6 +1016,7 @@ class ScreenerWorker:
                         policy_version=policy_version,
                         scored_runtime_evidence=item.scored_runtime_evidence,
                         scored_runtime_evidence_received_at=received_at,
+                        review_lineage=review_lineage,
                     )
             if result.policy_version != policy_version:
                 raise PlatformError(

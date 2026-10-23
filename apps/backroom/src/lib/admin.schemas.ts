@@ -5162,6 +5162,11 @@ export const screeningAttemptSchema = z.object({
   duplicate_of: z.string().nullish().default(null),
   duplicate_name: z.string().nullish().default(null),
   duplicate_version: z.number().int().positive().nullish().default(null),
+  // Lineage-scoped review: the same-hotkey prior version whose diff and review
+  // history scoped this attempt, and the exact packet the worker bound.
+  lineage_parent_agent_id: z.string().nullish().default(null),
+  lineage_scope: z.enum(['diff', 'full']).nullish().default(null),
+  lineage_packet_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullish().default(null),
 })
 
 export const adjudicationRequestAttemptDiagnosticSchema = z.object({
@@ -8332,6 +8337,75 @@ const distinctLineagePairError = {
   message: 'referenceAgentId must differ from agentId',
   path: ['referenceAgentId'],
 }
+
+export const screeningReviewLineageInputSchema = z.object({
+  attemptId: z.string().uuid(),
+})
+
+const reviewLineageAgentSchema = z.object({
+  agent_id: z.string().uuid(),
+  version: z.number().int().positive(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  status: z.string(),
+  screening_policy_version: z.number().int().positive().nullable(),
+  submitted_at: z.string(),
+})
+
+// The exact lineage packet a screening attempt was reviewed with: prior
+// versions, every ruling on them, the parent's automated findings, and the
+// bounded source diff. Kept whole so an operator sees what the reviewer saw.
+export const screeningReviewLineageSchema = z.object({
+  packet_version: z.literal(1),
+  agent_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  policy_version: z.number().int().positive(),
+  parent: reviewLineageAgentSchema,
+  history: z.array(reviewLineageAgentSchema),
+  scope: z.enum(['diff', 'full']),
+  full_review_reasons: z.array(z.string()),
+  changes: z.array(
+    z.object({
+      path: z.string(),
+      change: z.enum(['added', 'removed', 'modified', 'renamed']),
+      from_path: z.string().nullable(),
+      added_lines: z.number().int().nonnegative(),
+      removed_lines: z.number().int().nonnegative(),
+      diff_lines: z.array(z.string()),
+      truncated: z.boolean(),
+    }),
+  ),
+  changed_file_count: z.number().int().nonnegative(),
+  unchanged_file_count: z.number().int().nonnegative(),
+  changed_line_count: z.number().int().nonnegative(),
+  rulings: z.array(
+    z.object({
+      agent_id: z.string().uuid(),
+      version: z.number().int().positive(),
+      court: z.enum(['quarantine', 'ath', 'dispute']),
+      resolution: z.string(),
+      reason: z.string(),
+      evidence_references: z.array(z.string()),
+      policy_version: z.number().int().positive().nullable(),
+      decided_at: z.string(),
+    }),
+  ),
+  findings: z.array(
+    z.object({
+      agent_id: z.string().uuid(),
+      version: z.number().int().positive(),
+      attempt_id: z.string().uuid().nullable(),
+      policy_version: z.number().int().positive().nullable(),
+      reviewer: z.string().nullable(),
+      outcome: z.string(),
+      reason_code: z.string().nullable(),
+      reason: z.string(),
+      finding: z.string(),
+      recorded_at: z.string(),
+    }),
+  ),
+  packet_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+})
 
 export const lineageSourceDiffInputSchema = z
   .object(lineagePairShape)

@@ -55,6 +55,7 @@ from ditto.db.queries.benchmark_admission import (
     validator_queue_admission_predicate,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
+from ditto.db.queries.review_lineage import select_lineage_parent
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.screening_infra_retry import (
     InfraRetryDecision,
@@ -1837,10 +1838,25 @@ async def claim_screening_attempts(
                 )
             )
         )
+        # A same-hotkey prior version scopes the model review to its diff and
+        # review history. Duplicates, mechanical rebuilds, canaries and forced
+        # full reviews keep the ordinary full review.
+        lineage_parent = (
+            await select_lineage_parent(session, agent)
+            if not build_only
+            and duplicate_of is None
+            # A canary or integrity double-check pins its own posture.
+            and attempt_review_settings_binding == review_settings_binding
+            and not force_full_review
+            else None
+        )
         attempt = ScreeningAttempt(
             attempt_id=uuid4(),
             agent_id=agent.agent_id,
             artifact_sha256=agent.sha256,
+            lineage_parent_agent_id=(
+                lineage_parent.agent_id if lineage_parent is not None else None
+            ),
             screener_hotkey=screener_hotkey,
             policy_version=attempt_policy_version,
             status="running",

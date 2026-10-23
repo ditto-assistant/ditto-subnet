@@ -76,7 +76,10 @@ Read the Dockerfile, manifests, entrypoint, and every reachable answer- or
 tool-construction path. Use `get_copy_review_source_diff` and
 `read_copy_review_source_diff_file` for suspected copying or same-owner
 resubmits. Use `get_lineage_source_diff` (add `path` for one file) to diff a
-resubmission against its rejected ancestor. Use
+resubmission against its rejected ancestor. A same-hotkey resubmission's
+screening attempt names its `lineage_parent_agent_id`; read
+`get_screening_review_lineage(attemptId)` for the exact diff, rulings and
+prior findings its reviewer was scoped by. Use
 `get_screening_baseline_diff` for starter-kit comparisons.
 Search terms and class labels live in
 [references/techniques.md](references/techniques.md).

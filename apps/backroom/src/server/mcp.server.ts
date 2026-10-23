@@ -211,6 +211,7 @@ import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
   fetchLineageSourceDiff,
+  fetchScreeningReviewLineage,
   fetchLineageSourceDiffFile,
   fetchAthReview,
   fetchAthPrecedents,
@@ -567,6 +568,7 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // Lineage diffs render the same two-submission source for any operator-named
   // pair, so they gate identically.
   ['get_lineage_source_diff', BACKROOM_ARTIFACT_SCOPE],
+  ['get_screening_review_lineage', BACKROOM_ARTIFACT_SCOPE],
   // Baseline diffs render miner source against the starter kit, so they gate on
   // the same dedicated artifact scope.
   ['get_screening_baseline_diff', BACKROOM_ARTIFACT_SCOPE],
@@ -751,6 +753,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_copy_review_source_diff:
     'Per-file held/reference source diff with rename and normalized identity. Artifact scope; bodies via file reader.',
   get_lineage_source_diff: 'Any two agents, reference->agent. Artifact scope; see help.',
+  get_screening_review_lineage:
+    'Exact lineage packet one attempt was reviewed with: parent, rulings, prior findings, diff. Artifact scope.',
   apply_copy_court_settings:
     'Write complete copy-court posture with expected revision and exact confirmation. Inert or complete signal semantics; see tool help.',
   expand_benchmark_rollout_cohort:
@@ -1503,6 +1507,23 @@ export function createBackroomMcpServer(props: McpGrantProps) {
               files: { pin: ['path'] },
             })
           : fetchLineageSourceDiffFile({ ...pair, path }, props.session.email),
+      ),
+  )
+
+  registerTool(
+    'get_screening_review_lineage',
+    {
+      title: 'Get screening review lineage',
+      description:
+        "Return the exact lineage packet one screening attempt was reviewed with. A same-hotkey resubmission is reviewed against its prior version: the attempt (see lineage_parent_agent_id / lineage_scope / lineage_packet_sha256 on get_screening_submission attempts) binds one packet carrying the parent and earlier versions, every operator ruling on them (quarantine resolutions, ATH actions with evidence references, resolved disputes), the parent's automated findings and notes, and the bounded source diff from the parent. scope=diff means the review focused on the changed files and open history leads; scope=full names why the prior review could not carry (full_review_reasons: build-surface-changed, diff-too-large, opaque-file-changed, source-not-compared, parent-policy-differs, no-review-history). The model review always runs; history is never a verdict. Platform answers 409 when the attempt has no parent or when the history has moved since the packet was bound. Platform audits the source read of both agents. Requires the dedicated backroom:artifact:read scope because the diff is miner source.",
+      inputSchema: { attemptId: sourceAgentId() },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      artifact(async () =>
+        compacted(await fetchScreeningReviewLineage(input, props.session.email), {
+          changes: { pin: ['path'] },
+        }),
       ),
   )
 

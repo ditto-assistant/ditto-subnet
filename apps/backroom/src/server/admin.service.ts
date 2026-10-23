@@ -322,6 +322,8 @@ import {
   sourceDiffInputSchema,
   sourceDiffManifestSchema,
   lineageSourceDiffInputSchema,
+  screeningReviewLineageInputSchema,
+  screeningReviewLineageSchema,
   lineageSourceDiffFileInputSchema,
   sourceExcerptInputSchema,
   sourceExcerptSchema,
@@ -3744,6 +3746,15 @@ export async function fetchCopyReviewSourceDiffFile(rawInput: unknown, actor: st
     { actor },
   )
   return sourceDiffFileDetailSchema.parse(payload)
+}
+
+export async function fetchScreeningReviewLineage(rawInput: unknown, actor: string) {
+  const input = screeningReviewLineageInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-attempts/${encodeURIComponent(input.attemptId)}/review-lineage`,
+    { actor },
+  )
+  return screeningReviewLineageSchema.parse(payload)
 }
 
 export async function fetchLineageSourceDiff(rawInput: unknown, actor: string) {

@@ -3027,6 +3027,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-attempts/{attempt_id}/review-lineage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Screening Review Lineage
+         * @description Rebuild the lineage packet one screening attempt was reviewed with.
+         *
+         *     Returns the same packet the worker fetched: parent, history, rulings,
+         *     prior findings and the bounded source diff. When the attempt bound a
+         *     digest and the rebuilt packet differs (a ruling landed since), the route
+         *     answers 409 rather than show a packet the reviewer never saw.
+         */
+        get: operations["get_screening_review_lineage_api_v1_admin_screening_attempts__attempt_id__review_lineage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-disputes": {
         parameters: {
             query?: never;
@@ -7075,6 +7100,32 @@ export interface paths {
          *     verdict can be retried — so an evaluating agent always has a scoreable dataset.
          */
         post: operations["submit_result_api_v1_screener_agent__agent_id__result_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/agent/{agent_id}/review-lineage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Agent Review Lineage
+         * @description Bind and return the lineage-scoped review packet for one leased attempt.
+         *
+         *     The packet is the diff from the attempt's lineage parent plus the prior
+         *     rulings and the parent's automated findings. The first fetch binds its
+         *     scope and digest to the attempt; a later fetch that would produce a
+         *     different packet (a ruling landed mid-attempt) is refused, so the worker
+         *     falls back to an ordinary full review rather than mixing two histories.
+         */
+        post: operations["agent_review_lineage_api_v1_screener_agent__agent_id__review_lineage_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -13134,6 +13185,21 @@ export interface components {
             duplicate_version?: number | null;
             /** Finished At */
             finished_at: string | null;
+            /**
+             * Lineage Packet Sha256
+             * @description Digest of the exact packet the worker received.
+             */
+            lineage_packet_sha256?: string | null;
+            /**
+             * Lineage Parent Agent Id
+             * @description Same-hotkey prior version whose diff and review history scoped this attempt's model review. Null is an ordinary full review.
+             */
+            lineage_parent_agent_id?: string | null;
+            /**
+             * Lineage Scope
+             * @description Scope the bound lineage packet selected. Null with a parent means the worker never fetched the packet and reviewed in full.
+             */
+            lineage_scope?: ("diff" | "full") | null;
             /** Policy Version */
             policy_version: number;
             /** Reason */
@@ -33460,6 +33526,209 @@ export interface components {
             /** Updated At */
             updated_at?: string | null;
         };
+        /**
+         * ReviewLineageAgent
+         * @description One prior version in the lineage, newest first.
+         */
+        ReviewLineageAgent: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Screening Policy Version */
+            screening_policy_version?: number | null;
+            /** Status */
+            status: string;
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+            /** Version */
+            version: number;
+        };
+        /**
+         * ReviewLineageFileChange
+         * @description One changed path between the parent and this artifact.
+         */
+        ReviewLineageFileChange: {
+            /** Added Lines */
+            added_lines: number;
+            /**
+             * Change
+             * @enum {string}
+             */
+            change: "added" | "removed" | "modified" | "renamed";
+            /**
+             * Diff Lines
+             * @default []
+             */
+            diff_lines: string[];
+            /** From Path */
+            from_path?: string | null;
+            /** Path */
+            path: string;
+            /** Removed Lines */
+            removed_lines: number;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /**
+         * ReviewLineageFinding
+         * @description One automated review outcome on the parent (L1/L2/L3 or the court).
+         */
+        ReviewLineageFinding: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Attempt Id */
+            attempt_id?: string | null;
+            /**
+             * Finding
+             * @default
+             */
+            finding: string;
+            /** Outcome */
+            outcome: string;
+            /** Policy Version */
+            policy_version?: number | null;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Reason Code */
+            reason_code?: string | null;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Reviewer */
+            reviewer?: string | null;
+            /** Version */
+            version: number;
+        };
+        /**
+         * ReviewLineageFullReviewReason
+         * @description Why the parent's review cannot scope this attempt to its diff.
+         * @enum {string}
+         */
+        ReviewLineageFullReviewReason: "build-surface-changed" | "diff-too-large" | "too-many-files-changed" | "opaque-file-changed" | "source-not-compared" | "parent-policy-differs" | "no-review-history";
+        /**
+         * ReviewLineagePacket
+         * @description Exact lineage packet bound to one screening attempt.
+         */
+        ReviewLineagePacket: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Changed File Count
+             * @default 0
+             */
+            changed_file_count: number;
+            /**
+             * Changed Line Count
+             * @default 0
+             */
+            changed_line_count: number;
+            /**
+             * Changes
+             * @default []
+             */
+            changes: components["schemas"]["ReviewLineageFileChange"][];
+            /**
+             * Findings
+             * @default []
+             */
+            findings: components["schemas"]["ReviewLineageFinding"][];
+            /**
+             * Full Review Reasons
+             * @default []
+             */
+            full_review_reasons: components["schemas"]["ReviewLineageFullReviewReason"][];
+            /** History */
+            history: components["schemas"]["ReviewLineageAgent"][];
+            /** Packet Sha256 */
+            packet_sha256: string;
+            /**
+             * Packet Version
+             * @default 1
+             * @constant
+             */
+            packet_version: 1;
+            parent: components["schemas"]["ReviewLineageAgent"];
+            /** Policy Version */
+            policy_version: number;
+            /**
+             * Rulings
+             * @default []
+             */
+            rulings: components["schemas"]["ReviewLineageRuling"][];
+            scope: components["schemas"]["ReviewLineageScope"];
+            /**
+             * Unchanged File Count
+             * @default 0
+             */
+            unchanged_file_count: number;
+        };
+        /**
+         * ReviewLineageRuling
+         * @description An operator or court decision on one prior version.
+         */
+        ReviewLineageRuling: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Court
+             * @enum {string}
+             */
+            court: "quarantine" | "ath" | "dispute";
+            /**
+             * Decided At
+             * Format: date-time
+             */
+            decided_at: string;
+            /**
+             * Evidence References
+             * @default []
+             */
+            evidence_references: string[];
+            /** Policy Version */
+            policy_version?: number | null;
+            /** Reason */
+            reason: string;
+            /** Resolution */
+            resolution: string;
+            /** Version */
+            version: number;
+        };
+        /**
+         * ReviewLineageScope
+         * @enum {string}
+         */
+        ReviewLineageScope: "diff" | "full";
         /** RotateV13ScorerCohortRequest */
         RotateV13ScorerCohortRequest: {
             /** Actor */
@@ -35614,6 +35883,11 @@ export interface components {
              * @description UTC deadline for this screening attempt. A verdict arriving after it expires must not be accepted.
              */
             lease_deadline?: string | null;
+            /**
+             * Lineage Parent Agent Id
+             * @description Same-hotkey prior version of this agent whose diff and review history scope the model review. The worker fetches the attempt's lineage packet before reviewing; null is an ordinary full review.
+             */
+            lineage_parent_agent_id?: string | null;
             /**
              * Miner Hotkey
              * @description Submitting miner's SS58 hotkey.
@@ -47841,6 +48115,54 @@ export interface operations {
             };
         };
     };
+    get_screening_review_lineage_api_v1_admin_screening_attempts__attempt_id__review_lineage_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewLineagePacket"];
+                };
+            };
+            /** @description No attempt with this id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The attempt has no lineage parent, or its bound packet can no longer be rebuilt identically. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_screening_disputes_api_v1_admin_screening_disputes_get: {
         parameters: {
             query?: {
@@ -55407,6 +55729,64 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    agent_review_lineage_api_v1_screener_agent__agent_id__review_lineage_post: {
+        parameters: {
+            query: {
+                attempt_id: string;
+                instance_id?: string | null;
+            };
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewLineagePacket"];
+                };
+            };
+            /** @description Missing/invalid screener auth. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No agent with the given id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active attempt, no lineage parent, an unreadable parent artifact, or a packet that changed after it was bound. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

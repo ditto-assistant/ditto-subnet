@@ -361,6 +361,23 @@ class AdminScreeningAttempt(BaseModel):
     duplicate_of: UUID | None
     duplicate_name: str | None = None
     duplicate_version: int | None = None
+    lineage_parent_agent_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Same-hotkey prior version whose diff and review history scoped this "
+            "attempt's model review. Null is an ordinary full review."
+        ),
+    )
+    lineage_scope: Literal["diff", "full"] | None = Field(
+        default=None,
+        description=(
+            "Scope the bound lineage packet selected. Null with a parent means "
+            "the worker never fetched the packet and reviewed in full."
+        ),
+    )
+    lineage_packet_sha256: str | None = Field(
+        default=None, description="Digest of the exact packet the worker received."
+    )
 
 
 class AdminScreeningFailureDiagnostic(BaseModel):

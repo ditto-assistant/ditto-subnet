@@ -120,6 +120,7 @@ from ditto_screener.source_review import (
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
+    ReviewLineagePacket,
     ScoredRuntimeEvidenceLease,
 )
 from ditto_screening_protocol.reason_codes import DOCKER_BUILD_INFRASTRUCTURE
@@ -1243,6 +1244,7 @@ class BuildGate:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
         scored_runtime_evidence_received_at: int | None = None,
         execution_namespace: UUID | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> ScreeningDecision:
         """Screen one agent end-to-end; never raises.
 
@@ -1544,6 +1546,7 @@ class BuildGate:
                                 scored_runtime_evidence_received_at
                             ),
                             bench_version=bench_version,
+                            review_lineage=review_lineage,
                         )
 
                     review_factory = review_locally

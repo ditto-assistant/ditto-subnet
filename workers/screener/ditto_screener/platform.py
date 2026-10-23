@@ -50,6 +50,7 @@ from ditto_screener.review_settings import (
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ArtifactResponse,
+    ReviewLineagePacket,
     ScreenedImageCompletedPart,
     ScreenedImagePartUploadRequest,
     ScreenedImagePartUploadResponse,
@@ -577,6 +578,36 @@ class PlatformClient:
                 )
                 raise ClaimResponseInvalid(message, ()) from error
             raise ClaimResponseInvalid(message, tuple(refs)) from error
+
+    async def get_review_lineage(
+        self, agent_id: UUID, *, attempt_id: UUID, artifact_sha256: str
+    ) -> ReviewLineagePacket:
+        """Fetch and bind the lineage-scoped review packet for one leased attempt.
+
+        The packet must name exactly this agent, attempt and artifact; anything
+        else is refused so a stale or crossed packet can never scope a review.
+        """
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/review-lineage"
+        try:
+            resp = await self._client.post(
+                url,
+                headers=await self._auth_headers(),
+                params={"attempt_id": str(attempt_id)},
+            )
+        except httpx.HTTPError as e:
+            raise PlatformError(f"lineage packet fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"lineage packet rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        packet = ReviewLineagePacket.model_validate(resp.json())
+        if (
+            packet.agent_id != agent_id
+            or packet.attempt_id != attempt_id
+            or packet.artifact_sha256 != artifact_sha256.lower()
+        ):
+            raise PlatformError("lineage packet does not match the claimed attempt")
+        return packet
 
     async def get_artifact(
         self, agent_id: UUID, *, attempt_id: UUID | None = None

@@ -205,6 +205,33 @@ Quarantine listings default to `sort=oldest` so operator queues process the
 longest-waiting submission first. Clients may request `sort=newest`; pagination
 uses the same timestamp and quarantine-ID direction for deterministic results.
 
+## Lineage-scoped review
+
+When a claimed attempt is an ordinary source review (not build-only, not an
+exact duplicate, not a pinned canary or forced full review) and the same
+`miner_hotkey` has an earlier `version` of the same agent `name`, the claim
+stores that earlier agent as `screening_attempts.lineage_parent_agent_id` and
+emits it on the queue item as `lineage_parent_agent_id`.
+
+The worker then calls `POST /api/v1/screener/agent/{agent_id}/review-lineage
+?attempt_id=...` under the same lease checks as the artifact download. The
+response is a digest-sealed `ReviewLineagePacket` (protocol
+`ditto_screening_protocol.review_lineage`): parent and history, every
+quarantine resolution, ATH action (with batch evidence references) and resolved
+dispute on those versions, the parent's automated review outcomes, and the
+bounded per-file diff. The first fetch binds `lineage_scope` and
+`lineage_packet_sha256` to the attempt; a later fetch that would produce a
+different packet is refused with 409. Any fetch failure leaves the worker on an
+ordinary full review.
+
+`scope` is `full` when the Dockerfile, a build manifest or an entrypoint
+changed, the diff exceeds 2,500 changed lines or 64 files, an opaque or unread
+file changed (compared by member digest), no ruling or finding exists under the
+attempt's policy, or the lineage has no review history. The L1 opening message
+and the L2/L3 dossier (`review_lineage` section) carry the packet, and the L2
+result and analyst caches include its digest, so an ordinary review's caches are
+unchanged.
+
 ## Miner disputes
 
 A miner may dispute a resolved quarantine rejection exactly once per submission.

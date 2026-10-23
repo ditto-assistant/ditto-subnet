@@ -534,6 +534,26 @@ artifact-fetch audit row per agent read (`admin.get_lineage_source_diff` or
 `admin.get_lineage_source_diff_file`, each tagged candidate or reference), so
 "who read this source" answers for the ancestor too.
 
+## Lineage-scoped review packets
+
+A same-hotkey resubmission (same agent name, a higher version) is screened
+against its prior version. At claim Platform names that prior version as the
+attempt's lineage parent; the worker then fetches one bound packet carrying the
+parent and earlier versions, every operator ruling on them, the parent's
+automated findings, and the bounded source diff from the parent. The model
+review always runs: `scope: diff` focuses it on the changed files and the open
+leads in the history, and `scope: full` names why the prior review could not
+carry (`build-surface-changed`, `diff-too-large`, `too-many-files-changed`,
+`opaque-file-changed`, `source-not-compared`, `parent-policy-differs`,
+`no-review-history`). History is context, never a verdict.
+
+`get_screening_submission` attempts carry `lineage_parent_agent_id`,
+`lineage_scope` and `lineage_packet_sha256`. A parent with a null scope means
+the worker never fetched the packet and reviewed in full.
+`get_screening_review_lineage(attemptId)` rebuilds the exact packet (artifact
+scope, audited as `admin.get_screening_review_lineage` for both agents) and
+answers 409 when the history has moved since the packet was bound.
+
 The source readers publish their agent ids as plain `format: uuid` rather than
 zod's long uuid regex, also for the byte budget. Each service function still
 parses its input with the strict uuid schema before calling Platform.

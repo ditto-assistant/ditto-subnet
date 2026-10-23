@@ -569,6 +569,15 @@ class ScreeningAttempt(Base):
     review_settings_instance_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_settings_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_settings_checksum: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Lineage-scoped review: the same-owner prior version whose diff and
+    # review history scope this attempt's model review (chosen at claim), and
+    # the scope/digest of the exact packet the worker fetched. NULL scope and
+    # digest mean the packet was never fetched; a NULL parent is a full review.
+    lineage_parent_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    lineage_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lineage_packet_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     """This attempt only rebuilds an already-adjudicated submission's missing
     prerequisites (screened image / dataset); the screener must NOT re-run the
     anti-cheat source review and cannot quarantine. Set when an EVALUATING agent
@@ -591,6 +600,19 @@ class ScreeningAttempt(Base):
             ["agents.agent_id"],
             ondelete="SET NULL",
             name="screening_attempts_duplicate_of_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["lineage_parent_agent_id"],
+            ["agents.agent_id"],
+            ondelete="SET NULL",
+            name="screening_attempts_lineage_parent_fkey",
+        ),
+        CheckConstraint(
+            "(lineage_scope IS NULL AND lineage_packet_sha256 IS NULL) OR "
+            "(lineage_parent_agent_id IS NOT NULL "
+            "AND lineage_scope IN ('diff', 'full') "
+            "AND length(lineage_packet_sha256) = 64)",
+            name="screening_attempts_lineage_binding_check",
         ),
         CheckConstraint(
             "policy_version > 0",

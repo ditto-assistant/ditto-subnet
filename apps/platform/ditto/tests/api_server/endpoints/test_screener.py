@@ -1133,6 +1133,7 @@ async def _authenticate_screener_client(
         "TestSubmitResult",
         "TestVerdictLeaseOwnership",
         "TestQuarantineReviewContext",
+        "TestReviewLineage",
     }
     independent_policy_tests = {
         "test_legacy_gcp_claim_waits_for_fenced_overflow_capacity",

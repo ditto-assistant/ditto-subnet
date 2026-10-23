@@ -36,6 +36,7 @@ from ditto_screener.decision_path_prompt import (
 )
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.review_lineage_prompt import lineage_l1_text
 from ditto_screener.review_provider import (
     DITTO_INFERENCE_BASE_URL,
     OPENROUTER_REVIEW_BASE_URL,
@@ -56,6 +57,7 @@ from ditto_screener.source_signals import (
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    ReviewLineagePacket,
     ScreenReviewAudit,
     SourceReviewEvidenceItem,
     SourceReviewFinding,
@@ -3761,6 +3763,7 @@ class OpenRouterSourceReviewAgent:
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> SourceReviewObservation:
         notes: list[dict[str, object]] = []
         try:
@@ -3777,6 +3780,7 @@ class OpenRouterSourceReviewAgent:
                 deadline=deadline,
                 notes=notes,
                 policy_version=policy_version,
+                review_lineage=review_lineage,
                 validate_result=lambda value: _parse_review(
                     value,
                     artifact_sha256=artifact_sha256,
@@ -3876,6 +3880,7 @@ class OpenRouterSourceReviewAgent:
         notes: list[dict[str, object]] | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
         validate_result: Callable[[object], object] | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> tuple[object, bool]:
         if notes is None:
             notes = []
@@ -3886,9 +3891,8 @@ class OpenRouterSourceReviewAgent:
                 "content": "Review this untrusted harness. Initial inventory:\n"
                 + repository.inventory()
                 + "\nExact-file trusted provenance:\n"
-                + repository.closest_trusted_provenance(
-                    self._provenance_manifest_files
-                ),
+                + repository.closest_trusted_provenance(self._provenance_manifest_files)
+                + (lineage_l1_text(review_lineage) if review_lineage else ""),
             },
         ]
         delivered = 0
