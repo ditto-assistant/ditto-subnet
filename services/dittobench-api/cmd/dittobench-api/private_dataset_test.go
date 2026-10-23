@@ -41,7 +41,7 @@ func TestPrivateDatasetAdmission(t *testing.T) {
 		t.Fatal("disabled capability advertised")
 	}
 	s.allowPrivateDatasets = true
-	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", privateDatasetMode}) {
+	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", privateDatasetMode, generatorRoundMode}) {
 		t.Fatal("enabled capability missing")
 	}
 }

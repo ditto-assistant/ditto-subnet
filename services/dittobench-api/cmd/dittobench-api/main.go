@@ -46,6 +46,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-api/internal/store"
 	"github.com/ditto-assistant/dittobench-datagen/catalog"
+	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/datagen"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -1161,7 +1162,7 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 	var req submitRequest
 	bodyLimit := int64(maxSubmitBody)
 	if s.allowPrivateDatasets {
-		bodyLimit += (gen.MaxPrivateArtifactBytes + 2) / 3 * 4
+		bodyLimit += (max(gen.MaxPrivateArtifactBytes, challenge.MaxRoundDatasetBytes) + 2) / 3 * 4
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1380,7 +1381,11 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.registerRunCancel(runID, cancel)
-	go s.runSizeJob(runCtx, runID, req, prof, seed)
+	if req.PrivateDatasetMode == generatorRoundMode {
+		go s.runGeneratorRoundJob(runCtx, runID, req, seed)
+	} else {
+		go s.runSizeJob(runCtx, runID, req, prof, seed)
+	}
 
 	writeJSON(w, http.StatusAccepted, acceptedResponse{
 		RunID:        runID,

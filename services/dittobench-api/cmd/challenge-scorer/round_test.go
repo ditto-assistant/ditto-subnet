@@ -1,0 +1,141 @@
+package main
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/ditto-assistant/dittobench-datagen/challenge"
+	"github.com/ditto-assistant/dittobench-datagen/genrun"
+)
+
+type fakeRoundPlatform struct {
+	*httptest.Server
+	work      []*roundWork
+	generated []roundGenerateResult
+	scored    []roundScoreResult
+}
+
+func newFakeRoundPlatform(t *testing.T, work ...*roundWork) *fakeRoundPlatform {
+	t.Helper()
+	fp := &fakeRoundPlatform{work: work}
+	fp.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer secret-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/v1/generator-scorer/round-work":
+			var next *roundWork
+			if len(fp.work) > 0 {
+				next, fp.work = fp.work[0], fp.work[1:]
+			}
+			_ = json.NewEncoder(w).Encode(roundWorkResponse{Work: next})
+		case "/api/v1/generator-scorer/round-results":
+			var res roundGenerateResult
+			_ = json.NewDecoder(r.Body).Decode(&res)
+			fp.generated = append(fp.generated, res)
+		case "/api/v1/generator-scorer/round-score":
+			var res roundScoreResult
+			_ = json.NewDecoder(r.Body).Decode(&res)
+			fp.scored = append(fp.scored, res)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(fp.Close)
+	return fp
+}
+
+func (fp *fakeRoundPlatform) client() *platformClient {
+	return &platformClient{base: fp.URL, token: "secret-token", http: fp.Client()}
+}
+
+func sourceCol(id string, raw []byte) roundSourceCol {
+	return roundSourceCol{
+		ColumnID: id, SubmissionID: "sub-" + id, MinerHotkey: testHotkey,
+		SourceSHA256: challenge.Digest(raw), SourceBase64: base64.StdEncoding.EncodeToString(raw),
+	}
+}
+
+func TestProcessRoundGeneratesAndEncodesTheDataset(t *testing.T) {
+	good := generatorArchive(t, false)
+	broken := generatorArchive(t, true)
+	seed := challenge.SeedFromInt64(77)
+	fp := newFakeRoundPlatform(t, &roundWork{
+		Kind: "generate", LeaseID: "lease-r", RoundIndex: 12, Seed: seed, CasesPerColumn: 16,
+		Columns: []roundSourceCol{sourceCol("c0", good), sourceCol("c1", broken), sourceCol("c2", good)},
+	})
+	processed, err := processRound(context.Background(), fp.client(), genrun.Local{})
+	if err != nil || !processed {
+		t.Fatalf("processed=%v err=%v", processed, err)
+	}
+	if len(fp.generated) != 1 {
+		t.Fatalf("posted %d results", len(fp.generated))
+	}
+	got := fp.generated[0]
+	if got.RoundIndex != 12 || got.LeaseID != "lease-r" || got.ScorerVersion != ScorerVersion || len(got.Columns) != 3 {
+		t.Fatalf("identity: %+v", got)
+	}
+	if !got.Columns[0].OK || got.Columns[1].OK || got.Columns[1].Error == "" || !got.Columns[2].OK {
+		t.Fatalf("column outcomes: %+v", got.Columns)
+	}
+	raw, err := base64.StdEncoding.DecodeString(got.DatasetBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ds, cols, err := challenge.DecodeRoundDataset(raw, got.DatasetSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ds.RoundIndex != 12 || ds.Seed != seed || len(cols) != 2 || cols[0].ColumnID != "c0" || cols[1].ColumnID != "c2" {
+		t.Fatalf("dataset: %+v", ds)
+	}
+	// The two columns run the same generator but on distinct column seeds,
+	// so their seed-dependent cases differ.
+	if got.Columns[0].Seed.Report.Cases[0].Fingerprint == got.Columns[2].Seed.Report.Cases[0].Fingerprint &&
+		got.Columns[0].Seed.Report.Cases[1].Fingerprint == got.Columns[2].Seed.Report.Cases[1].Fingerprint {
+		t.Fatal("columns must not share a seed")
+	}
+}
+
+func TestProcessRoundRefusesMismatchedPin(t *testing.T) {
+	good := generatorArchive(t, false)
+	col := sourceCol("c0", good)
+	col.SourceSHA256 = strings.Repeat("0", 64)
+	fp := newFakeRoundPlatform(t, &roundWork{Kind: "generate", RoundIndex: 1, Seed: challenge.SeedFromInt64(1), CasesPerColumn: 16, Columns: []roundSourceCol{col}})
+	if _, err := processRound(context.Background(), fp.client(), genrun.Local{}); err == nil || len(fp.generated) != 0 {
+		t.Fatalf("mismatched pin generated: err=%v posted=%d", err, len(fp.generated))
+	}
+}
+
+func TestProcessRoundScoresTheMatrix(t *testing.T) {
+	params := challenge.DefaultScoreParams()
+	params.MinPanel = 2
+	cases := []challenge.CaseRef{{CaseID: "c0/a", Fingerprint: "fa"}, {CaseID: "c0/b", Fingerprint: "fb"}}
+	matrix := challenge.RoundInput{
+		Columns: []challenge.RoundColumn{{ColumnID: "c0", Counted: true, Cases: cases}},
+		Agents: []challenge.RoundAgent{
+			{AgentID: "x", OwnerKey: "o1", Results: []challenge.PanelCaseResult{{CaseID: "c0/a", Score: 1}, {CaseID: "c0/b", Score: 1}}},
+			{AgentID: "y", OwnerKey: "o2", Results: []challenge.PanelCaseResult{{CaseID: "c0/a", Score: 0}, {CaseID: "c0/b", Score: 1}}},
+			{AgentID: "z", OwnerKey: "o3", Results: []challenge.PanelCaseResult{{CaseID: "c0/a", Score: 1}, {CaseID: "c0/b", Score: 1}}},
+		},
+	}
+	fp := newFakeRoundPlatform(t, &roundWork{Kind: "score", LeaseID: "s", RoundIndex: 4, Params: &params, Matrix: &matrix})
+	if _, err := processRound(context.Background(), fp.client(), genrun.Local{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fp.scored) != 1 {
+		t.Fatalf("posted %d scores", len(fp.scored))
+	}
+	want, _ := challenge.ScoreRound(matrix, params)
+	gotRaw, _ := json.Marshal(fp.scored[0].Score)
+	wantRaw, _ := json.Marshal(want)
+	if string(gotRaw) != string(wantRaw) || fp.scored[0].RoundIndex != 4 {
+		t.Fatalf("score: %s", gotRaw)
+	}
+}
