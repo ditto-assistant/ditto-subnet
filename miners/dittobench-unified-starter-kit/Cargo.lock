@@ -977,7 +977,7 @@ dependencies = [
 [[package]]
 name = "ditto-harness"
 version = "0.1.0"
-source = "git+https://github.com/ditto-assistant/ditto-harness?rev=b2c647b6e061ba415c9846fd2fafa5cb34cf3d98#b2c647b6e061ba415c9846fd2fafa5cb34cf3d98"
+source = "git+https://github.com/ditto-assistant/ditto-harness?rev=51e06e3b5e3d7884b1cab57b0309780a2a0bc483#51e06e3b5e3d7884b1cab57b0309780a2a0bc483"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1039,7 +1039,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
- "ditto-harness 0.1.0 (git+https://github.com/ditto-assistant/ditto-harness?rev=b2c647b6e061ba415c9846fd2fafa5cb34cf3d98)",
+ "ditto-harness 0.1.0 (git+https://github.com/ditto-assistant/ditto-harness?rev=51e06e3b5e3d7884b1cab57b0309780a2a0bc483)",
  "dotenvy",
  "ndarray 0.16.1",
  "ort",
