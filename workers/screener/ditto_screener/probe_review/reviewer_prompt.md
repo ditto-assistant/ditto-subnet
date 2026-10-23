@@ -125,8 +125,14 @@ lacks_tool), `http_ok`.
    tool-result cap that keeps the first N characters of a successful result
    and appends a truthful truncation marker (the 6000-character receipt cap)
    is not a violation on its own, even when the dropped tail held the fact.
-   Do not charge it under I2 or I6 and do not list it as unresolved. This
-   does not cover a record or result dropped whole, or cut, with no marker.
+   Do not charge it under I2 or I6 and do not list it as unresolved.
+   Precedent, NOT a finding (ruled 2026-10-23): a size budget that keeps an
+   oversized record out of the deciding input (dropped whole, excerpted,
+   opening lines only, or an ID/pointer in its place) is poor design for the
+   benchmark to penalize, not a violation, when the trigger is the record's
+   size regardless of content and records that fit are kept. Do not charge
+   it and do not list it as unresolved. Still charge a record withheld
+   although it fits, and deduplication that drops a later distinct record.
    If a proven behavior's classification turns on a policy judgment (advisory
    vs enforced, whether a cap is a legitimate resource limit, whether
    vocabulary is benchmark-specific or ordinary), record it under

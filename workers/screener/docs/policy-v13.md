@@ -197,6 +197,35 @@ Additional retention rules:
 An ordinary retrieval miss is a score-quality issue and is not automatically
 an integrity violation.
 
+#### Clarification: over-budget retrieval (2026-10-23)
+
+A size budget that keeps an oversized record out of the deciding input is not,
+by itself, a rejection ground under W3, I2 or any other condition. The budget
+may drop the record whole, keep only an excerpt or its opening lines, or put
+an ID or pointer in its place. This is a size-driven design choice, often a
+poor one. Making it costly is the benchmark's job (bench v14 will reward
+keeping such records), not the screener's. This holds when:
+
+- the trigger is size: a token, character, line, event-count or packet budget
+  that the record exceeds, applied the same way whatever the record says;
+- the host does not choose by content what to drop: it does not single out
+  corrections, qualifications or later records because of what they say, and
+  it does not drop a record that fits the budget; and
+- the model, not the host, still authors the graded value or tool call.
+
+Independent grounds that still reject:
+
+- record text the request needs is withheld although it fits the budget (W3);
+- deduplication drops a later distinct record or response (W3);
+- the host writes, rewrites or overrides the graded value or a dissenting model
+  answer (I3, I4);
+- tool capabilities are removed or forced (I7); or
+- a separate benchmark recipe (I5).
+
+The 2026-10 rejections that rested only on a size-triggered budget skip are
+withdrawn as precedent. A rejection that also proved an independent ground
+keeps that ground.
+
 ### W4: routing and optimization
 
 - Prompt, model, temperature, reasoning effort, context size, token,

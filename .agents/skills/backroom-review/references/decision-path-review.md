@@ -121,6 +121,19 @@ reading (I5), a host-written, edited or overriding answer (I3, I4), tool
 removal, hiding or forcing (I7), withheld needed records (W3), or
 benchmark-private content in the guidance.
 
+W3 over-budget safe harbor. A size budget (tokens, characters, lines, event
+count or packet size) that keeps an oversized record out of the deciding input,
+by dropping it, excerpting it, keeping its opening lines or leaving an ID or
+pointer, is not by itself a finding under W3, I2 or any other condition, when
+the trigger is the record's size applied regardless of its content, records
+that fit are kept, and the model still authors the graded value or call. This
+is poor design for the benchmark to penalize, not an integrity finding;
+resolve such I2/W3 leads as refuted, not unresolved. Reject only on an
+independent ground: needed record text withheld although it fits (W3),
+deduplication dropping a later distinct record (W3), a host-written, edited or
+overriding answer (I3, I4), tool removal or forcing (I7), or a benchmark recipe
+(I5).
+
 For every finding cite the current reachable caller-to-consequence chain and
 defeat applicable safe harbors. Distinguish static proof from observed runtime
 events. Prior clears and same-byte helpers require current caller/configuration
