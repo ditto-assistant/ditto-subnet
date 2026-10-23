@@ -9665,3 +9665,19 @@ async def test_non_auth_http_errors_are_not_waited_out(tmp_path: Path) -> None:
             )
 
     assert requests == 1
+
+
+@pytest.mark.parametrize(
+    "revision",
+    [
+        l2_review.l2_prompt_revision,
+        l2_review.l2_critic_prompt_revision,
+        l2_review.l2_cause_prompt_revision,
+        l2_review.l2_cause_tiebreaker_prompt_revision,
+        l2_review.l2_safety_prompt_revision,
+    ],
+)
+def test_policy_v13_prompt_revisions_carry_one_policy_suffix(revision) -> None:
+    value = revision(13)
+    assert value.endswith("-policy-v13")
+    assert value.count("-policy-v") == 1

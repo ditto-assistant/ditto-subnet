@@ -161,7 +161,7 @@ def l2_cause_prompt_revision(policy_version: int) -> str:
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v14-policy-v13-policy-v13"
+        return "l3-sol-cause-disagreement-v14-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
