@@ -67,7 +67,7 @@ func (d *Deps) closeProviderCircuit(parent context.Context, startedAt time.Time)
 // receipt-bearing response, or ordinary provider rejection cannot stop fleet
 // work. This is deliberately the same accounting boundary that authorizes the
 // relay's in-place retry.
-func receiptFreeOverload(phases []phaseTrace, model, provider string) (int, bool) {
+func receiptFreeOverload(phases []phaseTrace, model string) (int, bool) {
 	if len(phases) == 0 {
 		return 0, false
 	}
@@ -81,7 +81,7 @@ func receiptFreeOverload(phases []phaseTrace, model, provider string) (int, bool
 			header: phase.headers,
 			body:   phase.body,
 		}
-		if !providerBackpressureIsReceiptFree(result, model, provider) {
+		if !providerBackpressureIsReceiptFree(result, model) {
 			return 0, false
 		}
 		lastStatus = phase.status
@@ -89,8 +89,8 @@ func receiptFreeOverload(phases []phaseTrace, model, provider string) (int, bool
 	return lastStatus, true
 }
 
-func receiptFreeResultOverload(result *providerHTTPResult, model, provider string) bool {
+func receiptFreeResultOverload(result *providerHTTPResult, model string) bool {
 	return result != nil &&
 		providerIsBackpressure(result.status, result.header) &&
-		providerBackpressureIsReceiptFree(result, model, provider)
+		providerBackpressureIsReceiptFree(result, model)
 }

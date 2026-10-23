@@ -21,6 +21,7 @@ from ditto.api_models.screener import (
     SourceReviewFinding,
 )
 from ditto.api_models.screener_review_settings import AdminShadowReviewObservation
+from ditto.api_models.source_review_evidence import StoredSourceReviewEvidence
 from ditto_screening_protocol import (
     AdjudicationCompletionReceipt,
     AdjudicationRunDiagnostic,
@@ -508,6 +509,7 @@ class AdminScreeningVerificationReadiness(BaseModel):
     checks: list[AdminScreeningVerificationCheck]
     private_metamorphic_applicability: Literal["not_recorded"] = "not_recorded"
     private_package: AdminV13PrivatePackageReadiness | None = None
+    source_review: StoredSourceReviewEvidence | None = None
     receipts: list[AdminScreeningVerificationReceipt]
     receipt_count: int
     receipts_truncated: bool

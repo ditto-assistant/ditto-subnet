@@ -15,6 +15,8 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.inference_failure_taxonomy import (
+    ConfirmationFailureGroup,
+    ConfirmationFailureLaneWindow,
     InferenceFailureGroup,
     InferenceFailureLaneWindow,
     InferenceFailureTaxonomy,
@@ -43,6 +45,11 @@ from ditto.api_server.runtime_profiles import (
     RuntimeProfileStore,
 )
 from ditto.db.models import ProviderOutageCircuit
+from ditto.db.queries.confirmation_failure_taxonomy import (
+    CONFIRMATION_FAILURE_GROUP_LIMIT,
+    CONFIRMATION_FAILURE_WINDOWS_SECONDS,
+    load_confirmation_failure_taxonomy_rows,
+)
 from ditto.db.queries.inference_concurrency_settings import (
     latest_inference_concurrency_settings_revision,
 )
@@ -308,6 +315,7 @@ async def get_inference_failure_taxonomy(
                 groups_truncated=group_total > group_count,
             )
         )
+    confirmation_lanes, confirmation_groups = await _confirmation_failure_rows(session)
     return InferenceFailureTaxonomy(
         observed_at=datetime.now(UTC),
         window_seconds=list(FAILURE_WINDOWS_SECONDS),
@@ -315,7 +323,69 @@ async def get_inference_failure_taxonomy(
         lanes=lanes,
         groups=groups,
         rate_limit_bursts=await _rate_limit_bursts(session, lanes),
+        confirmation_window_seconds=list(CONFIRMATION_FAILURE_WINDOWS_SECONDS),
+        confirmation_lanes=confirmation_lanes,
+        confirmation_groups=confirmation_groups,
     )
+
+
+async def _confirmation_failure_rows(
+    session: AsyncSession,
+) -> tuple[list[ConfirmationFailureLaneWindow], list[ConfirmationFailureGroup]]:
+    """Aggregate the confirmation grants the ordinary taxonomy cannot see.
+
+    ``inference_requests`` and ``confirmation_inference_requests`` are different
+    tables, so a confirmation provider rejection appears in neither ``lanes``
+    nor ``groups`` above however the windows are widened. LongMem lost 83% of
+    its bundles to provider rejections while this endpoint reported
+    ``rate_limited_failures: 0``.
+    """
+    lane_rows, group_rows = await load_confirmation_failure_taxonomy_rows(
+        session, group_limit=CONFIRMATION_FAILURE_GROUP_LIMIT
+    )
+    lanes = [
+        ConfirmationFailureLaneWindow(
+            window_seconds=int(row["window_seconds"]),
+            lane=cast(Literal["reader", "judge", "embedding"], str(row["lane"])),
+            calls=int(row["calls"]),
+            settled=int(row["settled"]),
+            completed=int(row["completed"]),
+            failed=int(row["failed"]),
+            in_flight=int(row["in_flight"]),
+            failed_without_provider=int(row["failed_without_provider"]),
+            failed_without_cost=int(row["failed_without_cost"]),
+            bundles_with_failure=int(row["bundles_with_failure"]),
+            failed_max_duration_ms=int(row["failed_max_duration_ms"]),
+            failed_p50_duration_ms=int(row["failed_p50_duration_ms"]),
+            failure_share=(
+                round(int(row["failed"]) / int(row["settled"]), 4)
+                if int(row["settled"]) > 0
+                else 0.0
+            ),
+        )
+        for row in lane_rows
+    ]
+    groups = [
+        ConfirmationFailureGroup(
+            window_seconds=int(row["window_seconds"]),
+            lane=cast(Literal["reader", "judge", "embedding"], str(row["lane"])),
+            model=str(row["model"]),
+            upstream_provider=(
+                str(row["upstream_provider"])
+                if row["upstream_provider"] is not None
+                else None
+            ),
+            provider_basis=cast(InferenceRouteBasis, str(row["provider_basis"])),
+            status=str(row["status"]),
+            calls=int(row["calls"]),
+            without_cost=int(row["without_cost"]),
+            bundles_affected=int(row["bundles_affected"]),
+            max_duration_ms=int(row["max_duration_ms"]),
+            p50_duration_ms=int(row["p50_duration_ms"]),
+        )
+        for row in group_rows
+    ]
+    return lanes, groups
 
 
 async def _rate_limit_bursts(

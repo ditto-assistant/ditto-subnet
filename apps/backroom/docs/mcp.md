@@ -10,6 +10,17 @@ was private: the audit is fail-open and an earlier shorter release window may
 be omitted. Private operator/validator reads never count. Only `backroom:read`
 is needed; no URL, IP, requester identity or source bytes are returned.
 
+`get_screening_verification_readiness` also reports the existing source-review
+job for that exact agent and attempt, when present. It checks the current
+artifact binding, completion state, canonical finding digest, policy suffix and
+assessment schema before returning a retained finding. `not_recorded` means
+the row has no observation; `finding_not_recorded` means a valid stored
+observation has no finding; `invalid` means its finding or bindings did not
+validate. These states do not establish misconduct or prove a review never ran.
+The stored `clearance_certified` flag remains a reviewer assertion;
+`source_admission_accepted` stays false. This read does not verify health,
+authorize CLEAR or make private challenges universal admission requirements.
+
 `get_validator_weight_diagnostics` reads revealed weights, last Yuma vTrust,
 consensus, epoch counters, and pending timelock rounds at one chain block/hash.
 It requires `backroom:read`, accepts an optional `validatorUid`, and never submits

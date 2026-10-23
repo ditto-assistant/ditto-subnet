@@ -145,6 +145,7 @@ from ditto.api_server.source_inspect import (
     SourceInspectError,
     TarSourceInspector,
 )
+from ditto.api_server.source_review_evidence import stored_source_review_evidence
 from ditto.api_server.starter_kit import (
     is_stock_kit_text,
     starter_kit_head_text,
@@ -3408,6 +3409,9 @@ async def get_screening_verification_readiness(
         attempt_id=attempt_id,
         policy_version=attempt.policy_version,
         attempt_status=attempt.status,
+        source_review=await stored_source_review_evidence(
+            session, agent=agent, attempt=attempt
+        ),
         verified_image_sha256s=exact_verified_image_sha256s[:16],
         verified_image_count=len(exact_verified_image_sha256s),
         verified_images_truncated=len(exact_verified_image_sha256s) > 16,

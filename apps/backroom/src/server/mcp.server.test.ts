@@ -757,10 +757,12 @@ describe('Backroom MCP tools', () => {
     // summaries. Detailed procedures stay in help; services validate IDs.
     // One publication-evidence read adds two compact UUIDs and a one-line
     // summary: measured 205,900 bytes. Retain about 0.5 KB headroom.
+    // The retained source-review evidence read (#3111) together with the
+    // exact-artifact source handoffs (#3107) measures 206,434 on main.
     // The three whole-policy settings writes now list every field as required
     // (#2979), so an omission cannot overwrite live policy with a default:
-    // measured 206,234. Keep about 0.5 KB of headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(206_750)
+    // measured 206,757. Keep about 0.5 KB of headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(207_250)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

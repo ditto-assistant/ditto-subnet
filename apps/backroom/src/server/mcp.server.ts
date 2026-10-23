@@ -913,7 +913,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_outlier_escalation_dry_run:
     'Replay outlier escalation on the scored ledger: rows it would hold.',
   get_inference_failure_taxonomy:
-    'Read inference outcome groups and report-only 429 bursts; unknown routes retained.',
+    'Read hosted-inference outcome groups, report-only 429 bursts, and confirmation-lane (reader/judge) failures; unknown routes retained.',
   start_runtime_profile:
     'Capture bounded private relay pprof.',
   download_runtime_profile:
@@ -1631,7 +1631,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening verification readiness',
       description:
-        'Read exact V13 attempt receipts and private prerequisites. Missing or recorded_unverified is not a pass; mechanically_verified covers only archive/image identity. Never authorizes CLEAR. Artifact scope.',
+        'Read exact V13 receipts, retained source-review finding/digest and private prerequisites. Source observation binding checks and a stored clearance_certified assertion are not accepted source admission or health proof. Missing records do not prove review never ran. A private challenge is not universally required for source admission. mechanically_verified covers only archive/image identity. Never authorizes CLEAR. Artifact scope.',
       inputSchema: screeningFailureDiagnosticInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -3706,7 +3706,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         'Split the last 1, 5, 15, and 60 minutes of SETTLED hosted chat and embedding calls by model, lane, gateway, upstream route, and terminal error code. get_inference_runtime_metrics can say "209 of 903 chat calls failed" and cannot say which model, route, or code; this can. Per lane: calls, settled, completed, failed, canceled, in_flight, timed_out, failure_share, rate_limited_failures (exactly upstream_http_429), and groups_total / groups_returned / groups_truncated. Per group: the same counts plus upstream_http_status, openrouter_attempts_max (>1 means OpenRouter tried backup providers inside one request) and share_of_settled_calls. ' +
         'READ route_basis BEFORE BELIEVING upstream_route. Only confirmed_selected means that upstream served the call, and it exists only on completed chat rows. last_attempted is the final upstream a FAILED chat row was sent to -- evidence, not a route. configured is the relay\'s pinned embedding provider, stamped before the call. router_internal, unknown and unrecognized always carry upstream_route null: the Ditto Router did not say, the ledger column was NULL (the usual case for a failure whose provider returned no metadata), or the stored value was not a plain identifier and was refused. A lane of unknown routes is a metadata gap, NOT a healthy route. ' +
         'rate_limit_bursts is a REPORT-ONLY five-minute signal per lane: rate_limited_failures (upstream_http_429 started in the last 300 s), a provisional threshold pending measurement, and peak_global_concurrency (the same 300 s peak get_inference_runtime_metrics reports) against global_concurrency_limit. active means count >= threshold AND peak < limit: the upstream pool, not Ditto admission, was the bottleneck. tickets (most 429s first, capped; tickets_total / tickets_truncated) name agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline and that ticket\'s 429 count. active enforces, reroutes, and retries nothing. ' +
-        'In-flight requests are excluded from the groups on purpose (no route and no code yet) and counted as in_flight instead, so failure_share is failed over settled. Counts and identifiers only: no prompts, responses, keys, headers, or trace bodies. This changes nothing and admits nothing -- route admission and provider-fallback policy are not controlled here.',
+        'In-flight requests are excluded from the groups on purpose (no route and no code yet) and counted as in_flight instead, so failure_share is failed over settled. Counts and identifiers only: no prompts, responses, keys, headers, or trace bodies. This changes nothing and admits nothing -- route admission and provider-fallback policy are not controlled here. ' +
+        'confirmation_lanes and confirmation_groups cover the LongMem confirmation grants, which lanes/groups above DO NOT and never did: those read inference_requests, and a confirmation call writes confirmation_inference_requests instead. Through 2026-10 that lane lost 83% of its bundles to provider rejections while this tool reported rate_limited_failures 0 and rate_limit_bursts.active false in every window, so a zero here is not evidence about confirmation. Its windows are confirmation_window_seconds (1 hour / 1 day / 7 days) because a bundle runs a few times a day, not thousands of times an hour. ' +
+        'NO TERMINAL ERROR CODE IS REPORTED FOR CONFIRMATION, because none is stored: confirmation_inference_requests has no terminal_error_code or upstream_http_status column, so the 429-versus-timeout split exists only in the trace archive (list_inference_traces / peek_inference_trace). Read it from what is stored instead -- failed_without_provider equal to failed at a sub-second failed_p50_duration_ms is a pre-provider rejection that was never billed, while a failed_p50_duration_ms at the configured inference timeout is a hang. bundles_with_failure counts distinct bundles that saw a failure, and a bundle dies on its first one. Every (window, lane) pair is reported even when idle, so an absent lane is a bug, not a quiet one.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchInferenceFailureTaxonomy()),
@@ -4056,9 +4058,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'get_benchmark_contract_migration',
     {
-      title: 'Inspect zero-score v2-to-v3 migration',
+      title: 'Inspect zero-score legacy bench-2 migration',
       description:
-        'Inspect whether one zero-score legacy v2 submission can be safely migrated to v3 without replacing its artifact or history. Returns score, dataset, screening, and active-validator guards. Requires backroom:read and does not change production.',
+        'Inspect whether one zero-score legacy bench-2 submission can be safely migrated onto the open rollout target contract without replacing its artifact or history. The source contract is pinned to bench_version 2; the target is whatever the open rollout desires, so this reports blocked when no rollout is open. Returns score, dataset, screening, and active-validator guards. Requires backroom:read and does not change production.',
       inputSchema: benchmarkContractMigrationLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -4068,9 +4070,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'migrate_zero_score_benchmark_contract',
     {
-      title: 'Migrate zero-score v2 submission to v3',
+      title: 'Migrate zero-score legacy bench-2 submission',
       description:
-        'Preserve one exact zero-score v2 submission and its history while expiring unscored legacy tickets, pinning a v3 dataset, clearing stale screened-image metadata, and queuing rescreening before fresh v3 ticket issuance. Requires backroom:write.',
+        'Preserve one exact zero-score bench-2 submission and its history while expiring unscored legacy tickets, pinning a dataset for the open rollout target contract, clearing stale screened-image metadata, and queuing rescreening before fresh ticket issuance. The source is pinned to bench_version 2; the target follows the open rollout, not a fixed version. Requires backroom:write.',
       inputSchema: migrateBenchmarkContractInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -4150,7 +4152,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Inspect scored benchmark rollout qualification',
       description:
-        'Inspect whether one scored or live current-hybrid-top-five submission can be safely enrolled for the active v2-to-v3 rollout. Returns immutable artifact, rollout, score-count, dataset, screening, and validator-run guards. Requires backroom:read and does not change production.',
+        'Inspect whether one scored or live current-hybrid-top-five submission can be safely enrolled for the open benchmark rollout. The rollout target is read live rather than fixed to any version pair. Returns immutable artifact, rollout, score-count, dataset, screening, and validator-run guards. Requires backroom:read and does not change production.',
       inputSchema: benchmarkRolloutQualificationLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -4162,7 +4164,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Qualify scored submission for benchmark rollout',
       description:
-        'Enroll one exact scored or live current-hybrid-top-five submission into the active v2-to-v3 rollout and queue its required policy rescreen without deleting accepted scores or attempt history. Requires current artifact, rollout, and score-count guards from get_benchmark_rollout_qualification. Requires backroom:write.',
+        'Enroll one exact scored or live current-hybrid-top-five submission into the open benchmark rollout and queue its required policy rescreen without deleting accepted scores or attempt history. The rollout target is read live rather than fixed to any version pair. Requires current artifact, rollout, and score-count guards from get_benchmark_rollout_qualification. Requires backroom:write.',
       inputSchema: qualifyBenchmarkRolloutInputSchema,
       annotations: toolAnnotations('write', true),
     },

@@ -999,16 +999,15 @@ async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> Non
     async def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal requests
         requests += 1
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(5)
         return httpx.Response(200, json={})
 
-    # Leave enough window that a slow CI runner still reaches the first
-    # completion before the deadline (otherwise the lease precheck fires and
-    # reports ``lease-budget`` instead of the completion timeout under test).
-    deadline = asyncio.get_running_loop().time() + 0.5
-    result = await _adjudicator(
-        _key(tmp_path), httpx.MockTransport(handler)
-    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], deadline=deadline)
+    adjudicator = _adjudicator(_key(tmp_path), httpx.MockTransport(handler))
+    archive = _archive(tmp_path)
+    # Fixture I/O must not consume the completion deadline on a loaded runner.
+    # Leave time to enter the provider, whose response still exceeds the lease.
+    deadline = asyncio.get_running_loop().time() + 1
+    result = await adjudicator.adjudicate(archive, notes=[_CONCERN], deadline=deadline)
 
     assert result.decision == "escalate"
     assert result.clear_clause is None

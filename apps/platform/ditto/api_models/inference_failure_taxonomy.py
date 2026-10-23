@@ -126,6 +126,65 @@ class InferenceRateLimitBurst(BaseModel):
     tickets: list[InferenceRateLimitedTicket]
 
 
+class ConfirmationFailureLaneWindow(BaseModel):
+    """Confirmation-lane totals for one window.
+
+    ``lane`` is the confirmation grant lane (reader / judge / embedding), which
+    is a different axis from ``request_kind`` on the ordinary lanes: a
+    confirmation reader call is also a chat call. The two taxonomies are kept
+    separate rather than merged because they read different tables and need
+    different windows.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    window_seconds: int
+    lane: Literal["reader", "judge", "embedding"]
+    calls: int
+    settled: int
+    completed: int
+    failed: int
+    in_flight: int
+    failed_without_provider: int
+    """Failures where no serving endpoint was ever recorded.
+
+    This is the pre-provider rejection shape -- the gateway refused before
+    selecting an endpoint, so nothing was billed. It is reported instead of a
+    terminal error code because ``confirmation_inference_requests`` stores no
+    such code; the 429-versus-timeout split lives only in the trace archive.
+    """
+    failed_without_cost: int
+    bundles_with_failure: int
+    """Distinct bundles that saw at least one failure in this window.
+
+    A bundle dies on its first failed call, so this is close to the count of
+    bundles this lane ended.
+    """
+    failed_max_duration_ms: int
+    failed_p50_duration_ms: int
+    """Read against the configured inference timeout: a p50 at the timeout
+    budget is a hang, a sub-second p50 is a rejection."""
+    failure_share: float
+
+
+class ConfirmationFailureGroup(BaseModel):
+    """One (window, lane, model, provider, status) confirmation bucket."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    window_seconds: int
+    lane: Literal["reader", "judge", "embedding"]
+    model: str
+    upstream_provider: str | None
+    provider_basis: InferenceRouteBasis
+    status: str
+    calls: int
+    without_cost: int
+    bundles_affected: int
+    max_duration_ms: int
+    p50_duration_ms: int
+
+
 class InferenceFailureTaxonomy(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -135,3 +194,9 @@ class InferenceFailureTaxonomy(BaseModel):
     lanes: list[InferenceFailureLaneWindow]
     groups: list[InferenceFailureGroup]
     rate_limit_bursts: list[InferenceRateLimitBurst]
+
+    # The confirmation lane reads a different table on a different cadence, so
+    # it carries its own windows rather than borrowing `window_seconds`.
+    confirmation_window_seconds: list[int] = []
+    confirmation_lanes: list[ConfirmationFailureLaneWindow] = []
+    confirmation_groups: list[ConfirmationFailureGroup] = []

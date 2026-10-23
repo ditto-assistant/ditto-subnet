@@ -2866,6 +2866,48 @@ export const inferenceFailureTaxonomySchema = z.object({
   // Nothing is enforced, rerouted, or retried on it. Null (not []) when the
   // Platform predates the signal, so a rollout skew never reads as "no burst".
   rate_limit_bursts: z.array(inferenceRateLimitBurstSchema).nullish().default(null),
+
+  // The confirmation lane reads confirmation_inference_requests, which the
+  // chat/embedding taxonomy above does not touch at all. Without these fields
+  // Zod would strip them and an operator would keep reading a dying lane as a
+  // healthy one -- which is exactly what happened through 2026-10.
+  confirmation_window_seconds: z.array(z.number().int().positive()).default([]),
+  confirmation_lanes: z
+    .array(
+      z.object({
+        window_seconds: z.number().int().positive(),
+        lane: z.enum(['reader', 'judge', 'embedding']),
+        calls: z.number().int().nonnegative(),
+        settled: z.number().int().nonnegative(),
+        completed: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        in_flight: z.number().int().nonnegative(),
+        failed_without_provider: z.number().int().nonnegative(),
+        failed_without_cost: z.number().int().nonnegative(),
+        bundles_with_failure: z.number().int().nonnegative(),
+        failed_max_duration_ms: z.number().int().nonnegative(),
+        failed_p50_duration_ms: z.number().int().nonnegative(),
+        failure_share: z.number().nonnegative(),
+      }),
+    )
+    .default([]),
+  confirmation_groups: z
+    .array(
+      z.object({
+        window_seconds: z.number().int().positive(),
+        lane: z.enum(['reader', 'judge', 'embedding']),
+        model: z.string(),
+        upstream_provider: z.string().nullable(),
+        provider_basis: z.string(),
+        status: z.string(),
+        calls: z.number().int().nonnegative(),
+        without_cost: z.number().int().nonnegative(),
+        bundles_affected: z.number().int().nonnegative(),
+        max_duration_ms: z.number().int().nonnegative(),
+        p50_duration_ms: z.number().int().nonnegative(),
+      }),
+    )
+    .default([]),
 })
 
 export const runtimeProfileCaptureInputSchema = z
@@ -4742,6 +4784,7 @@ const sourceReviewAuthorityTransitionSchema = z.enum([
   'tool_trajectory_fabricated', 'selective_model_disablement', 'scorer_field_rewritten',
   'derived_value_authoritative', 'family_compiler_authoritative',
   'tool_selection_predetermined',
+  'evaluation_identity_authoritative',
 ])
 const sourceReviewScorerVisibleEffectSchema = z.enum([
   'final_text', 'answer', 'abstain', 'tool_calls', 'validator_observed_trajectory',
@@ -4761,6 +4804,10 @@ const scorerEffectsByTransition: Record<
   family_compiler_authoritative: new Set(['final_text', 'answer', 'abstain', 'graded_outcome']),
   tool_selection_predetermined: new Set([
     'tool_calls', 'validator_observed_trajectory', 'graded_outcome',
+  ]),
+  evaluation_identity_authoritative: new Set([
+    'final_text', 'answer', 'abstain', 'tool_calls',
+    'validator_observed_trajectory', 'graded_outcome',
   ]),
 }
 const sourceReviewCausalRoleBindingSchema = z.strictObject({
@@ -5349,6 +5396,16 @@ export const screeningVerificationReadinessSchema = z.object({
     receipt_count: z.number().int().nonnegative(),
   })).length(20),
   private_metamorphic_applicability: z.literal('not_recorded'),
+  source_review: z.object({
+    review_id: z.string().uuid(), status: z.string(),
+    artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/), binding_matches: z.boolean(),
+    observation_status: z.enum(['not_recorded', 'finding_not_recorded', 'invalid', 'recorded_unverified']),
+    completed_at: z.string().nullable(), consumed_at: z.string().nullable(),
+    observation_ok: z.boolean().nullable(),
+    clearance_certified: z.boolean().nullable(), finding_digest: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    finding: sourceReviewFindingSchema.nullable(), source_admission_accepted: z.literal(false),
+    limitations: z.string(),
+  }).nullish(),
   private_package: z.object({
     registration_status: z.enum(['not_registered', 'registered_unverified']),
     prerequisites: z.array(z.object({
