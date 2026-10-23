@@ -421,7 +421,11 @@ async def fail_generator_round_job(
         # Validate the round and find its attempt before changing anything, so
         # a payload naming another round cannot close this ticket while the
         # real attempt stays leased.
-        row = await round_for_dataset(session, ticket.dataset_sha256)
+        row = (
+            await round_for_dataset(session, ticket.dataset_sha256)
+            if ticket.dataset_sha256 is not None
+            else None
+        )
         if row is None or row.round_index != payload.round_index:
             raise HTTPException(409, "round failure names another round")
         attempt = await session.get(
