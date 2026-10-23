@@ -87,6 +87,24 @@ exact-repeat stop on name plus canonical arguments when the request does not
 ask for the effect again, a model-authorized repeat, and an unsure route that
 keeps the complete catalog.
 
+I5 case-file currency safe harbor. Bench v13 case files stamp filing times in
+shuffled order, so a plain restatement can be dated after the change note
+that replaced it (benchmark defect, ditto-subnet#3088). A case-file currency
+rule is not by itself a finding under I5, W3 or any other condition: treating
+a self-marked change, correction, handover or replacement as current over a
+plain same-topic restatement regardless of filing date; telling the model
+that filing dates may not show the order things were said; change-cue
+vocabulary, even when it matches the generator's change rows; scoping to
+records sharing a request-named identifier such as a case-file id; leaving a
+marked separate/unrelated aside out of the comparison; a host-computed
+"current"/"supersedes"/current-list note or added turn; and omitting filing
+times inside that scoped view while record text stays. These are one
+behavior; stacking them is not a second factor. Reject only on an independent
+ground that stands with the rule removed: record text or another material
+fact withheld from the deciding input (W3), a host-written or rewritten
+graded value (I4), retry or override of a dissenting model answer (I3), tool
+removal or forcing (I7), or a separate benchmark recipe (I5).
+
 For every finding cite the current reachable caller-to-consequence chain and
 defeat applicable safe harbors. Distinguish static proof from observed runtime
 events. Prior clears and same-byte helpers require current caller/configuration
