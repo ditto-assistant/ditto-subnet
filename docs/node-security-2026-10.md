@@ -47,10 +47,19 @@ and dashboard builds. Its running pm2 daemon needs a separate version audit.
 
 ## Remaining rollout evidence
 
-The read-only screener-host inventory attempt using the documented `peyton`
-identity failed SSH host-key verification. No host-key bypass or production
-mutation was attempted. Live installed/process versions, container digests,
-old distro binaries and any previously shipped benchmark images remain unverified.
+At October 22, 2026 21:26:58 EDT, a read-only inventory authenticated to
+`subnet-screener-1` over its company-tailnet address as the documented `peyton`
+user. SSH verified the existing trusted key under the inventory's public-IP
+alias with strict host-key checking; no trust entry was added or bypassed.
+No Node binary was found on the login PATH or at `/usr/bin/node`,
+`/usr/local/bin/node`, or `/opt/nodejs/*/bin/node`; no process named `node`
+or `nodejs` and no running root-Docker container were observed. The retained
+`screener-fleet-stable-1` image was
+`sha256:7d131cbe673fded89878aac86e364ca4e1d4c8d9b543096e6d5bc3cd049faf59`,
+source `27cd188027e9dd674af4cb85417f9220dc0ce0a5`. This bounded check does not
+exhaust user installations, rootless container engines, inactive images,
+other hosts, or previously shipped benchmark images. The Platform app host
+and its pm2 daemon remain unverified. No production mutation was performed.
 
 After authorized merge/release, rebuild and publish the affected images and
 verify the deployed image digest plus `node --version` in the actual runtime.
