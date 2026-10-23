@@ -33,7 +33,8 @@ BUILDER_GO_VERSION = "1.27.3"
 # legal archive at the file-payload limit acceptable.
 MAX_TAR_BYTES = MAX_SOURCE_BYTES + (MAX_SOURCE_FILES + 2) * 2048 + (20 << 10)
 
-_MODULE_LINE = re.compile(r'^module\s+("?)([^\s"]+)("?)\s*(//.*)?$')
+# A quoted module path needs both quotes (mirrors the Go alternation).
+_MODULE_LINE = re.compile(r'^module\s+(?:"([^\s"]+)"|([^\s"]+))\s*(//.*)?$')
 _GO_LINE = re.compile(r"^go\s+([0-9]+\.[0-9]+(\.[0-9]+)?)\s*(//.*)?$")
 _REQUIRE = re.compile(r"^require(\s|\()")
 
@@ -99,7 +100,7 @@ def _parse_go_mod(raw: bytes) -> tuple[str, str, bool]:
     for line in raw.decode("utf-8", errors="replace").splitlines():
         line = line.strip()
         if m := _MODULE_LINE.match(line):
-            module = m.group(2)
+            module = m.group(1) or m.group(2)
         elif m := _GO_LINE.match(line):
             go_version = m.group(1)
         elif _REQUIRE.match(line):
@@ -131,6 +132,7 @@ def inspect_archive(raw: bytes) -> ArchiveInfo:
     if decompressor.unused_data:
         raise ArchiveRejected("source archive has data after its gzip member")
     files: dict[str, bytes] = {}
+    directories: set[str] = set()
     total = 0
     entries = 0
     try:
@@ -161,6 +163,20 @@ def inspect_archive(raw: bytes) -> ArchiveInfo:
                     )
                 if name in files:
                     raise ArchiveRejected(f"source archive repeats {name!r}")
+                # A file cannot also be a directory: "a" and "a/b" would extract
+                # halfway and then fail.
+                if name in directories:
+                    raise ArchiveRejected(
+                        f"source archive holds files under file {name!r}"
+                    )
+                parent = posixpath.dirname(name)
+                while parent:
+                    if parent in files:
+                        raise ArchiveRejected(
+                            f"source archive file {name!r} is under file {parent!r}"
+                        )
+                    directories.add(parent)
+                    parent = posixpath.dirname(parent)
                 if member.size < 0 or total + member.size > MAX_SOURCE_BYTES:
                     raise ArchiveRejected(
                         f"source archive expands past {MAX_SOURCE_BYTES} bytes"

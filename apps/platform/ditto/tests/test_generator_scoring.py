@@ -192,3 +192,8 @@ def test_a_repeat_within_one_pack_earns_credit_once() -> None:
     )
     assert [c.status for c in got.cases] == ["discriminating", "duplicate"]
     assert got.discriminating == 1 and got.duplicate == 1
+
+
+def test_one_case_id_cannot_name_two_fingerprints() -> None:
+    with pytest.raises(ScoreInputError, match="two different fingerprints"):
+        score_cases([CaseRef("c", "f1"), CaseRef("c", "f2")], [], ScoreParams())

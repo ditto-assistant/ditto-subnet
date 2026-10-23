@@ -851,6 +851,31 @@ class TestScorer:
 
 
 class TestOperatorActions:
+    async def test_a_rescore_during_a_run_survives_its_result(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        fixed_panel: list[dict[str, Any]],  # noqa: ARG002 - pins the panel
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive())
+        sub_id = accepted["submission_id"]
+        work = await _lease(client)
+        resp = await client.post(
+            f"/api/v1/admin/generator-competition/submissions/{sub_id}/rescore",
+            headers=_ADMIN,
+            json={"expected_status": "active", "reason": "panel changed mid-run"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert (await _post(client, _result(work, tag="r"))).json()[
+            "status"
+        ] == "scored"
+        # The requested run starts now, not after the rescore interval.
+        rerun = await _lease(client)
+        assert rerun is not None and rerun["run_id"] != work["run_id"]
+
     async def test_rescore_and_reject(
         self,
         app: FastAPI,

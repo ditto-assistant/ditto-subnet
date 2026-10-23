@@ -123,6 +123,31 @@ def test_accepts_minimal_tree_and_ignores_packing_details() -> None:
             ],
             "vendor",
         ),
+        (
+            [
+                ("go.mod", GOMOD, tarfile.REGTYPE),
+                ("main.go", MAIN, tarfile.REGTYPE),
+                ("gen.go", MAIN, tarfile.REGTYPE),
+                ("gen.go/extra.go", MAIN, tarfile.REGTYPE),
+            ],
+            "under file",
+        ),
+        (
+            [
+                ("go.mod", GOMOD, tarfile.REGTYPE),
+                ("main.go", MAIN, tarfile.REGTYPE),
+                ("gen.go/extra.go", MAIN, tarfile.REGTYPE),
+                ("gen.go", MAIN, tarfile.REGTYPE),
+            ],
+            "under file",
+        ),
+        (
+            [
+                ("go.mod", b'module x"\n\ngo 1.23\n', tarfile.REGTYPE),
+                ("main.go", MAIN, tarfile.REGTYPE),
+            ],
+            "module",
+        ),
     ],
 )
 def test_rejects_unsafe_or_unbuildable_trees(
@@ -150,3 +175,15 @@ def test_requires_exactly_one_complete_gzip_member() -> None:
         inspect_archive(good[:-4])
     with pytest.raises(ArchiveRejected, match="after its gzip member"):
         inspect_archive(good + good)
+
+
+def test_accepts_a_quoted_module_path() -> None:
+    info = inspect_archive(
+        _archive(
+            [
+                ("go.mod", b'module "x"\n\ngo 1.23\n', tarfile.REGTYPE),
+                ("main.go", MAIN, tarfile.REGTYPE),
+            ]
+        )
+    )
+    assert info.module == "x"

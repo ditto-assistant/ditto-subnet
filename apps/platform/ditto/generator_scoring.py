@@ -162,6 +162,16 @@ def score_cases(
         CASE_DUPLICATE: 0,
     }
     verdicts: list[CaseVerdict] = []
+    # Results are looked up by case id, so one id naming two fingerprints would
+    # let one panel result earn credit twice.
+    fingerprint_of: dict[str, str] = {}
+    for case in cases:
+        if fingerprint_of.setdefault(case.case_id, case.fingerprint) != (
+            case.fingerprint
+        ):
+            raise ScoreInputError(
+                f"case {case.case_id!r} names two different fingerprints"
+            )
     for case in cases:
         if case.fingerprint in claimed:
             counts[CASE_DUPLICATE] += 1

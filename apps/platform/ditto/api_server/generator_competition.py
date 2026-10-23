@@ -535,7 +535,16 @@ async def record_result(
     }
     finish_run(run, status="scored", outcome="scored", now=now, score=scored.score)
     if row.status == "active":
-        row.next_run_at = rescore_at
+        # An operator rescore requested while this run was in flight set
+        # next_run_at after the lease began; keep it rather than pushing the
+        # requested run out to the normal interval.
+        requested = row.next_run_at
+        if requested is not None and requested.replace(
+            tzinfo=requested.tzinfo or UTC
+        ) > run.leased_at.replace(tzinfo=run.leased_at.tzinfo or UTC):
+            row.next_run_at = min(requested, rescore_at)
+        else:
+            row.next_run_at = rescore_at
         row.status_reason = None
     return RecordedResult("scored", "scored", scored.score, row.status)
 
