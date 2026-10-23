@@ -1,6 +1,6 @@
 module github.com/ditto-assistant/dittobench-generator-starter-kit
 
-go 1.23
+go 1.27
 
 require github.com/ditto-assistant/dittobench-datagen v0.0.0
 
