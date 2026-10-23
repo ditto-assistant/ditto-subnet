@@ -55,7 +55,9 @@ def test_case_file_currency_rule_is_not_rejectable_alone(render) -> None:
     assert "I5 case-file currency safe harbor." in prompt
     assert "stacking them is not a second factor" in prompt
     assert "ditto-subnet#3088" in prompt
-    policy = (Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md").read_text()
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
     for fragment in (
         "#### Clarification: case-file currency rules (2026-10-23)",
         "is not, by itself, a rejection ground under I5",
