@@ -293,6 +293,17 @@ def test_every_listed_predicate_has_a_handler() -> None:
         }
     )
     assert any("control_checks must be a list" in p for p in problems)
+    null_control = {
+        "invariant": "I7",
+        "claim": "x",
+        "probe_id": "p001-aaaaaa",
+        "violation_checks": [{"op": "http_ok"}],
+        "control_checks": None,
+    }
+    problems = tools.validate_verdict(
+        {"outcome": "violation", "findings": [null_control]}
+    )
+    assert any("control_checks must be a list" in p for p in problems)
 
 
 def test_agent_loop_respects_ledger_and_stops_on_verdict(tmp_path: Path) -> None:
