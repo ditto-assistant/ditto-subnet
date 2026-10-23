@@ -173,6 +173,10 @@ func TestInspectArchiveRejects(t *testing.T) {
 	if _, _, err := InspectArchive(corrupt); err == nil {
 		t.Error("corrupt gzip trailer accepted")
 	}
+	twoMembers := append(append([]byte(nil), good...), good...)
+	if _, _, err := InspectArchive(twoMembers); err == nil {
+		t.Error("a second gzip member was accepted")
+	}
 }
 
 func TestInspectArchiveRejectsNonFilePayloads(t *testing.T) {

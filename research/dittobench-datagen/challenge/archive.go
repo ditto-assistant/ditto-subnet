@@ -70,10 +70,14 @@ func InspectArchive(raw []byte) (ArchiveInfo, []SourceFile, error) {
 	if len(raw) > MaxArchiveBytes {
 		return ArchiveInfo{}, nil, fmt.Errorf("source archive exceeds %d bytes", MaxArchiveBytes)
 	}
-	gz, err := gzip.NewReader(bytes.NewReader(raw))
+	src := bytes.NewReader(raw)
+	gz, err := gzip.NewReader(src)
 	if err != nil {
 		return ArchiveInfo{}, nil, fmt.Errorf("source archive is not gzip: %w", err)
 	}
+	// One gzip member exactly, as `challenge pack` writes it. Platform's
+	// Python check reads one member, so both sides must agree on the bytes.
+	gz.Multistream(false)
 	tr := tar.NewReader(gz)
 	var files []SourceFile
 	seen := map[string]bool{}
@@ -91,22 +95,26 @@ func InspectArchive(raw []byte) (ArchiveInfo, []SourceFile, error) {
 			if n > MaxSourceBytes {
 				return ArchiveInfo{}, nil, errors.New("source archive has excessive data after its tar end markers")
 			}
+			if src.Len() != 0 {
+				return ArchiveInfo{}, nil, errors.New("source archive has data after its gzip member")
+			}
 			break
 		}
 		if err != nil {
 			return ArchiveInfo{}, nil, fmt.Errorf("source archive: %w", err)
 		}
+		if hdr.Typeflag == tar.TypeXGlobalHeader {
+			continue // PAX records; the tar reader consumes their payload itself
+		}
 		entries++
-		if entries > MaxSourceFiles {
+		// Every entry counts; the root directory entry may be one extra.
+		if entries > MaxSourceFiles+1 {
 			return ArchiveInfo{}, nil, fmt.Errorf("source archive has more than %d entries", MaxSourceFiles)
 		}
 		if hdr.Typeflag != tar.TypeReg && hdr.Size != 0 {
 			// The tar reader skips an entry's payload on the next Next(); a
 			// non-file entry with a payload would be unbounded decompression.
 			return ArchiveInfo{}, nil, fmt.Errorf("source archive entry %q carries a payload but is not a regular file", hdr.Name)
-		}
-		if hdr.Typeflag == tar.TypeXGlobalHeader {
-			continue
 		}
 		if hdr.Typeflag == tar.TypeDir && (hdr.Name == "." || hdr.Name == "./" || hdr.Name == "") {
 			continue // the root itself, as `tar -C dir .` writes it

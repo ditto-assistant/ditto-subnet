@@ -356,6 +356,23 @@ func (d Docker) hardening(limits Limits) []string {
 	}
 }
 
+// create makes the named container without starting it. Killing a
+// `docker run` client while the daemon is still creating the container leaves
+// the container to start detached after any cleanup already ran, so creation
+// is its own bounded step that is never cut short by the caller: once it
+// returns, a later rm -f always finds the container.
+func (d Docker) create(ctx context.Context, args []string) error {
+	cctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var stderr tailBuffer
+	cmd := exec.CommandContext(cctx, d.cli(), append([]string{"create"}, args...)...)
+	cmd.Stdout, cmd.Stderr = io.Discard, &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%w: docker create: %v: %s", ErrSandbox, err, stderr.String())
+	}
+	return ctx.Err()
+}
+
 func (d Docker) kill(name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -387,7 +404,7 @@ func (d Docker) Build(ctx context.Context, srcDir string) (Program, error) {
 	buildLimits.MemoryBytes = 2 << 30
 	buildLimits.CPUs = "2"
 	buildLimits.PIDs = 512
-	args := append([]string{"run", "--name", name}, d.hardening(buildLimits)...)
+	args := append([]string{"--name", name}, d.hardening(buildLimits)...)
 	args = append(args,
 		"--tmpfs=/tmp:rw,exec,nosuid,size=1g",
 		"-v", src+":/src:ro", "-v", out+":/out",
@@ -398,12 +415,16 @@ func (d Docker) Build(ctx context.Context, srcDir string) (Program, error) {
 		builder,
 		"go", "build", "-trimpath", "-buildvcs=false", "-o", "/out/generator", ".",
 	)
+	defer d.remove(name)
+	if err := d.create(ctx, args); err != nil {
+		os.RemoveAll(out)
+		return nil, err
+	}
 	bctx, cancel := context.WithTimeout(ctx, limits.BuildTimeout)
 	defer cancel()
-	cmd := exec.Command(d.cli(), args...)
+	cmd := exec.Command(d.cli(), "start", "-a", name)
 	var stderr tailBuffer
 	cmd.Stdout, cmd.Stderr = &stderr, &stderr
-	defer d.remove(name)
 	if err := startAndWait(bctx, cmd, func() { d.kill(name) }); err != nil {
 		os.RemoveAll(out)
 		if ctx.Err() != nil {
@@ -455,21 +476,24 @@ func (p *dockerProgram) Close() error   { return os.RemoveAll(p.dir) }
 
 func (p *dockerProgram) Generate(ctx context.Context, req challenge.GenerateRequest) ([]byte, error) {
 	name := containerName()
-	args := append([]string{"run", "--name", name, "-i"}, p.d.hardening(p.limits)...)
+	args := append([]string{"--name", name, "-i"}, p.d.hardening(p.limits)...)
 	args = append(args,
 		"--tmpfs=/tmp:rw,noexec,nosuid,size=64m",
 		"-v", p.dir+":/gen:ro",
 		"--entrypoint", "/gen/generator",
 		p.image,
 	)
+	defer p.d.remove(name)
+	if err := p.d.create(ctx, args); err != nil {
+		return nil, err
+	}
 	gctx, cancel := context.WithTimeout(ctx, p.limits.GenerateTimeout)
 	defer cancel()
-	cmd := exec.Command(p.d.cli(), args...)
+	cmd := exec.Command(p.d.cli(), "start", "-a", "-i", name)
 	cmd.Stdin = bytes.NewReader(req.Bytes())
 	stdout := &boundedBuffer{limit: challenge.MaxPackBytes}
 	var stderr tailBuffer
 	cmd.Stdout, cmd.Stderr = stdout, &stderr
-	defer p.d.remove(name)
 	err := startAndWait(gctx, cmd, func() { p.d.kill(name) })
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -481,7 +505,7 @@ func (p *dockerProgram) Generate(ctx context.Context, req challenge.GenerateRequ
 		if started, code := p.d.containerExit(name); started && code != 0 {
 			return nil, exitError(code, stderr.String())
 		}
-		return nil, fmt.Errorf("%w: docker run: %v: %s", ErrSandbox, err, stderr.String())
+		return nil, fmt.Errorf("%w: docker start: %v: %s", ErrSandbox, err, stderr.String())
 	}
 	return packOutput(stdout)
 }
