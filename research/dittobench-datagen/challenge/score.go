@@ -16,7 +16,7 @@ const (
 	CaseInsufficientPanel = "insufficient_panel"
 )
 
-// Pack statuses after scoring.
+// Pack and run statuses after scoring.
 const (
 	PackScored            = "scored"
 	PackInsufficientPanel = "insufficient_panel"
@@ -269,5 +269,70 @@ func ScoreCases(cases []CaseRef, in ScoreInput, params ScoreParams) (PackScore, 
 	if out.Score > 1 {
 		out.Score = 1
 	}
+	return out, nil
+}
+
+// SeedPanel is one seed's pack, reduced to case refs, and its panel results.
+type SeedPanel struct {
+	Seed  string        `json:"seed"`
+	Cases []CaseRef     `json:"cases"`
+	Panel []PanelMember `json:"panel"`
+}
+
+// RunInput is one generator evaluation: the packs it produced for each of the
+// run's secret seeds, each run against the same panel.
+type RunInput struct {
+	GeneratorOwnerKey string      `json:"generator_owner_key"`
+	Seeds             []SeedPanel `json:"seeds"`
+	// ClaimedFingerprints are case fingerprints earlier runs (of any
+	// generator) already hold credit for.
+	ClaimedFingerprints []string `json:"claimed_fingerprints,omitempty"`
+}
+
+// RunScore is a generator's score for one evaluation.
+type RunScore struct {
+	Status string      `json:"status"`
+	Score  float64     `json:"score"`
+	Seeds  []PackScore `json:"seeds"`
+}
+
+// ScoreRun scores a generator evaluation: each seed's pack with ScoreCases,
+// then the mean pack score across seeds.
+//
+// Seeds are scored in order, and every case fingerprint a seed emits joins the
+// claimed set for later seeds. A generator that ignores its seed therefore
+// scores its first pack and duplicates for the rest: the mean rewards a
+// program whose output is fresh for every seed, not one good sample. Any seed
+// with an insufficient panel makes the whole run insufficient (re-queued, no
+// score), so a run is never judged on a subset of its seeds.
+func ScoreRun(in RunInput, params ScoreParams) (RunScore, error) {
+	if len(in.Seeds) == 0 {
+		return RunScore{}, errors.New("run has no seeds")
+	}
+	claimed := append([]string(nil), in.ClaimedFingerprints...)
+	out := RunScore{Status: PackScored, Seeds: make([]PackScore, 0, len(in.Seeds))}
+	var sum float64
+	for _, seed := range in.Seeds {
+		ps, err := ScoreCases(seed.Cases, ScoreInput{
+			GeneratorOwnerKey:   in.GeneratorOwnerKey,
+			Panel:               seed.Panel,
+			ClaimedFingerprints: claimed,
+		}, params)
+		if err != nil {
+			return RunScore{}, fmt.Errorf("seed %s: %w", seed.Seed, err)
+		}
+		if ps.Status != PackScored {
+			out.Status = PackInsufficientPanel
+		}
+		sum += ps.Score
+		out.Seeds = append(out.Seeds, ps)
+		for _, c := range seed.Cases {
+			claimed = append(claimed, c.Fingerprint)
+		}
+	}
+	if out.Status != PackScored {
+		return out, nil
+	}
+	out.Score = sum / float64(len(in.Seeds))
 	return out, nil
 }

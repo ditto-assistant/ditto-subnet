@@ -1,29 +1,37 @@
-// Command challenge is the generator competition's local tool: emit the
-// reference pack, validate a pack exactly as Platform's scorer will, print its
-// identity, and score it against a panel verdict file.
+// Command challenge is the generator competition's local tool: rehearse a
+// generator exactly as the trusted scorer runs it, package its source for
+// upload, and validate or score individual packs.
 //
 // Usage:
 //
+//	challenge rehearse -dir ./my-generator -hotkey 5Grw... [-seeds 3] [-cases 16] \
+//	    [-sandbox local|docker] [-out-dir packs/]       # exit 1 when invalid
+//	challenge pack -dir ./my-generator -out generator.tar.gz
+//	challenge inspect generator.tar.gz                   # archive identity and checks
+//	challenge rehearse -archive generator.tar.gz -hotkey 5Grw... -sandbox docker
+//	challenge validate pack.json [-seed <hex> -hotkey 5Grw... -cases 16]
 //	challenge example -seed 42 -hotkey 5Grw... -out pack.json
-//	challenge validate pack.json          # exit 1 when invalid
-//	challenge validate -json pack.json    # machine-readable report
-//	challenge sha pack.json               # the identity to sign and upload
+//	challenge sha FILE
 //	challenge score -pack pack.json -panel panel.json [-params params.json]
 //
-// validate is the same function the trusted scorer runs before any agent sees
-// a pack, so a pack that validates locally is accepted on upload unless its
-// bytes change.
+// rehearse runs genrun.Evaluate, the same build/run/validate/determinism path
+// the scorer runs on secret seeds. With -sandbox docker it uses the scorer's
+// pinned images and limits, so a generator that rehearses cleanly there is
+// accepted by the scorer unless it depends on the seeds it happened to see.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
+	"github.com/ditto-assistant/dittobench-datagen/genrun"
 )
 
 func main() {
@@ -33,6 +41,12 @@ func main() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "rehearse":
+		err = runRehearse(os.Args[2:])
+	case "pack":
+		err = runPack(os.Args[2:])
+	case "inspect":
+		err = runInspect(os.Args[2:])
 	case "example":
 		err = runExample(os.Args[2:])
 	case "validate":
@@ -66,9 +80,12 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: challenge <command> [flags]
 
 commands:
-  example   emit the reference generator's pack for a seed
+  rehearse  build and run a generator as the scorer does (exit 1 when invalid)
+  pack      package a generator directory as a deterministic source archive
+  inspect   check a source archive and print its identity
   validate  check a pack against the v1 contract (exit 1 when invalid)
-  sha       print a pack's identity (SHA-256 of its exact bytes)
+  example   emit the reference generator's pack for a seed
+  sha       print the SHA-256 of a file's exact bytes
   score     score a pack against a panel verdict file`)
 }
 
@@ -84,9 +101,161 @@ func runExample(args []string) error {
 	return writeJSON(*out, challenge.ReferencePack(*seed, *hotkey))
 }
 
+func runRehearse(args []string) error {
+	fs := flag.NewFlagSet("rehearse", flag.ExitOnError)
+	dir := fs.String("dir", "", "generator source directory")
+	archive := fs.String("archive", "", "generator source archive (rehearses the exact upload)")
+	hotkey := fs.String("hotkey", "", "SS58 hotkey the packs are bound to (required)")
+	seeds := fs.Int("seeds", 3, "seeds to run (1..8)")
+	firstSeed := fs.Int64("seed", 1, "first rehearsal seed; seeds are derived with challenge.SeedFromInt64")
+	cases := fs.Int("cases", 16, "cases per pack (the competition's cases_per_seed)")
+	sandbox := fs.String("sandbox", "local", "local (host toolchain, no isolation) or docker (the scorer's sandbox)")
+	outDir := fs.String("out-dir", "", "write each seed's pack here as <seed>.json")
+	asJSON := fs.Bool("json", false, "print the evaluation as JSON")
+	_ = fs.Parse(args)
+	if (*dir == "") == (*archive == "") || *hotkey == "" || *seeds < 1 || *seeds > 8 {
+		return errors.New("rehearse: exactly one of -dir/-archive, -hotkey, and -seeds 1..8 are required")
+	}
+	var sb genrun.Sandbox
+	switch *sandbox {
+	case "local":
+		sb = genrun.Local{}
+	case "docker":
+		sb = genrun.Docker{}
+	default:
+		return fmt.Errorf("rehearse: unknown sandbox %q", *sandbox)
+	}
+	// Rehearse the upload, not the checkout: package -dir the way `pack` does,
+	// then build from the extracted archive like the scorer.
+	var raw []byte
+	var err error
+	if *archive != "" {
+		raw, err = os.ReadFile(*archive)
+	} else {
+		raw, _, err = genrun.PackDir(context.Background(), *dir)
+	}
+	if err != nil {
+		return err
+	}
+	src, err := os.MkdirTemp("", "challenge-rehearse-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(src)
+	if _, err := challenge.ExtractArchive(raw, src); err != nil {
+		return err
+	}
+	plan := genrun.Plan{MinerHotkey: *hotkey, Cases: *cases, CheckDeterminism: true}
+	for i := 0; i < *seeds; i++ {
+		plan.Seeds = append(plan.Seeds, challenge.SeedFromInt64(*firstSeed+int64(i)))
+	}
+	ev, err := genrun.Evaluate(context.Background(), sb, src, plan)
+	if err != nil {
+		return err
+	}
+	if *outDir != "" {
+		if err := os.MkdirAll(*outDir, 0o755); err != nil {
+			return err
+		}
+		for _, s := range ev.Seeds {
+			if len(s.Pack) == 0 {
+				continue
+			}
+			if err := os.WriteFile(filepath.Join(*outDir, s.Seed[:16]+".json"), s.Pack, 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	if *asJSON {
+		if err := writeJSON("", ev); err != nil {
+			return err
+		}
+	} else {
+		printEvaluation(ev)
+	}
+	if !ev.Valid() {
+		return exitError(1)
+	}
+	return nil
+}
+
+func printEvaluation(ev genrun.Evaluation) {
+	if !ev.Build.OK {
+		fmt.Printf("build failed (%s sandbox, %dms):\n%s\n", ev.Sandbox, ev.Build.DurationMS, ev.Build.Error)
+		return
+	}
+	fmt.Printf("built (%s sandbox, %dms) binary sha256 %s\n", ev.Sandbox, ev.Build.DurationMS, ev.Build.BinarySHA256)
+	for _, s := range ev.Seeds {
+		switch {
+		case s.Error != "":
+			fmt.Printf("seed %s…: %s\n", s.Seed[:12], s.Error)
+		case s.Report.Valid:
+			fmt.Printf("seed %s…: valid, %d cases, %d pairs, %dms\n", s.Seed[:12], s.Report.CaseCount, s.Report.PairCount, s.DurationMS)
+		default:
+			fmt.Printf("seed %s…: invalid, %d issue(s)\n", s.Seed[:12], len(s.Report.Issues))
+			for _, is := range s.Report.Issues {
+				where := "pack"
+				if is.CaseID != "" {
+					where = "case " + is.CaseID
+				}
+				fmt.Printf("  %s: [%s] %s\n", where, is.Rule, is.Message)
+			}
+		}
+	}
+	if ev.Deterministic != nil {
+		if *ev.Deterministic {
+			fmt.Println("deterministic: re-running the first seed reproduced identical bytes")
+		} else {
+			fmt.Println("NOT deterministic: re-running the first seed produced different output")
+		}
+	}
+	if ev.Valid() {
+		fmt.Println("valid: the scorer would accept this generator on these seeds")
+	} else {
+		fmt.Println("invalid: the scorer would reject this generator")
+	}
+}
+
+func runPack(args []string) error {
+	fs := flag.NewFlagSet("pack", flag.ExitOnError)
+	dir := fs.String("dir", "", "generator source directory (required)")
+	out := fs.String("out", "generator.tar.gz", "archive path")
+	_ = fs.Parse(args)
+	if *dir == "" {
+		return errors.New("pack: -dir is required")
+	}
+	raw, info, err := genrun.PackDir(context.Background(), *dir)
+	if err != nil {
+		return fmt.Errorf("pack: %w", err)
+	}
+	if err := os.WriteFile(*out, raw, 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s: %d files, %d bytes source, archive sha256 %s, tree sha256 %s\n", *out, info.Files, info.Bytes, info.SHA256, info.TreeSHA256)
+	return nil
+}
+
+func runInspect(args []string) error {
+	if len(args) != 1 {
+		return errors.New("inspect: expected one archive path")
+	}
+	raw, err := os.ReadFile(args[0])
+	if err != nil {
+		return err
+	}
+	info, _, err := challenge.InspectArchive(raw)
+	if err != nil {
+		return err
+	}
+	return writeJSON("", info)
+}
+
 func runValidate(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "print the full report as JSON")
+	seed := fs.String("seed", "", "also check the pack is bound to this request seed")
+	hotkey := fs.String("hotkey", "", "request hotkey for the binding check")
+	cases := fs.Int("cases", 0, "request case count for the binding check")
 	_ = fs.Parse(args)
 	if fs.NArg() != 1 {
 		return errors.New("validate: expected one pack path")
@@ -94,6 +263,13 @@ func runValidate(args []string) error {
 	report, err := validateFile(fs.Arg(0))
 	if err != nil {
 		return err
+	}
+	if *seed != "" {
+		raw, err := readRaw(fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		report = challenge.ValidateGenerated(raw, challenge.NewGenerateRequest(*seed, *hotkey, *cases))
 	}
 	if *asJSON {
 		if err := writeJSON("", report); err != nil {

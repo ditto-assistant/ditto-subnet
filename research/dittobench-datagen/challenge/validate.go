@@ -151,6 +151,9 @@ func validateGenerator(v *validator, g Generator) {
 	if g.Version == "" || !labelPattern.MatchString(g.Version) {
 		v.add("", "generator.version", "generator.version must match %s", labelPattern)
 	}
+	if !shaPattern.MatchString(g.Seed) {
+		v.add("", "generator.seed", "generator.seed must be the request seed: 64 lowercase hex characters")
+	}
 	if g.SourceSHA256 != "" && !shaPattern.MatchString(g.SourceSHA256) {
 		v.add("", "generator.source_sha256", "generator.source_sha256 must be 64 lowercase hex characters")
 	}

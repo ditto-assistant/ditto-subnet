@@ -221,3 +221,118 @@ func TestScoreRejectsBadInput(t *testing.T) {
 		}
 	}
 }
+
+// RunVector is one cross-language ScoreRun fixture; Platform's Python port
+// replays testdata/run_vectors.json.
+type RunVector struct {
+	Name     string      `json:"name"`
+	Input    RunInput    `json:"input"`
+	Params   ScoreParams `json:"params"`
+	Expected RunScore    `json:"expected"`
+}
+
+func buildRunVectors(t *testing.T) []RunVector {
+	t.Helper()
+	params := DefaultScoreParams()
+	params.TargetCases = 16
+	rng := rand.New(rand.NewSource(77))
+	seedA, seedB := ReferencePack(31, testHotkey).Refs(), ReferencePack(32, testHotkey).Refs()
+	panelFor := func(cases []CaseRef) []PanelMember {
+		return []PanelMember{
+			member("champ", "o1", true, randomScores(rng, cases, 0.5)),
+			member("p2", "o2", false, randomScores(rng, cases, 0.7)),
+			member("p3", "o3", false, randomScores(rng, cases, 0.6)),
+			member("p4", "o4", false, randomScores(rng, cases, 0.4)),
+		}
+	}
+	var vs []RunVector
+	add := func(name string, in RunInput) {
+		got, err := ScoreRun(in, params)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		vs = append(vs, RunVector{Name: name, Input: in, Params: params, Expected: got})
+	}
+	add("two_fresh_seeds", RunInput{GeneratorOwnerKey: "gen", Seeds: []SeedPanel{
+		{Seed: SeedFromInt64(31), Cases: seedA, Panel: panelFor(seedA)},
+		{Seed: SeedFromInt64(32), Cases: seedB, Panel: panelFor(seedB)},
+	}})
+	// A generator that ignores its seed emits the same cases twice: the second
+	// seed is all duplicates and the mean halves.
+	add("seed_ignored_repeats", RunInput{GeneratorOwnerKey: "gen", Seeds: []SeedPanel{
+		{Seed: SeedFromInt64(31), Cases: seedA, Panel: panelFor(seedA)},
+		{Seed: SeedFromInt64(32), Cases: seedA, Panel: panelFor(seedA)},
+	}})
+	add("historical_claims", RunInput{GeneratorOwnerKey: "gen", ClaimedFingerprints: []string{seedA[1].Fingerprint, seedB[2].Fingerprint}, Seeds: []SeedPanel{
+		{Seed: SeedFromInt64(31), Cases: seedA, Panel: panelFor(seedA)},
+		{Seed: SeedFromInt64(32), Cases: seedB, Panel: panelFor(seedB)},
+	}})
+	short := panelFor(seedB)[:2]
+	add("one_seed_insufficient", RunInput{GeneratorOwnerKey: "gen", Seeds: []SeedPanel{
+		{Seed: SeedFromInt64(31), Cases: seedA, Panel: panelFor(seedA)},
+		{Seed: SeedFromInt64(32), Cases: seedB, Panel: short},
+	}})
+	return vs
+}
+
+func TestRunVectorsGolden(t *testing.T) {
+	vs := buildRunVectors(t)
+	path := "testdata/run_vectors.json"
+	if *update {
+		b, err := json.MarshalIndent(vs, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run go test ./challenge -run TestRunVectorsGolden -update)", err)
+	}
+	var golden []RunVector
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatal(err)
+	}
+	if len(golden) != len(vs) {
+		t.Fatalf("golden has %d vectors, built %d", len(golden), len(vs))
+	}
+	for i := range vs {
+		got, _ := json.Marshal(vs[i])
+		want, _ := json.Marshal(golden[i])
+		if string(got) != string(want) {
+			t.Errorf("run vector %q drifted; rerun with -update if intended", vs[i].Name)
+		}
+	}
+}
+
+func TestScoreRunSemantics(t *testing.T) {
+	vs := map[string]RunVector{}
+	for _, v := range buildRunVectors(t) {
+		vs[v.Name] = v
+	}
+	fresh := vs["two_fresh_seeds"].Expected
+	if fresh.Status != PackScored || fresh.Score <= 0 || len(fresh.Seeds) != 2 {
+		t.Fatalf("fresh: %+v", fresh)
+	}
+	if want := (fresh.Seeds[0].Score + fresh.Seeds[1].Score) / 2; fresh.Score != want {
+		t.Errorf("fresh mean %v want %v", fresh.Score, want)
+	}
+	rep := vs["seed_ignored_repeats"].Expected
+	if rep.Seeds[1].Duplicate != len(rep.Seeds[1].Cases) || rep.Seeds[1].Score != 0 {
+		t.Errorf("repeated seed should be all duplicates: %+v", rep.Seeds[1])
+	}
+	if rep.Score >= fresh.Score && fresh.Seeds[1].Score > 0 {
+		t.Errorf("ignoring the seed should not beat fresh output: %v vs %v", rep.Score, fresh.Score)
+	}
+	if h := vs["historical_claims"].Expected; h.Seeds[0].Duplicate != 1 || h.Seeds[1].Duplicate != 1 {
+		t.Errorf("historical claims: %d %d", h.Seeds[0].Duplicate, h.Seeds[1].Duplicate)
+	}
+	if ins := vs["one_seed_insufficient"].Expected; ins.Status != PackInsufficientPanel || ins.Score != 0 {
+		t.Errorf("insufficient: %+v", ins)
+	}
+	if _, err := ScoreRun(RunInput{}, DefaultScoreParams()); err == nil {
+		t.Error("empty run accepted")
+	}
+}

@@ -2,27 +2,30 @@
 // counterbalance to the agent competition.
 //
 // Agent miners are paid for harnesses that answer DittoBench cases. Generator
-// miners are paid for *cases*: a generator runs offline on the miner's machine
-// and emits a challenge pack (a seeded memory haystack plus questions with
-// deterministic gold answers). Platform holds the pack private, a trusted
-// scorer runs it against a panel of current top agents, and the pack earns
-// credit for cases that strong agents split on: solved by at least two
-// independent owners, failed by the rest, and preferably failed by the
-// champion.
+// miners are paid for *generators*: CPU-only programs that turn a seed into a
+// challenge pack (a seeded memory haystack plus questions with deterministic
+// gold answers). A miner submits generator source; Platform keeps it private,
+// and a trusted scorer builds it offline, runs it in a no-network sandbox on
+// fresh secret seeds, and runs the resulting packs against a panel of current
+// top agents. A generator earns credit for cases strong agents split on:
+// solved by at least two independent owners, failed by the rest, and
+// preferably failed by the champion.
 //
-// Everything a pack is judged on before any agent sees it lives here and is a
-// pure function of the pack bytes:
+// The contract is two layers, both pure functions of their inputs:
 //
-//   - Decode bounds the input and rejects unknown structure.
-//   - Validate checks schema, evidence grounding, answer leakage, and grader
-//     self-consistency (the gold answer passes the real memory grader; empty,
-//     abstaining, echoing, distractor, and whole-memory-dump answers do not).
-//   - Score turns a panel verdict matrix into a discrimination score.
+//   - The generator contract (generator.go): the source archive rules, the
+//     GenerateRequest a generator reads on stdin, and the binding checks that
+//     tie an emitted pack to its request.
+//   - The pack contract (this file, validate.go, score.go): Decode bounds the
+//     output and rejects unknown structure; Validate checks schema, evidence
+//     grounding, answer leakage, and grader self-consistency (the gold answer
+//     passes the real memory grader; empty, abstaining, echoing, distractor,
+//     and whole-memory-dump answers do not); ScoreCases and ScoreRun turn panel
+//     verdicts into a discrimination score.
 //
-// Packs carry data, never code. A generator is the miner's private program;
-// only its inert output crosses the trust boundary, so no screener sandbox is
-// needed and every validator rule is reproducible by the miner locally with
-// `go run ./cmd/challenge validate`.
+// No model is involved anywhere: generation is CPU compute, validation is
+// deterministic, and every rule is reproducible by the miner locally with
+// `go run ./cmd/challenge rehearse -dir <generator>`.
 package challenge
 
 import (
@@ -75,15 +78,15 @@ var (
 	labelPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]{0,63}$`)
 )
 
-// Generator identifies the program that produced a pack. It is provenance the
-// miner asserts; nothing about scoring trusts it.
+// Generator identifies the program that produced a pack. Name and version are
+// provenance the generator asserts; nothing about scoring trusts them.
 type Generator struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
-	// Seed is the generator seed the miner used, so the miner can reproduce the
-	// exact pack from their own program.
-	Seed int64 `json:"seed"`
-	// SourceSHA256 optionally commits to the generator source the miner ran.
+	// Seed echoes the GenerateRequest seed (64 lowercase hex) the pack was
+	// generated from. ValidateGenerated requires it to equal the request.
+	Seed string `json:"seed"`
+	// SourceSHA256 optionally commits to the generator source that ran.
 	SourceSHA256 string `json:"source_sha256,omitempty"`
 }
 
@@ -104,7 +107,7 @@ type Case struct {
 	EvidencePairIDs []string `json:"evidence_pair_ids"`
 }
 
-// Pack is a generator miner's submission.
+// Pack is one generator output: everything a panel run needs for one seed.
 type Pack struct {
 	Contract            string                 `json:"contract"`
 	GradingBenchVersion int                    `json:"grading_bench_version"`
@@ -118,7 +121,7 @@ type Pack struct {
 var ErrTooLarge = errors.New("challenge pack exceeds the size limit")
 
 // Decode parses pack bytes. It rejects oversize input, trailing data, and
-// unknown fields: a pack is an authored artifact, so a misspelled field is far
+// unknown fields: a pack is a generated artifact, so a misspelled field is far
 // more likely a generator bug than forward-compatible metadata, and silently
 // dropping it would grade a case differently from what its author intended.
 func Decode(raw []byte) (Pack, error) {
@@ -137,18 +140,19 @@ func Decode(raw []byte) (Pack, error) {
 	return p, nil
 }
 
-// Digest is a pack's identity: the hex SHA-256 of the exact bytes the miner
-// uploaded. It is what the miner signs, what Platform stores and pins, and
-// what the scorer re-checks before running a panel. Hashing the raw bytes (not
-// a re-encoding) keeps the identity reproducible in any language.
+// Digest is the hex SHA-256 of exact bytes: a pack's identity (what the
+// determinism check compares) and a source archive's identity (what the miner
+// signs and Platform pins). Hashing the raw bytes, not a re-encoding, keeps it
+// reproducible in any language.
 func Digest(raw []byte) string {
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
 
 // Fingerprint is a case's content identity across packs: its normalized
-// question and gold answer. Platform uses it to give the first submitter of a
-// case the credit and to zero later copies, regardless of IDs or haystack.
+// question and gold answer. Platform uses it to give the first generator that
+// emitted a case the credit and to zero later repeats, regardless of IDs or
+// haystack, and to compare generators' outputs on a shared probe seed.
 func Fingerprint(c Case) string {
 	h := sha256.New()
 	h.Write([]byte(grade.Normalize(c.Question)))

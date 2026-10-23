@@ -49,7 +49,7 @@ func ReferencePack(seed int64, minerHotkey string) Pack {
 		Generator: Generator{
 			Name:    ReferenceGeneratorName,
 			Version: ReferenceGeneratorVersion,
-			Seed:    seed,
+			Seed:    SeedFromInt64(seed),
 		},
 		MemoryWaves: b.waves,
 		Cases:       cases,

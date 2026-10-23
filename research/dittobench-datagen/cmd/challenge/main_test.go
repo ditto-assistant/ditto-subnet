@@ -30,3 +30,33 @@ func TestValidateFileReportsDecodeErrorsAsIssues(t *testing.T) {
 		t.Fatalf("reference pack rejected: %+v %v", r, err)
 	}
 }
+
+func TestPackAndInspectRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "gen")
+	if err := os.MkdirAll(filepath.Join(src, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"go.mod":    "module example.com/gen\n\ngo 1.23\n",
+		"main.go":   "package main\n\nfunc main() {}\n",
+		".git/HEAD": "ref: x\n",
+		".DS_Store": "junk",
+	} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := filepath.Join(dir, "gen.tar.gz")
+	if err := runPack([]string{"-dir", src, "-out", out}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, files, err := challenge.InspectArchive(raw)
+	if err != nil || info.Files != 2 || len(files) != 2 {
+		t.Fatalf("packed archive: %+v %v", info, err)
+	}
+}
