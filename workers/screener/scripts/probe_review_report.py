@@ -166,6 +166,9 @@ def summary(table: list[dict[str, Any]]) -> dict[str, Any]:
             row["n"] += 1
             row["caught"] += r["verified"]
             row["same_inv"] += r["verified"] and inv in r["found"]
+    reject_baselines = [
+        r for r in bad if r["group"] == "reject" and r.get("baseline_wall_s")
+    ]
     lo = sum(_cost(t)[0] for t in tokens)
     hi = sum(_cost(t)[1] for t in tokens)
     flagged = [r for r in good if r["verified"]]
@@ -208,14 +211,12 @@ def summary(table: list[dict[str, Any]]) -> dict[str, Any]:
             round(lo / len(tokens), 2) if tokens else None,
             round(hi / len(tokens), 2) if tokens else None,
         ),
+        # Oracle misses passed production, so they have no reject baseline.
         "baseline_median_min_reviewed_rejects": round(
-            statistics.median(
-                [r["baseline_wall_s"] for r in bad if r.get("baseline_wall_s")]
-            )
-            / 60,
+            statistics.median([r["baseline_wall_s"] for r in reject_baselines]) / 60,
             1,
         )
-        if any(r.get("baseline_wall_s") for r in bad)
+        if reject_baselines
         else None,
         "baseline_median_min_reviewed_passes": round(
             statistics.median(

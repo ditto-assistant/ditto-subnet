@@ -664,6 +664,12 @@ class Session:
         elapsed = round((time.monotonic() - started) * 1000)
         time.sleep(0.05)
         transcript = self._transcript_since(offset)
+        if status is None:
+            # The harness may still be serving the abandoned request; restart
+            # it while the lock is held so that request cannot consume the
+            # next probe's script or append to its transcript.
+            with contextlib.suppress(SandboxError):
+                self.restart_harness()
         try:
             response: Any = json.loads(body) if body else None
         except (ValueError, UnicodeError):

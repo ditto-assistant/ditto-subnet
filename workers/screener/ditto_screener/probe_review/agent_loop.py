@@ -307,6 +307,10 @@ def review(
                 lambda: complete(messages, TOOL_SCHEMAS), max(1.0, remaining)
             )
             if response is None:
+                # The abandoned call may still bill; its usage is unknowable,
+                # so the result reports untracked spend.
+                ledger.requests += 1
+                ledger.untracked = True
                 break
         ledger.settle(response.get("usage") or {})
         if ledger.over_budget():
@@ -369,6 +373,7 @@ def review(
     return {
         "replay": replay,
         "complete": replay is not None,
+        "untracked_spend": ledger.untracked,
         "budget_exhausted": ledger.exhausted()
         or ledger.tool_calls >= ledger.max_tool_calls
         or session.probe_count - first_probe >= ledger.max_probes,

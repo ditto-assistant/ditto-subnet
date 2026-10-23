@@ -173,7 +173,7 @@ def _search(pattern: str, text: str) -> bool:
     """
     try:
         re.compile(pattern)
-    except re.error:
+    except (re.error, RecursionError, OverflowError):
         return False
     try:
         completed = subprocess.run(
@@ -287,7 +287,14 @@ def evaluate(record: ProbeRecord, check: Check) -> tuple[bool, str]:
         return False, f"unknown predicate {op!r}"
     try:
         return handler()
-    except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as error:
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        AttributeError,
+        OverflowError,
+        RecursionError,
+    ) as error:
         # A malformed check is a failed predicate, never an evaluation crash.
         return False, f"malformed predicate {op!r}: {type(error).__name__}"
 

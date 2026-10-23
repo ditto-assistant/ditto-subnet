@@ -173,10 +173,12 @@ def summarize(record: ProbeRecord, *, prompt_chars: int = 600) -> dict[str, Any]
         "answer": response.get("answer"),
         "abstain": response.get("abstain"),
         "final_text": _clip(str(response.get("final_text", "")), 500),
-        "reported_tool_calls": response.get("tool_calls"),
-        "blocked_tool_calls": response.get("blocked_tool_calls"),
-        "executions": executions(record),
-        "model_calls": model,
+        # Collections are bounded so one high-hop probe cannot flood the
+        # reviewer's context.
+        "reported_tool_calls": _bounded_json(response.get("tool_calls"), 4000),
+        "blocked_tool_calls": _bounded_json(response.get("blocked_tool_calls"), 4000),
+        "executions": _bounded_json(executions(record), 8000),
+        "model_calls": _bounded_json(model[:24], 12000),
         "error": record.error,
     }
 
@@ -335,7 +337,9 @@ def batch(
             )
         if truncated:
             break
-    return {"results": results, "truncated": truncated}
+    # The fixed caps truncate too, not only the probe allowance.
+    capped = len(bindings) > 24 or len(plan.get("probes") or []) > 12
+    return {"results": results, "truncated": truncated or capped}
 
 
 def _substitute(value: Any, binding: dict[str, Any]) -> Any:
@@ -414,6 +418,7 @@ def mutate(
     record = session.probe(
         request,
         script=script,
+        path=base.path,
         label=f"mutate:{transform}:{probe_id}",
         preconditions=setup,
     )

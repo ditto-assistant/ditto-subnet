@@ -10,6 +10,7 @@ import json
 import os
 import re
 import threading
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -21,6 +22,22 @@ VIOLATIONS = set(
 )
 MEMORY = {}
 MEMORY_LOCK = threading.Lock()
+
+
+# The probe sandbox only ever hands out its own gateway (or the battery's
+# deliberately unreachable loopback endpoint); refuse any other destination.
+TOOL_HOSTS = set(
+    os.environ.get("PROBE_FIXTURE_TOOL_HOSTS", "host.docker.internal,127.0.0.1").split(
+        ","
+    )
+)
+
+
+def _allowed_tool_endpoint(url):
+    if not url:
+        return False
+    parsed = urllib.parse.urlsplit(url)
+    return parsed.scheme == "http" and parsed.hostname in TOOL_HOSTS
 
 
 def post(url, payload, timeout=60, *, authorize=False):
@@ -114,7 +131,7 @@ def run(request):
                 )
                 continue
             result = {"result": "", "error": "no endpoint"}
-            if request.get("tool_endpoint"):
+            if _allowed_tool_endpoint(request.get("tool_endpoint")):
                 try:
                     result = post(
                         request["tool_endpoint"],
