@@ -55,7 +55,9 @@ type SourceFile struct {
 }
 
 var (
-	moduleLine = regexp.MustCompile(`^module\s+("?)([^\s"]+)("?)\s*(//.*)?$`)
+	// A quoted path needs both quotes; RE2 has no backreferences, so the two
+	// forms are alternatives and exactly one group is non-empty.
+	moduleLine = regexp.MustCompile(`^module\s+(?:"([^\s"]+)"|([^\s"]+))\s*(//.*)?$`)
 	goLine     = regexp.MustCompile(`^go\s+([0-9]+\.[0-9]+(\.[0-9]+)?)\s*(//.*)?$`)
 	requireTok = regexp.MustCompile(`^require(\s|\()`)
 )
@@ -281,7 +283,7 @@ func parseGoMod(raw []byte) (module, goVersion string, requires bool, err error)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if m := moduleLine.FindStringSubmatch(line); m != nil {
-			module = m[2]
+			module = m[1] + m[2]
 		} else if m := goLine.FindStringSubmatch(line); m != nil {
 			goVersion = m[1]
 		} else if requireTok.MatchString(line) {

@@ -225,6 +225,28 @@ func TestArchiveRefusesAFileThatIsAlsoADirectory(t *testing.T) {
 	}
 }
 
+func TestGoModModuleQuotesMustMatch(t *testing.T) {
+	main := "package main\nfunc main(){}\n"
+	for mod, want := range map[string]string{
+		"module example.com/gen\n":     "example.com/gen",
+		"module \"example.com/gen\"\n": "example.com/gen",
+		"module example.com/gen\"\n":   "",
+		"module \"example.com/gen\n":   "",
+	} {
+		raw := rawArchive(t, []tar.Header{{Name: "go.mod"}, {Name: "main.go"}}, []string{mod + "\ngo 1.23\n", main})
+		info, _, err := InspectArchive(raw)
+		if want == "" {
+			if err == nil {
+				t.Errorf("%q accepted", mod)
+			}
+			continue
+		}
+		if err != nil || info.Module != want {
+			t.Errorf("%q: module %q err %v", mod, info.Module, err)
+		}
+	}
+}
+
 func TestFingerprintFieldsCannotShiftIntoEachOther(t *testing.T) {
 	a := Case{MemoryCase: protocol.MemoryCase{Question: "q\x00a", ExpectedAnswer: "b"}}
 	b := Case{MemoryCase: protocol.MemoryCase{Question: "q", ExpectedAnswer: "a\x00b"}}
