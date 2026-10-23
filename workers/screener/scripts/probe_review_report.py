@@ -28,7 +28,13 @@ def _cost(tokens: int) -> tuple[float, float]:
 
 
 def _load(path: Path) -> Any:
-    return json.loads(path.read_text()) if path.exists() else None
+    """A missing or unreadable artifact is unavailable, not a report failure."""
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return None
 
 
 def _complete_replay(replay: Any) -> bool:

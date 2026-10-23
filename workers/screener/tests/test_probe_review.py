@@ -318,9 +318,9 @@ def test_agent_loop_does_not_act_on_a_response_that_crosses_the_budget(
             "choices": [
                 {"message": {"role": "assistant", "tool_calls": [verdict_call]}}
             ],
-            "usage": {"prompt_tokens": 900, "completion_tokens": 200},
+            "usage": {"prompt_tokens": 9_000, "completion_tokens": 2_000},
         },
-        ledger=agent_loop.Ledger(max_total_tokens=1000),
+        ledger=agent_loop.Ledger(max_total_tokens=10_000),
     )
     assert not result["complete"] and result["budget_exhausted"]
     assert not (tmp_path / "verdict.json").exists()
@@ -734,6 +734,29 @@ def test_unusable_session_refuses_probes_until_restarted(tmp_path: Path) -> None
     reloaded = Session.load(str(tmp_path))
     with pytest.raises(sandbox.SandboxError, match="unusable"):
         reloaded.probe({"user_input": "q"})
+
+
+def test_session_lock_blocks_other_threads_but_reenters(tmp_path: Path) -> None:
+    import threading
+    import time as _time
+
+    from ditto_screener.probe_review.sandbox import _session_lock
+
+    entered = threading.Event()
+    with _session_lock(tmp_path):
+        with _session_lock(tmp_path):  # same thread re-enters
+            pass
+
+        def other() -> None:
+            with _session_lock(tmp_path):
+                entered.set()
+
+        thread = threading.Thread(target=other)
+        thread.start()
+        _time.sleep(0.3)
+        assert not entered.is_set()  # another thread waits
+    thread.join(5)
+    assert entered.is_set()
 
 
 def _fixture_archive(path: Path, violations: str) -> None:

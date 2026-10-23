@@ -113,6 +113,7 @@ class Ledger:
     max_probes: int = 30
     tool_calls: int = 0
     untracked: bool = False
+    allowance_spent: bool = False
     requests: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -133,6 +134,26 @@ class Ledger:
             self.prompt_tokens + self.completion_tokens > self.max_total_tokens
             or self.cost_usd > self.max_cost_usd
         )
+
+    def completion_allowance(self, prompt_tokens: int, ceiling: int = 8000) -> int:
+        """Largest completion the remaining token and cost budgets can absorb.
+
+        Costed at the fallback list price, so a request can never be admitted
+        with a completion cap that would carry spend past either limit.
+        """
+        tokens_left = (
+            self.max_total_tokens
+            - self.prompt_tokens
+            - self.completion_tokens
+            - prompt_tokens
+        )
+        cost_left = (
+            self.max_cost_usd
+            - self.cost_usd
+            - prompt_tokens * self.fallback_input_usd_per_mtok / 1e6
+        )
+        by_cost = int(cost_left * 1e6 / self.fallback_output_usd_per_mtok)
+        return max(0, min(ceiling, tokens_left, by_cost))
 
     def exhausted(self) -> bool:
         """Any limit reached, so ``admit`` refuses another request."""
@@ -298,10 +319,19 @@ def review(
         remaining = deadline_seconds - (time.monotonic() - started)
         if remaining <= 0:
             break
+        # Roughly four characters per token; refuse a request whose capped
+        # completion could not fit what is left of the budgets.
+        prompt_estimate = len(json.dumps(messages, default=str)) // 4
+        max_tokens = ledger.completion_allowance(prompt_estimate)
+        if max_tokens < 256:
+            ledger.allowance_spent = True
+            break
         # A pooled completer is bounded by the review's remaining wall time.
         response: dict[str, Any] | None
         if isinstance(complete, HttpCompleter):
-            response = complete(messages, TOOL_SCHEMAS, timeout=remaining)
+            response = complete(
+                messages, TOOL_SCHEMAS, timeout=remaining, max_tokens=max_tokens
+            )
         else:
             # Any other completer runs on a daemon thread that the loop stops
             # waiting for at the deadline (the thread is abandoned, not killed).
@@ -377,6 +407,7 @@ def review(
         "complete": replay is not None,
         "untracked_spend": ledger.untracked,
         "budget_exhausted": ledger.exhausted()
+        or ledger.allowance_spent
         or ledger.tool_calls >= ledger.max_tool_calls
         or session.probe_count - first_probe >= ledger.max_probes,
         "requests": ledger.requests,
@@ -412,6 +443,7 @@ class HttpCompleter:
         schemas: list[dict[str, Any]],
         *,
         timeout: float | None = None,
+        max_tokens: int = 8000,
     ) -> dict[str, Any]:
         response = self._client.post(
             self._url,
@@ -422,7 +454,7 @@ class HttpCompleter:
                 "messages": messages,
                 "tools": schemas,
                 "tool_choice": "auto",
-                "max_tokens": 8000,
+                "max_tokens": max_tokens,
             },
         )
         response.raise_for_status()

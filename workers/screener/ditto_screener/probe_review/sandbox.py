@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
@@ -114,7 +115,9 @@ def _docker(args: list[str], *, timeout: float, stdin: Any = None) -> tuple[int,
 
 
 _ARCHIVE_LABEL = "probe-review.archive-sha256"
-_HELD_LOCKS: set[str] = set()
+_ROOT_LOCKS: dict[str, threading.RLock] = {}
+_ROOT_LOCKS_GUARD = threading.Lock()
+_LOCK_DEPTH = threading.local()
 
 
 def file_sha256(path: Path) -> str:
@@ -128,20 +131,34 @@ def file_sha256(path: Path) -> str:
 
 @contextlib.contextmanager
 def _session_lock(root: Path) -> Iterator[None]:
-    """Cross-process session lock; re-entrant within this process."""
+    """Session lock across processes and threads; re-entrant per thread.
+
+    A per-session ``RLock`` serializes threads of this process (a thread that
+    already holds it re-enters), and only the outermost holder takes the
+    cross-process file lock.
+    """
     key = str(root.resolve())
-    if key in _HELD_LOCKS:
-        yield
-        return
-    root.mkdir(parents=True, exist_ok=True)
-    with (root / "probe.lock").open("a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        _HELD_LOCKS.add(key)
-        try:
-            yield
-        finally:
-            _HELD_LOCKS.discard(key)
-            fcntl.flock(handle, fcntl.LOCK_UN)
+    with _ROOT_LOCKS_GUARD:
+        rlock = _ROOT_LOCKS.setdefault(key, threading.RLock())
+    with rlock:
+        depths: dict[str, int] = getattr(_LOCK_DEPTH, "depths", None) or {}
+        _LOCK_DEPTH.depths = depths
+        if depths.get(key):
+            depths[key] += 1
+            try:
+                yield
+            finally:
+                depths[key] -= 1
+            return
+        root.mkdir(parents=True, exist_ok=True)
+        with (root / "probe.lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            depths[key] = 1
+            try:
+                yield
+            finally:
+                depths[key] = 0
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _refused_build_entitlement(archive: Path) -> str | None:
