@@ -104,8 +104,10 @@ from ditto.db.queries.score_ranking import (
     resolve_efficiency_adjustments,
 )
 from ditto.db.queries.scores import (
+    SCORING_QUORUM,
     LedgerRow,
     LedgerScoreProofRow,
+    get_score_counts,
     list_eligible_ledger,
     quorum_composites,
     quorum_ledger_proof_rows,
@@ -908,6 +910,9 @@ async def materialize_ledger_snapshot(
     context: _LedgerContext,
     now: datetime,
     requesting_validator_hotkey: str | None,
+    diagnostic_read_only: bool = False,
+    diagnostic_scored_agent_ids: frozenset[UUID] = frozenset(),
+    diagnostic_excluded_agent_ids: frozenset[UUID] = frozenset(),
 ) -> _LedgerSnapshot:
     """Build the ledger the validator fold consumes, at this instant.
 
@@ -917,9 +922,22 @@ async def materialize_ledger_snapshot(
     identical for every validator that reads the pin. Raises
     :class:`EfficiencyFactorRequesterNotReady` and ``SQLAlchemyError`` to the
     caller, which owns the HTTP or retry semantics.
+
+    The court's diagnostic mode uses existing state only, never rolls back
+    the caller or writes efficiency/rehearsal rows. Membership overrides are
+    available only in that mode; its output is never stored as an authority
+    snapshot or epoch pin.
     """
     ledger_context = context
-    if session.in_transaction():
+    if diagnostic_read_only and (session.new or session.dirty or session.deleted):
+        raise ValueError("diagnostic ledger requires a clean read-only session")
+    if (
+        diagnostic_scored_agent_ids or diagnostic_excluded_agent_ids
+    ) and not diagnostic_read_only:
+        raise ValueError(
+            "hypothetical ledger membership requires diagnostic read-only mode"
+        )
+    if not diagnostic_read_only and session.in_transaction():
         await session.rollback()
     # The validator ledger is an authority path, not a dependent of the
     # public leaderboard. Materialize this epoch before reading either the
@@ -928,7 +946,7 @@ async def materialize_ledger_snapshot(
     # its independent session and the nonce transaction above is complete,
     # leaving this session clean for ensure_efficiency_state's transaction.
     efficiency_config = ledger_context.policy.efficiency
-    if efficiency_config.enabled:
+    if efficiency_config.enabled and not diagnostic_read_only:
         await ensure_current_efficiency_state(
             app_state, session, efficiency_config, now=now
         )
@@ -941,7 +959,43 @@ async def materialize_ledger_snapshot(
             "confirmation_seeds",
         ),
         dedupe_owners=False,
+        active_version=(
+            ledger_context.active_bench_version if diagnostic_read_only else None
+        ),
+        diagnostic_scored_agent_ids=diagnostic_scored_agent_ids,
+        diagnostic_excluded_agent_ids=diagnostic_excluded_agent_ids,
     )
+    if diagnostic_read_only:
+        # Match the public finalized pool before computing shared seed windows.
+        # Unranked finalized histories still inform that window; exclude their
+        # entries only after _ledger_entries has derived the common inputs.
+        counts = await get_score_counts(
+            session,
+            [row.agent_id for row in rows],
+            bench_versions={row.agent_id: row.bench_version for row in rows},
+        )
+        rows = [row for row in rows if counts.get(row.agent_id, 0) >= SCORING_QUORUM]
+    if (
+        diagnostic_read_only
+        and efficiency_config.enabled
+        and efficiency_config.fold_enabled
+    ):
+        # Authority reads may create these rows; a dry-run must only consume
+        # existing current-epoch assignments, never silently omit a factor.
+        from ditto.api_server.efficiency import epoch_index_for
+        from ditto.db.queries.efficiency import get_bonus_rows
+
+        adjustments = await get_bonus_rows(
+            session,
+            [row.agent_id for row in rows if row.eligible],
+            bench_versions={row.agent_id: row.bench_version for row in rows},
+            epoch_index=epoch_index_for(now, efficiency_config.epoch_hours),
+        )
+        if any(row.eligible and row.agent_id not in adjustments for row in rows):
+            raise HTTPException(
+                status_code=409,
+                detail="current efficiency assignments unavailable for court",
+            )
     v9_confirmation_mode: Literal["enforce"] | None = (
         "enforce" if await v9_confirmation_enforcement_active(session) else None
     )
@@ -956,6 +1010,11 @@ async def materialize_ledger_snapshot(
         configured_policy,
         fleet_ready=ledger_context.reward_eligibility_fleet_ready,
     )
+    if diagnostic_scored_agent_ids and eligibility_policy.enforcing:
+        raise HTTPException(
+            status_code=409,
+            detail="court restoration unsupported with enforcing reward eligibility",
+        )
     if eligibility_policy is not configured_policy:
         logger.warning(
             "emission eligibility revision %d is set to enforce, but the live "
@@ -991,8 +1050,9 @@ async def materialize_ledger_snapshot(
                     f"{record.agent_id}:{record.state}" for record in withheld[:10]
                 ),
             )
-        await _record_eligibility_rehearsal(app_state, eligibility)
-        rows = eligibility.filter_rows(rows)
+        if not diagnostic_read_only:
+            await _record_eligibility_rehearsal(app_state, eligibility)
+            rows = eligibility.filter_rows(rows)
     fleet_protocol_ready = ledger_context.continual_fleet_ready
     continual_settings = ledger_context.policy.continual_retest
     burn_settings = ledger_context.policy.burn
@@ -1033,6 +1093,17 @@ async def materialize_ledger_snapshot(
         now=now,
         requesting_validator_hotkey=requesting_validator_hotkey,
         registered_hotkeys=registered_hotkeys,
+        emit=(
+            lambda row: (
+                row.eligible
+                and row.composite > 0.0
+                and not (
+                    eligibility_policy.enforcing and eligibility.withholds(row.agent_id)
+                )
+            )
+        )
+        if diagnostic_read_only
+        else None,
     )
     generated_at = datetime.now(UTC)
     crown_mode: Literal["incumbent"] | None = (
@@ -1066,7 +1137,10 @@ async def materialize_ledger_snapshot(
             efficiency_config=efficiency_config,
             now=now,
             requesting_validator_hotkey=requesting_validator_hotkey,
-            emit=lambda row: eligibility.withholds(row.agent_id),
+            emit=lambda row: (
+                eligibility.withholds(row.agent_id)
+                and (not diagnostic_read_only or (row.eligible and row.composite > 0.0))
+            ),
             registered_hotkeys=registered_hotkeys,
         )
     return _LedgerSnapshot(
