@@ -36,7 +36,7 @@ from ditto_screening_protocol.collector_receipts import (
     liquid_collector_credit,
 )
 
-# Exact v482 official artifact and reviewed source. Historical receipt hashes
+# Exact v483 official artifact and reviewed source. Historical receipt hashes
 # are accepted only on the observation path, never for preparation/broadcast.
 AUDITED_CODE_HASH = AUDITED_COLLECTOR_CODE_HASH
 
