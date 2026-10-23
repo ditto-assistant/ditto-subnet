@@ -322,6 +322,8 @@ def _reported(record: ProbeRecord) -> list[dict[str, Any]]:
         calls = [response["function_call"]]
     calls = calls or []
     reported = []
+    if isinstance(calls, dict):
+        calls = [calls]  # a single call object reported without a list
     for c in calls if isinstance(calls, list) else []:
         if not isinstance(c, dict):
             continue

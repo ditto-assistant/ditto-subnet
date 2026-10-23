@@ -239,8 +239,17 @@ def show(
     record = load_probe(session, probe_id)
     calls = record.model_requests
     picked = [calls[entry]] if entry is not None and 0 <= entry < len(calls) else calls
+    # One budget for everything returned: raw fields take a quarter each at
+    # most, and the model calls share whatever remains.
+    raw = {
+        "request": _bounded_json(record.request, chars // 4),
+        "script": _bounded_json(record.script, chars // 4),
+        "tool_executions": _bounded_json(
+            [e.get("request") for e in record.tool_executions], chars // 4
+        ),
+    }
+    budget = chars - sum(len(json.dumps(v, default=str)) for v in raw.values())
     out = []
-    budget = chars
     for item in picked:
         request = as_dict(item.get("request"))
         messages = []
@@ -281,13 +290,10 @@ def show(
         )
     return {
         "probe_id": probe_id,
-        # Raw fields share the same character budget as the messages.
-        "request": _bounded_json(record.request, chars),
-        "script": _bounded_json(record.script, chars),
+        "request": raw["request"],
+        "script": raw["script"],
         "model_requests": out,
-        "tool_executions": _bounded_json(
-            [e.get("request") for e in record.tool_executions], chars
-        ),
+        "tool_executions": raw["tool_executions"],
     }
 
 

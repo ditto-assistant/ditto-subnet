@@ -770,7 +770,7 @@ def calibrate(session: Session) -> tuple[str | None, ProbeRecord, bool]:
         if not rejected_unseeded:
             break
     assert record is not None
-    return None, record, False
+    return None, record, seed_first
 
 
 def run_battery(session: Session) -> dict[str, Any]:

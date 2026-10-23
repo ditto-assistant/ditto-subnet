@@ -9,6 +9,7 @@ Router in production shadow); the API key is read from a file and never logged.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import threading
@@ -277,7 +278,8 @@ def dispatch(
 def review(
     session: Session,
     *,
-    complete: Callable[[list[dict[str, Any]], list[dict[str, Any]]], dict[str, Any]],
+    # Called as complete(messages, schemas, max_tokens=N); it must honor N.
+    complete: Callable[..., dict[str, Any]],
     ledger: Ledger | None = None,
     deadline_seconds: float = 1800.0,
 ) -> dict[str, Any]:
@@ -328,22 +330,31 @@ def review(
             break
         # A pooled completer is bounded by the review's remaining wall time.
         response: dict[str, Any] | None
+        # Every completer runs on a daemon thread the loop stops waiting for at
+        # the deadline (abandoned, not killed): httpx timeouts bound each read,
+        # not the whole request. The HTTP completer also gets the remainder.
+        # A snapshot: an abandoned call must not see later messages.
+        request_messages = list(messages)
+        invoke: Callable[[], dict[str, Any]]
         if isinstance(complete, HttpCompleter):
-            response = complete(
-                messages, TOOL_SCHEMAS, timeout=remaining, max_tokens=max_tokens
+            invoke = functools.partial(
+                complete,
+                request_messages,
+                TOOL_SCHEMAS,
+                timeout=remaining,
+                max_tokens=max_tokens,
             )
         else:
-            # Any other completer runs on a daemon thread that the loop stops
-            # waiting for at the deadline (the thread is abandoned, not killed).
-            response = _call_with_deadline(
-                lambda: complete(messages, TOOL_SCHEMAS), remaining
+            invoke = functools.partial(
+                complete, request_messages, TOOL_SCHEMAS, max_tokens=max_tokens
             )
-            if response is None:
-                # The abandoned call may still bill; its usage is unknowable,
-                # so the result reports untracked spend.
-                ledger.requests += 1
-                ledger.untracked = True
-                break
+        response = _call_with_deadline(invoke, remaining)
+        if response is None:
+            # The abandoned call may still bill; its usage is unknowable,
+            # so the result reports untracked spend.
+            ledger.requests += 1
+            ledger.untracked = True
+            break
         ledger.settle(response.get("usage") or {})
         if ledger.over_budget():
             # The response that crossed a budget is not acted on.

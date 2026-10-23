@@ -379,10 +379,21 @@ class Session:
     # -- lifecycle -----------------------------------------------------------
 
     def start(self, *, health_timeout: float = 300.0) -> None:
-        if self.started:
-            # Restaging would erase the live gateway's script and transcript
-            # under an in-flight probe; stop() first (the CLI does).
-            raise SandboxError("session is already started; stop it first")
+        # Serialized with probes and other starters; the persisted state is
+        # re-read because another process may have started this session.
+        with _session_lock(Path(self.root)):
+            saved = Path(self.root) / "session.json"
+            if saved.exists():
+                self.started = self.started or bool(
+                    json.loads(saved.read_text()).get("started")
+                )
+            if self.started:
+                # Restaging would erase the live gateway's script and
+                # transcript under an in-flight probe; stop() first.
+                raise SandboxError("session is already started; stop it first")
+            self._start_locked(health_timeout)
+
+    def _start_locked(self, health_timeout: float) -> None:
         # Same scheme as the gate's gateway state: the session root is private
         # to the owner; the sidecar (a different uid, no DAC override) can
         # traverse the state dir, read the script and throwaway shim certs,
@@ -662,9 +673,11 @@ class Session:
         with _session_lock(Path(self.root)):
             saved_state = Path(self.root) / "session.json"
             if saved_state.exists():
-                self.unusable = self.unusable or bool(
-                    json.loads(saved_state.read_text()).get("unusable")
-                )
+                state = json.loads(saved_state.read_text())
+                self.started = bool(state.get("started", self.started))
+                self.unusable = self.unusable or bool(state.get("unusable"))
+            if not self.started:
+                raise SandboxError("session is not started")
             if self.unusable:
                 raise SandboxError(
                     "session is unusable after a failed harness restart; stop and "

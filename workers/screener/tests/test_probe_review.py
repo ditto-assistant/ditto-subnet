@@ -271,7 +271,7 @@ def test_agent_loop_respects_ledger_and_stops_on_verdict(tmp_path: Path) -> None
             },
         ]
     )
-    result = agent_loop.review(session, complete=lambda _m, _s: next(replies))
+    result = agent_loop.review(session, complete=lambda _m, _s, **_k: next(replies))
     assert result["complete"] and result["requests"] == 2
     assert (result["prompt_tokens"], result["completion_tokens"]) == (220, 30)
     assert (
@@ -281,7 +281,7 @@ def test_agent_loop_respects_ledger_and_stops_on_verdict(tmp_path: Path) -> None
 
     exhausted = agent_loop.review(
         session,
-        complete=lambda _m, _s: {
+        complete=lambda _m, _s, **_k: {
             "choices": [{"message": {"role": "assistant", "content": "x"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         },
@@ -314,7 +314,7 @@ def test_agent_loop_does_not_act_on_a_response_that_crosses_the_budget(
     }
     result = agent_loop.review(
         session,
-        complete=lambda _m, _s: {
+        complete=lambda _m, _s, **_k: {
             "choices": [
                 {"message": {"role": "assistant", "tool_calls": [verdict_call]}}
             ],
@@ -729,6 +729,7 @@ def test_unusable_session_refuses_probes_until_restarted(tmp_path: Path) -> None
     session = Session(
         root=str(tmp_path), image="i", artifact_sha256="0" * 64, bench_version=13
     )
+    session.started = True
     session.unusable = True
     session.save()
     reloaded = Session.load(str(tmp_path))
@@ -757,6 +758,35 @@ def test_session_lock_blocks_other_threads_but_reenters(tmp_path: Path) -> None:
         assert not entered.is_set()  # another thread waits
     thread.join(5)
     assert entered.is_set()
+
+
+def test_tool_context_follows_the_issuing_request_when_calls_interleave(
+    tmp_path: Path,
+) -> None:
+    gateway = _gateway(
+        tmp_path,
+        {
+            "rules": [
+                {
+                    "when": {"prompt_contains": "Lyon"},
+                    "reply": {"tool_calls": [{"name": "s", "arguments": {"q": 1}}]},
+                }
+            ],
+            "default": {"content": "ok"},
+            "tools": {"s": {"result": "{{user_input}}"}},
+        },
+    )
+
+    def chat(text: str) -> None:
+        body = {"model": "m", "messages": [{"role": "user", "content": text}]}
+        gateway.route("POST", "/v1/chat/completions", json.dumps(body).encode())
+
+    chat("find Lyon")
+    chat("unrelated request")  # interleaves before the tool POST
+    _, payload, _, _ = gateway.route(
+        "POST", "/v1/tools/r/tool", json.dumps({"name": "s", "args": {"q": 1}}).encode()
+    )
+    assert payload["result"] == "find Lyon"
 
 
 def _fixture_archive(path: Path, violations: str) -> None:

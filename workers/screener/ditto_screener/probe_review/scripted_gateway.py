@@ -82,6 +82,10 @@ class _State:
         self._rule_uses: dict[int, int] = {}
         self._tool_uses: dict[str, int] = {}
         self.last_model_request: dict = {}
+        # Scripted tool calls -> the model request that issued them, so a
+        # tool result renders against its own conversation even when model
+        # calls interleave.
+        self._call_context: dict[tuple[str, str], dict] = {}
         self._seq = 0
 
     def script(self) -> dict:
@@ -144,6 +148,19 @@ class _State:
         if isinstance(default, dict):
             return dict(default)
         return {"content": "Answer: unknown"}
+
+    def remember_calls(self, reply: dict, request: dict) -> None:
+        for call in reply.get("tool_calls") or []:
+            if isinstance(call, dict):
+                key = (str(call.get("name", "")), _canonical(call.get("arguments")))
+                self._call_context[key] = request
+        while len(self._call_context) > 256:
+            self._call_context.pop(next(iter(self._call_context)))
+
+    def call_context(self, name: str, arguments: object) -> dict:
+        """The issuing request for a tool POST; the latest one as a fallback."""
+        found = self._call_context.get((name, _canonical(arguments)))
+        return found if found is not None else self.last_model_request
 
     def tool_reply(self, name: str) -> dict:
         script = self.script()
@@ -234,6 +251,17 @@ def _matches(when: dict, request: dict, text: str, turn: int) -> bool:
     return True
 
 
+def _canonical(arguments: object) -> str:
+    """Arguments as one comparable string, whether raw JSON text or decoded."""
+    value = arguments
+    if isinstance(arguments, str):
+        try:
+            value = json.loads(arguments)
+        except ValueError:
+            return arguments
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
 def _render(content: object, request: dict) -> object:
     if not isinstance(content, str):
         return content
@@ -295,6 +323,7 @@ class ScriptedGateway:
     def _chat(self, request: dict) -> tuple[int, dict | bytes, str]:
         text = _messages_text(request)
         reply = self._state.next_reply(request, text)
+        self._state.remember_calls(reply, request)
         status = int(reply.get("http_status", 200))
         if status != 200:
             return (
@@ -366,6 +395,7 @@ class ScriptedGateway:
     def _responses(self, request: dict) -> tuple[int, dict, str]:
         text = _messages_text(request)
         reply = self._state.next_reply(request, text)
+        self._state.remember_calls(reply, request)
         status = int(reply.get("http_status", 200))
         if status != 200:
             return (
@@ -385,7 +415,8 @@ class ScriptedGateway:
                     "status": "completed",
                 }
             )
-        if content is not None and not output:
+        if content is not None:
+            # Text that accompanies tool calls is part of the reply too.
             output.append(
                 {
                     "type": "message",
@@ -402,7 +433,7 @@ class ScriptedGateway:
                 "created_at": int(time.time()),
                 "model": request.get("model") or _DEFAULT_ECHO_MODEL,
                 "output": output,
-                "output_text": "" if reply.get("tool_calls") else (content or ""),
+                "output_text": content or "",
                 "usage": {"input_tokens": max(1, len(text) // 4), "output_tokens": 8},
             },
             "application/json",
@@ -413,7 +444,12 @@ class ScriptedGateway:
         spec = self._state.tool_reply(name)
         status = int(spec.get("http_status", 200))
         payload = {
-            "result": _render(spec.get("result", "ok"), self._state.last_model_request),
+            "result": _render(
+                spec.get("result", "ok"),
+                self._state.call_context(
+                    name, request.get("args", request.get("arguments", {}))
+                ),
+            ),
             "error": spec.get("error", ""),
         }
         for key in ("operation_id", "effect_state"):
