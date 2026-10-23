@@ -17,7 +17,7 @@ The contract, sandbox limits, validation rules, and scoring formula are in
 ## Sandbox
 
 `serve` uses `genrun.Docker`, so the scorer host needs a Docker daemon. Builds
-run in the pinned `golang:1.26.6-bookworm` image. Generation runs in pinned
+run in the pinned `golang:1.27.3-bookworm` image. Generation runs in pinned
 distroless `static`. Both run with no network, a read-only root filesystem, all
 capabilities dropped, an unprivileged user, and memory, CPU, process, and
 wall-time limits.
