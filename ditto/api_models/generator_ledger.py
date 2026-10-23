@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
 class GeneratorLedgerModel(BaseModel):
@@ -40,13 +40,15 @@ class GeneratorLedgerEntry(GeneratorLedgerModel):
     ] = False
     score: Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
     discriminating_cases: Annotated[int, Field(ge=0)] = 0
-    first_seen: datetime
-    scored_at: datetime
+    # Aware only: the fold orders entries by these, and mixing naive and aware
+    # datetimes cannot be ordered.
+    first_seen: AwareDatetime
+    scored_at: AwareDatetime
 
 
 class GeneratorLedgerResponse(GeneratorLedgerModel):
     entries: list[GeneratorLedgerEntry] = Field(default_factory=list)
-    count: int = 0
+    count: int
     window_days: int = 0
     mode: Literal["off", "shadow"] = "off"
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

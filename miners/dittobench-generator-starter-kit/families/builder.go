@@ -57,7 +57,6 @@ func (b *Builder) Say(wave int, prompt, response string) string {
 	b.waves[wave].Pairs = append(b.waves[wave].Pairs, protocol.MemoryPair{
 		PairID:    id,
 		SessionID: fmt.Sprintf("s%d-%d", wave, b.nPairs%5),
-		Timestamp: b.epoch.Add(time.Duration(wave*72+b.nPairs) * time.Hour).Format(time.RFC3339),
 		Prompt:    prompt,
 		Response:  response,
 	})
@@ -95,6 +94,18 @@ func (b *Builder) Len() int { return len(b.cases) }
 
 // Pack assembles the challenge pack bound to the request.
 func (b *Builder) Pack(req challenge.GenerateRequest, name, version string) challenge.Pack {
+	// Timestamps are laid out once every pair is known: wave by wave, an hour
+	// apart, with a day between waves. Families interleave waves as they seed
+	// facts, so stamping at Say time could put an earlier wave after a later
+	// one.
+	at := b.epoch
+	for w := range b.waves {
+		for p := range b.waves[w].Pairs {
+			b.waves[w].Pairs[p].Timestamp = at.Format(time.RFC3339)
+			at = at.Add(time.Hour)
+		}
+		at = at.Add(24 * time.Hour)
+	}
 	return challenge.Pack{
 		Contract:            challenge.ContractV1,
 		GradingBenchVersion: req.GradingBenchVersion,

@@ -38,7 +38,8 @@ const (
 const MaxCases = 32
 
 // Generate builds the pack for one request: the default families in rotation,
-// with a filler pair after every round, until the requested count is reached.
+// with a filler pair after every round that has room for both of its cases,
+// until the requested count is reached.
 func Generate(req challenge.GenerateRequest) (challenge.Pack, error) {
 	if err := req.Validate(); err != nil {
 		return challenge.Pack{}, err
@@ -50,7 +51,8 @@ func Generate(req challenge.GenerateRequest) (challenge.Pack, error) {
 	for i := 0; b.Len() < req.Cases; i++ {
 		round, family := i/len(families.Default), families.Default[i%len(families.Default)]
 		b.Add(family(b, round))
-		if i%len(families.Default) == len(families.Default)-1 {
+		// The filler pair closes a round only when both of its cases fit.
+		if i%len(families.Default) == len(families.Default)-1 && b.Len()+2 <= req.Cases {
 			families.Filler(b)
 		}
 	}

@@ -204,7 +204,8 @@ def _resolve_hotkey(args: argparse.Namespace) -> str:
 
 
 def _upload(args: argparse.Namespace, archive: Path) -> int:
-    raw = archive.read_bytes()
+    with archive.open("rb") as source:
+        raw = source.read(MAX_ARCHIVE_BYTES + 1)
     if not raw or len(raw) > MAX_ARCHIVE_BYTES:
         raise GeneratorToolError(f"source archive must be 1..{MAX_ARCHIVE_BYTES} bytes")
     info = inspect_archive(archive, explicit=args.challenge_bin)

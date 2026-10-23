@@ -778,7 +778,7 @@ class PlatformGeneratorLedgerSource:
                 "generator ledger read failed; folding an empty ledger this epoch",
                 exc_info=True,
             )
-            return GeneratorLedgerResponse()
+            return GeneratorLedgerResponse(count=0)
 
 
 class ValidatorWorker:
@@ -2341,10 +2341,17 @@ class ValidatorWorker:
             generator_weight_eligible=self._config.generator_weight_eligible,
         )
         router_ledger = await self._get_router_ledger()
+        # None only for chain fakes without a metagraph read; a live read
+        # always sets it before the fold.
+        registered_hotkeys = (
+            {n.hotkey for n in self._registered_neurons}
+            if self._registered_neurons is not None
+            else None
+        )
         generator_ledger = (
             await self._generator_ledger_source.fetch()
             if self._generator_ledger_source is not None
-            else GeneratorLedgerResponse()
+            else GeneratorLedgerResponse(count=0)
         )
         fold_inputs = TrackFoldInputs(
             memory_entries=registered_entries,
@@ -2368,11 +2375,17 @@ class ValidatorWorker:
                 or e.miner_hotkey != treasury_pin.policy.collector_hotkey
             ),
             router_rank_shares=self._config.router_rank_shares,
+            # Like the memory entries, only currently registered hotkeys may
+            # take a generator slot, so an absent hotkey's share goes to the
+            # next registered generator instead of being dropped by the chain.
             generator_entries=tuple(
                 e
                 for e in generator_ledger.entries
-                if not isinstance(treasury_pin, EnforcingTreasuryPin)
-                or e.miner_hotkey != treasury_pin.policy.collector_hotkey
+                if (registered_hotkeys is None or e.miner_hotkey in registered_hotkeys)
+                and (
+                    not isinstance(treasury_pin, EnforcingTreasuryPin)
+                    or e.miner_hotkey != treasury_pin.policy.collector_hotkey
+                )
             ),
             generator_rank_shares=self._config.generator_rank_shares,
         )

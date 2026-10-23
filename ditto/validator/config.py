@@ -583,6 +583,12 @@ class ValidatorConfig:
                 "generator_rank_shares must be non-empty finite positive values, "
                 f"got {self.generator_rank_shares!r}"
             )
+        if self.generator_weight_eligible and not self.generator_ledger_read_enabled:
+            # Eligibility without the ledger read would fold an empty ledger
+            # and silently pay the promoted track nothing.
+            raise ValidatorConfigError(
+                "generator_weight_eligible requires generator_ledger_read_enabled"
+            )
 
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured (wallet files)."""

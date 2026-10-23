@@ -117,3 +117,54 @@ def test_ledger_ignores_unknown_fields() -> None:
         {"entries": [], "count": 0, "future_field": {"x": 1}}
     )
     assert ledger.count == 0
+
+
+async def test_a_deregistered_generator_never_takes_a_paid_slot() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from ditto.tests.validator.test_worker import (
+        _config,
+        _platform_with_ledger,
+    )
+    from ditto.tests.validator.test_worker import (
+        _entry as _memory_entry,
+    )
+    from ditto.validator.worker import ValidatorWorker
+
+    champion = "5Champion" + "x" * 39
+    absent, present = "5GenAbsent" + "x" * 37, "5GenPresent" + "x" * 36
+    platform = _platform_with_ledger(jobs=[], ledger=[_memory_entry(champion, 0.9)])
+    source = MagicMock()
+    source.fetch = AsyncMock(
+        return_value=GeneratorLedgerResponse(
+            entries=[_entry(absent, 0.9), _entry(present, 0.5, seen=1)],
+            count=2,
+            mode="shadow",
+        )
+    )
+    chain = MagicMock()
+    chain.get_recent_neurons = AsyncMock(
+        return_value=[SimpleNamespace(hotkey=champion), SimpleNamespace(hotkey=present)]
+    )
+    chain.put_weights = AsyncMock()
+    config = _config()
+    config.track_shares_bps = {TRACK_MEMORY: 8000, TRACK_GENERATOR: 2000}
+    config.generator_track_state = TrackState.ACTIVE.value
+    config.generator_weight_eligible = True
+    config.generator_ledger_read_enabled = True
+    worker = ValidatorWorker(
+        config=config,
+        platform=platform,
+        dittobench=MagicMock(),
+        chain=chain,
+        keypair=MagicMock(),
+        generator_ledger_source=source,
+    )
+
+    await worker.run_once()
+
+    weights = chain.put_weights.await_args.args[0]
+    assert absent not in weights
+    assert weights[present] == pytest.approx(0.2)
+    assert weights[champion] == pytest.approx(0.8)
