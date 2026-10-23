@@ -186,9 +186,10 @@ async def admin_list_submissions(
     hotkey: Annotated[str | None, Query(max_length=64)] = None,
     status: SubmissionStatusFilter | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AdminGeneratorSubmissionListResponse:
     rows = await list_submissions(
-        session, miner_hotkey=hotkey, status=status, limit=limit
+        session, miner_hotkey=hotkey, status=status, limit=limit, offset=offset
     )
     latest = await latest_runs(session, [row.submission_id for row in rows])
     counts = await case_status_counts(session, [run.run_id for run in latest.values()])
@@ -422,9 +423,10 @@ async def promotion_candidates(
     _admin: AdminDep,
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AdminGeneratorPromotionCandidatesResponse:
     """Discriminating cases from scored runs, highest credit first."""
-    rows = await list_promotion_candidates(session, limit=limit)
+    rows = await list_promotion_candidates(session, limit=limit, offset=offset)
     return AdminGeneratorPromotionCandidatesResponse(
         candidates=[
             GeneratorPromotionCandidate(

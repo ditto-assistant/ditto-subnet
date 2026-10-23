@@ -420,11 +420,16 @@ async def list_submissions(
     miner_hotkey: str | None = None,
     status: str | None = None,
     limit: int = 50,
+    offset: int = 0,
 ) -> Sequence[GeneratorSubmission]:
     stmt = (
         select(GeneratorSubmission)
-        .order_by(GeneratorSubmission.submitted_at.desc())
+        .order_by(
+            GeneratorSubmission.submitted_at.desc(),
+            GeneratorSubmission.submission_id,
+        )
         .limit(limit)
+        .offset(offset)
     )
     if miner_hotkey is not None:
         stmt = stmt.where(GeneratorSubmission.miner_hotkey == miner_hotkey)
@@ -545,7 +550,7 @@ async def latest_scored_runs(
 
 
 async def list_promotion_candidates(
-    session: AsyncSession, *, limit: int = 100
+    session: AsyncSession, *, limit: int = 100, offset: int = 0
 ) -> Sequence[tuple[GeneratorCaseVerdict, GeneratorRun, GeneratorSubmission]]:
     rows = await session.execute(
         select(GeneratorCaseVerdict, GeneratorRun, GeneratorSubmission)
@@ -562,8 +567,11 @@ async def list_promotion_candidates(
         .order_by(
             GeneratorCaseVerdict.credit.desc(),
             GeneratorRun.finished_at.desc(),
+            GeneratorCaseVerdict.run_id,
+            GeneratorCaseVerdict.seed_index,
             GeneratorCaseVerdict.case_id,
         )
         .limit(limit)
+        .offset(offset)
     )
     return [(v, r, s) for v, r, s in rows.tuples()]

@@ -47208,6 +47208,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                offset?: number;
             };
             header?: {
                 authorization?: string | null;
@@ -47342,6 +47343,7 @@ export interface operations {
                 hotkey?: string | null;
                 status?: ("active" | "superseded" | "rejected") | null;
                 limit?: number;
+                offset?: number;
             };
             header?: {
                 authorization?: string | null;

@@ -600,6 +600,12 @@ class TestScorer:
             "/api/v1/admin/generator-competition/promotion-candidates", headers=_ADMIN
         )
         assert len(candidates.json()["candidates"]) == 16
+        paged = await client.get(
+            "/api/v1/admin/generator-competition/promotion-candidates",
+            headers=_ADMIN,
+            params={"limit": 10, "offset": 10},
+        )
+        assert len(paged.json()["candidates"]) == 6
 
         # The rescore runs the same generator on fresh seeds. Repeating its
         # previous cases earns nothing: every fingerprint is already claimed.
