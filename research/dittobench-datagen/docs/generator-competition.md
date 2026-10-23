@@ -73,7 +73,7 @@ contain:
 - only regular files and directories, with clean relative paths (no links,
   devices, absolute paths, or `..`)
 - `go.mod` at the root, with a `go` directive no newer than the builder
-  (`go 1.26.6`)
+  (`go 1.27.3`)
 - the main package's `.go` files at the root
 - `vendor/` with every dependency, if `go.mod` has any requirements, because the
   build has no network
@@ -87,7 +87,7 @@ tar order, timestamps, permissions, or compression. Platform refuses a tree
 that was already uploaded, whoever uploads it.
 
 **Build.** The scorer builds the module with `go build -trimpath` in the pinned
-`golang:1.26.6` image. The build runs with:
+`golang:1.27.3` image. The build runs with:
 
 - `CGO_ENABLED=0`, `GOPROXY=off`, `GOTOOLCHAIN=local`, and `-mod=vendor`
 - `--network=none` and a read-only root filesystem

@@ -31,7 +31,7 @@ const (
 // BuilderGoVersion is the pinned toolchain the scorer builds generators with.
 // A generator's go.mod `go` directive must not exceed it (the build runs with
 // GOTOOLCHAIN=local, so a newer directive fails instead of downloading).
-const BuilderGoVersion = "1.26.6"
+const BuilderGoVersion = "1.27.3"
 
 // ArchiveInfo describes a structurally valid generator source archive.
 type ArchiveInfo struct {
