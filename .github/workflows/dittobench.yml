@@ -1,9 +1,19 @@
 name: DittoBench
 
-# Cost control: standalone verification is operator-dispatched; release gates
-# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - services/dittobench-api/**
+      - research/dittobench-datagen/**
+      - packages/ditto-screening-protocol/ditto_screening_protocol/data/**
+      - scripts/generate_confirmation_installation.py
+      - docker-compose.yml
+      - Dockerfile.sandbox-docker
+      - scripts/sandbox-docker-entrypoint.sh
+      - scripts/test-validator-embedding-gateway.sh
+      - .github/workflows/dittobench.yml
+
 concurrency:
   group: dittobench-${{ github.ref }}
   cancel-in-progress: true
@@ -18,6 +28,8 @@ env:
 jobs:
   rust-coding-driver:
     name: trusted Rust supervisor driver isolation
+    # Coding-competition drivers stay operator-dispatched (SN-120).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -39,6 +51,8 @@ jobs:
 
   rust-coding-bridge:
     name: compiled Rust API bridge isolation
+    # Coding-competition drivers stay operator-dispatched (SN-120).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -51,6 +65,8 @@ jobs:
 
   rust-suite-admission:
     name: protected Rust suite admission
+    # Coding-competition drivers stay operator-dispatched (SN-120).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -72,6 +88,8 @@ jobs:
 
   go-coding-driver:
     name: trusted Go driver isolation
+    # Coding-competition drivers stay operator-dispatched (SN-120).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -95,6 +113,8 @@ jobs:
 
   compiled-coding-bootstrap:
     name: compiled candidate pre-exec confinement
+    # Coding-competition drivers stay operator-dispatched (SN-120).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -106,6 +126,8 @@ jobs:
 
   node-coding-driver:
     name: restricted Node TypeScript driver isolation
+    # Coding-competition drivers stay operator-dispatched (SN-120).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -140,6 +162,8 @@ jobs:
 
   python-coding-driver:
     name: restricted Python driver isolation
+    # Coding-competition drivers stay operator-dispatched (SN-120).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -215,7 +239,8 @@ jobs:
 
   coding-supervisor-build:
     name: coding supervisor image builds
-    if: github.event_name == 'pull_request'
+    # Coding-competition drivers stay operator-dispatched (SN-120).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
