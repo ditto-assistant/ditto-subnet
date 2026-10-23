@@ -1,6 +1,6 @@
 # Build the generate service from this repo's own packages — no external
 # module dependencies, so the image is byte-reproducible from a tag.
-FROM golang:1.25@sha256:9006890ecba0a168034d99516084099ae3114d9f2b7d6572c77f2dde57ebc980 AS build
+FROM golang:1.27.3-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS build
 WORKDIR /src
 COPY go.mod ./
 RUN go mod download

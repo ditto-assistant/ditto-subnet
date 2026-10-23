@@ -219,7 +219,7 @@ func Compile(source []byte, config Config) (*Suite, error) {
 		files = append(files, parsed)
 	}
 	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
-	typeConfig := &types.Config{Importer: config.Importer, Sizes: types.SizesFor("gc", "amd64"), GoVersion: "go1.26"}
+	typeConfig := &types.Config{Importer: config.Importer, Sizes: types.SizesFor("gc", "amd64"), GoVersion: "go1.27"}
 	apiPackage := types.NewPackage(config.PackagePath, files[0].Name.Name)
 	checker := types.NewChecker(typeConfig, fset, apiPackage, info)
 	if checker.Files(files) != nil {
