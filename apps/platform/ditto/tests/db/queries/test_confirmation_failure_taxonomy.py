@@ -51,9 +51,12 @@ async def _move_requests_into_window(session: AsyncSession) -> None:
             """
             UPDATE confirmation_inference_requests
                SET started_at   = now() - interval '5 minutes',
-                   completed_at = now() - interval '5 minutes'
-                                + make_interval(secs => COALESCE(
-                                    EXTRACT(EPOCH FROM (completed_at - started_at)), 0))
+                   completed_at = CASE
+                                    WHEN completed_at IS NULL THEN NULL
+                                    ELSE now() - interval '5 minutes'
+                                         + make_interval(secs => EXTRACT(
+                                             EPOCH FROM (completed_at - started_at)))
+                                  END
             """
         )
     )
@@ -210,3 +213,71 @@ async def test_ordinary_taxonomy_cannot_see_a_confirmation_failure(
     assert {str(row["request_kind"]) for row in lanes} == {"chat", "embedding"}
     assert all(str(group["model"]) != _JUDGE_MODEL for group in groups)
     assert all(int(row["failed"]) == 0 for row in lanes)
+
+
+async def test_a_still_started_request_is_in_flight_and_not_settled(
+    session: AsyncSession,
+) -> None:
+    """An open request must not be counted as settled.
+
+    `confirmation_inference_requests.status` is CHECK-constrained to
+    ('started', 'completed', 'failed', 'canceled') -- there is no 'active'.
+    The first version of this query spelled in-flight as `status = 'active'`,
+    which no row can ever satisfy, so `in_flight` was structurally zero and
+    every open request was silently counted as settled instead.
+    """
+    async with session.begin():
+        now = _FIXTURE_NOW
+        _, revision, settings, bundle = await seed_bundle(session)
+        _, ticket = await reserve_and_issue(
+            session, bundle=bundle, revision=revision, policy=settings
+        )
+        offers = await ensure_confirmation_inference_grants(
+            session,
+            ticket=ticket,
+            broker_public_key="A" * 43,
+            profile=verification_profile(),
+            now=now,
+        )
+        by_lane = {grant.lane: (grant, bearer) for grant, bearer in offers}
+        judge_grant, judge_bearer = by_lane["judge"]
+        # Begin without finishing: this is the in-flight shape.
+        await begin_confirmation_inference_request(
+            session,
+            grant_id=judge_grant.grant_id,
+            nonce=uuid4(),
+            bearer=judge_bearer,
+            model=judge_grant.model,
+            token_reservation=64,
+            max_chargeable_tokens=256,
+            now=now,
+        )
+        await _move_requests_into_window(session)
+
+    async with session.begin():
+        lanes, groups = await load_confirmation_failure_taxonomy_rows(session)
+
+    hour = CONFIRMATION_FAILURE_WINDOWS_SECONDS[0]
+    judge = {
+        (int(r["window_seconds"]), str(r["lane"])): r for r in lanes
+    }[(hour, "judge")]
+
+    assert int(judge["calls"]) == 1
+    assert int(judge["in_flight"]) == 1, "an open request must count as in flight"
+    assert int(judge["settled"]) == 0, "an open request must not count as settled"
+    assert int(judge["completed"]) == 0
+    assert int(judge["failed"]) == 0
+    # It is not a failure, so it must not reach any failure-derived counter.
+    assert int(judge["failed_without_provider"]) == 0
+    assert int(judge["bundles_with_failure"]) == 0
+    # Groups deliberately break out every status, so the open request appears
+    # with status 'started'. What must not exist is a 'failed' judge group.
+    judge_groups = [
+        g
+        for g in groups
+        if int(g["window_seconds"]) == hour and str(g["lane"]) == "judge"
+    ]
+    assert [str(g["status"]) for g in judge_groups] == ["started"]
+    # duration_ms is NULL until a request completes; the group COALESCEs that
+    # to 0, which is only readable because `status` sits beside it.
+    assert int(judge_groups[0]["max_duration_ms"]) == 0
