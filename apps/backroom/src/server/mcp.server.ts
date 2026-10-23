@@ -3,6 +3,7 @@ import {
   claPolicyWriteInputSchema, claPublishInputSchema,
   githubRevocationReadInputSchema, githubRevocationWriteInputSchema,
 } from '../lib/contributor.schemas'
+import { fetchAgentSourceReleaseEvidence } from './source-release-evidence.service'
 import {
   fetchMinerGithubLink, fetchGithubContributor, fetchMinerClaStatus, fetchClaPolicy,
   updateClaPolicy, publishClaVersion,
@@ -542,6 +543,7 @@ export const WRITE_TOOL_NAMES = new Set([
 ])
 
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
+  ['get_agent_source_release_evidence', BACKROOM_READ_SCOPE],
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_v13_official_control_artifact', BACKROOM_ARTIFACT_SCOPE],
@@ -1025,6 +1027,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read rank, score, eligibility and registration; current benchmark default.',
   get_source_release_policy:
     'Read disclosure gate and receipts; history default 0.',
+  get_agent_source_release_evidence:
+    'Exact-SHA public handoffs versus candidate upload; derived eligibility is not publication proof. Missing audit is unknown, not private. See tool help.',
   set_burn_settings:
     'Change burn weights with CAS/reason/confirmation. MOVES TAO. See tool help.',
   get_burn_settings:
@@ -1079,12 +1083,13 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screening_review_queue:
     'Oldest-first unresolved ATH holds, with identity and hold kind. Defaults generation=all; filter reviewKind. Read agent_status: a pending row outside ath_pending_review is stranded and resolve returns 409. Distinct from screener quarantines.',
   // The two quarantine reads below get catalog summaries in the same change
-  // that fixes the queue. They describe the screener-owned surface an operator
-  // reaches after picking a row, not the queue itself, so their long-form
-  // notes belong in get_backroom_tool_help rather than in every session's
-  // context — which is also what buys the budget the queue's own entry needs.
+  // that fixes the queue. list_screening_quarantines is the pre-score hold
+  // queue (anti-cheat and inconclusive holds), separate from the ATH queue
+  // above; long-form notes belong in get_backroom_tool_help rather than in
+  // every session's context — which is also what buys the budget the queue's
+  // own entry needs.
   list_screening_quarantines:
-    'Page screener quarantines (active | resolved | all), newest first; sort=oldest for chronology, detail=full for every evidence row. Active rows are auto-resolved by the platform within milliseconds, so this is not the operator queue — use get_screening_review_queue.',
+    'Page screener quarantines (active | resolved | all), newest first; sort=oldest for chronology, detail=full for every evidence row. Active rows are open operator holds (anti-cheat or inconclusive); resolve with resolve_screening_quarantine. ATH holds: get_screening_review_queue.',
   list_screening_review_events:
     'Read append-only source-review decisions with exact attempt, artifact SHA, policy version, model or actor, evidence and receipt snapshots, and state transitions.',
   list_screening_adjudication_attempts:
@@ -1198,7 +1203,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening review queue',
       description:
-        'Page the SN118 operator review queue: every agent held in ath_pending_review with an unresolved ATH review, oldest hold first. Each row carries the held agent_id/agent_name/agent_version, miner_hotkey and payment-time miner_coldkey, submitted_at, opened_at, agent_status, and a `hold` object with review_kind (copy | benchmark_overfit | deferred_source_review | anomalous_score), the operator reason, and for a copy hold the matched agent\'s identity (duplicate_of plus its name, version, hotkey, coldkey and submission time). `hold.reason` is why the submission is under review NOW: after a withdrawn resolution and a guarded reopen, `hold.reason_source` reads `reconsideration`, `hold.reason` is the reopen reason, and the `superseded_*` fields carry the withdrawn decision as HISTORY, never a finding that still stands. Filter with reviewKind; page with limit/offset. The queue is unresolved holds across every scoring generation and is not narrowable by either: a review status filter would let a closed hold read as open, and the platform\'s generation filter selects on whether the held agent has a score at a benchmark version, so its `active` default hides an upload-time copy hold (no scores at all) and any hold that survived a rollout (none at the new active version) while both still wait for an operator. `agent_status` is the field to read before acting: a pending review whose agent is NOT ath_pending_review is a hold stranded by some other path, and resolve_ath_review answers 409 for it. This is the queue enumeration; get_ath_review gives one review its full audit trail, and get_copy_review_source_diff the source evidence. This is NOT the quarantine queue — list_screening_quarantines is a different, screener-owned surface whose active rows the platform auto-resolves within milliseconds.',
+        'Page the SN118 operator review queue: every agent held in ath_pending_review with an unresolved ATH review, oldest hold first. Each row carries the held agent_id/agent_name/agent_version, miner_hotkey and payment-time miner_coldkey, submitted_at, opened_at, agent_status, and a `hold` object with review_kind (copy | benchmark_overfit | deferred_source_review | anomalous_score), the operator reason, and for a copy hold the matched agent\'s identity (duplicate_of plus its name, version, hotkey, coldkey and submission time). `hold.reason` is why the submission is under review NOW: after a withdrawn resolution and a guarded reopen, `hold.reason_source` reads `reconsideration`, `hold.reason` is the reopen reason, and the `superseded_*` fields carry the withdrawn decision as HISTORY, never a finding that still stands. Filter with reviewKind; page with limit/offset. The queue is unresolved holds across every scoring generation and is not narrowable by either: a review status filter would let a closed hold read as open, and the platform\'s generation filter selects on whether the held agent has a score at a benchmark version, so its `active` default hides an upload-time copy hold (no scores at all) and any hold that survived a rollout (none at the new active version) while both still wait for an operator. `agent_status` is the field to read before acting: a pending review whose agent is NOT ath_pending_review is a hold stranded by some other path, and resolve_ath_review answers 409 for it. This is the queue enumeration; get_ath_review gives one review its full audit trail, and get_copy_review_source_diff the source evidence. This is NOT the quarantine queue — list_screening_quarantines status=active is the separate pre-score hold queue (anti-cheat quarantines and inconclusive screenings held for operator review), resolved with resolve_screening_quarantine.',
       inputSchema: { ...athReviewQueueInputSchema.shape, ...MCP_PAGINATION_INPUT },
       annotations: toolAnnotations('read'),
     },
@@ -1421,7 +1426,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Preview ATH rulings batch',
       description:
-        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]; a clear on a held agent is ["clear"], and a clear on an unheld scored or live agent with no ATH review is ["attest"]: it records the terminal clear without holding the row, so the agent never leaves the board and would_change_crown is always false; a reject is also accepted on an agent still evaluating below quorum, as ["open","reject"], and ends its live validator tickets so the remaining runs are not paid for, while a bare open still needs scored or live), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear a held agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
+        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]; a clear on a held agent is ["clear"], and a clear on an unheld scored or live agent with no ATH review is ["attest"]: it records the terminal clear without holding the row, so the agent never leaves the board and would_change_crown is always false; a reject is also accepted on an agent still evaluating below quorum, as ["open","reject"], and ends its live validator tickets so the remaining runs are not paid for, while a bare open still needs scored or live; a WITHDRAWN REJECT is reversible: a clear on a banned agent whose ATH review resolved reject is ["open","clear"] -- it reopens that same review with the ruling\'s reason (a `reopen` action keeping the reject on the record), then clears it back to the status recorded before the reject (scored, live, or evaluating if it was rejected below quorum), and would_change_crown reports whether the restored score retakes the crown; an open on such an agent is ["open"] and holds it for further review; a ban by any other path, with no rejected review, stays a conflict, and the hotkey upload gate (list_hotkey_bans) is never touched), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear a held agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
       inputSchema: previewAthRulingsBatchInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2575,6 +2580,13 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         ),
       ),
   )
+
+  registerTool('get_agent_source_release_evidence', {
+    title: 'Get exact-agent public source-release evidence',
+    description: 'Read publication timing for one exact source artifact. Supply candidateAgentId to compare against that submission upload under the policy effective then; omit it for a current snapshot. Returns source SHA, policy revision, completed-emission confirmation, derived eligibility time, and the count/earliest timestamp of exact-SHA unauthenticated public handoffs. Derived eligibility can be backdated by late emission proof and never establishes historical availability; publication_proven_by_reference_time uses only a recorded public handoff before that time. An actual public handoff remains publication after an embargo increase or status change. Private reads do not count. The audit is fail-open: missing rows or a false publication_proven_by_reference_time mean publication was not proved, never that the source was private or copying occurred. Earlier shorter eligibility windows may be omitted without a recorded handoff. No artifact URL, IP, requester identity or source bytes are returned. Requires backroom:read and changes nothing.',
+    inputSchema: { agentId: sourceAgentId(), candidateAgentId: sourceAgentId().optional() },
+    annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchAgentSourceReleaseEvidence(input)))
 
   registerTool(
     'set_source_release_policy',

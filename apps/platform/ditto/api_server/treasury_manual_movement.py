@@ -32,6 +32,8 @@ from ditto_screening_protocol.treasury_manual import (
 )
 
 KIND = "finalized_manual_movement_v1"
+# Two 360-block tempos: the settlement epoch's pin plus one late pin.
+SETTLEMENT_ANCHOR_MAX_LAG = 720
 
 
 def verified_movement_payload(receipt):
@@ -86,11 +88,34 @@ async def publish_finalized_movement(session, chain, row):
             LedgerEpochSnapshot.epoch_index == settlement.epoch_index,
         )
     )
-    if ledger is None:
-        raise ReceiptHistoryUnavailable("manual wallet identity anchor absent")
+    settlement_anchor = ledger is None
+    if settlement_anchor:
+        # The first source epoch can fall in a snapshot gap that is never
+        # reconstructed. The movement asserts only the payment effect, so the
+        # ledger pinned at settlement is an equally exact identity anchor: the
+        # newest snapshot at or before the settlement block, within one epoch.
+        ledger = await session.scalar(
+            select(LedgerEpochSnapshot)
+            .where(
+                LedgerEpochSnapshot.netuid == 118,
+                LedgerEpochSnapshot.pinned_block <= settlement.block,
+            )
+            .order_by(LedgerEpochSnapshot.pinned_block.desc())
+            .limit(1)
+        )
+        if (
+            ledger is None
+            or settlement.block - ledger.pinned_block > SETTLEMENT_ANCHOR_MAX_LAG
+        ):
+            raise ReceiptHistoryUnavailable("manual wallet identity anchor absent")
     pin = treasury_pin_from_context(LedgerPin.from_row(ledger))
     if not isinstance(pin, EnforcingTreasuryPin):
         raise ValueError("historical approved wallet identity anchor required")
+    if (
+        settlement_anchor
+        and pin.policy.collector_policy_digest != envelope.collector_policy_digest
+    ):
+        raise ValueError("settlement anchor differs from the request's custody policy")
     policy = verify_policy_approval(
         pin.approval,
         expected_policy_digest=pin.policy_digest,

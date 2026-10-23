@@ -2,6 +2,60 @@
 
 <!-- version list -->
 
+## v0.382.3 (2026-10-23)
+
+### Bug Fixes
+
+- **screener**: Distinguish refuted I5 leads from unresolved source
+  ([#3060](https://github.com/ditto-assistant/ditto-subnet/pull/3060),
+  [`f34936d`](https://github.com/ditto-assistant/ditto-subnet/commit/f34936d5d853060956c05c19f6f145820c24cff1))
+
+
+## v0.382.2 (2026-10-23)
+
+### Bug Fixes
+
+- **treasury**: Anchor manual movement proof at settlement when its source epoch is a gap
+  ([#3093](https://github.com/ditto-assistant/ditto-subnet/pull/3093),
+  [`8df5c3d`](https://github.com/ditto-assistant/ditto-subnet/commit/8df5c3d7c015933c5f373a7ef0a98e6a11b4620e))
+
+
+## v0.382.1 (2026-10-23)
+
+### Bug Fixes
+
+- **release**: Map Node runtime pins added by #3083
+  ([#3090](https://github.com/ditto-assistant/ditto-subnet/pull/3090),
+  [`12a1adb`](https://github.com/ditto-assistant/ditto-subnet/commit/12a1adbdcb9b0f6c05f1b04b80020a2791b73ccc))
+
+- **screener**: Ruff-format the case-file currency guidance test
+  ([#3091](https://github.com/ditto-assistant/ditto-subnet/pull/3091),
+  [`443e782`](https://github.com/ditto-assistant/ditto-subnet/commit/443e7826216c09be91d17750eb4fc0243b73ce54))
+
+- **screener**: Stop treating case-file currency rules as I5 on their own
+  ([#3089](https://github.com/ditto-assistant/ditto-subnet/pull/3089),
+  [`e1d5754`](https://github.com/ditto-assistant/ditto-subnet/commit/e1d57541d60568dd4d8ed2cffcc0a27023124ace))
+
+- **security**: Require patched October Node runtimes
+  ([#3083](https://github.com/ditto-assistant/ditto-subnet/pull/3083),
+  [`2de866a`](https://github.com/ditto-assistant/ditto-subnet/commit/2de866ace8ae9725268392622160ee9527c5604d))
+
+
+## v0.382.0 (2026-10-22)
+
+### Bug Fixes
+
+- **validator**: Bound every Docker call in the stack update transaction
+  ([#3037](https://github.com/ditto-assistant/ditto-subnet/pull/3037),
+  [`fb2f96c`](https://github.com/ditto-assistant/ditto-subnet/commit/fb2f96c7068aae74b7928323d308a7f308d45903))
+
+### Features
+
+- **platform**: Reconsider a rejected agent through the ATH rulings court
+  ([#3082](https://github.com/ditto-assistant/ditto-subnet/pull/3082),
+  [`e403390`](https://github.com/ditto-assistant/ditto-subnet/commit/e40339051e2407fb225d851b8dc3fce8c262dc80))
+
+
 ## v0.381.2 (2026-10-22)
 
 ### Bug Fixes

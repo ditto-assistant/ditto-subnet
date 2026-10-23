@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -25,8 +25,10 @@ from ditto.api_server.fingerprint import reference_corpus_provenance
 from ditto.api_server.storage import ObjectDownloadFailedError
 from ditto.db.models import (
     Agent,
+    AgentKingship,
     AgentStatus,
     ArtifactFetchAudit,
+    ArtifactReleaseSettingsRevision,
     AthReview,
     AthReviewAction,
     BenchmarkRollout,
@@ -34,12 +36,210 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
+from ditto.db.queries.king_reign import KingEmissionProof, record_emission_confirmed
 from ditto.db.queries.scores import list_eligible_ledger
 
 _TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_TOKEN}", "X-Admin-Actor": "operator"}
 _T0 = datetime(2026, 7, 16, 12, tzinfo=UTC)
 _CORPUS_ID = reference_corpus_provenance()["corpus_id"]
+
+
+async def test_late_emission_proof_does_not_prove_historical_publication(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    candidate_id, source_id = await _seed(maker)
+    async with maker() as session, session.begin():
+        source = await session.get(Agent, source_id)
+        assert source is not None
+        source.created_at = _T0 - timedelta(days=5)
+        session.add(
+            AgentKingship(
+                agent_id=source_id,
+                first_crowned_at=_T0 - timedelta(days=4),
+            )
+        )
+        for index in range(3):
+            session.add(
+                Score(
+                    agent_id=source_id,
+                    validator_hotkey=f"late-proof-{index}",
+                    run_id=f"late-proof-{index}",
+                    seed=7,
+                    bench_version=13,
+                    composite=0.8,
+                    tool_mean=0.8,
+                    memory_mean=0.8,
+                    median_ms=100,
+                    n=350,
+                    details={},
+                    generated_at=_T0 - timedelta(days=4),
+                    created_at=_T0 - timedelta(days=4),
+                )
+            )
+    path = f"/api/v1/admin/agents/{source_id}/source-release-evidence"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        before = await client.get(
+            path, params={"candidate_agent_id": str(candidate_id)}, headers=_HEADERS
+        )
+        assert before.status_code == 200
+        assert before.json()["derived_eligibility_at"] is None
+        async with maker() as session, session.begin():
+            await record_emission_confirmed(
+                session,
+                agent_id=source_id,
+                proof=KingEmissionProof(
+                    confirmed_at=_T0 - timedelta(days=3),
+                    block=100,
+                    block_hash="a" * 64,
+                    epoch_index=1,
+                    ledger_digest="b" * 64,
+                ),
+            )
+        after = await client.get(
+            path, params={"candidate_agent_id": str(candidate_id)}, headers=_HEADERS
+        )
+    assert after.status_code == 200
+    body = after.json()
+    assert datetime.fromisoformat(body["derived_eligibility_at"]) < _T0
+    assert body["publication_evidence_at"] is None
+    assert body["publication_proven_by_reference_time"] is False
+    assert body["exact_sha_public_handoff_count"] == 0
+    assert body["absence_proves_nonpublication"] is False
+
+
+async def test_source_release_evidence_preserves_exact_public_handoffs(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    candidate_id, source_id = await _seed(maker)
+    sha = source_id.hex * 2
+    async with maker() as session, session.begin():
+        base_revision = (
+            await session.scalar(
+                select(func.max(ArtifactReleaseSettingsRevision.revision))
+            )
+        ) or 0
+        session.add(
+            ArtifactReleaseSettingsRevision(
+                revision=base_revision + 1,
+                parent_revision=base_revision,
+                disclosure="public",
+                embargo_hours=48,
+                actor="operator",
+                reason="Increase source embargo for future releases",
+                created_at=_T0 - timedelta(minutes=1),
+            )
+        )
+        session.add(
+            ArtifactReleaseSettingsRevision(
+                revision=base_revision + 2,
+                parent_revision=base_revision + 1,
+                disclosure="never",
+                embargo_hours=72,
+                actor="operator",
+                reason="Suspend future publication after candidate upload",
+                created_at=_T0 + timedelta(minutes=1),
+            )
+        )
+        source = await session.get(Agent, source_id)
+        assert source is not None
+        source.status = AgentStatus.REJECTED
+        for digest, kind, identity, endpoint, moment in (
+            (sha, "public", None, "public.agent_artifact", _T0 - timedelta(minutes=30)),
+            (sha, "public", None, "public.agent_artifact", _T0 + timedelta(hours=1)),
+            (
+                "0" * 64,
+                "public",
+                None,
+                "public.agent_artifact",
+                _T0 - timedelta(hours=1),
+            ),
+            (
+                sha,
+                "admin",
+                "operator",
+                "admin.get_screening_artifact",
+                _T0 - timedelta(hours=2),
+            ),
+            (
+                sha,
+                "public",
+                None,
+                "public.other_artifact",
+                _T0 - timedelta(hours=3),
+            ),
+        ):
+            session.add(
+                ArtifactFetchAudit(
+                    agent_id=source_id,
+                    artifact_sha256=digest,
+                    requester_kind=kind,
+                    requester_id=identity,
+                    endpoint=endpoint,
+                    fetched_at=moment,
+                    source_ip="192.0.2.1",
+                    detail={"private_url": "must-not-leak"},
+                )
+            )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/v1/admin/agents/{source_id}/source-release-evidence",
+            params={"candidate_agent_id": str(candidate_id)},
+            headers=_HEADERS,
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["artifact_sha256"] == sha
+    assert body["candidate_agent_id"] == str(candidate_id)
+    assert body["policy_revision"] == base_revision + 1
+    assert body["embargo_hours"] == 48
+    assert body["publication_proven_by_reference_time"] is True
+    assert body["exact_sha_public_handoff_count"] == 2
+    assert datetime.fromisoformat(body["publication_evidence_at"]) == _T0 - timedelta(
+        minutes=30
+    )
+    assert body["absence_proves_nonpublication"] is False
+    assert "192.0.2.1" not in response.text
+    assert "must-not-leak" not in response.text
+
+
+async def test_source_release_evidence_absence_is_not_private_proof(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    candidate_id, source_id = await _seed(maker)
+    path = f"/api/v1/admin/agents/{source_id}/source-release-evidence"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            path, params={"candidate_agent_id": str(candidate_id)}, headers=_HEADERS
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["publication_evidence_at"] is None
+        assert body["exact_sha_public_handoff_count"] == 0
+        assert body["publication_proven_by_reference_time"] is False
+        assert body["absence_proves_nonpublication"] is False
+        assert "fail-open" in body["limitations"]
+        assert (await client.get(path)).status_code in {401, 403}
+        assert (
+            await client.get(
+                path, params={"candidate_agent_id": str(uuid4())}, headers=_HEADERS
+            )
+        ).status_code == 404
+        assert (
+            await client.get(
+                f"/api/v1/admin/agents/{uuid4()}/source-release-evidence",
+                headers=_HEADERS,
+            )
+        ).status_code == 404
 
 
 @pytest.fixture

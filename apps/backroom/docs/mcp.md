@@ -1,5 +1,15 @@
 # SN118 Backroom MCP
 
+`get_agent_source_release_evidence` reads exact-artifact publication evidence
+without downloading source. With `candidateAgentId`, its reference time is
+that submission's upload, and its policy revision is the one effective then.
+The result distinguishes conservative eligibility/publication timing from
+actual exact-SHA anonymous public handoffs, which remain evidence after a
+longer embargo or status change. Missing fetch rows do not prove that source
+was private: the audit is fail-open and an earlier shorter release window may
+be omitted. Private operator/validator reads never count. Only `backroom:read`
+is needed; no URL, IP, requester identity or source bytes are returned.
+
 `get_validator_weight_diagnostics` reads revealed weights, last Yuma vTrust,
 consensus, epoch counters, and pending timelock rounds at one chain block/hash.
 It requires `backroom:read`, accepts an optional `validatorUid`, and never submits
@@ -428,11 +438,23 @@ once took eight 200-row pages and about 1.4 MB of JSON.
 
 ## The review queue
 
-`get_screening_review_queue` is the operator queue: unresolved `ath_reviews`
-rows, oldest hold first. It is **not** `list_screening_quarantines` — active
-quarantines are auto-resolved by the platform within milliseconds and that list
-is effectively always empty, which is what made the queue look empty when this
-tool pointed at it.
+`get_screening_review_queue` is the ATH operator queue: unresolved
+`ath_reviews` rows, oldest hold first. It is **not**
+`list_screening_quarantines`, which is the separate pre-score hold queue.
+Pointing this tool at the quarantine list made the ATH queue look empty.
+
+`list_screening_quarantines status=active` lists real operator holds:
+anti-cheat `quarantine` outcomes, the platform's `repeatedly-inconclusive`
+park, and reviewer-inconclusive screenings held for operator review (public
+reason "Screening was inconclusive; held for operator review"). Nothing
+resolves them automatically; settle each with `resolve_screening_quarantine`
+or `preview_screening_quarantine_batch` and
+`execute_screening_quarantine_batch` (`release`, `rescreen`, or `reject`).
+The evidence-only rows Platform writes next to an outcome that did not hold
+are recorded already resolved by `platform:deferred-source-review` and never
+appear as active. An inconclusive outcome whose reason code names a provider
+or transport fault is not held; it parks in `screening_failed` for
+`retry_failed_screening_now` (see `apps/platform/docs/screener-protocol.md`).
 
 Two platform parameters are deliberately not exposed. `status`, because a queue
 is unresolved work by definition. `generation`, because it filters on whether
@@ -463,7 +485,11 @@ Nothing releases automatically.
 
 ## Hotkey-level upload bans
 
-An ATH rejection bans one agent UUID. The separate `banned_hotkeys` gate is a
+An ATH rejection bans one agent UUID. A withdrawn rejection is reversed
+through the rulings court, not here: a `clear` ruling on that banned agent
+previews `["open","clear"]`, reopening the rejected review and restoring its
+pre-reject status with the reject kept in the history
+(`apps/platform/docs/ath-review-queue.md`). The separate `banned_hotkeys` gate is a
 rare miner-wide control that refuses every future upload from one hotkey. Use
 `list_hotkey_bans` to enumerate the active rows and retain the exact `hotkey`,
 stored `reason`, and `banned_at` timestamp.

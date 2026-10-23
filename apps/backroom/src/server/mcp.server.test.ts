@@ -505,6 +505,7 @@ describe('Backroom MCP tools', () => {
         'get_v13_report_only_current_packet',
         'get_screening_submission',
         'get_source_release_policy',
+        'get_agent_source_release_evidence',
         'get_miner_github_link',
         'get_github_contributor_status',
         'get_github_link_revocation_preflight',
@@ -754,10 +755,12 @@ describe('Backroom MCP tools', () => {
     // Keep procedure text in tool help and retain about 0.5 KB headroom.
     // Six official-control operations add compact UUID schemas and short
     // summaries. Detailed procedures stay in help; services validate IDs.
+    // One publication-evidence read adds two compact UUIDs and a one-line
+    // summary: measured 205,900 bytes. Retain about 0.5 KB headroom.
     // The three whole-policy settings writes now list every field as required
     // (#2979), so an omission cannot overwrite live policy with a default:
-    // measured 205,592. Keep about 0.5 KB of headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(206_100)
+    // measured 206,234. Keep about 0.5 KB of headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(206_750)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -7259,13 +7262,13 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('enumerates the ATH hold queue, not the auto-resolved quarantine queue', async () => {
+  it('enumerates the ATH hold queue, not the pre-score quarantine queue', async () => {
     // The defect: this tool read /admin/screening-quarantines?status=active,
-    // which the platform actor `platform:deferred-source-review` auto-resolves
-    // to `rescreen` within milliseconds. It therefore answered
-    // `{items: [], count: 0}` while agents sat in ath_pending_review, and the
-    // only working enumeration was an eight-call ~1.5MB sweep of
-    // list_screening_submissions.
+    // the separate pre-score hold queue (its evidence-only rows are written
+    // already resolved by `platform:deferred-source-review`). It therefore
+    // answered `{items: [], count: 0}` while agents sat in
+    // ath_pending_review, and the only working enumeration was an eight-call
+    // ~1.5MB sweep of list_screening_submissions.
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({

@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ditto_screening_protocol.v13_private_package import (
     PreparedV13PrivatePackage,
     SealedPackageStore,
+    V13PrivatePair,
     V13PrivateRunSummary,
     _prepare_registered_package,
 )
@@ -120,6 +121,65 @@ def _answer_digest(response: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+async def _execute_private_inventory(
+    *,
+    pairs: tuple[V13PrivatePair, ...],
+    image_sha256: str,
+    store: SealedPackageStore,
+    executor: FreshIsolatedCaseExecutor,
+) -> tuple[tuple[PrivatePairCounts, ...], str]:
+    """Shared execution mechanics, called only after authoritative preflight."""
+    counts: Counter[tuple[str, str, str]] = Counter()
+    evidence = hashlib.sha256()
+    for pair in pairs:
+        control = await _load_case(store, pair.control_sha256, pair.pair_id, "control")
+        variant = await _load_case(store, pair.variant_sha256, pair.pair_id, "variant")
+        if control.semantic_contract_sha256 != variant.semantic_contract_sha256:
+            raise PrivateExecutionUnavailable(
+                "private paired semantics commitment mismatch"
+            )
+        outcomes: list[bool] = []
+        for case in (control, variant):
+            observation = await executor.run_case(
+                image_sha256=image_sha256,
+                seed_envelope=case.seed_envelope,
+                run_envelope=case.run_envelope,
+                timeout_seconds=30.0,
+            )
+            if not observation.model_authority_verified:
+                raise PrivateExecutionUnavailable("private model authority unavailable")
+            outcomes.append(
+                _answer_digest(observation.response) == case.expected_answer_sha256
+            )
+        control_ok, variant_ok = outcomes
+        key = (pair.transformation_class, pair.seed_commitment)
+        counts[(*key, "pairs")] += 1
+        counts[(*key, "control_correct")] += int(control_ok)
+        counts[(*key, "variant_correct")] += int(variant_ok)
+        counts[(*key, "control_only_correct")] += int(control_ok and not variant_ok)
+        counts[(*key, "variant_only_correct")] += int(variant_ok and not control_ok)
+        evidence.update(pair.pair_id.bytes)
+        evidence.update(bytes((int(control_ok), int(variant_ok))))
+    aggregate_keys = sorted({key[:2] for key in counts})
+    aggregates = tuple(
+        PrivatePairCounts(
+            transformation_class=class_name,
+            seed_commitment=seed_commitment,
+            pairs=counts[(class_name, seed_commitment, "pairs")],
+            control_correct=counts[(class_name, seed_commitment, "control_correct")],
+            variant_correct=counts[(class_name, seed_commitment, "variant_correct")],
+            control_only_correct=counts[
+                (class_name, seed_commitment, "control_only_correct")
+            ],
+            variant_only_correct=counts[
+                (class_name, seed_commitment, "variant_only_correct")
+            ],
+        )
+        for class_name, seed_commitment in aggregate_keys
+    )
+    return aggregates, evidence.hexdigest()
+
+
 async def execute_v13_private_pairs(
     *,
     prepared: PreparedV13PrivatePackage,
@@ -147,68 +207,11 @@ async def execute_v13_private_pairs(
                 raise PrivateExecutionUnavailable(
                     "private prepared package commitment mismatch"
                 )
-            counts: Counter[tuple[str, str, str]] = Counter()
-            evidence = hashlib.sha256()
-            for pair in prepared.manifest.pairs:
-                control = await _load_case(
-                    store, pair.control_sha256, pair.pair_id, "control"
-                )
-                variant = await _load_case(
-                    store, pair.variant_sha256, pair.pair_id, "variant"
-                )
-                if control.semantic_contract_sha256 != variant.semantic_contract_sha256:
-                    raise PrivateExecutionUnavailable(
-                        "private paired semantics commitment mismatch"
-                    )
-                outcomes: list[bool] = []
-                for case in (control, variant):
-                    observation = await executor.run_case(
-                        image_sha256=prepared.commitment.image_sha256,
-                        seed_envelope=case.seed_envelope,
-                        run_envelope=case.run_envelope,
-                        timeout_seconds=30.0,
-                    )
-                    if not observation.model_authority_verified:
-                        raise PrivateExecutionUnavailable(
-                            "private model authority unavailable"
-                        )
-                    outcomes.append(
-                        _answer_digest(observation.response)
-                        == case.expected_answer_sha256
-                    )
-                control_ok, variant_ok = outcomes
-                key = (pair.transformation_class, pair.seed_commitment)
-                counts[(*key, "pairs")] += 1
-                counts[(*key, "control_correct")] += int(control_ok)
-                counts[(*key, "variant_correct")] += int(variant_ok)
-                counts[(*key, "control_only_correct")] += int(
-                    control_ok and not variant_ok
-                )
-                counts[(*key, "variant_only_correct")] += int(
-                    variant_ok and not control_ok
-                )
-                evidence.update(pair.pair_id.bytes)
-                evidence.update(bytes((int(control_ok), int(variant_ok))))
-            aggregate_keys = sorted({key[:2] for key in counts})
-            aggregates = tuple(
-                PrivatePairCounts(
-                    transformation_class=class_name,
-                    seed_commitment=seed_commitment,
-                    pairs=counts[(class_name, seed_commitment, "pairs")],
-                    control_correct=counts[
-                        (class_name, seed_commitment, "control_correct")
-                    ],
-                    variant_correct=counts[
-                        (class_name, seed_commitment, "variant_correct")
-                    ],
-                    control_only_correct=counts[
-                        (class_name, seed_commitment, "control_only_correct")
-                    ],
-                    variant_only_correct=counts[
-                        (class_name, seed_commitment, "variant_only_correct")
-                    ],
-                )
-                for class_name, seed_commitment in aggregate_keys
+            aggregates, evidence_sha256 = await _execute_private_inventory(
+                pairs=prepared.manifest.pairs,
+                image_sha256=prepared.commitment.image_sha256,
+                store=store,
+                executor=executor,
             )
             return PrivateExecutionResult(
                 summary=V13PrivateRunSummary(
@@ -221,7 +224,7 @@ async def execute_v13_private_pairs(
                     runner_hotkey=runner_hotkey,
                     status="completed",
                     completed_pairs=len(prepared.manifest.pairs),
-                    evidence_sha256=evidence.hexdigest(),
+                    evidence_sha256=evidence_sha256,
                 ),
                 aggregates=aggregates,
             )

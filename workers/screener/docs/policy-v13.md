@@ -652,6 +652,112 @@ instructions, ordinary finite vocabularies, typo handling, ordinary product
 rules, prescriptive prose, and fixture references alone are insufficient
 unless they create a proven benchmark-specific procedure.
 
+#### Clarification: case-file currency rules (2026-10-23)
+
+Bench v13 case files shuffle their records and then stamp filing timestamps
+in shuffled order (`research/dittobench-datagen/universe/personal.go:561-580`,
+`universe/v13_contract.go:1056-1072`, `universe/v13_calendar.go:26-33`). A
+plain restatement can therefore be dated after the change note that replaced
+it, which ordinary conversation does not do. This is a benchmark realism
+defect tracked for Bench v14 in ditto-subnet#3088. Coping with it is not an
+I5 violation.
+
+A **case-file currency rule** is not, by itself, a rejection ground under I5,
+W3 or any other condition. Such a rule may:
+
+- treat a record that states its own change, correction, handover or
+  replacement as current over a plain restatement of the same topic, whatever
+  their filing dates;
+- tell the deciding model that filing dates may not show the order in which
+  things were said;
+- recognize change statements by change vocabulary, including wording that
+  matches the public generator's change rows;
+- scope the comparison to the records that share an identifier the request
+  names, such as a case-file id, and serve only those records when the request
+  itself limits the answer to them;
+- leave an aside that a record marks as separate or unrelated out of that
+  comparison;
+- show the deciding model a host-computed note or added turn naming the
+  "current" statement, what it "supersedes", or the resulting current list;
+- omit the filing times of the records in that scoped view, while their text
+  stays in the deciding input.
+
+These elements are one behavior. Combining several of them is not a second
+factor. A reject of a submission that carries such a rule needs an
+independent ground that stands with the rule removed, proven under its own
+condition. Examples:
+
+- record text or another distinct material fact that the request needs is
+  withheld from the deciding input (W3), for example a deleted superseded
+  record;
+- the host writes or rewrites the graded value from the currency result
+  instead of the model authoring it (I4), or retries or overrides a model
+  answer that disagrees with the candidate (I3);
+- the currency result removes or forces tool capabilities (I7); or
+- a separate benchmark recipe, such as an answer-family or operand compiler
+  (I5).
+
+Outside the benchmark, a real save time is genuine chronology, so the rule can
+mislead a deployed agent. That is a product-quality lead, not an integrity
+finding.
+
+The 2026-10 board holdings that rejected a submission only for this shape
+(the "SN-215 shape" or "case-file currency recipe") are withdrawn as
+precedent. A holding that also proved an independent ground keeps that ground.
+
+#### Clarification: routed instruction guidance (2026-10-23)
+
+A request classifier or router that chooses which general instructions,
+examples, checklists or tool notes the deciding model sees is not, by itself,
+a rejection ground under I5 or any other condition. It may route by request
+type, tool family, answer form or the request's phrasing. Tailoring
+instructions to the kind of request is ordinary assistant engineering, and
+these mechanisms are useful product behavior. This holds when:
+
+- the deciding model still receives the request, the record text it needs and
+  the tool catalog, and authors the graded value or tool call itself;
+- the guidance is advisory text: the host does not act on the classifier
+  result by writing, rewriting, retrying or overriding the answer (I3, I4),
+  removing or forcing tools (I7), or withholding needed records (W3); and
+- the guidance encodes no benchmark-private knowledge, such as hidden answers,
+  private case or seed values, or grader internals that the repository does
+  not publish.
+
+Guidance may state an outcome rule that the public generator or tool
+semantics publish. Examples: "if the stored setting already matches the
+request, say so instead of calling the setter; if the records leave the
+choice open, ask"; "search the calendar before adding an event that may
+already exist". These describe sensible assistant behavior. Telling the model
+about them is not I5, even when they match how the benchmark grades. The
+classifier may be hand-written rules, regular expressions or a small compiled
+model declared under W13. Several routed notes together are one behavior, and
+stacking them is not a second factor.
+
+The I5 phrase "a family classifier activates a fixed benchmark answer or
+interpretation recipe" therefore means host-enforced output or
+benchmark-private content, not advisory guidance the model may follow. A
+reviewer that finds only routed guidance resolves those I5 leads as refuted
+under this clarification rather than leaving them unresolved.
+
+A reject of a submission that routes guidance needs an independent ground,
+proven under its own condition. Examples:
+
+- host code parses benchmark event text into operands, steps, ordering or
+  answers and serves that result in place of the model's own reading (I5);
+- the host writes, edits or overrides the graded value or a dissenting model
+  answer (I3, I4);
+- the route removes, hides or forces tool capabilities (I7);
+- record text the request needs is withheld from the deciding input (W3); or
+- the guidance carries benchmark-private content.
+
+Guidance that misfires outside the benchmark is a product-quality lead, not an
+integrity finding.
+
+The 2026-10 holdings that rejected a submission only for routed decision
+notes, per-family instruction modules or settings-request predicates (the
+SN-214 settings predicates included) are withdrawn as precedent. A holding
+that also proved an independent ground keeps that ground.
+
 ### I6: execution misrepresentation
 
 Reject fabricated, hidden, replayed, materially rewritten, falsely successful,

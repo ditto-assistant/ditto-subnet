@@ -104,41 +104,48 @@ class V13PrivateManifest(BaseModel):
 
     @model_validator(mode="after")
     def complete_design(self) -> V13PrivateManifest:
-        if len({pair.pair_id for pair in self.pairs}) != len(self.pairs):
-            raise ValueError("duplicate private pair identity")
-        all_payloads = [
-            digest
-            for pair in self.pairs
-            for digest in (pair.control_sha256, pair.variant_sha256)
-        ]
-        if len(set(all_payloads)) != len(all_payloads):
-            raise ValueError("private pair payloads are not distinct")
-        seeds = {pair.seed_commitment for pair in self.pairs}
-        if len(seeds) != V13_PRIVATE_PROFILE.independent_seed_count:
-            raise ValueError("private package needs two independent seed commitments")
-        counts: Counter[tuple[str, str]] = Counter(
-            (pair.seed_commitment, pair.transformation_class) for pair in self.pairs
-        )
-        required_classes: tuple[str, ...] = _REQUIRED_CLASSES
-        if self.tool_catalog_applicable:
-            required_classes += ("catalog_reorder_alias",)
-        for seed in seeds:
-            for class_name in required_classes:
-                if (
-                    counts[(seed, class_name)]
-                    < V13_PRIVATE_PROFILE.pairs_per_class_per_seed
-                ):
-                    raise ValueError("private package lacks per-seed class coverage")
-        for class_name in required_classes:
-            if sum(counts[(seed, class_name)] for seed in seeds) < (
-                V13_PRIVATE_PROFILE.pairs_per_class_total
-            ):
-                raise ValueError("private package lacks per-class coverage")
-        if not self.tool_catalog_applicable and any(
-            pair.transformation_class == "catalog_reorder_alias" for pair in self.pairs
-        ):
-            raise ValueError("catalog applicability conflicts with package cases")
+        validate_private_inventory(self.pairs, self.tool_catalog_applicable)
         return self
+
+
+def validate_private_inventory(
+    pairs: tuple[V13PrivatePair, ...], tool_catalog_applicable: bool
+) -> None:
+    """Shared coverage checks; no identity or signing semantics change."""
+    if len({pair.pair_id for pair in pairs}) != len(pairs):
+        raise ValueError("duplicate private pair identity")
+    all_payloads = [
+        digest
+        for pair in pairs
+        for digest in (pair.control_sha256, pair.variant_sha256)
+    ]
+    if len(set(all_payloads)) != len(all_payloads):
+        raise ValueError("private pair payloads are not distinct")
+    seeds = {pair.seed_commitment for pair in pairs}
+    if len(seeds) != V13_PRIVATE_PROFILE.independent_seed_count:
+        raise ValueError("private package needs two independent seed commitments")
+    counts: Counter[tuple[str, str]] = Counter(
+        (pair.seed_commitment, pair.transformation_class) for pair in pairs
+    )
+    required_classes: tuple[str, ...] = _REQUIRED_CLASSES
+    if tool_catalog_applicable:
+        required_classes += ("catalog_reorder_alias",)
+    for seed in seeds:
+        for class_name in required_classes:
+            if (
+                counts[(seed, class_name)]
+                < V13_PRIVATE_PROFILE.pairs_per_class_per_seed
+            ):
+                raise ValueError("private package lacks per-seed class coverage")
+    for class_name in required_classes:
+        if sum(counts[(seed, class_name)] for seed in seeds) < (
+            V13_PRIVATE_PROFILE.pairs_per_class_total
+        ):
+            raise ValueError("private package lacks per-class coverage")
+    if not tool_catalog_applicable and any(
+        pair.transformation_class == "catalog_reorder_alias" for pair in pairs
+    ):
+        raise ValueError("catalog applicability conflicts with package cases")
 
 
 class ArtifactCommitment(BaseModel):

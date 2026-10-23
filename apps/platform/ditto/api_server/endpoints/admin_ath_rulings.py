@@ -378,6 +378,16 @@ async def read_board_snapshot(
     )
 
 
+def _ready_message(steps: list[AthRulingStep], *, reconsidering: bool) -> str:
+    if steps == ["attest"]:
+        return "will clear without holding (the agent stays on the board)"
+    if reconsidering and steps == ["open", "clear"]:
+        return "will reopen the rejected review then clear it to its pre-reject status"
+    if reconsidering:
+        return "will reopen the rejected review and hold it for review"
+    return "will " + " then ".join(steps)
+
+
 async def _crown_effect(
     session: AsyncSession,
     *,
@@ -583,6 +593,11 @@ async def _preview_ruling(
             )
     scored_or_live = agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
     resolved_as = review.resolution if review and review.status == "resolved" else None
+    # An ATH reject is the only ruling that puts a reviewed agent in BANNED, and
+    # open_review reopens exactly that review (``reconsidering_rejection``),
+    # retaining the status recorded before the reject so a clear restores it.
+    # Any other path into BANNED has no review to reconsider and stays refused.
+    reconsidering = resolved_as == "reject" and agent.status == AgentStatus.BANNED
     steps: list[AthRulingStep]
     if ruling.action == "open":
         if held:
@@ -592,7 +607,7 @@ async def _preview_ruling(
                 disposition="already_applied",
                 message="agent is already held in ath_pending_review",
             )
-        if not scored_or_live:
+        if not scored_or_live and not reconsidering:
             return _blocked(
                 **base,
                 ok=False,
@@ -618,6 +633,10 @@ async def _preview_ruling(
             # A board review that found no violation: record the clear without
             # holding the row, so it never leaves the board (attest_review).
             steps = ["attest"]
+        elif reconsidering:
+            # A withdrawn reject: reopen the rejected review with this reason,
+            # then clear it back to its pre-reject status, history intact.
+            steps = ["open", "clear"]
         else:
             reason = (
                 "agent is held but its review is not pending"
@@ -669,11 +688,7 @@ async def _preview_ruling(
             ok=True,
             disposition="ready",
             steps=steps,
-            message=(
-                "will clear without holding (the agent stays on the board)"
-                if steps == ["attest"]
-                else "will " + " then ".join(steps)
-            ),
+            message=_ready_message(steps, reconsidering=reconsidering),
         ),
         after,
     )

@@ -999,10 +999,13 @@ async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> Non
     async def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal requests
         requests += 1
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(2.0)
         return httpx.Response(200, json={})
 
-    deadline = asyncio.get_running_loop().time() + 0.03
+    # Leave enough window that a slow CI runner still reaches the first
+    # completion before the deadline (otherwise the lease precheck fires and
+    # reports ``lease-budget`` instead of the completion timeout under test).
+    deadline = asyncio.get_running_loop().time() + 0.5
     result = await _adjudicator(
         _key(tmp_path), httpx.MockTransport(handler)
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN], deadline=deadline)
@@ -2039,8 +2042,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v14-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v14-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v16-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v16-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:

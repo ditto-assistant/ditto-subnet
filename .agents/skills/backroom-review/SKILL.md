@@ -48,7 +48,9 @@ SHA-256, and `agent_status`. Screenshots, rank, and truncated keys are leads.
 - Leaderboard / ATH / scored or live high-rank / precedent search → board.
 - Miner appeal: follow current status. A scored agent is a board case even
   if it was once quarantined.
-- Skip `banned` rows. An `evaluating` / `waiting_validator` row can still
+- Skip `banned` rows for new review; to withdraw a wrong reject see
+  [Reconsidering a reject](#reconsidering-a-reject). An `evaluating` /
+  `waiting_validator` row can still
   be rejected through the batched rulings court (below): a proven violation
   need not wait for quorum, and the reject ends its live validator tickets.
   A hold (`open_ath_review`, or a batch `open`) still 409s until the agent
@@ -288,6 +290,27 @@ an unheld row), with the crown re-read on both legs.
 5. Re-read `board_after`, then `get_leaderboard` and `get_ath_review` for
    each applied row. Every clear/reject action row carries `batch_ruling`
    (batch_id, index, evidence_references, rulings digest, upload key).
+
+### Reconsidering a reject
+
+A reject that turns out to rest on an unsupported ground is withdrawn on the
+record, never by un-banning through some other path. One example is a ground
+the operator later ruled insufficient on its own, such as the benign 6000-char
+tool-result cut with no independent second factor (ditto-subnet#3081).
+
+1. Confirm on `get_ath_review` that this exact UUID's review is
+   `resolved` / `reject`, and re-read the SHA and score count with
+   `get_screening_submission`.
+2. Submit a `clear` ruling whose miner-visible reason names the withdrawn
+   ground and why it no longer stands. An `open` ruling holds the agent for
+   fresh review instead.
+3. The preview must read `ready` with `steps: ["open","clear"]` (or `["open"]`).
+   Read `would_change_crown`: a restored high scorer can retake the crown.
+4. Execute, then re-read: the status returns to the one recorded before the
+   reject, and the history reads `reject`, `reopen`, `clear`.
+
+Withdraw only with the operator's authority for that ruling. A ban with no
+rejected review stays a conflict, and the hotkey upload gate is separate.
 
 Do not un-ban a row to restore a bench version. Rollout authority is a
 Platform question, not an enforcement undo.
