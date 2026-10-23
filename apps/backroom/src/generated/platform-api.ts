@@ -24917,7 +24917,7 @@ export interface components {
             /** Miner Hotkey */
             miner_hotkey: string;
             /** Round Index */
-            round_index: number;
+            round_index?: number | null;
             /** Score */
             score: number;
             /**
