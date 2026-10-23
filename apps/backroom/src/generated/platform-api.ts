@@ -24508,10 +24508,7 @@ export interface components {
         };
         /** GeneratorLedgerResponse */
         GeneratorLedgerResponse: {
-            /**
-             * Count
-             * @default 0
-             */
+            /** Count */
             count: number;
             /** Entries */
             entries?: components["schemas"]["GeneratorLedgerEntry"][];
