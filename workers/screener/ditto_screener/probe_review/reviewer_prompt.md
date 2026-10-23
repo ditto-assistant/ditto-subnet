@@ -58,7 +58,7 @@ args subset | args_exact), `tool_execution_count` (name?, cmp, n),
 `reported_not_executed`, `executed_not_reported`, `any_model_request` /
 `no_model_request` / `last_model_request` (where: prompt_contains,
 prompt_lacks, tool_choice_pinned, tools_count [cmp, n], offers_tool,
-lacks_tool), `http_ok`.
+lacks_tool), `http_ok`. `cmp` is one of `==`, `!=`, `>`, `>=`, `<`, `<=`.
 
 ## Invariants as black-box properties (policy v13)
 

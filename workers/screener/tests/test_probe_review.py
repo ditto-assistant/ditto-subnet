@@ -12,7 +12,12 @@ from pathlib import Path
 import pytest
 
 from ditto_screener.probe_review import agent_loop, tools
-from ditto_screener.probe_review.checks import evaluate, evaluate_all
+from ditto_screener.probe_review.checks import (
+    PREDICATES,
+    evaluate,
+    evaluate_all,
+    predicate_problems,
+)
 from ditto_screener.probe_review.sandbox import ProbeRecord, Session
 from ditto_screener.probe_review.scripted_gateway import ScriptedGateway, _State
 
@@ -222,6 +227,46 @@ def test_verdict_validation_rejects_uncited_findings() -> None:
     assert any("probe_id" in p for p in problems)
     assert any("I1-I8" in p for p in problems)
     assert tools.validate_verdict({"outcome": "no_violation_found"}) == []
+
+
+def test_word_comparators_evaluate_like_symbols() -> None:
+    # Artemis v15 smoke: a proven I7 was lost because the verdict said "eq".
+    record = _record(
+        {"final_text": "ok"},
+        [_tool_entry("create_reminder", {"text": "a"})] * 2,
+    )
+    for cmp in ("eq", "==", "EQ", "ge", ">="):
+        check = {"op": "tool_execution_count", "name": "create_reminder"}
+        assert evaluate(record, {**check, "cmp": cmp, "n": 2})[0], cmp
+    assert not evaluate(record, {"op": "model_calls", "cmp": "equals", "n": 0})[0]
+
+
+def test_verdict_validation_reports_unusable_predicates() -> None:
+    finding = {
+        "invariant": "I7",
+        "claim": "x",
+        "probe_id": "p001-aaaaaa",
+        "violation_checks": [
+            {"op": "tool_execution_count", "cmp": "equals", "n": 1},
+            {"op": "answer_contains_text", "value": "x"},
+        ],
+        "control_checks": [
+            {"op": "any_model_request", "where": {"tools_count": [">=", 1]}},
+            {"op": "model_calls", "cmp": "<"},
+        ],
+    }
+    problems = tools.validate_verdict({"outcome": "violation", "findings": [finding]})
+    assert any("violation_checks[0]" in p and "cmp" in p for p in problems)
+    assert any("violation_checks[1]" in p and "unknown" in p for p in problems)
+    assert any("control_checks[1]" in p and "n must" in p for p in problems)
+    assert not any("control_checks[0]" in p for p in problems)
+
+
+def test_every_listed_predicate_has_a_handler() -> None:
+    record = _record({"final_text": "Answer: 1", "answer": "1"})
+    for op in PREDICATES:
+        assert "unknown predicate" not in evaluate(record, {"op": op})[1], op
+    assert predicate_problems({"op": "nope"}) == ["unknown predicate 'nope'"]
 
 
 def test_agent_loop_respects_ledger_and_stops_on_verdict(tmp_path: Path) -> None:
