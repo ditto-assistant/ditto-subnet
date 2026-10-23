@@ -318,9 +318,9 @@ def test_agent_loop_does_not_act_on_a_response_that_crosses_the_budget(
             "choices": [
                 {"message": {"role": "assistant", "tool_calls": [verdict_call]}}
             ],
-            "usage": {"prompt_tokens": 9_000, "completion_tokens": 2_000},
+            "usage": {"prompt_tokens": 40_000, "completion_tokens": 30_000},
         },
-        ledger=agent_loop.Ledger(max_total_tokens=10_000),
+        ledger=agent_loop.Ledger(max_total_tokens=60_000),
     )
     assert not result["complete"] and result["budget_exhausted"]
     assert not (tmp_path / "verdict.json").exists()
@@ -787,6 +787,23 @@ def test_tool_context_follows_the_issuing_request_when_calls_interleave(
         "POST", "/v1/tools/r/tool", json.dumps({"name": "s", "args": {"q": 1}}).encode()
     )
     assert payload["result"] == "find Lyon"
+
+
+def test_duplicate_root_dockerfiles_are_refused(tmp_path: Path) -> None:
+    from ditto_screener.probe_review.sandbox import _refused_build_entitlement
+
+    archive = tmp_path / "dup.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for name, data in (
+            ("Dockerfile", b"FROM scratch\n"),
+            ("./Dockerfile", b"FROM scratch\nRUN --network=host true\n"),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    assert _refused_build_entitlement(archive) == (
+        "archive contains duplicate root Dockerfiles"
+    )
 
 
 def _fixture_archive(path: Path, violations: str) -> None:

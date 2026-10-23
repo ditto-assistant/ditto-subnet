@@ -170,7 +170,11 @@ def _refused_build_entitlement(archive: Path) -> str | None:
         for count, candidate in enumerate(tar, start=1):
             if count > _MAX_ARCHIVE_MEMBERS:
                 return "archive contains too many members"
-            if member is None and candidate.name in {"Dockerfile", "./Dockerfile"}:
+            if candidate.name in {"Dockerfile", "./Dockerfile"}:
+                # A second root Dockerfile could be the one Docker builds, so
+                # the archive is refused rather than checking only one.
+                if member is not None:
+                    return "archive contains duplicate root Dockerfiles"
                 member = candidate
         handle = tar.extractfile(member) if member is not None else None
         if handle is None:

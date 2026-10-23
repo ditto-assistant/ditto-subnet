@@ -322,12 +322,12 @@ def review(
         remaining = deadline_seconds - (time.monotonic() - started)
         if remaining <= 0:
             break
-        # A conservative upper bound (two characters per token, schemas
-        # included): code-heavy transcripts tokenize denser than prose. Refuse
-        # a request whose capped completion could not fit the budgets.
-        prompt_estimate = (
-            len(json.dumps(messages, default=str)) + len(json.dumps(TOOL_SCHEMAS))
-        ) // 2
+        # An upper bound that holds for any tokenizer: one token per serialized
+        # character, schemas included. Refuse a request whose capped completion
+        # could not fit what is left of the budgets.
+        prompt_estimate = len(json.dumps(messages, default=str)) + len(
+            json.dumps(TOOL_SCHEMAS)
+        )
         max_tokens = ledger.completion_allowance(prompt_estimate)
         if max_tokens < 256:
             ledger.allowance_spent = True

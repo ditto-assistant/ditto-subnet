@@ -37,6 +37,18 @@ def _load(path: Path) -> Any:
         return None
 
 
+def _usable_prepare(prepare: Any) -> bool:
+    """A prepare.json shaped well enough to report; anything else is not_run."""
+    if not isinstance(prepare, dict) or not isinstance(prepare.get("timings"), dict):
+        return False
+    battery = prepare.get("battery")
+    leads = battery.get("leads") if isinstance(battery, dict) else None
+    return isinstance(leads, list) and all(
+        isinstance(lead, dict) and isinstance(lead.get("item_id"), str)
+        for lead in leads
+    )
+
+
 def _complete_replay(replay: Any) -> bool:
     """A finished replay: no problems, typed verdict, well-formed findings."""
     if not isinstance(replay, dict) or replay.get("problems"):
@@ -61,7 +73,7 @@ def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
         prepare = _load(root / "prepare.json")
         replay = _load(root / "replay.json")
         meta = _load(root / "review_meta.json") or {}
-        if prepare is None:
+        if not _usable_prepare(prepare):
             out.append({**item, "status": "not_run"})
             continue
         battery = prepare["battery"]
