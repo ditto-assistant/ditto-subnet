@@ -65,9 +65,11 @@ from ditto.db.models import (
     Agent,
     GeneratorOperatorAction,
     GeneratorRoundAttempt,
+    GeneratorRoundCaseVerdict,
     GeneratorSubmission,
     ValidatorTicket,
 )
+from ditto.db.queries.generator import claimed_fingerprints
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
     _ADMIN_TOKEN,
@@ -658,6 +660,27 @@ class TestRoundLifecycle:
             )
         ).json()["candidates"]
         assert len(candidates) == 40 and candidates[0]["round_index"] == 3
+
+        # A rejected generator's round cases stop claiming their fingerprints.
+        async with session_maker() as session:
+            held = list(
+                await session.scalars(
+                    select(GeneratorRoundCaseVerdict.fingerprint).where(
+                        GeneratorRoundCaseVerdict.submission_id == miner_a,
+                        GeneratorRoundCaseVerdict.status == "discriminating",
+                    )
+                )
+            )
+            assert held
+            assert await claimed_fingerprints(session, fingerprints=held) == sorted(
+                set(held)
+            )
+            a = await session.get(GeneratorSubmission, miner_a)
+            assert a is not None
+            a.status = "rejected"
+            await session.flush()
+            assert await claimed_fingerprints(session, fingerprints=held) == []
+            await session.rollback()
 
         # A later round claims round 3's fingerprints as duplicates.
         await _advance(session_maker, 16)

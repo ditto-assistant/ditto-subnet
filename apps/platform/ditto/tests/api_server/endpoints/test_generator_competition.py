@@ -45,7 +45,6 @@ from ditto.db.models import (
     GeneratorRun,
     GeneratorSubmission,
 )
-from ditto.db.queries.generator import claimed_fingerprints
 from ditto.tests.api_server.endpoints.test_scoring import (
     _install_chain,
     _ledger_headers,
@@ -540,26 +539,6 @@ class TestScorer:
         item = listing.json()["submissions"][0]
         assert item["qualified_at"] is not None and item["next_run_at"] is None
         assert item["latest_run"]["status"] == "qualified"
-
-        # Rejecting the generator releases the claims its scored runs held.
-        fingerprints = [v["fingerprint"] for v in detail["verdicts"]]
-        async with session_maker() as session:
-            held = await claimed_fingerprints(
-                session, fingerprints=fingerprints, exclude_run_id=uuid4()
-            )
-            assert held == sorted(set(fingerprints))
-            row = await session.get(
-                GeneratorSubmission, UUID(accepted["submission_id"])
-            )
-            assert row is not None
-            row.status = "rejected"
-            await session.flush()
-            assert (
-                await claimed_fingerprints(
-                    session, fingerprints=fingerprints, exclude_run_id=uuid4()
-                )
-                == []
-            )
 
     @pytest.mark.parametrize(
         ("case", "outcome"),

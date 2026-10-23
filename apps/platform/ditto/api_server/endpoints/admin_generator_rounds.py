@@ -75,6 +75,7 @@ from ditto.db.queries.audit import append_audit_entry
 from ditto.db.queries.generator import (
     get_submission_by_sha,
     get_submission_by_tree,
+    lock_source_tree,
     record_operator_action,
 )
 from ditto.db.queries.inference import revoke_ticket_inference
@@ -553,6 +554,9 @@ async def admin_register_default_generator(
     except UploadRejected as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     info = inspected.info
+    # The same tree lock miner uploads take, so a concurrent upload of these
+    # files cannot also register them.
+    await lock_source_tree(session, info.tree_sha256)
     existing = await get_submission_by_sha(session, payload.source_sha256)
     if existing is None:
         existing = await get_submission_by_tree(session, info.tree_sha256)

@@ -498,9 +498,20 @@ async def claimed_fingerprints(
             GeneratorSubmission.status != "rejected",
         )
     )
-    rounds = select(GeneratorRoundCaseVerdict.fingerprint).where(
-        GeneratorRoundCaseVerdict.fingerprint.in_(wanted),
-        GeneratorRoundCaseVerdict.status.notin_(("duplicate", "insufficient_panel")),
+    rounds = (
+        select(GeneratorRoundCaseVerdict.fingerprint)
+        .join(
+            GeneratorSubmission,
+            GeneratorSubmission.submission_id
+            == GeneratorRoundCaseVerdict.submission_id,
+        )
+        .where(
+            GeneratorRoundCaseVerdict.fingerprint.in_(wanted),
+            GeneratorRoundCaseVerdict.status.notin_(
+                ("duplicate", "insufficient_panel")
+            ),
+            GeneratorSubmission.status != "rejected",
+        )
     )
     if exclude_round_index is not None:
         rounds = rounds.where(
