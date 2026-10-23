@@ -202,6 +202,15 @@ func ScoreCases(cases []CaseRef, in ScoreInput, params ScoreParams) (PackScore, 
 			byAgent[i][r.CaseID] = r
 		}
 	}
+	// Results are looked up by case id, so one id naming two fingerprints
+	// would let one panel result earn credit twice.
+	fingerprintOf := map[string]string{}
+	for _, c := range cases {
+		if fp, ok := fingerprintOf[c.CaseID]; ok && fp != c.Fingerprint {
+			return PackScore{}, fmt.Errorf("case %q names two different fingerprints", c.CaseID)
+		}
+		fingerprintOf[c.CaseID] = c.Fingerprint
+	}
 	claimed := map[string]bool{}
 	for _, fp := range in.ClaimedFingerprints {
 		claimed[fp] = true

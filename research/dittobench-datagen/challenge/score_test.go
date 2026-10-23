@@ -250,6 +250,13 @@ func TestScoreRejectsBadInput(t *testing.T) {
 	}
 }
 
+func TestScoreRejectsACaseIDWithTwoFingerprints(t *testing.T) {
+	cases := []CaseRef{{CaseID: "c", Fingerprint: "f1"}, {CaseID: "c", Fingerprint: "f2"}}
+	if _, err := ScoreCases(cases, ScoreInput{}, DefaultScoreParams()); err == nil {
+		t.Fatal("one case id with two fingerprints was scored")
+	}
+}
+
 // RunVector is one cross-language ScoreRun fixture; Platform's Python port
 // replays testdata/run_vectors.json.
 type RunVector struct {
