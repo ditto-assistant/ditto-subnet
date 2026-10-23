@@ -1,13 +1,13 @@
 # Allowlisting egress proxy for the untrusted-miner sandbox network.
 # Pure-Go, no cgo — a tiny static binary in a distroless base. See
 # docs/sandbox-egress.md.
-FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS build
+FROM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /egress-proxy ./cmd/egress-proxy
 
-FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+FROM gcr.io/distroless/static:nonroot@sha256:d62067879de890a1def9da0e7766b7d20810a5e5555cef8506b752437d7a3e88
 COPY --from=build /egress-proxy /egress-proxy
 # EGRESS_PROXY_ALLOW must be set (comma-separated hostnames) or every CONNECT is
 # denied (fail-closed). EGRESS_PROXY_ADDR defaults to :3128.
