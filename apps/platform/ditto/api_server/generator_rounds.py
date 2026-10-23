@@ -45,7 +45,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 
 from ditto.api_models.generator import PanelCaseResult
 from ditto.api_models.generator_ledger import (
@@ -354,15 +354,28 @@ async def expire_round_tickets(
         return 0
     from ditto.db.queries.inference import revoke_ticket_inference
 
+    # Only tickets this round's own leased attempts name (agent, validator,
+    # deadline) are expired; a dataset digest alone does not identify a round.
     tickets = list(
         await session.scalars(
             select(ValidatorTicket)
+            .join(
+                GeneratorRoundAttempt,
+                and_(
+                    GeneratorRoundAttempt.round_index == row.round_index,
+                    GeneratorRoundAttempt.status == "leased",
+                    GeneratorRoundAttempt.agent_id == ValidatorTicket.agent_id,
+                    GeneratorRoundAttempt.validator_hotkey
+                    == ValidatorTicket.validator_hotkey,
+                    GeneratorRoundAttempt.ticket_deadline == ValidatorTicket.deadline,
+                ),
+            )
             .where(
                 ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.dataset_sha256 == row.dataset_sha256,
             )
-            .with_for_update()
+            .with_for_update(of=ValidatorTicket)
         )
     )
     for ticket in tickets:

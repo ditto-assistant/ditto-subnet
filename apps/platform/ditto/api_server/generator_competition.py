@@ -424,8 +424,16 @@ async def record_result(
     }
     finish_run(run, status="qualified", outcome="qualified", now=now)
     if row.status == "active":
-        row.qualified_at = now
         row.status_reason = None
+        # An operator re-qualification requested while this run was leased set
+        # next_run_at after the lease began. That request stands: the run is
+        # recorded, but the generator stays unqualified until the new run.
+        requested = row.next_run_at
+        leased = run.leased_at
+        if requested is None or requested.replace(
+            tzinfo=requested.tzinfo or UTC
+        ) <= leased.replace(tzinfo=leased.tzinfo or UTC):
+            row.qualified_at = now
     return RecordedResult("qualified", "qualified", None, row.status)
 
 

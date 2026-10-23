@@ -3308,7 +3308,15 @@ class ValidatorWorker:
             return False
         if job is None:
             return False
-        if job.slot_id not in self._slots or job.bench_version != 13:
+        requested = free[0]
+        # Only the slot this request offered, still healthy and idle, may run
+        # the lease; any other slot could already be running work.
+        if (
+            job.slot_id != requested
+            or job.slot_id not in self._healthy_slots
+            or self._slots[job.slot_id].active_agent_id
+            or job.bench_version != 13
+        ):
             await self._platform.fail_generator_round_job(
                 job, reason="infrastructure", detail="round_job_not_executable"
             )

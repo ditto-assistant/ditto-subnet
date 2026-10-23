@@ -383,23 +383,34 @@ func ScoreRound(in RoundInput, params ScoreParams) (RoundScore, error) {
 	for _, m := range panel {
 		panelOwners[m.OwnerKey] = true
 	}
+	// The common cases are one set for every agent: counted cases on columns
+	// no panel owner owns that every panel agent answered without a fault, so
+	// the tie-break compares means over identical cases.
+	var common []string
+	for _, col := range in.Columns {
+		if !col.Counted || (col.OwnerKey != "" && panelOwners[col.OwnerKey]) {
+			continue
+		}
+	cases:
+		for _, c := range col.Cases {
+			for i := range agents {
+				if r, ok := results[i][c.CaseID]; !ok || r.Fault {
+					continue cases
+				}
+			}
+			common = append(common, c.CaseID)
+		}
+	}
 	standings := make([]AgentStanding, len(agents))
 	for i, a := range agents {
 		standings[i].AgentID = a.AgentID
+		standings[i].CommonCases = len(common)
 		var sum float64
-		for _, col := range in.Columns {
-			if !col.Counted || (col.OwnerKey != "" && panelOwners[col.OwnerKey]) {
-				continue
-			}
-			for _, c := range col.Cases {
-				if r, ok := results[i][c.CaseID]; ok && !r.Fault {
-					sum += r.Score
-					standings[i].CommonCases++
-				}
-			}
+		for _, id := range common {
+			sum += results[i][id].Score
 		}
-		if standings[i].CommonCases > 0 {
-			standings[i].CommonMean = sum / float64(standings[i].CommonCases)
+		if len(common) > 0 {
+			standings[i].CommonMean = sum / float64(len(common))
 		}
 	}
 	for i := range agents {

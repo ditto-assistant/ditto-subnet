@@ -168,3 +168,24 @@ async def test_a_deregistered_generator_never_takes_a_paid_slot() -> None:
     assert absent not in weights
     assert weights[present] == pytest.approx(0.2)
     assert weights[champion] == pytest.approx(0.8)
+
+
+def test_a_run_shaped_ledger_from_an_older_platform_still_folds() -> None:
+    raw = {
+        "count": 1,
+        "mode": "shadow",
+        "entries": [
+            {
+                "miner_hotkey": "5Older" + "x" * 42,
+                "submission_id": str(uuid4()),
+                "run_id": str(uuid4()),
+                "weight_eligible": True,
+                "score": 0.4,
+                "first_seen": _T0.isoformat(),
+                "scored_at": _T0.isoformat(),
+            }
+        ],
+    }
+    ledger = GeneratorLedgerResponse.model_validate(raw)
+    assert ledger.entries[0].round_index is None
+    assert compute_generator_weights(ledger.entries, rank_shares=GENERATOR_RANK_SHARES)

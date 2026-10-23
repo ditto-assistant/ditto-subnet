@@ -164,6 +164,21 @@ async def test_failures_go_to_the_round_endpoint_never_job_fail(
     assert ("slot-0" in worker._healthy_slots) is slot_kept
 
 
+async def test_a_lease_for_a_slot_it_did_not_offer_is_refused() -> None:
+    job = _job(slot_id="slot-1")
+    dittobench = MagicMock()
+    dittobench.run_generator_round = AsyncMock()
+    worker, platform = _worker(job, dittobench)
+
+    assert await worker._run_generator_round_lane() is True
+
+    platform.request_generator_round_job.assert_awaited_once_with(slot_id="slot-0")
+    dittobench.run_generator_round.assert_not_awaited()
+    assert platform.fail_generator_round_job.await_args.kwargs["detail"] == (
+        "round_job_not_executable"
+    )
+
+
 async def test_artifact_identity_mismatch_is_refused() -> None:
     job = _job()
     dittobench = MagicMock()

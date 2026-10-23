@@ -64,6 +64,7 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 	for _, col := range columns {
 		total += len(col.Pack.Cases)
 	}
+	s.store.Update(runID, func(j *store.Job) { j.N = total })
 
 	s.store.SetStage(runID, store.StatusBuilding, 0, total)
 	image, buildLog, _, err := s.sandbox.Build(ctx, sourceFromReq(req))

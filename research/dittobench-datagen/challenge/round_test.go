@@ -363,3 +363,28 @@ func TestRoundVectorsGolden(t *testing.T) {
 		t.Fatal("round vectors drifted; re-run with -update and review the diff")
 	}
 }
+
+func TestCommonMeanUsesOneCaseSetForEveryAgent(t *testing.T) {
+	params := DefaultScoreParams()
+	params.MinPanel = 2
+	params.MinSolverOwners = 1
+	in := RoundInput{
+		Columns: []RoundColumn{{ColumnID: "c0", Counted: true, Cases: []CaseRef{
+			{CaseID: "c0/a", Fingerprint: "fa"}, {CaseID: "c0/b", Fingerprint: "fb"},
+		}}},
+		Agents: []RoundAgent{
+			// x faults on b, so b is not common: both means use only a.
+			{AgentID: "x", OwnerKey: "o1", Results: []PanelCaseResult{{CaseID: "c0/a", Score: 1}, {CaseID: "c0/b", Fault: true}}},
+			{AgentID: "y", OwnerKey: "o2", Results: []PanelCaseResult{{CaseID: "c0/a", Score: 1}, {CaseID: "c0/b", Score: 0}}},
+		},
+	}
+	got, err := ScoreRound(in, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range got.Agents {
+		if a.CommonCases != 1 || a.CommonMean != 1 {
+			t.Fatalf("agent %s: common %d mean %v", a.AgentID, a.CommonCases, a.CommonMean)
+		}
+	}
+}

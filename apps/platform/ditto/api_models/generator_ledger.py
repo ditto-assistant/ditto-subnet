@@ -26,7 +26,10 @@ class GeneratorLedgerModel(BaseModel):
 class GeneratorLedgerEntry(GeneratorLedgerModel):
     miner_hotkey: str
     submission_id: UUID
-    round_index: Annotated[int, Field(ge=0)]
+    # The round that scored this entry. Optional so a ledger from a Platform
+    # still on the run-based shape (``run_id``, ignored) folds unchanged during
+    # a staggered rollout; the fold never reads it.
+    round_index: Annotated[int, Field(ge=0)] | None = None
     generator_contract_version: Literal[1] = 1
     weight_eligible: Annotated[
         bool,

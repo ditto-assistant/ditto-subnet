@@ -182,3 +182,40 @@ async def test_generator_rounds_enforce_their_invariants(engine: AsyncEngine) ->
     finally:
         async with engine.begin() as connection:
             await connection.execute(text("DELETE FROM generator_rounds"))
+
+
+async def test_round_downgrade_keeps_qualification_runs_unscored(
+    engine: AsyncEngine,
+) -> None:
+    try:
+        await _clear(engine)
+        submission = await _insert_submission(engine)
+        async with engine.begin() as connection:
+            epoch = await connection.scalar(
+                text(
+                    "INSERT INTO generator_probe_epochs (seed, reason, actor) "
+                    "VALUES (repeat('e', 64), 'initial', 'test') RETURNING epoch"
+                )
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO generator_runs (run_id, submission_id, attempt, "
+                    "seeds, probe_epoch, cases_per_seed, panel, settings_revision, "
+                    "status, outcome, finished_at) VALUES (gen_random_uuid(), "
+                    "CAST(:sub AS uuid), 1, '[]', :epoch, 16, '[]', 1, 'qualified', "
+                    "'qualified', now())"
+                ),
+                {"sub": submission, "epoch": epoch},
+            )
+        _alembic("downgrade", "5c1e9a7d2b40")
+        async with engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text("SELECT status, score, outcome FROM generator_runs")
+                )
+            ).one()
+        # A qualification run was never scored: no zero score appears.
+        assert tuple(row) == ("abandoned", None, "qualified")
+    finally:
+        await _clear(engine)
+        _alembic("upgrade", "head")

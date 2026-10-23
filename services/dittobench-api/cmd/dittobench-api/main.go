@@ -1373,7 +1373,12 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 		writeError(w, http.StatusConflict, "ticket inference runtime policy is unavailable")
 		return
 	}
-	s.store.Create(runID, "run_size", store.StatusQueued, seed, prof.Tools+prof.Mem)
+	cases := prof.Tools + prof.Mem
+	if req.PrivateDatasetMode == generatorRoundMode {
+		// A round run's size is its dataset's, set once the job decodes it.
+		cases = 0
+	}
+	s.store.Create(runID, "run_size", store.StatusQueued, seed, cases)
 	s.store.SetRunSize(runID, req.RunSize)
 	s.store.SetBenchVersion(runID, req.BenchVersion)
 	log.Printf("run %s: run_size=%s bench_version=%d seed=%d tools=%d mem=%d",

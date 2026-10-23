@@ -235,9 +235,11 @@ def downgrade() -> None:
     op.drop_table("generator_round_attempts")
     op.drop_table("generator_round_results")
     op.drop_table("generator_rounds")
+    # The previous schema has no qualification status. A qualification run
+    # was never scored, so it becomes a run with no result (outcome stays
+    # "qualified" as the record) rather than a zero score.
     op.execute(
-        "UPDATE generator_runs SET status = 'scored', score = 0 "
-        "WHERE status = 'qualified'"
+        "UPDATE generator_runs SET status = 'abandoned' WHERE status = 'qualified'"
     )
     op.drop_constraint("generator_runs_status_check", "generator_runs", type_="check")
     op.create_check_constraint(
