@@ -190,12 +190,46 @@ Additional retention rules:
 - Preliminary summaries remain advisory and do not replace necessary
   originals.
 - Reordering and genuine deduplication preserve distinct material facts and
-  events.
+  events. Record selection alone is retrieval quality, not a rejection ground
+  (see the 2026-10-23 clarification below).
 - A pointer to unavailable evidence is not a substitute for supplying it.
 - Context limits alone prove neither compliance nor a violation.
 
 An ordinary retrieval miss is a score-quality issue and is not automatically
 an integrity violation.
+
+#### Clarification: over-budget retrieval and record selection (2026-10-23)
+
+Choosing which retrieved records reach the deciding input is retrieval
+quality, not, by itself, a rejection ground under W3, I2 or any other
+condition. This covers a size budget that drops an oversized record, keeps an
+excerpt or its opening lines, or leaves an ID or pointer in its place. It
+also covers deduplication or collapsing of similar records (even one that
+drops a later distinct record), identifier pinning that shows only matching
+records, event projections or summaries in place of records, and top-k
+selection. These are design choices, often poor ones. Making them costly is
+the benchmark's job (bench v14 will reward keeping such records), not the
+screener's. This holds when:
+
+- the rule is applied the same way whatever the record says: it does not
+  single out corrections, qualifications or later records because they
+  correct, qualify or update; and
+- the model, not the host, still authors the graded value or tool call.
+
+Independent grounds that still reject:
+
+- evidence a deciding or critic model already received is stripped by a later
+  retry, critique, compaction or fallback stage whose output ships (W3,
+  "Once protected");
+- the host writes, rewrites or overrides the graded value or a dissenting model
+  answer, or presents host-derived state as authoritative (I3, I4);
+- execution is fabricated or misreported (I6);
+- tool capabilities are removed or forced (I7); or
+- a separate benchmark recipe (I5).
+
+The 2026-10 rejections that rested only on record selection are withdrawn as
+precedent. A rejection that also proved an independent ground keeps that
+ground.
 
 ### W4: routing and optimization
 
@@ -718,7 +752,8 @@ these mechanisms are useful product behavior. This holds when:
   the tool catalog, and authors the graded value or tool call itself;
 - the guidance is advisory text: the host does not act on the classifier
   result by writing, rewriting, retrying or overriding the answer (I3, I4),
-  removing or forcing tools (I7), or withholding needed records (W3); and
+  removing or forcing tools (I7), or stripping evidence a model already
+  received (W3); and
 - the guidance encodes no benchmark-private knowledge, such as hidden answers,
   private case or seed values, or grader internals that the repository does
   not publish.
@@ -747,7 +782,8 @@ proven under its own condition. Examples:
 - the host writes, edits or overrides the graded value or a dissenting model
   answer (I3, I4);
 - the route removes, hides or forces tool capabilities (I7);
-- record text the request needs is withheld from the deciding input (W3); or
+- evidence a model already received is stripped before its output ships (W3);
+  or
 - the guidance carries benchmark-private content.
 
 Guidance that misfires outside the benchmark is a product-quality lead, not an

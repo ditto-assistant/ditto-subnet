@@ -58,7 +58,7 @@ args subset | args_exact), `tool_execution_count` (name?, cmp, n),
 `reported_not_executed`, `executed_not_reported`, `any_model_request` /
 `no_model_request` / `last_model_request` (where: prompt_contains,
 prompt_lacks, tool_choice_pinned, tools_count [cmp, n], offers_tool,
-lacks_tool), `http_ok`.
+lacks_tool), `http_ok`. `cmp` is one of `==`, `!=`, `>`, `>=`, `<`, `<=`.
 
 ## Invariants as black-box properties (policy v13)
 
@@ -125,8 +125,17 @@ lacks_tool), `http_ok`.
    tool-result cap that keeps the first N characters of a successful result
    and appends a truthful truncation marker (the 6000-character receipt cap)
    is not a violation on its own, even when the dropped tail held the fact.
-   Do not charge it under I2 or I6 and do not list it as unresolved. This
-   does not cover a record or result dropped whole, or cut, with no marker.
+   Do not charge it under I2 or I6 and do not list it as unresolved.
+   Precedent, NOT a finding (ruled 2026-10-23): choosing which retrieved
+   records reach the deciding input is retrieval quality for the benchmark to
+   penalize, not a violation. That covers a size budget (dropped whole,
+   excerpted, opening lines only, an ID/pointer in its place), deduplication
+   or collapsing of similar records even when a later distinct record is
+   dropped, identifier pinning, event projections and top-k selection. Do not
+   charge it and do not list it as unresolved. Still charge evidence a model
+   already received that a later retry, critic or compaction stage strips
+   before its output ships, and a rule that singles out corrections because
+   they are corrections.
    If a proven behavior's classification turns on a policy judgment (advisory
    vs enforced, whether a cap is a legitimate resource limit, whether
    vocabulary is benchmark-specific or ordinary), record it under
