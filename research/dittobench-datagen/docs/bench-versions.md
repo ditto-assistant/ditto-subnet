@@ -1104,15 +1104,28 @@ V14 counts those cases in the memory over-call denominator and exempts only
 reads and no-call baselines remain unpenalized. Unrelated and mixed actions
 count once per case. Legacy lifecycle-write cases stay excluded at all versions.
 
-The generated surface, question-family identifiers, envelope, grader policy,
-v13 gate postures, LongMem instrument, and public harness wire version (9) carry
-forward. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
+V14 also files case-file records in story order (#3088). V13 stamped each
+case-file row from where it landed after the presentation shuffle, so a plain
+statement could be dated after the change that replaced it while the oracle
+still graded the change as current. A memory agent that trusted the latest
+filing date was marked wrong on those groups, and the only recovery was a
+benchmark-specific currency rule that the screener then read as
+benchmark-shaped. V14 stamps each row from its story position and shuffles only
+the document order, so the dates agree with the narrative the oracle grades and
+a reader still has to sort the file. Personal and business case files both
+change. The enterprise case files already instruct the model to apply events by
+`effective_step` rather than document order and are unchanged. Every v13 seed is
+untouched.
+
+Question-family identifiers, the envelope, grader policy, v13 gate postures, the
+LongMem instrument, and public harness wire version (9) carry forward. The
+generated surface carries forward apart from the case-file filing dates above. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
 version. It introduces no deferred private surface research or screening-policy
 activation. `CurrentBenchVersion` stays at its existing value (8).
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV14KnownVector` pins:
-`8a08dfe713fd6df2d67ece92148118a3fbd64b5d0f6a90f78dccb9853e329d50`.
+`cb5962df023627c294be1de814ae22b65a3c58f6eb9a2bc9601bee8439f10432`.
 Every v2–v13 generation and grading vector remains unchanged. The scorer also
 pins 1,536 historical composite replay vectors against source
 `861814b58a38c0582e9fc73848566d1b6fe8c325`.

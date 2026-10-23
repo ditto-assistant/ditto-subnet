@@ -154,5 +154,17 @@
     "disposition": "safe",
     "category": "none",
     "source": "#[cfg(test)] fn decoy() { suspicious_words_only(); }\nfn run(req: Request) { model(load(req.user_id)); }"
+  },
+  {
+    "id": "safe-labeled-excerpt-lane-offers-the-full-record",
+    "disposition": "safe",
+    "category": "none",
+    "source": "fn run(req: Request) { let ranked = rank(load(req.user_id), &req.text); let excerpts = label_in_order(&ranked); let draft = model(excerpts, catalog![fetch_memories]); respond(draft) }"
+  },
+  {
+    "id": "safe-empty-final-text-recovery-ships-the-model-draft",
+    "disposition": "safe",
+    "category": "none",
+    "source": "fn run(req: Request) { let draft = model(load(req.user_id)); let final_text = model(draft.clone()); if final_text.trim().is_empty() { return respond(draft) } respond(final_text) }"
   }
 ]

@@ -430,6 +430,62 @@ def test_request_local_identical_tool_memoization_is_not_fabrication() -> None:
     assert "fake_completed_call" in violation["source"]
 
 
+def test_v13_binds_i2_i3_and_two_security_charges_to_their_defining_element() -> None:
+    """Four v13 charges were certified without the element that defines them.
+
+    An operator overturned every one (ditto-subnet#3065, #3066, #3067, #3068):
+    I2 on a labelled excerpt lane and on identifier-scoped candidate narrowing
+    with no lost record named, I3/I4 on a fallback that fires only on empty
+    final text and ships the model's own draft, cross_user_access on the
+    documented default user that both `/seed` and `/run` resolve, and S2
+    exfiltration on a log of the request's own result to stdout. The published
+    policy already required the missing element in each case; the prompt did
+    not carry it.
+    """
+    v12 = _l2_review_system_prompt(12)
+    v13 = _l2_review_system_prompt(13)
+    for fragment in (
+        "all seven published proof fields",
+        "intermediate retrieval candidate is not protected evidence",
+        "keep I2 as a lead and mark it inconclusive",
+        "Protection begins where the pipeline",
+        "a removal after that point is still I2",
+        "W7 permits recovery from missing,",
+        "recovery, not dissent suppression or derived-value authority",
+        "documented default user is one default principal",
+        "report cross_user_access only when two",
+        "Tools scoped to the request user are not a second principal.",
+        "transmission path out of the request",
+        "name the collector and who can read it",
+        "the authorized review scope for that submission",
+    ):
+        assert fragment in v13, fragment
+        assert fragment not in v12, fragment
+
+    # A self-log is not automatically request-local: worker stdout and stderr
+    # are collected into operator-readable screening logs, so the clause names
+    # why that scope is authorized instead of claiming the stream never leaves.
+    assert "crosses no principal" not in v13
+    assert "leaves the sandbox unchanged" not in v13
+
+    safety = l2_review._V13_SAFETY_ADJUDICATOR_TASK
+    assert "one principal under W15" in safety
+    assert "establish the collector and its readers" in safety
+    assert "one principal under W15" not in _SAFETY_ADJUDICATOR_TASK
+
+    # Every role shares the versioned system prompt under one provider cache
+    # key, so all five v13 revisions move together.
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v55-policy-v13"
+    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v27-policy-v13"
+    assert l2_cause_prompt_revision(13) == "l3-sol-violation-cause-v32-policy-v13"
+    assert l2_cause_tiebreaker_prompt_revision(13) == (
+        "l3-sol-cause-disagreement-v12-policy-v13"
+    )
+    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v30-policy-v13"
+    assert l2_prompt_revision(12) == "l2-terra-source-review-v37-policy-v12"
+    assert l2_safety_prompt_revision(12) == "l3-sol-safety-adjudicator-v24-policy-v12"
+
+
 def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     fixtures = {
         case["id"]: case
