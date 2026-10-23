@@ -13,20 +13,15 @@ import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.s
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
-  officialControlsInputSchema, officialControlLookupSchema, officialControlStageSchema,
-  officialControlVerifySchema, officialControlApprovalSchema,
+  officialControlsInputSchema, officialControlLookupSchema,
 } from '../lib/v13-official-control.schemas'
 import {
-  fetchOfficialV13Controls, fetchOfficialV13ControlApprovals, fetchOfficialV13ControlArtifact, stageOfficialV13ControlImage,
-  verifyOfficialV13ControlImage, recordOfficialV13ControlApproval,
+  fetchOfficialV13Controls, fetchOfficialV13ControlApprovals, fetchOfficialV13ControlArtifact,
 } from './v13-official-control.service'
 import {
   listV13BenignApprovalsInputSchema,
   v13BenignApprovalLookupInputSchema,
-  v13BenignApprovalWriteInputSchema,
   v13ReplayPrivateLookupInputSchema,
-  v13ReplayGroupWriteInputSchema,
-  v13ReplayPackageWriteInputSchema,
 } from '../lib/v13-private.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import { bountyBoardInputSchema, bountyCatalogInputs, bountyQueueInputSchema } from '../lib/bounty.schemas'
@@ -223,10 +218,7 @@ import {
   fetchV13GenerationGroup,
   listV13BenignApprovals,
   fetchV13BenignApproval,
-  recordV13BenignApproval,
   fetchV13ReplayPrivateGroup,
-  recordV13ReplayPrivateGroup,
-  registerV13ReplayPrivatePackage,
   fetchV13ReplayPrivateReceipt,
   fetchV13ReplayPrivateStatistics,
   fetchScreeningReviewDeadline,
@@ -422,12 +414,6 @@ export const WRITE_TOOL_NAMES = new Set([
   'record_treasury_settings',
   'record_treasury_runtime',
   'record_treasury_receipt',
-  'record_v13_benign_approval',
-  'stage_v13_official_control_image',
-  'verify_v13_official_control_image',
-  'record_v13_official_control_approval',
-  'record_v13_replay_private_group',
-  'register_v13_replay_private_package',
   'schedule_l2_report_canary',
   'register_canonical_starter_fixture',
   'review_canonical_starter_fixture',
@@ -809,12 +795,6 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read immutable official-image review claims; not certification.',
   get_v13_official_control_artifact:
     'Download sealed candidate image for independent review; no verdict.',
-  stage_v13_official_control_image:
-    'Registrar stages an exact official image for review; no miner row.',
-  verify_v13_official_control_image:
-    'Hash and seal official image bytes; no execution or verdict authority.',
-  record_v13_official_control_approval:
-    'Authenticated fixture reviewer records exact-image evidence; one account may perform all steps.',
   register_canonical_starter_fixture:
     'Stage exact released starter: operator fixture, no miner submission.',
   review_canonical_starter_fixture:
@@ -1619,17 +1599,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
-    'record_v13_benign_approval',
-    {
-      title: 'Record V13 known benign approval',
-      description: 'Append an exact control artifact and image approval with review evidence digest. Records provenance only; it cannot clear or reject an agent.',
-      inputSchema: v13BenignApprovalWriteInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => recordV13BenignApproval(props.session.email, input)),
-  )
-
-  registerTool(
     'get_v13_replay_private_group',
     {
       title: 'Get V13 replay private group',
@@ -1638,28 +1607,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchV13ReplayPrivateGroup(input)),
-  )
-
-  registerTool(
-    'record_v13_replay_private_group',
-    {
-      title: 'Record V13 replay private group',
-      description: 'Append replay-bound target and known benign commitments before private generation. No case generation or terminal decision is performed.',
-      inputSchema: v13ReplayGroupWriteInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => recordV13ReplayPrivateGroup(props.session.email, input)),
-  )
-
-  registerTool(
-    'register_v13_replay_private_package',
-    {
-      title: 'Register V13 replay private package',
-      description: 'Append a role-specific sealed package digest for one replay. Registration is recorded unverified and does not clear a hold.',
-      inputSchema: v13ReplayPackageWriteInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => registerV13ReplayPrivatePackage(props.session.email, input)),
   )
 
   registerTool(
@@ -1683,7 +1630,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) => result(await fetchV13ReplayPrivateStatistics(input)),
   )
-
 
   registerTool('get_github_link_revocation_preflight', {
     title: 'Inspect GitHub link',
@@ -2724,24 +2670,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Read append-only authenticated operator attestations for a controlId. Each binds the official fixture, exact image, profile and review evidence. recorded_unverified is not a semantic pass or terminal authorization. Requires backroom:read.',
     inputSchema: officialControlLookupSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchOfficialV13ControlApprovals(input)))
-
-  registerTool('stage_v13_official_control_image', {
-    title: 'Stage official V13 control image',
-    description: 'The signed-in fixture registrar pins requestId, fixtureId, image tar SHA, config image ID and byte size. May stage before independent source review so the operator can inspect sealed image bytes first; one account may register and record review evidence. Once reviewed, the source fixture image ID must match. Returns a short-lived constrained PUT and headers. Creates no miner or attempt and cannot clear anything. Same exact requestId may remint an unverified upload; conflicts refuse. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlStageSchema.extend({ requestId: officialControlCatalogId(), fixtureId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => stageOfficialV13ControlImage(input, props.session.email)))
-
-  registerTool('verify_v13_official_control_image', {
-    title: 'Verify official V13 control archive',
-    description: 'The registrar hashes the staged tar, copies it to a distinct protected key and hashes again before pinning immutable archive identity. Claimed Docker image ID remains unverified until the private runner loads it. No source, semantic or admission pass. May take up to three minutes; reread after ambiguous delivery before retrying. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlVerifySchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => verifyOfficialV13ControlImage(input, props.session.email)))
-
-  registerTool('record_v13_official_control_approval', {
-    title: 'Record official control approval',
-    description: 'The authenticated fixture reviewer records the exact verified archive, image ID, profile and evidence digest; this may be the same account that registered and built it. Independent agent review evidence is not a second human identity or an automated semantic pass. The append-only recorded_unverified receipt must predate private generation and does not establish semantic benignness, execution or a policy verdict. No miner or attempt is fabricated. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlApprovalSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => recordOfficialV13ControlApproval(input, props.session.email)))
 
   registerTool('get_v13_official_control_artifact', {
     title: 'Download official V13 control candidate',

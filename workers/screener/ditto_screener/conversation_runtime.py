@@ -54,18 +54,8 @@ class ConversationRuntime:
         config: ScreenerConfig,
         launch: RuntimeImageLaunch,
         provider_key: str,
-        *,
-        private_case: bool = False,
-        private_budget_microusd: int | None = None,
     ):
-        if private_case and (
-            type(private_budget_microusd) is not int
-            or not 0 < private_budget_microusd <= 5_000_000
-        ):
-            raise AssessmentFailure("private_budget_unavailable")
         self.config, self.launch, self.provider_key = config, launch, provider_key
-        self.private_case = private_case
-        self.private_budget_microusd = private_budget_microusd
         suffix = launch.assessment_id.hex
         self.network = "ditto-conversation-" + suffix
         self.relay = self.network + "-relay"
@@ -237,14 +227,6 @@ class ConversationRuntime:
             "none",
         ]
         relay_args = ["--env", "OPENROUTER_API_KEY"]
-        if self.private_case:
-            relay_args.extend(("--env", "DITTO_PRIVATE_CASE=1"))
-            relay_args.extend(
-                (
-                    "--env",
-                    f"DITTO_PRIVATE_BUDGET_MICROUSD={self.private_budget_microusd}",
-                )
-            )
         await self.docker(
             "create",
             "--name",
@@ -379,34 +361,6 @@ class ConversationRuntime:
         if self.state:
             shutil.rmtree(self.state, ignore_errors=True)
         return usage
-
-    async def stop_private(self) -> dict[str, object]:
-        """Drain a single-case sidecar and return its terminal broker ledger.
-
-        Every Docker teardown step must succeed. The ordinary conversation
-        instrument may tolerate missing usage as uncertainty; protected V13
-        execution cannot treat an interrupted relay as settled evidence.
-        """
-        if self.state is None:
-            raise AssessmentFailure("private_sandbox_not_started")
-        try:
-            await self.docker("rm", "--force", self.container)
-            await self.docker("stop", "--time", "120", self.relay, timeout=130)
-            await self.docker("rm", self.relay)
-            raw = (self.state / "usage.json").read_bytes()
-            if len(raw) > 16_384:
-                raise AssessmentFailure("private_broker_ledger_invalid")
-            ledger = json.loads(raw)
-            if type(ledger) is not dict or ledger.get("settled") is not True:
-                raise AssessmentFailure("private_broker_ledger_unsettled")
-            await self.docker("network", "rm", self.network)
-            await self.docker("image", "rm", self.image)
-            shutil.rmtree(self.state)
-            self.state = None
-            return ledger
-        except Exception:
-            await self.stop()
-            raise AssessmentFailure("private_sandbox_teardown_failed") from None
 
 
 class HarnessTransport(httpx.AsyncBaseTransport):
