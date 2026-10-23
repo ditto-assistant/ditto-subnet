@@ -360,6 +360,21 @@ async def current_probe_epoch(
     return row
 
 
+async def lock_probe_epoch_if_current(session: AsyncSession, epoch: int) -> bool:
+    """Whether ``epoch`` is still current, holding it against rotation.
+
+    The row is locked ``FOR SHARE`` so a concurrent rotation (which retires the
+    row before clearing every qualification) waits for this transaction; once
+    it commits, the rotation clears whatever this transaction qualified.
+    """
+    row = await session.scalar(
+        select(GeneratorProbeEpoch)
+        .where(GeneratorProbeEpoch.epoch == epoch)
+        .with_for_update(read=True)
+    )
+    return row is not None and row.retired_at is None
+
+
 async def rotate_probe_epoch(
     session: AsyncSession, *, reason: str, actor: str, now: datetime
 ) -> GeneratorProbeEpoch:

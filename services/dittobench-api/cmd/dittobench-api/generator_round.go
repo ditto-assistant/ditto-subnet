@@ -191,15 +191,15 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 		return
 	}
 	s.store.SetStage(runID, store.StatusScoring, len(perCase), total)
-	report := generatorRoundReport(runID, seed, req, perCase, tokenUsage, time.Since(started))
+	report := generatorRoundReport(runID, seed, req, perCase, tokenUsage)
 	s.store.Finish(runID, report)
-	log.Printf("generator round %s done: columns=%d cases=%d memory_mean=%.3f", runID, len(columns), len(perCase), report.MemoryMean)
+	log.Printf("generator round %s done: columns=%d cases=%d memory_mean=%.3f elapsed=%s", runID, len(columns), len(perCase), report.MemoryMean, time.Since(started).Round(time.Second))
 }
 
 // generatorRoundReport shapes round results as a score report. Composite is
 // the plain mean over answered cases and is informational only: the round
-// matrix is scored from per_case. MedianMs is the mean per-case wall time.
-func generatorRoundReport(runID string, seed int64, req submitRequest, perCase []protocol.CaseScore, usage protocol.TokenUsage, elapsed time.Duration) protocol.ScoreReport {
+// matrix is scored from per_case.
+func generatorRoundReport(runID string, seed int64, req submitRequest, perCase []protocol.CaseScore, usage protocol.TokenUsage) protocol.ScoreReport {
 	var sum float64
 	answered := 0
 	for _, c := range perCase {
@@ -220,8 +220,10 @@ func generatorRoundReport(runID string, seed int64, req submitRequest, perCase [
 		Composite:    mean,
 		RawComposite: mean,
 		MemoryMean:   mean,
-		MedianMs:     elapsed.Milliseconds() / int64(max(len(perCase), 1)),
-		PerCase:      perCase,
+		// Per-case latency is not measured on this path; zero means unknown,
+		// not instant.
+		MedianMs: 0,
+		PerCase:  perCase,
 		Details: &protocol.RunDetails{
 			BenchVersion:  req.BenchVersion,
 			RunSize:       req.RunSize,

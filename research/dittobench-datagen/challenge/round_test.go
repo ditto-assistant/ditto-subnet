@@ -101,6 +101,10 @@ func TestRoundDatasetRoundTrip(t *testing.T) {
 	if _, _, err := DecodeRoundDataset(raw, strings.Repeat("0", 64)); err == nil {
 		t.Fatal("digest mismatch must be refused")
 	}
+	trailing := append(append([]byte(nil), raw...), []byte(" {}")...)
+	if _, _, err := DecodeRoundDataset(trailing, Digest(trailing)); err == nil {
+		t.Fatal("trailing data after the dataset must be refused")
+	}
 	if _, _, err := EncodeRoundDataset(3, seed, map[string][]byte{"c0": roundPack(t, 1, seed, "c1")}); err == nil {
 		t.Fatal("a pack generated for another column seed must be refused")
 	}
@@ -293,6 +297,12 @@ func TestScoreRoundFaultsAndClaims(t *testing.T) {
 	}
 	if _, err := ScoreRound(RoundInput{Agents: []RoundAgent{{AgentID: "x"}, {AgentID: "x"}}}, params); err == nil {
 		t.Fatal("duplicate agents must be refused")
+	}
+	dupResults := RoundInput{Agents: []RoundAgent{{AgentID: "x", OwnerKey: "o", Results: []PanelCaseResult{
+		{CaseID: "c0/a", Score: 1}, {CaseID: "c0/a", Score: 0},
+	}}}}
+	if _, err := ScoreRound(dupResults, params); err == nil {
+		t.Fatal("duplicate case results must be refused")
 	}
 }
 

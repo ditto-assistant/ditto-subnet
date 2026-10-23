@@ -182,6 +182,9 @@ func runLocal(ctx context.Context, args []string) error {
 	slots := make([]panelSlot, len(agents))
 	urls := map[string]string{}
 	for i, a := range agents {
+		if _, dup := urls[a.ID]; dup {
+			return fmt.Errorf("run: duplicate -agent id %q", a.ID)
+		}
 		slots[i] = panelSlot{AgentID: a.ID, OwnerKey: a.Owner, Champion: a.Champion}
 		if _, dup := urls[a.ID]; dup {
 			return fmt.Errorf("run: duplicate -agent id %q", a.ID)

@@ -27,7 +27,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
@@ -43,6 +43,7 @@ from ditto.api_models.generator import (
     GeneratorSubmissionSummary,
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
+from ditto.db.models import GeneratorCompetitionSettingsRevision
 from ditto.db.queries.generator import (
     abandon_run,
     clear_lease,
@@ -51,6 +52,7 @@ from ditto.db.queries.generator import (
     finish_run,
     latest_generator_settings_revision,
     lock_next_runnable_submission,
+    lock_probe_epoch_if_current,
     new_seeds,
     start_run,
     upsert_probe_result,
@@ -62,11 +64,7 @@ from ditto.score_order import rank_submissions
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from ditto.db.models import (
-        GeneratorCompetitionSettingsRevision,
-        GeneratorRun,
-        GeneratorSubmission,
-    )
+    from ditto.db.models import GeneratorRun, GeneratorSubmission
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +118,24 @@ async def load_settings(session: AsyncSession) -> ResolvedSettings:
         checksum=row.checksum if row is not None else "",
         valid=valid,
     )
+
+
+async def settings_at(
+    session: AsyncSession, revision: int | None
+) -> GeneratorCompetitionSettings:
+    """The policy as of ``revision``: the one a run or round started under.
+
+    Work leased under one revision is judged by it, so a settings write in
+    flight cannot change how already-leased work is scored. A missing or
+    corrupt revision falls back to the governing one.
+    """
+    if revision:
+        row = await session.get(GeneratorCompetitionSettingsRevision, revision)
+        if row is not None:
+            settings, valid = settings_from_row(row)
+            if valid:
+                return settings
+    return (await load_settings(session)).settings
 
 
 class UploadRejected(ValueError):
@@ -302,6 +318,11 @@ async def record_result(
         or row.lease_run_id != run.run_id
     ):
         raise ResultRejected("lease is not current for this run")
+    expires = row.lease_expires_at
+    if expires is not None and expires.replace(tzinfo=expires.tzinfo or UTC) <= now:
+        # The lease lapsed: the submission may already be leased again on new
+        # seeds, so this late evaluation must not decide anything.
+        raise ResultRejected("lease expired before the result arrived")
     if payload.source_sha256 != row.source_sha256:
         raise ResultRejected("result pins a different source archive")
     seeds = payload.seeds or []
@@ -313,7 +334,7 @@ async def record_result(
         if all(s.valid for s in seeds) and payload.deterministic is None:
             raise ResultRejected("result is missing the determinism check")
 
-    settings = resolved.settings
+    settings = await settings_at(session, run.settings_revision)
     clear_lease(row, now=now)
     row.attempts = 0
     run.scorer_version = payload.scorer_version
@@ -352,6 +373,14 @@ async def record_result(
     )
     if not probe_fingerprints:
         raise ResultRejected("valid probe carries no case refs")
+
+    if not await lock_probe_epoch_if_current(session, run.probe_epoch):
+        # The probe rotated while this run was leased. Its probe answers a seed
+        # no current submission is compared on, so it cannot qualify; the
+        # submission is re-run promptly on the new probe.
+        finish_run(run, status="abandoned", outcome="probe_rotated", now=now)
+        row.next_run_at = now
+        return RecordedResult("abandoned", "probe_rotated", None, row.status)
 
     await session.execute(
         text("SELECT pg_advisory_xact_lock(:key)"), {"key": _SCORING_LOCK_KEY}

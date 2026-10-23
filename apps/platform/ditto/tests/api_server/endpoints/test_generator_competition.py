@@ -724,6 +724,64 @@ class TestScorer:
             old = await session.get(GeneratorRun, UUID(first["run_id"]))
             assert old is not None and old.status == "abandoned"
 
+    async def test_a_lapsed_lease_cannot_report(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive())
+        work = await _lease(client)
+        async with session_maker() as session:
+            row = await session.get(
+                GeneratorSubmission, UUID(accepted["submission_id"])
+            )
+            assert row is not None
+            row.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            await session.commit()
+        resp = await _post(client, _result(work, tag="late"))
+        assert resp.status_code == 409 and "expired" in resp.text
+        async with session_maker() as session:
+            row = await session.get(
+                GeneratorSubmission, UUID(accepted["submission_id"])
+            )
+            assert row is not None and row.qualified_at is None
+
+    async def test_a_run_leased_before_a_probe_rotation_cannot_qualify(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive())
+        work = await _lease(client)
+        rotated = await client.post(
+            "/api/v1/admin/generator-competition/probe/rotate",
+            headers=_ADMIN,
+            json={
+                "reason": "rotate while a run is leased",
+                "confirmation": PROBE_ROTATION_CONFIRMATION,
+            },
+        )
+        assert rotated.status_code == 200, rotated.text
+        resp = await _post(client, _result(work, tag="stale"))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "abandoned"
+        async with session_maker() as session:
+            row = await session.get(
+                GeneratorSubmission, UUID(accepted["submission_id"])
+            )
+            run = await session.get(GeneratorRun, UUID(work["run_id"]))
+            assert row is not None and row.qualified_at is None
+            assert run is not None and run.outcome == "probe_rotated"
+        again = await _lease(client)
+        assert again["run_id"] != work["run_id"]
+        assert again["probe_seed"] != work["probe_seed"]
+
     async def test_validator_ledger_is_shadow(
         self,
         app: FastAPI,

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -208,6 +209,13 @@ func DecodeRoundDataset(raw []byte, expectedSHA string) (RoundDataset, []RoundCo
 	if err := dec.Decode(&ds); err != nil {
 		return fail("invalid JSON")
 	}
+	if dec.More() {
+		return fail("trailing data after the dataset")
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return fail("trailing data after the dataset")
+	}
 	if ds.Contract != RoundContractV1 || !shaPattern.MatchString(ds.Seed) || ds.RoundIndex < 0 {
 		return fail("identity mismatch")
 	}
@@ -340,6 +348,9 @@ func ScoreRound(in RoundInput, params ScoreParams) (RoundScore, error) {
 		panel[i] = PanelMember{AgentID: a.AgentID, OwnerKey: owner, Champion: a.Champion, Results: a.Results}
 		results[i] = map[string]PanelCaseResult{}
 		for _, r := range a.Results {
+			if _, dup := results[i][r.CaseID]; dup {
+				return RoundScore{}, fmt.Errorf("agent %q has two results for case %q", a.AgentID, r.CaseID)
+			}
 			results[i][r.CaseID] = r
 		}
 	}

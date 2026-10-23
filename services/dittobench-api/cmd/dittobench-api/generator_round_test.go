@@ -3,7 +3,6 @@ package main
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -43,7 +42,7 @@ func TestGeneratorRoundReportExcludesFaultsFromTheMean(t *testing.T) {
 		{CaseID: "c0/b", Category: challenge.RoundCaseCategory, Kind: "memory", Score: 0.5},
 		{CaseID: "c1/a", Category: challenge.RoundFaultCategory, Kind: "memory"},
 	}
-	r := generatorRoundReport("run-1", 9, req, perCase, protocol.TokenUsage{}, 3*time.Second)
+	r := generatorRoundReport("run-1", 9, req, perCase, protocol.TokenUsage{})
 	if r.MemoryMean != 0.75 || r.Composite != 0.75 || len(r.PerCase) != 3 || r.Seed != 9 {
 		t.Fatalf("report: %+v", r)
 	}
