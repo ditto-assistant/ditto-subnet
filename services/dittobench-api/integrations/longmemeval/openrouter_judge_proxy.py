@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Narrow OpenAI-compatible proxy for LongMemEval's frozen GPT-4o judge."""
+"""Narrow OpenAI-compatible proxy for LongMemEval's official judge.
+
+The upstream evaluator hard-codes the official judge name, so this proxy is the
+only seam where the model actually answering can be changed without editing
+LongMemEval itself. It defaults to the frozen GPT-4o judge and is byte-identical
+in that configuration.
+
+Setting ``LONGMEMEVAL_JUDGE_TARGET_MODEL`` points the same official prompts at a
+different model. That is strictly a research instrument: a run whose target is
+not the official model is NOT an official-protocol LongMemEval score and must
+not be reported as one. ``/health`` reports the target so a run can be audited
+after the fact rather than trusted.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +25,19 @@ from typing import Any
 
 
 OFFICIAL_MODEL = "gpt-4o-2024-08-06"
-OPENROUTER_MODEL = "openai/gpt-4o-2024-08-06"
+OFFICIAL_OPENROUTER_MODEL = "openai/gpt-4o-2024-08-06"
+
+
+def target_model() -> str:
+    """The model that actually answers. Defaults to the official judge."""
+    return (
+        os.environ.get("LONGMEMEVAL_JUDGE_TARGET_MODEL", "").strip()
+        or OFFICIAL_OPENROUTER_MODEL
+    )
+
+
+def is_official() -> bool:
+    return target_model() == OFFICIAL_OPENROUTER_MODEL
 UPSTREAM = "https://openrouter.ai/api/v1/chat/completions"
 MAX_BODY_BYTES = 1024 * 1024
 
@@ -26,7 +50,7 @@ def rewrite_request(value: Any) -> dict[str, Any]:
     if value.get("stream") is True:
         raise ValueError("streaming is not supported")
     rewritten = dict(value)
-    rewritten["model"] = OPENROUTER_MODEL
+    rewritten["model"] = target_model()
     rewritten["stream"] = False
     return rewritten
 
@@ -53,9 +77,14 @@ class Handler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             {
                 "status": "ok",
-                "profile_revision": "longmemeval-official-gpt4o-openrouter-v1",
+                "profile_revision": (
+                    "longmemeval-official-gpt4o-openrouter-v1"
+                    if is_official()
+                    else "longmemeval-judge-substitution-research-v1"
+                ),
                 "official_model": OFFICIAL_MODEL,
-                "upstream_model": OPENROUTER_MODEL,
+                "upstream_model": target_model(),
+                "official_protocol": is_official(),
             },
         )
 
@@ -111,7 +140,15 @@ def main() -> None:
     port = int(os.environ.get("PORT", "18436"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     server.api_key = api_key  # type: ignore[attr-defined]
-    print(f"LongMemEval judge proxy on :{port}; model pinned to {OPENROUTER_MODEL}", flush=True)
+    model = target_model()
+    if is_official():
+        print(f"LongMemEval judge proxy on :{port}; official judge {model}", flush=True)
+    else:
+        print(
+            f"LongMemEval judge proxy on :{port}; RESEARCH SUBSTITUTION {model} "
+            f"(not an official-protocol score)",
+            flush=True,
+        )
     server.serve_forever()
 
 

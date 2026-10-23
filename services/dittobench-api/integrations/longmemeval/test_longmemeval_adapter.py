@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -19,7 +20,13 @@ from longmemeval_adapter import (
     sha256_file,
     stable_id,
 )
-from openrouter_judge_proxy import OFFICIAL_MODEL, OPENROUTER_MODEL, rewrite_request
+from openrouter_judge_proxy import (
+    OFFICIAL_MODEL,
+    OFFICIAL_OPENROUTER_MODEL,
+    is_official,
+    rewrite_request,
+    target_model,
+)
 from openrouter_reader_proxy import (
     PROFILE_REVISION as READER_PROFILE_REVISION,
 )
@@ -180,7 +187,7 @@ class JudgeProxyTests(unittest.TestCase):
         value = rewrite_request(
             {"model": OFFICIAL_MODEL, "messages": [], "temperature": 0}
         )
-        self.assertEqual(value["model"], OPENROUTER_MODEL)
+        self.assertEqual(value["model"], OFFICIAL_OPENROUTER_MODEL)
         self.assertFalse(value["stream"])
 
     def test_other_models_are_rejected(self):
@@ -445,3 +452,41 @@ class EndToEndTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JudgeTargetModelTest(unittest.TestCase):
+    """The proxy must stay the official judge unless explicitly redirected."""
+
+    def setUp(self) -> None:
+        self._saved = os.environ.pop("LONGMEMEVAL_JUDGE_TARGET_MODEL", None)
+
+    def tearDown(self) -> None:
+        os.environ.pop("LONGMEMEVAL_JUDGE_TARGET_MODEL", None)
+        if self._saved is not None:
+            os.environ["LONGMEMEVAL_JUDGE_TARGET_MODEL"] = self._saved
+
+    def test_default_is_the_official_judge(self) -> None:
+        self.assertEqual(target_model(), OFFICIAL_OPENROUTER_MODEL)
+        self.assertTrue(is_official())
+        value = rewrite_request({"model": OFFICIAL_MODEL, "messages": []})
+        self.assertEqual(value["model"], OFFICIAL_OPENROUTER_MODEL)
+
+    def test_blank_override_is_ignored(self) -> None:
+        # An empty or whitespace env var must not silently de-officialise a run.
+        for blank in ("", "   "):
+            os.environ["LONGMEMEVAL_JUDGE_TARGET_MODEL"] = blank
+            self.assertEqual(target_model(), OFFICIAL_OPENROUTER_MODEL)
+            self.assertTrue(is_official())
+
+    def test_override_redirects_and_is_flagged_unofficial(self) -> None:
+        os.environ["LONGMEMEVAL_JUDGE_TARGET_MODEL"] = "z-ai/glm-5.3-flash"
+        self.assertEqual(target_model(), "z-ai/glm-5.3-flash")
+        self.assertFalse(is_official())
+        # The evaluator still sends the official name; only the target changes.
+        value = rewrite_request({"model": OFFICIAL_MODEL, "messages": []})
+        self.assertEqual(value["model"], "z-ai/glm-5.3-flash")
+
+    def test_override_does_not_relax_the_accepted_request_model(self) -> None:
+        os.environ["LONGMEMEVAL_JUDGE_TARGET_MODEL"] = "z-ai/glm-5.3-flash"
+        with self.assertRaises(ValueError):
+            rewrite_request({"model": "z-ai/glm-5.3-flash", "messages": []})
