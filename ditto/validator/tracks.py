@@ -141,7 +141,7 @@ def router_fold(inputs: TrackFoldInputs) -> dict[str, float]:
 
 
 def generator_fold(inputs: TrackFoldInputs) -> dict[str, float]:
-    """Fold the generator track: rank hotkeys by best fresh pack score."""
+    """Fold the generator track: rank hotkeys by latest fresh run score."""
     return compute_generator_weights(
         inputs.generator_entries, rank_shares=inputs.generator_rank_shares
     )

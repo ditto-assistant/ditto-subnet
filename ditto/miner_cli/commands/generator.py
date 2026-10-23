@@ -1,15 +1,18 @@
 """``ditto generator``: the DittoBench generator competition (shadow).
 
-The counterbalance to the agent competition. A generator miner runs their own
-program to emit a **challenge pack** (a memory haystack plus cases with
-deterministic gold answers), validates it locally with the same rules the
-scorer applies, and uploads it signed by their hotkey. The scorer runs the
-pack against the top agents; packs earn credit for cases strong agents split
-on. The lane is weight-zero while in shadow.
+The counterbalance to the agent competition. A generator miner writes a
+CPU-only Go program that turns a seed into a **challenge pack** (a memory
+haystack plus cases with deterministic gold answers), rehearses it locally
+exactly as the scorer runs it, and uploads its source signed by their hotkey.
+The scorer builds the source offline, runs it in a no-network sandbox on fresh
+secret seeds, and runs the packs against the top agents; generators earn
+credit for cases strong agents split on. The lane is weight-zero in shadow.
 
-* ``validate PACK``: run the contract validator (``challenge validate``).
-* ``upload PACK``: validate, sign ``ditto-generator-pack-v1``, and upload.
-* ``status``: list your packs and their outcomes.
+* ``rehearse DIR``: build and run the generator as the scorer does
+  (``challenge rehearse``; ``--sandbox docker`` uses the scorer's images).
+* ``package DIR``: write the deterministic, vendored source archive.
+* ``upload [ARCHIVE | --dir DIR]``: check, sign ``ditto-generator-v1``, upload.
+* ``status``: list your generators and their latest runs.
 * ``board``: the shadow generator ledger.
 
 See ``research/dittobench-datagen/docs/generator-competition.md`` and
@@ -26,6 +29,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -35,22 +39,21 @@ from ditto.miner_cli.errors import MinerCliError
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
 
-PACK_CONTRACT_V1 = "dittobench-challenge-pack/v1"
-MAX_PACK_BYTES = 4 << 20
-SIGNATURE_DOMAIN = "ditto-generator-pack-v1"
+MAX_ARCHIVE_BYTES = 4 << 20
+SIGNATURE_DOMAIN = "ditto-generator-v1"
 _DATAGEN_DIR = Path(__file__).resolve().parents[3] / "research" / "dittobench-datagen"
 
 
-class PackValidationError(MinerCliError):
-    """The pack failed local validation."""
+class GeneratorToolError(MinerCliError):
+    """The local generator tooling failed or rejected the generator."""
 
 
-def build_pack_payload(
-    *, hotkey_ss58: str, pack_sha256: str, signature_timestamp: int, nonce: str
+def build_source_payload(
+    *, hotkey_ss58: str, source_sha256: str, signature_timestamp: int, nonce: str
 ) -> bytes:
     """The exact bytes signed for an upload; Platform verifies the same."""
     return (
-        f"{SIGNATURE_DOMAIN}:{hotkey_ss58}:{pack_sha256}:{signature_timestamp}:{nonce}"
+        f"{SIGNATURE_DOMAIN}:{hotkey_ss58}:{source_sha256}:{signature_timestamp}:{nonce}"
     ).encode("ascii")
 
 
@@ -61,32 +64,50 @@ def add_subparser(
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
         "generator",
-        help="Generator competition: validate and upload challenge packs.",
+        help="Generator competition: rehearse, package, and upload generators.",
         description=(
-            "Submit DittoBench challenge packs: cases the top agents split on. "
+            "Submit DittoBench case generators: CPU-only programs scored on "
+            "secret seeds by how sharply their cases split the top agents. "
             "Weight-zero while the competition is in shadow."
         ),
         parents=parents or [],
     )
     subs = parser.add_subparsers(dest="generator_command", required=True)
 
-    validate = subs.add_parser("validate", help="Validate a pack locally.")
-    validate.add_argument("pack", type=Path)
-    _validator_flag(validate)
-    validate.set_defaults(func=run)
-
-    upload = subs.add_parser("upload", help="Validate, sign, and upload a pack.")
-    upload.add_argument("pack", type=Path)
-    _validator_flag(upload)
-    upload.add_argument(
-        "--skip-validate",
-        action="store_true",
-        help="Upload without local validation (the scorer still validates).",
+    rehearse = subs.add_parser(
+        "rehearse", help="Build and run a generator exactly as the scorer does."
     )
+    rehearse.add_argument("dir", type=Path)
+    rehearse.add_argument("--ss58", dest="ss58", help="Hotkey the packs bind to.")
+    rehearse.add_argument("--seeds", type=int, default=3)
+    rehearse.add_argument("--cases", type=int, default=16)
+    rehearse.add_argument(
+        "--sandbox",
+        choices=("local", "docker"),
+        default="local",
+        help="docker runs the scorer's pinned no-network sandbox.",
+    )
+    rehearse.add_argument("--out-dir", type=Path, help="Write each seed's pack here.")
+    _tool_flag(rehearse)
+    _wallet_flags(rehearse)
+    rehearse.set_defaults(func=run)
+
+    package = subs.add_parser("package", help="Write the upload archive.")
+    package.add_argument("dir", type=Path)
+    package.add_argument(
+        "-o", "--out", type=Path, default=Path("generator.tar.gz"), dest="out"
+    )
+    _tool_flag(package)
+    package.set_defaults(func=run)
+
+    upload = subs.add_parser("upload", help="Check, sign, and upload generator source.")
+    upload.add_argument("archive", type=Path, nargs="?")
+    upload.add_argument("--dir", type=Path, help="Package this directory first.")
+    _tool_flag(upload)
     _wallet_flags(upload)
     upload.set_defaults(func=run)
 
-    status = subs.add_parser("status", help="List a hotkey's packs.")
+    status = subs.add_parser("status", help="List a hotkey's generators.")
     status.add_argument("--ss58", dest="ss58", help="Hotkey address to list.")
     _wallet_flags(status)
     status.set_defaults(func=run)
@@ -96,13 +117,13 @@ def add_subparser(
     return parser
 
 
-def _validator_flag(parser: argparse.ArgumentParser) -> None:
+def _tool_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--validator",
-        dest="validator",
+        "--challenge-bin",
+        dest="challenge_bin",
         default=os.environ.get("DITTO_CHALLENGE_BIN"),
         help=(
-            "Path to the `challenge` binary. Default: `challenge` on PATH, else "
+            "Path to the `challenge` tool. Default: `challenge` on PATH, else "
             "`go run ./cmd/challenge` from this checkout."
         ),
     )
@@ -124,7 +145,7 @@ def _wallet_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-y", "--yes", action="store_true")
 
 
-def _validator_command(explicit: str | None) -> tuple[list[str], Path | None] | None:
+def _tool_command(explicit: str | None) -> tuple[list[str], Path | None]:
     if explicit:
         return [explicit], None
     found = shutil.which("challenge")
@@ -132,131 +153,153 @@ def _validator_command(explicit: str | None) -> tuple[list[str], Path | None] | 
         return [found], None
     if shutil.which("go") and (_DATAGEN_DIR / "cmd" / "challenge").is_dir():
         return ["go", "run", "./cmd/challenge"], _DATAGEN_DIR
-    return None
-
-
-def validate_pack(path: Path, *, validator: str | None) -> dict:
-    """Run the contract validator and return its JSON report."""
-    command = _validator_command(validator)
-    if command is None:
-        raise PackValidationError(
-            "no pack validator found: install Go and run from a ditto-subnet "
-            "checkout, or pass --validator /path/to/challenge"
-        )
-    argv, cwd = command
-    proc = subprocess.run(
-        [*argv, "validate", "-json", str(path.resolve())],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
+    raise GeneratorToolError(
+        "no generator tool found: install Go and run from a ditto-subnet "
+        "checkout, or pass --challenge-bin /path/to/challenge"
     )
-    try:
-        report = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise PackValidationError(
-            f"validator failed to run: {proc.stderr.strip()[:400]}"
-        ) from exc
-    if not isinstance(report, dict):
-        raise PackValidationError("validator returned a non-object report")
-    return report
 
 
-def _print_report(report: dict) -> None:
-    for issue in report.get("issues") or []:
-        where = f"case {issue['case_id']}" if issue.get("case_id") else "pack"
-        print(f"{where}: [{issue.get('rule')}] {issue.get('message')}", file=sys.stderr)
-    if report.get("valid"):
-        print(
-            f"valid: {report.get('case_count')} cases, {report.get('pair_count')} "
-            f"pairs, sha256 {report.get('pack_sha256')}",
-            file=sys.stderr,
+def run_tool(
+    args: list[str], *, explicit: str | None, capture: bool = False
+) -> subprocess.CompletedProcess[str]:
+    """Run the datagen ``challenge`` tool; paths in ``args`` must be absolute."""
+    argv, cwd = _tool_command(explicit)
+    return subprocess.run(
+        [*argv, *args], cwd=cwd, capture_output=capture, text=True, check=False
+    )
+
+
+def inspect_archive(path: Path, *, explicit: str | None) -> dict:
+    """Run the contract's archive check and return its identity JSON."""
+    proc = run_tool(["inspect", str(path.resolve())], explicit=explicit, capture=True)
+    if proc.returncode != 0:
+        raise GeneratorToolError(
+            f"archive rejected: {(proc.stderr or proc.stdout).strip()[:600]}"
         )
+    info = json.loads(proc.stdout)
+    if not isinstance(info, dict):
+        raise GeneratorToolError("archive check returned a non-object")
+    return info
 
 
-def _read_pack(path: Path) -> bytes:
-    raw = path.read_bytes()
-    if not raw or len(raw) > MAX_PACK_BYTES:
-        raise PackValidationError(f"pack must be 1..{MAX_PACK_BYTES} bytes")
-    return raw
+def package_dir(directory: Path, out: Path, *, explicit: str | None) -> None:
+    proc = run_tool(
+        ["pack", "-dir", str(directory.resolve()), "-out", str(out.resolve())],
+        explicit=explicit,
+    )
+    if proc.returncode != 0:
+        raise GeneratorToolError(f"packaging {directory} failed")
+
+
+def _resolve_hotkey(args: argparse.Namespace) -> str:
+    if getattr(args, "ss58", None):
+        return str(args.ss58)
+    coldkey_name, hotkey_name = resolve_wallet_names(
+        coldkey_name=args.coldkey_name,
+        hotkey_name=args.hotkey_name,
+        interactive=sys.stdin.isatty() and not args.yes,
+    )
+    handle, _ = load_wallet(coldkey_name=coldkey_name, hotkey_name=hotkey_name)
+    return str(handle.hotkey_ss58)
+
+
+def _upload(args: argparse.Namespace, archive: Path) -> int:
+    raw = archive.read_bytes()
+    if not raw or len(raw) > MAX_ARCHIVE_BYTES:
+        raise GeneratorToolError(f"source archive must be 1..{MAX_ARCHIVE_BYTES} bytes")
+    info = inspect_archive(archive, explicit=args.challenge_bin)
+    digest = hashlib.sha256(raw).hexdigest()
+    if info.get("sha256") != digest:
+        raise GeneratorToolError("archive check reported a different digest")
+    coldkey_name, hotkey_name = resolve_wallet_names(
+        coldkey_name=args.coldkey_name,
+        hotkey_name=args.hotkey_name,
+        interactive=sys.stdin.isatty() and not args.yes,
+    )
+    handle, wallet = load_wallet(coldkey_name=coldkey_name, hotkey_name=hotkey_name)
+    nonce = str(uuid4())
+    timestamp = int(time.time())
+    signature = wallet.hotkey.sign(
+        build_source_payload(
+            hotkey_ss58=handle.hotkey_ss58,
+            source_sha256=digest,
+            signature_timestamp=timestamp,
+            nonce=nonce,
+        )
+    ).hex()
+    body = {
+        "hotkey": handle.hotkey_ss58,
+        "source_sha256": digest,
+        "source_base64": base64.b64encode(raw).decode("ascii"),
+        "signature": signature,
+        "signature_timestamp": timestamp,
+        "signature_nonce": nonce,
+    }
+    network = resolve_network(args.network)
+    with ApiClient(base_url=network.api_url) as client:
+        result = client.post_generator_submission(body)
+    print(result["submission_id"])
+    superseded = result.get("superseded") or []
+    print(
+        f"generator {result['status']}: {info.get('files')} files, module "
+        f"{info.get('module')}, sha256 {result['source_sha256']}"
+        + (
+            f"; superseded {len(superseded)} earlier generator(s)" if superseded else ""
+        ),
+        file=sys.stderr,
+    )
+    return 0
 
 
 def run(args: argparse.Namespace) -> int:
-    network = resolve_network(args.network)
     command = args.generator_command
 
     if command == "board":
+        network = resolve_network(args.network)
         with ApiClient(base_url=network.api_url) as client:
             print(json.dumps(client.get_generator_board(), indent=2))
         return 0
 
-    if command == "validate":
-        report = validate_pack(args.pack, validator=args.validator)
-        _print_report(report)
-        return 0 if report.get("valid") else 1
-
     if command == "status":
-        hotkey = args.ss58
-        if not hotkey:
-            coldkey_name, hotkey_name = resolve_wallet_names(
-                coldkey_name=args.coldkey_name,
-                hotkey_name=args.hotkey_name,
-                interactive=sys.stdin.isatty() and not args.yes,
-            )
-            handle, _ = load_wallet(coldkey_name=coldkey_name, hotkey_name=hotkey_name)
-            hotkey = handle.hotkey_ss58
+        hotkey = _resolve_hotkey(args)
+        network = resolve_network(args.network)
         with ApiClient(base_url=network.api_url) as client:
-            print(json.dumps(client.list_generator_packs(hotkey=hotkey), indent=2))
+            print(
+                json.dumps(client.list_generator_submissions(hotkey=hotkey), indent=2)
+            )
+        return 0
+
+    if command == "rehearse":
+        hotkey = _resolve_hotkey(args)
+        tool_args = [
+            "rehearse",
+            "-dir",
+            str(args.dir.resolve()),
+            "-hotkey",
+            hotkey,
+            "-seeds",
+            str(args.seeds),
+            "-cases",
+            str(args.cases),
+            "-sandbox",
+            args.sandbox,
+        ]
+        if args.out_dir:
+            tool_args += ["-out-dir", str(args.out_dir.resolve())]
+        return run_tool(tool_args, explicit=args.challenge_bin).returncode
+
+    if command == "package":
+        package_dir(args.dir, args.out, explicit=args.challenge_bin)
         return 0
 
     if command == "upload":
-        raw = _read_pack(args.pack)
-        doc = json.loads(raw)
-        if not isinstance(doc, dict) or doc.get("contract") != PACK_CONTRACT_V1:
-            raise PackValidationError(f"pack contract must be {PACK_CONTRACT_V1!r}")
-        if not args.skip_validate:
-            report = validate_pack(args.pack, validator=args.validator)
-            _print_report(report)
-            if not report.get("valid"):
-                raise PackValidationError("pack is invalid; fix the issues above")
-        coldkey_name, hotkey_name = resolve_wallet_names(
-            coldkey_name=args.coldkey_name,
-            hotkey_name=args.hotkey_name,
-            interactive=sys.stdin.isatty() and not args.yes,
-        )
-        handle, wallet = load_wallet(coldkey_name=coldkey_name, hotkey_name=hotkey_name)
-        if doc.get("miner_hotkey") != handle.hotkey_ss58:
-            raise PackValidationError(
-                f"pack miner_hotkey {doc.get('miner_hotkey')!r} is not the signing "
-                f"hotkey {handle.hotkey_ss58}; regenerate the pack for this hotkey"
-            )
-        digest = hashlib.sha256(raw).hexdigest()
-        nonce = str(uuid4())
-        timestamp = int(time.time())
-        signature = wallet.hotkey.sign(
-            build_pack_payload(
-                hotkey_ss58=handle.hotkey_ss58,
-                pack_sha256=digest,
-                signature_timestamp=timestamp,
-                nonce=nonce,
-            )
-        ).hex()
-        body = {
-            "hotkey": handle.hotkey_ss58,
-            "pack_sha256": digest,
-            "pack_base64": base64.b64encode(raw).decode("ascii"),
-            "signature": signature,
-            "signature_timestamp": timestamp,
-            "signature_nonce": nonce,
-        }
-        with ApiClient(base_url=network.api_url) as client:
-            result = client.post_generator_pack(body)
-        print(result["pack_id"])
-        print(
-            f"pack {result['status']}: {result['case_count']} cases, "
-            f"sha256 {result['pack_sha256']}",
-            file=sys.stderr,
-        )
-        return 0
+        if (args.archive is None) == (args.dir is None):
+            raise GeneratorToolError("pass exactly one of ARCHIVE or --dir DIR")
+        if args.dir is None:
+            return _upload(args, args.archive)
+        with tempfile.TemporaryDirectory(prefix="ditto-generator-") as tmp:
+            archive = Path(tmp) / "generator.tar.gz"
+            package_dir(args.dir, archive, explicit=args.challenge_bin)
+            return _upload(args, archive)
 
     raise MinerCliError(f"unknown generator command {command!r}")

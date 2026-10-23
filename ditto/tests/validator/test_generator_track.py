@@ -32,11 +32,12 @@ def _entry(
     *,
     eligible: bool = True,
     seen: int = 0,
-    pack_id: UUID | None = None,
+    run_id: UUID | None = None,
 ) -> GeneratorLedgerEntry:
     return GeneratorLedgerEntry(
         miner_hotkey=hotkey,
-        pack_id=pack_id or uuid4(),
+        submission_id=uuid4(),
+        run_id=run_id or uuid4(),
         weight_eligible=eligible,
         score=score,
         first_seen=_T0 + timedelta(hours=seen),
@@ -68,8 +69,8 @@ def test_fold_ranks_by_score_with_deterministic_ties() -> None:
     early, late = uuid4(), uuid4()
     entries = [
         _entry("hk-c", 0.10),
-        _entry("hk-a", 0.30, seen=5, pack_id=late),
-        _entry("hk-b", 0.30, seen=1, pack_id=early),
+        _entry("hk-a", 0.30, seen=5, run_id=late),
+        _entry("hk-b", 0.30, seen=1, run_id=early),
         _entry("hk-ineligible", 0.99, eligible=False),
         _entry("hk-zero", 0.0),
     ]

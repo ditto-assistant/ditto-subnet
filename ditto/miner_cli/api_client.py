@@ -391,21 +391,25 @@ class ApiClient:
 
     # ---- /generator (generator competition, shadow) ---------------------
 
-    def post_generator_pack(self, body: dict[str, Any]) -> dict[str, Any]:
-        response = self._request("POST", "/api/v1/generator/packs", json=body)
+    def post_generator_submission(self, body: dict[str, Any]) -> dict[str, Any]:
+        response = self._request("POST", "/api/v1/generator/submissions", json=body)
         if response.status_code != 200:
             raise ApiResponseError(_format_error(response, prefix="generator upload"))
         result: dict[str, Any] = response.json()
         return result
 
-    def list_generator_packs(self, *, hotkey: str, limit: int = 25) -> dict[str, Any]:
+    def list_generator_submissions(
+        self, *, hotkey: str, limit: int = 25
+    ) -> dict[str, Any]:
         response = self._request(
             "GET",
-            "/api/v1/generator/packs",
+            "/api/v1/generator/submissions",
             params={"hotkey": hotkey, "limit": limit},
         )
         if response.status_code != 200:
-            raise ApiResponseError(_format_error(response, prefix="generator packs"))
+            raise ApiResponseError(
+                _format_error(response, prefix="generator submissions")
+            )
         result: dict[str, Any] = response.json()
         return result
 

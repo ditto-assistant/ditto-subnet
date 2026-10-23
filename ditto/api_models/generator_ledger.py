@@ -1,8 +1,9 @@
 """Generator-track ledger relayed to validators (shadow, weight-zero).
 
-Platform is the generator competition's system of record: it scores each pack
-from the trusted scorer's panel results and folds every hotkey to its best pack
-scored within the freshness window. Validators read this ledger through
+Platform is the generator competition's system of record: it scores each
+generator run (fresh secret seeds, a top-agent panel) from the trusted scorer's
+results and folds every hotkey to its latest run scored within the freshness
+window. Validators read this ledger through
 ``GET /scoring/generator-ledger`` and fold it as the ``generator`` track, which
 ships in ``SHADOW`` at 0 bps. Field discipline mirrors
 ``ditto.api_models.router_ledger``: unknown fields are ignored, ``score`` is the
@@ -24,7 +25,8 @@ class GeneratorLedgerModel(BaseModel):
 
 class GeneratorLedgerEntry(GeneratorLedgerModel):
     miner_hotkey: str
-    pack_id: UUID
+    submission_id: UUID
+    run_id: UUID
     generator_contract_version: Literal[1] = 1
     weight_eligible: Annotated[
         bool,

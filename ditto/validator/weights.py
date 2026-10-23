@@ -277,14 +277,15 @@ def compute_router_weights(
 def compute_generator_weights(
     entries: Sequence[GeneratorLedgerEntry], *, rank_shares: Sequence[float]
 ) -> dict[str, float]:
-    """Rank generator-competition miners by their best fresh pack score.
+    """Rank generator-competition miners by their latest fresh run score.
 
-    Platform has already scored each pack against a top-agent panel and folded
-    every hotkey to its best pack inside the freshness window (see
-    :mod:`ditto.api_models.generator_ledger`). This fold only ranks that pool
-    and assigns ``rank_shares`` by position, tie-breaking on ``first_seen``
-    then ``pack_id`` so every validator folds identical bytes. Only entries
-    marked ``weight_eligible`` with a positive score earn anything, and
+    Platform has already run each generator on secret seeds against a
+    top-agent panel and folded every hotkey to its latest run scored inside the
+    freshness window (see :mod:`ditto.api_models.generator_ledger`). This fold
+    only ranks that pool and assigns ``rank_shares`` by position, tie-breaking
+    on ``first_seen`` then ``run_id`` so every validator folds identical bytes.
+    Only entries marked ``weight_eligible`` with a positive score earn anything,
+    and
     malformed ``rank_shares`` degrade to ``{}``: like the router fold, this
     runs on the consensus ``put_weights`` path and must never raise.
     """
@@ -298,7 +299,7 @@ def compute_generator_weights(
         if entry.weight_eligible and math.isfinite(entry.score) and entry.score > 0.0
     ]
     ranked = sorted(
-        scored, key=lambda entry: (-entry.score, entry.first_seen, entry.pack_id)
+        scored, key=lambda entry: (-entry.score, entry.first_seen, entry.run_id)
     )
     distinct: list[GeneratorLedgerEntry] = []
     seen_hotkeys: set[str] = set()

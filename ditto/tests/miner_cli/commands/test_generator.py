@@ -1,13 +1,11 @@
-"""``ditto generator``: signing wire format, local validation, upload flow."""
+"""``ditto generator``: signing wire format, packaging, rehearsal, upload flow."""
 
 from __future__ import annotations
 
 import argparse
 import base64
 import hashlib
-import json
 import shutil
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,7 +16,9 @@ import pytest
 from ditto.miner_cli.commands import generator as gen_cmd
 
 _KEY = bittensor.Keypair.create_from_uri("//Bob")
-_DATAGEN = Path(__file__).resolve().parents[4] / "research" / "dittobench-datagen"
+_KIT = (
+    Path(__file__).resolve().parents[4] / "miners" / "dittobench-generator-starter-kit"
+)
 _HAS_GO = shutil.which("go") is not None
 
 
@@ -29,59 +29,49 @@ def test_signature_payload_is_the_pinned_wire_format() -> None:
     same literal instead of importing each other.
     """
     nonce = "4b0d7e8e-5f3c-4c4e-9a8b-1e2f3a4b5c6d"
-    payload = gen_cmd.build_pack_payload(
+    payload = gen_cmd.build_source_payload(
         hotkey_ss58=_KEY.ss58_address,
-        pack_sha256="ab" * 32,
+        source_sha256="ab" * 32,
         signature_timestamp=1_700_000_000,
         nonce=nonce,
     )
-    expected = f"ditto-generator-pack-v1:{_KEY.ss58_address}:{'ab' * 32}"
+    expected = f"ditto-generator-v1:{_KEY.ss58_address}:{'ab' * 32}"
     assert payload == f"{expected}:1700000000:{nonce}".encode()
 
 
-def _example(tmp_path: Path, hotkey: str) -> Path:
-    out = tmp_path / "pack.json"
-    subprocess.run(
-        [
-            "go",
-            "run",
-            "./cmd/challenge",
-            "example",
-            "-seed",
-            "5",
-            "-hotkey",
-            hotkey,
-            "-out",
-            str(out),
-        ],
-        cwd=_DATAGEN,
-        check=True,
-    )
-    return out
-
-
 @pytest.mark.skipif(not _HAS_GO, reason="needs the Go toolchain")
-def test_validate_runs_the_contract_validator(tmp_path: Path) -> None:
-    pack = _example(tmp_path, _KEY.ss58_address)
-    report = gen_cmd.validate_pack(pack, validator=None)
-    assert report["valid"] is True and report["case_count"] == 16
-    assert report["pack_sha256"] == hashlib.sha256(pack.read_bytes()).hexdigest()
+def test_package_and_rehearse_the_starter_kit(tmp_path: Path) -> None:
+    archive = tmp_path / "kit.tar.gz"
+    gen_cmd.package_dir(_KIT, archive, explicit=None)
+    info = gen_cmd.inspect_archive(archive, explicit=None)
+    assert info["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert info["vendored"] is True and info["module"].endswith("starter-kit")
+    # Packaging never writes into the miner's checkout.
+    assert not (_KIT / "vendor").exists()
 
-    broken = json.loads(pack.read_text())
-    broken["cases"][0]["expected_answer"] = "not in evidence"
-    bad = tmp_path / "bad.json"
-    bad.write_text(json.dumps(broken))
-    report = gen_cmd.validate_pack(bad, validator=None)
-    assert report["valid"] is False
-    assert {issue["rule"] for issue in report["issues"]} >= {"grounding"}
+    proc = gen_cmd.run_tool(
+        [
+            "rehearse",
+            "-archive",
+            str(archive),
+            "-hotkey",
+            _KEY.ss58_address,
+            "-seeds",
+            "1",
+            "-cases",
+            "8",
+        ],
+        explicit=None,
+        capture=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "deterministic" in proc.stdout
 
 
-def test_missing_validator_is_a_clear_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(gen_cmd, "_validator_command", lambda _explicit: None)
-    with pytest.raises(gen_cmd.PackValidationError, match="no pack validator"):
-        gen_cmd.validate_pack(tmp_path / "x.json", validator=None)
+def test_missing_tool_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gen_cmd.shutil, "which", lambda _name: None)
+    with pytest.raises(gen_cmd.GeneratorToolError, match="no generator tool"):
+        gen_cmd.run_tool(["inspect", "/x"], explicit=None)
 
 
 class _FakeClient:
@@ -96,23 +86,26 @@ class _FakeClient:
     def __exit__(self, *_exc: object) -> None:
         return None
 
-    def post_generator_pack(self, body: dict[str, Any]) -> dict[str, Any]:
+    def post_generator_submission(self, body: dict[str, Any]) -> dict[str, Any]:
         _FakeClient.posted.append(body)
         return {
-            "pack_id": "00000000-0000-4000-8000-000000000001",
-            "status": "queued",
-            "case_count": 16,
-            "pack_sha256": body["pack_sha256"],
+            "submission_id": "00000000-0000-4000-8000-000000000001",
+            "status": "active",
+            "source_sha256": body["source_sha256"],
+            "tree_sha256": "cd" * 32,
+            "superseded": [],
         }
 
 
-def _upload_args(pack: Path) -> argparse.Namespace:
+def _upload_args(
+    archive: Path | None, directory: Path | None = None
+) -> argparse.Namespace:
     return argparse.Namespace(
         network="local",
         generator_command="upload",
-        pack=pack,
-        validator=None,
-        skip_validate=True,
+        archive=archive,
+        dir=directory,
+        challenge_bin=None,
         coldkey_name="cold",
         hotkey_name="hot",
         yes=True,
@@ -130,34 +123,48 @@ def test_upload_signs_the_exact_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_wallet(monkeypatch, _KEY)
-    raw = json.dumps(
-        {"contract": gen_cmd.PACK_CONTRACT_V1, "miner_hotkey": _KEY.ss58_address}
-    ).encode()
-    pack = tmp_path / "pack.json"
-    pack.write_bytes(raw)
+    raw = b"\x1f\x8b fake archive bytes"
+    archive = tmp_path / "gen.tar.gz"
+    archive.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    monkeypatch.setattr(
+        gen_cmd,
+        "inspect_archive",
+        lambda _path, **_kw: {"sha256": digest, "files": 2, "module": "m"},
+    )
     _FakeClient.posted.clear()
-    assert gen_cmd.run(_upload_args(pack)) == 0
+    assert gen_cmd.run(_upload_args(archive)) == 0
     body = _FakeClient.posted[0]
-    assert base64.b64decode(body["pack_base64"]) == raw
-    assert body["pack_sha256"] == hashlib.sha256(raw).hexdigest()
-    payload = gen_cmd.build_pack_payload(
+    assert base64.b64decode(body["source_base64"]) == raw
+    assert body["source_sha256"] == digest
+    payload = gen_cmd.build_source_payload(
         hotkey_ss58=_KEY.ss58_address,
-        pack_sha256=body["pack_sha256"],
+        source_sha256=digest,
         signature_timestamp=body["signature_timestamp"],
         nonce=body["signature_nonce"],
     )
     assert _KEY.verify(payload, bytes.fromhex(body["signature"]))
 
 
-def test_upload_refuses_a_pack_bound_to_another_hotkey(
+def test_upload_refuses_an_archive_the_contract_rejects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_wallet(monkeypatch, _KEY)
-    pack = tmp_path / "pack.json"
-    pack.write_text(
-        json.dumps({"contract": gen_cmd.PACK_CONTRACT_V1, "miner_hotkey": "5Other"})
-    )
+    archive = tmp_path / "gen.tar.gz"
+    archive.write_bytes(b"bytes")
+
+    def _reject(_path: Path, **_kw: object) -> dict:
+        raise gen_cmd.GeneratorToolError("archive rejected: no go.mod")
+
+    monkeypatch.setattr(gen_cmd, "inspect_archive", _reject)
     _FakeClient.posted.clear()
-    with pytest.raises(gen_cmd.PackValidationError, match="not the signing"):
-        gen_cmd.run(_upload_args(pack))
+    with pytest.raises(gen_cmd.GeneratorToolError, match="no go.mod"):
+        gen_cmd.run(_upload_args(archive))
     assert _FakeClient.posted == []
+
+
+def test_upload_needs_exactly_one_source(tmp_path: Path) -> None:
+    with pytest.raises(gen_cmd.GeneratorToolError, match="exactly one"):
+        gen_cmd.run(_upload_args(None))
+    with pytest.raises(gen_cmd.GeneratorToolError, match="exactly one"):
+        gen_cmd.run(_upload_args(tmp_path / "a", tmp_path))

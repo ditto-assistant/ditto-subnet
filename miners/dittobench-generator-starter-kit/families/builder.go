@@ -4,9 +4,13 @@
 // returns one challenge case grounded in them. The Builder owns the haystack
 // (waves, pair IDs, timestamps) so families only describe content.
 //
-// Every case a family emits must pass `challenge validate`: its gold answer
+// Every case a family emits must pass the pack contract: its gold answer
 // appears in the named evidence pairs, not in the question, and the haystack
 // holds at least one decoy value so an agent that dumps all of memory fails.
+//
+// All randomness flows from the request seed through Builder.Rng; nothing
+// reads the clock or the environment, so a request always yields the same
+// bytes (the scorer re-runs a seed and rejects a generator that drifts).
 package families
 
 import (
@@ -32,10 +36,10 @@ type Builder struct {
 	epoch  time.Time
 }
 
-// NewBuilder returns an empty builder for one seed.
-func NewBuilder(seed int64) *Builder {
+// NewBuilder returns an empty builder for one request.
+func NewBuilder(req challenge.GenerateRequest) *Builder {
 	b := &Builder{
-		Rng:   rand.New(rand.NewSource(seed)),
+		Rng:   req.Rand(),
 		waves: make([]protocol.SeedRequest, Waves),
 		used:  map[string]bool{},
 		epoch: time.Date(2026, time.March, 2, 8, 0, 0, 0, time.UTC),
@@ -86,13 +90,16 @@ func (b *Builder) Pick(pool []string, n int) []string {
 	return out
 }
 
-// Pack assembles the challenge pack for a hotkey.
-func (b *Builder) Pack(hotkey, name, version string, seed int64) challenge.Pack {
+// Len is the number of cases added so far.
+func (b *Builder) Len() int { return len(b.cases) }
+
+// Pack assembles the challenge pack bound to the request.
+func (b *Builder) Pack(req challenge.GenerateRequest, name, version string) challenge.Pack {
 	return challenge.Pack{
 		Contract:            challenge.ContractV1,
-		GradingBenchVersion: challenge.GradingBenchVersion,
-		MinerHotkey:         hotkey,
-		Generator:           challenge.Generator{Name: name, Version: version, Seed: seed},
+		GradingBenchVersion: req.GradingBenchVersion,
+		MinerHotkey:         req.MinerHotkey,
+		Generator:           challenge.Generator{Name: name, Version: version, Seed: req.Seed},
 		MemoryWaves:         b.waves,
 		Cases:               b.cases,
 	}

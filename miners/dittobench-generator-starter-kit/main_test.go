@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -9,24 +10,49 @@ import (
 
 const testHotkey = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 
+func request(seed int64, cases int) challenge.GenerateRequest {
+	return challenge.NewGenerateRequest(challenge.SeedFromInt64(seed), testHotkey, cases)
+}
+
 func TestEverySeedValidates(t *testing.T) {
-	for seed := int64(1); seed <= 40; seed++ {
-		for _, per := range []int{2, 4, 6} { // 6 is the CLI maximum
-			r := challenge.Validate(Generate(seed, testHotkey, per))
-			if !r.Valid {
+	for seed := int64(1); seed <= 16; seed++ {
+		for _, cases := range []int{challenge.MinCases, 13, 16, 24, MaxCases} {
+			req := request(seed, cases)
+			pack, err := Generate(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(pack)
+			if r := challenge.ValidateGenerated(raw, req); !r.Valid {
 				b, _ := json.MarshalIndent(r.Issues, "", "  ")
-				t.Fatalf("seed %d per-family %d invalid:\n%s", seed, per, b)
+				t.Fatalf("seed %d cases %d invalid:\n%s", seed, cases, b)
 			}
 		}
 	}
 }
 
-func TestGenerateIsDeterministic(t *testing.T) {
-	a, _ := json.Marshal(Generate(9, testHotkey, 4))
-	b, _ := json.Marshal(Generate(9, testHotkey, 4))
-	c, _ := json.Marshal(Generate(10, testHotkey, 4))
-	if string(a) != string(b) || string(a) == string(c) {
-		t.Fatal("generation must be a pure function of the seed")
+func TestRunIsAPureFunctionOfTheRequest(t *testing.T) {
+	emit := func(req challenge.GenerateRequest) []byte {
+		var out bytes.Buffer
+		if err := run(bytes.NewReader(req.Bytes()), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Bytes()
+	}
+	a, b, c := emit(request(9, 16)), emit(request(9, 16)), emit(request(10, 16))
+	if !bytes.Equal(a, b) || bytes.Equal(a, c) {
+		t.Fatal("output must be a pure function of the request")
+	}
+}
+
+func TestRejectsUnfillableRequests(t *testing.T) {
+	if _, err := Generate(request(1, MaxCases+1)); err == nil {
+		t.Fatal("oversized request accepted")
+	}
+	bad := request(1, 16)
+	bad.Contract = "nope"
+	if _, err := Generate(bad); err == nil {
+		t.Fatal("bad contract accepted")
 	}
 }
 
@@ -34,8 +60,12 @@ func TestGenerateIsDeterministic(t *testing.T) {
 // question about the same memory have no single right answer.
 func TestQuestionsAreUnique(t *testing.T) {
 	for seed := int64(1); seed <= 40; seed++ {
+		pack, err := Generate(request(seed, MaxCases))
+		if err != nil {
+			t.Fatal(err)
+		}
 		seen := map[string]string{}
-		for _, c := range Generate(seed, testHotkey, 6).Cases {
+		for _, c := range pack.Cases {
 			if prior, dup := seen[c.Question]; dup {
 				t.Fatalf("seed %d: %s and %s both ask %q", seed, prior, c.ID, c.Question)
 			}

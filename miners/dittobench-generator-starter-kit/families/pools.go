@@ -5,7 +5,12 @@ var cities = []string{
 	"Ghent", "Bologna", "Tbilisi", "Seville", "Gdansk", "Leipzig", "Utrecht",
 	"Aarhus", "Brno", "Cluj", "Graz", "Malmo", "Riga", "Turku", "Vilnius",
 	"Zadar", "Lyon", "Nantes", "Bilbao", "Salzburg", "Plovdiv", "Tartu", "Split",
+	"Coimbra", "Trieste", "Kaunas", "Pecs", "Bratislava", "Uppsala", "Lille",
+	"Groningen", "Innsbruck", "Varna", "Debrecen", "Oulu",
 }
+
+// Pool sizes bound MaxCases: each round of the four default families draws 5
+// cities, 6 names, 1 role, 1 event, 3 drinks, and 4 allergens.
 
 var firstNames = []string{
 	"Ines", "Tobias", "Marisol", "Henrik", "Aiyana", "Dmitri", "Noor", "Callum",
@@ -13,6 +18,8 @@ var firstNames = []string{
 	"Zofia", "Emeka", "Liesel", "Joaquin", "Saoirse", "Kenji", "Farida", "Mateo",
 	"Ingrid", "Tariq", "Ottilie", "Ravi", "Signe", "Dario", "Hana", "Lorcan",
 	"Mirela", "Anselm", "Keziah", "Bram", "Yasmin", "Florin", "Thandiwe", "Ilan",
+	"Wren", "Casimir", "Odalys", "Pavel", "Nkiru", "Soren", "Ximena", "Halvard",
+	"Ines-Maria", "Dagny", "Kofi", "Rosalind",
 }
 
 var roles = []string{
@@ -22,14 +29,16 @@ var roles = []string{
 
 var events = []string{
 	"team offsite", "book club retreat", "alumni reunion", "product summit",
-	"family reunion", "choir tour", "wedding rehearsal",
+	"family reunion", "choir tour", "wedding rehearsal", "charity gala",
+	"hackathon", "quiz night",
 }
 
 var drinksPool = []string{
 	"espresso", "matcha", "rooibos", "kombucha", "chai", "yerba mate",
 	"cold brew", "oat latte", "green tea", "hot chocolate", "kefir",
 	"cortado", "hojicha", "barley tea", "turmeric latte", "lassi", "genmaicha",
-	"americano", "flat white", "ginger tea", "sencha",
+	"americano", "flat white", "ginger tea", "sencha", "mint tea", "macchiato",
+	"chamomile", "golden milk", "pu-erh", "horchata",
 }
 
 var allergens = []string{
@@ -37,6 +46,8 @@ var allergens = []string{
 	"lupin", "buckwheat", "mango", "soy", "cashews", "hazelnuts", "fennel",
 	"pistachios", "squid", "lentils", "avocado", "chickpeas", "anchovies",
 	"pecans", "papaya", "quinoa", "eggplant", "oysters", "macadamias",
+	"almonds", "crab", "pineapple", "peppers", "mussels", "coconut",
+	"strawberries", "tomatoes", "barley",
 }
 
 var filler = [][2]string{
