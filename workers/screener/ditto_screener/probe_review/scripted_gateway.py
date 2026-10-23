@@ -552,30 +552,45 @@ class ScriptedGateway:
             await writer.wait_closed()
 
 
+_BODY_DEADLINE_S = 60.0
+
+
 async def _read_body(reader: asyncio.StreamReader, headers: dict[str, str]) -> bytes:
+    """Read one request body under a single deadline and size bound.
+
+    Chunks and trailers share the deadline, so a client cannot hold a handler
+    by trickling small chunks or trailer lines.
+    """
+    deadline = time.monotonic() + _BODY_DEADLINE_S
+
+    def left() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("request body deadline")
+        return min(remaining, 10.0)
+
     if "chunked" in headers.get("transfer-encoding", "").casefold():
         body = bytearray()
         while True:
-            size_line = await asyncio.wait_for(reader.readuntil(b"\r\n"), timeout=10)
+            size_line = await asyncio.wait_for(reader.readuntil(b"\r\n"), left())
             size = int(size_line[:-2].split(b";", 1)[0].strip() or b"0", 16)
             if size == 0:
-                while (
-                    await asyncio.wait_for(reader.readuntil(b"\r\n"), timeout=10)
-                ) != b"\r\n":
-                    pass
-                return bytes(body)
+                trailer_bytes = 0
+                while True:
+                    trailer = await asyncio.wait_for(reader.readuntil(b"\r\n"), left())
+                    trailer_bytes += len(trailer)
+                    if trailer_bytes > _MAX_HEADER_BYTES:
+                        raise ValueError("trailers too large")
+                    if trailer == b"\r\n":
+                        return bytes(body)
             if len(body) + size > _MAX_BODY_BYTES:
                 raise ValueError("body too large")
-            body.extend(await asyncio.wait_for(reader.readexactly(size), timeout=10))
-            await asyncio.wait_for(reader.readexactly(2), timeout=10)
+            body.extend(await asyncio.wait_for(reader.readexactly(size), left()))
+            await asyncio.wait_for(reader.readexactly(2), left())
     length = int(headers.get("content-length", "0") or 0)
     if length < 0 or length > _MAX_BODY_BYTES:
         raise ValueError("body too large")
-    return (
-        await asyncio.wait_for(reader.readexactly(length), timeout=10)
-        if length
-        else b""
-    )
+    return await asyncio.wait_for(reader.readexactly(length), left()) if length else b""
 
 
 async def _serve() -> None:

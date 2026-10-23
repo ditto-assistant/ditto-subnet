@@ -63,11 +63,13 @@ def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
         replay_failed = replay is not None and not _complete_replay(replay)
         reviewed = replay is not None and not replay_failed
         verified = bool(replay and not replay_failed and replay.get("verified"))
+        # A failed replay's findings may be malformed; never iterate them.
+        findings = [] if replay_failed else (replay or {}).get("findings", [])
         found = sorted(
             {
                 f["invariant"]
-                for f in (replay or {}).get("findings", [])
-                if f.get("verified")
+                for f in findings
+                if isinstance(f, dict) and f.get("verified")
             }
         )
         out.append(

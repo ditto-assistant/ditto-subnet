@@ -302,7 +302,13 @@ def review(
             name = call["function"]["name"]
             probes_left = ledger.max_probes - (session.probe_count - first_probe)
             result: Any
-            if name != "submit_verdict" and ledger.tool_calls >= ledger.max_tool_calls:
+            if time.monotonic() - started >= deadline_seconds:
+                # A running probe cannot be interrupted, so the overrun is at
+                # most one probe's own timeout; nothing new starts past it.
+                result = {"error": "review deadline reached"}
+            elif (
+                name != "submit_verdict" and ledger.tool_calls >= ledger.max_tool_calls
+            ):
                 result = {"error": "tool-call budget spent; call submit_verdict"}
             elif name in _PROBING_TOOLS and probes_left <= 0:
                 result = {"error": "probe budget spent; call submit_verdict"}

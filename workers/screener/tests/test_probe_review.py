@@ -555,6 +555,19 @@ def test_report_cells_cannot_break_the_table() -> None:
     spec.loader.exec_module(report)
     _cell = report._cell
     assert not report._complete_replay({})
+    session_dir = Path(__file__).parent / "_nonexistent_sessions"
+    corpus = [
+        {
+            "id8": "x",
+            "group": "reject",
+            "name": "n",
+            "version": 1,
+            "lang": "py",
+            "invariants": ["I4"],
+        }
+    ]
+    assert tools._probe_number("p1000-ab") > tools._probe_number("p999-cd")
+    assert report.rows(corpus, session_dir)[0]["status"] == "not_run"
     assert report._complete_replay({"verified": False, "findings": []})
     assert _cell("a|b\nc") == "a\\|b<br>c"
     assert _cell("<img src=x>") == "&lt;img src=x&gt;"

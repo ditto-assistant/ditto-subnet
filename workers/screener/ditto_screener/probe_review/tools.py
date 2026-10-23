@@ -635,6 +635,12 @@ def check_citations(session: Session, verdict: dict[str, Any]) -> list[str]:
     return problems
 
 
+def _probe_number(probe_id: str) -> int:
+    """The sequence number in ``p<n>-<hex>``; unparseable ids sort last."""
+    head = probe_id[1:].split("-", 1)[0]
+    return int(head) if head.isdigit() else 1 << 62
+
+
 def _setup_for(session: Session, record: ProbeRecord) -> list[dict[str, Any]]:
     """Preconditions to re-post before ``record`` on a fresh harness.
 
@@ -645,10 +651,14 @@ def _setup_for(session: Session, record: ProbeRecord) -> list[dict[str, Any]]:
     if record.preconditions:
         return record.preconditions
     user = record.request.get("user_id")
+    target = _probe_number(record.probe_id)
     setup = []
-    for path in sorted(session.probes_dir.glob("p*.json")):
+    # Numeric order: p1000-… must follow p999-… (lexical order would not).
+    for path in sorted(
+        session.probes_dir.glob("p*.json"), key=lambda p: _probe_number(p.stem)
+    ):
         earlier = ProbeRecord.from_json(json.loads(path.read_text()))
-        if earlier.probe_id >= record.probe_id:
+        if _probe_number(earlier.probe_id) >= target:
             break
         if earlier.path == "/seed" and user and earlier.request.get("user_id") == user:
             setup.append({"path": "/seed", "request": earlier.request})
