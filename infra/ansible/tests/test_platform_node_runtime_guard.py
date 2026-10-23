@@ -1,11 +1,12 @@
 """Run the production admission task through Ansible against version fixtures."""
+
 import copy
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 import yaml
 
@@ -42,17 +43,60 @@ class PlatformNodeAdmissionTests(unittest.TestCase):
             task = copy.deepcopy(admission)
             task["name"] = name
             task["vars"].update(
-                platform_node_distro_version={"stdout": distro, "cmd": ["/usr/bin/node", "--version"]} if distro else {"skipped": True},
-                platform_node_pm2_versions={"results": [{"stdout": version, "cmd": [f"/proc/{index + 100}/exe", "--version"]} for index, version in enumerate(daemons)]},
+                platform_node_distro_version={
+                    "stdout": distro,
+                    "cmd": ["/usr/bin/node", "--version"],
+                }
+                if distro
+                else {"skipped": True},
+                platform_node_pm2_versions={
+                    "results": [
+                        {
+                            "stdout": version,
+                            "cmd": [f"/proc/{index + 100}/exe", "--version"],
+                        }
+                        for index, version in enumerate(daemons)
+                    ]
+                },
             )
             task["ignore_errors"] = True
             task["register"] = "node_admission_case"
-            tasks.extend([task, {"name": f"Check {name}", "ansible.builtin.assert": {"that": [f"node_admission_case is failed == {'true' if should_fail else 'false'}"]}}])
+            tasks.extend(
+                [
+                    task,
+                    {
+                        "name": f"Check {name}",
+                        "ansible.builtin.assert": {
+                            "that": [
+                                f"node_admission_case is failed == "
+                                f"{'true' if should_fail else 'false'}"
+                            ]
+                        },
+                    },
+                ]
+            )
         with tempfile.TemporaryDirectory() as directory:
             playbook = Path(directory) / "cases.yml"
-            playbook.write_text(yaml.safe_dump([{"hosts": "localhost", "gather_facts": False, "tasks": tasks}], sort_keys=False))
+            playbook.write_text(
+                yaml.safe_dump(
+                    [{"hosts": "localhost", "gather_facts": False, "tasks": tasks}],
+                    sort_keys=False,
+                )
+            )
             environment = dict(os.environ, ANSIBLE_NOCOLOR="1")
-            result = subprocess.run([executable, "-i", "localhost,", "--connection", "local", str(playbook)], env=environment, text=True, capture_output=True)
+            result = subprocess.run(
+                [
+                    executable,
+                    "-i",
+                    "localhost,",
+                    "--connection",
+                    "local",
+                    str(playbook),
+                ],
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
