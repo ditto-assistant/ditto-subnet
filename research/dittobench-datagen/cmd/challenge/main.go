@@ -98,8 +98,8 @@ func runExample(args []string) error {
 	hotkey := fs.String("hotkey", "", "miner SS58 hotkey the pack is bound to (required)")
 	out := fs.String("out", "", "write the pack here (default: stdout)")
 	_ = fs.Parse(args)
-	if *hotkey == "" {
-		return errors.New("example: -hotkey is required")
+	if !challenge.ValidHotkey(*hotkey) {
+		return errors.New("example: -hotkey must be an SS58 hotkey")
 	}
 	return writeJSON(*out, challenge.ReferencePack(*seed, *hotkey))
 }

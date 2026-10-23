@@ -133,6 +133,18 @@ func InspectArchive(raw []byte) (ArchiveInfo, []SourceFile, error) {
 		if seen[name] {
 			return ArchiveInfo{}, nil, fmt.Errorf("source archive repeats %q", name)
 		}
+		// A file cannot also be a directory: "a" and "a/b" would extract
+		// halfway and then fail.
+		for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
+			if seen[parent] {
+				return ArchiveInfo{}, nil, fmt.Errorf("source archive file %q is under file %q", name, parent)
+			}
+		}
+		for existing := range seen {
+			if strings.HasPrefix(existing, name+"/") {
+				return ArchiveInfo{}, nil, fmt.Errorf("source archive file %q is under file %q", existing, name)
+			}
+		}
 		seen[name] = true
 		if hdr.Size < 0 || total+hdr.Size > MaxSourceBytes {
 			return ArchiveInfo{}, nil, fmt.Errorf("source archive expands past %d bytes", MaxSourceBytes)

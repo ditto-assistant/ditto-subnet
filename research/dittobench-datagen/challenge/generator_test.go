@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 func TestGenerateRequestValidate(t *testing.T) {
@@ -208,6 +210,29 @@ func TestExtractArchiveRequiresAnEmptyDirectory(t *testing.T) {
 	}
 	if _, err := ExtractArchive(raw, t.TempDir()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestArchiveRefusesAFileThatIsAlsoADirectory(t *testing.T) {
+	mod, main := "module x\n\ngo 1.23\n", "package main\nfunc main(){}\n"
+	for _, order := range [][2]string{{"gen.go", "gen.go/extra.go"}, {"gen.go/extra.go", "gen.go"}} {
+		raw := rawArchive(t,
+			[]tar.Header{{Name: "go.mod"}, {Name: order[0]}, {Name: order[1]}},
+			[]string{mod, main, main})
+		if _, _, err := InspectArchive(raw); err == nil || !strings.Contains(err.Error(), "is under file") {
+			t.Fatalf("%v: %v", order, err)
+		}
+	}
+}
+
+func TestFingerprintFieldsCannotShiftIntoEachOther(t *testing.T) {
+	a := Case{MemoryCase: protocol.MemoryCase{Question: "q\x00a", ExpectedAnswer: "b"}}
+	b := Case{MemoryCase: protocol.MemoryCase{Question: "q", ExpectedAnswer: "a\x00b"}}
+	if Fingerprint(a) == Fingerprint(b) {
+		t.Fatal("distinct cases share a fingerprint")
+	}
+	if Fingerprint(a) != Fingerprint(a) {
+		t.Fatal("fingerprint is not deterministic")
 	}
 }
 

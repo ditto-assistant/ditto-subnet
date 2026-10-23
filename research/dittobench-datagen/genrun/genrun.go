@@ -458,6 +458,11 @@ func startAndWait(ctx context.Context, cmd *exec.Cmd, onCancel func()) error {
 		return err
 	case <-ctx.Done():
 		onCancel()
+		// The kill above is best effort; an unresponsive CLI must still not
+		// outlive the deadline.
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
 		<-done
 		return ctx.Err()
 	}

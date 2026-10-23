@@ -11,14 +11,14 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-// AllowedAnswerKinds are the answer kinds a v1 pack may use. Each one has a
+// allowedAnswerKinds are the answer kinds a v1 pack may use. Each one has a
 // value the validator can ground in the haystack and a grader path that
 // rejects a blank, abstaining, or echoed answer. Stance, instruction, and
 // conversational kinds (decline, clarify, acknowledge, chitchat, persistence,
 // reversal, absence) are excluded: their gold answer cannot be checked against
 // evidence, so they are the cheapest place to plant ambiguous cases that no
 // agent "solves".
-var AllowedAnswerKinds = map[string]bool{
+var allowedAnswerKinds = map[string]bool{
 	protocol.AnswerValue:       true,
 	protocol.AnswerNumber:      true,
 	protocol.AnswerMoney:       true,
@@ -239,7 +239,7 @@ func validateCase(v *validator, c Case, nWaves int, pairs map[string]seededPair,
 	if kind == "" {
 		kind = protocol.AnswerValue
 	}
-	if !AllowedAnswerKinds[kind] {
+	if !allowedAnswerKinds[kind] {
 		v.add(id, "answer_kind", "answer_kind %q is not allowed in contract v1", c.AnswerKind)
 		return
 	}

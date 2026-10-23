@@ -69,8 +69,9 @@ func PackDir(ctx context.Context, dir string) ([]byte, challenge.ArchiveInfo, er
 
 func hasRequire(gomod []byte) bool {
 	for _, line := range strings.Split(string(gomod), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "require" || strings.HasPrefix(line, "require ") || strings.HasPrefix(line, "require(") {
+		// go.mod separates tokens with any whitespace, tabs included.
+		if fields := strings.Fields(line); len(fields) > 0 &&
+			(fields[0] == "require" || strings.HasPrefix(fields[0], "require(")) {
 			return true
 		}
 	}

@@ -140,6 +140,10 @@ func Decode(raw []byte) (Pack, error) {
 	return p, nil
 }
 
+// ValidHotkey reports whether s has the shape of an SS58 hotkey, the form every
+// pack and generate request binds.
+func ValidHotkey(s string) bool { return hotkeyPattern.MatchString(s) }
+
 // Digest is the hex SHA-256 of exact bytes: a pack's identity (what the
 // determinism check compares) and a source archive's identity (what the miner
 // signs and Platform pins). Hashing the raw bytes, not a re-encoding, keeps it
@@ -161,12 +165,17 @@ func Digest(raw []byte) string {
 // check.
 func Fingerprint(c Case) string {
 	h := sha256.New()
-	h.Write([]byte(grade.Normalize(c.Question)))
-	h.Write([]byte{0})
-	h.Write([]byte(grade.Normalize(c.ExpectedAnswer)))
+	// Each field is length-prefixed, so no field content (an embedded NUL
+	// included) can shift text from one field into the next.
+	field := func(s string) {
+		b := []byte(grade.Normalize(s))
+		fmt.Fprintf(h, "%d:", len(b))
+		h.Write(b)
+	}
+	field(c.Question)
+	field(c.ExpectedAnswer)
 	for _, item := range c.AnswerItems {
-		h.Write([]byte{0})
-		h.Write([]byte(grade.Normalize(item)))
+		field(item)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

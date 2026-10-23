@@ -19,7 +19,9 @@ const ReferenceGeneratorVersion = "1"
 // known-good producer (tests, the CLI's `example` command, and the generator
 // starter kit build on it), not to win: every case is an "update chain" (a
 // fact, a decoy belonging to someone or something else, and a later
-// correction) that current agents mostly solve.
+// correction) that current agents mostly solve. minerHotkey must be an SS58
+// hotkey (ValidHotkey): the pack echoes it, and Validate rejects one that is
+// not.
 func ReferencePack(seed int64, minerHotkey string) Pack {
 	rng := rand.New(rand.NewSource(seed))
 	b := &refBuilder{rng: rng, waves: make([]protocol.SeedRequest, 3)}
