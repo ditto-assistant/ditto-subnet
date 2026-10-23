@@ -723,6 +723,19 @@ def test_answer_regex_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not evaluate(record, {"op": "answer_matches", "value": "(a+)+$"})[0]
 
 
+def test_unusable_session_refuses_probes_until_restarted(tmp_path: Path) -> None:
+    from ditto_screener.probe_review import sandbox
+
+    session = Session(
+        root=str(tmp_path), image="i", artifact_sha256="0" * 64, bench_version=13
+    )
+    session.unusable = True
+    session.save()
+    reloaded = Session.load(str(tmp_path))
+    with pytest.raises(sandbox.SandboxError, match="unusable"):
+        reloaded.probe({"user_input": "q"})
+
+
 def _fixture_archive(path: Path, violations: str) -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:

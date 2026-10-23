@@ -26,18 +26,23 @@ MEMORY_LOCK = threading.Lock()
 
 # The probe sandbox only ever hands out its own gateway (or the battery's
 # deliberately unreachable loopback endpoint); refuse any other destination.
-TOOL_HOSTS = set(
-    os.environ.get("PROBE_FIXTURE_TOOL_HOSTS", "host.docker.internal,127.0.0.1").split(
-        ","
-    )
+TOOL_AUTHORITIES = set(
+    os.environ.get(
+        "PROBE_FIXTURE_TOOL_AUTHORITIES", "host.docker.internal:11435,127.0.0.1:9"
+    ).split(",")
 )
 
 
 def _allowed_tool_endpoint(url):
+    """Only the sandbox gateway's tool route (or the battery's dead endpoint)."""
     if not url:
         return False
     parsed = urllib.parse.urlsplit(url)
-    return parsed.scheme == "http" and parsed.hostname in TOOL_HOSTS
+    return (
+        parsed.scheme == "http"
+        and parsed.netloc in TOOL_AUTHORITIES
+        and parsed.path.startswith("/v1/tools/")
+    )
 
 
 def post(url, payload, timeout=60, *, authorize=False):

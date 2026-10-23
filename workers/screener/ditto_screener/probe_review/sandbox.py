@@ -114,6 +114,7 @@ def _docker(args: list[str], *, timeout: float, stdin: Any = None) -> tuple[int,
 
 
 _ARCHIVE_LABEL = "probe-review.archive-sha256"
+_HELD_LOCKS: set[str] = set()
 
 
 def file_sha256(path: Path) -> str:
@@ -127,12 +128,19 @@ def file_sha256(path: Path) -> str:
 
 @contextlib.contextmanager
 def _session_lock(root: Path) -> Iterator[None]:
+    """Cross-process session lock; re-entrant within this process."""
+    key = str(root.resolve())
+    if key in _HELD_LOCKS:
+        yield
+        return
     root.mkdir(parents=True, exist_ok=True)
     with (root / "probe.lock").open("a") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
+        _HELD_LOCKS.add(key)
         try:
             yield
         finally:
+            _HELD_LOCKS.discard(key)
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
@@ -319,6 +327,8 @@ class Session:
     tool_route: str = field(default_factory=lambda: secrets.token_hex(8))
     started: bool = False
     probe_count: int = 0
+    # Set when an abandoned request could not be cleared; stop and start anew.
+    unusable: bool = False
 
     @property
     def network(self) -> str:
@@ -502,7 +512,9 @@ class Session:
 
     def restart_harness(self, *, health_timeout: float = 300.0) -> None:
         """Fresh process and tmpfs: clears any seeded memory or run state."""
-        _docker(["rm", "-f", self.harness], timeout=60)
+        code, out = _docker(["rm", "-f", self.harness], timeout=60)
+        if code != 0 and "no such container" not in out.casefold():
+            raise SandboxError(f"harness removal failed: {out.strip()[-300:]}")
         self._start_harness(health_timeout)
 
     def stop(self) -> None:
@@ -511,6 +523,10 @@ class Session:
         A failed removal leaves ``started`` set so callers do not mistake
         lingering sandbox resources for a stopped session.
         """
+        with _session_lock(Path(self.root)):
+            self._stop_locked()
+
+    def _stop_locked(self) -> None:
         failures = []
         for name in (self.harness, self.gateway):
             code, out = _docker(["rm", "-f", name], timeout=180)
@@ -523,6 +539,7 @@ class Session:
             self.save()
             raise SandboxError("sandbox cleanup failed: " + "; ".join(failures))
         self.started = False
+        self.unusable = False
         self.save()
 
     # -- probing -------------------------------------------------------------
@@ -626,6 +643,16 @@ class Session:
         probe counter.
         """
         with _session_lock(Path(self.root)):
+            saved_state = Path(self.root) / "session.json"
+            if saved_state.exists():
+                self.unusable = self.unusable or bool(
+                    json.loads(saved_state.read_text()).get("unusable")
+                )
+            if self.unusable:
+                raise SandboxError(
+                    "session is unusable after a failed harness restart; stop and "
+                    "start it again"
+                )
             saved = Path(self.root) / "session.json"
             if saved.exists():
                 self.probe_count = max(
@@ -667,9 +694,12 @@ class Session:
         if status is None:
             # The harness may still be serving the abandoned request; restart
             # it while the lock is held so that request cannot consume the
-            # next probe's script or append to its transcript.
-            with contextlib.suppress(SandboxError):
+            # next probe's script or append to its transcript. If that fails
+            # the old harness may live on, so the session refuses new probes.
+            try:
                 self.restart_harness()
+            except SandboxError:
+                self.unusable = True
         try:
             response: Any = json.loads(body) if body else None
         except (ValueError, UnicodeError):

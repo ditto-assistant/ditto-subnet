@@ -296,15 +296,17 @@ def review(
         and time.monotonic() - started < deadline_seconds
     ):
         remaining = deadline_seconds - (time.monotonic() - started)
+        if remaining <= 0:
+            break
         # A pooled completer is bounded by the review's remaining wall time.
         response: dict[str, Any] | None
         if isinstance(complete, HttpCompleter):
-            response = complete(messages, TOOL_SCHEMAS, timeout=max(1.0, remaining))
+            response = complete(messages, TOOL_SCHEMAS, timeout=remaining)
         else:
             # Any other completer runs on a daemon thread that the loop stops
             # waiting for at the deadline (the thread is abandoned, not killed).
             response = _call_with_deadline(
-                lambda: complete(messages, TOOL_SCHEMAS), max(1.0, remaining)
+                lambda: complete(messages, TOOL_SCHEMAS), remaining
             )
             if response is None:
                 # The abandoned call may still bill; its usage is unknowable,
