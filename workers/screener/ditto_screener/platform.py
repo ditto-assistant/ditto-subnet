@@ -42,6 +42,7 @@ from ditto_screener.heartbeat import (
 )
 from ditto_screener.review_settings import (
     EffectiveReviewSettings,
+    ProbeBatteryObservationRequest,
     ReviewSettingsCache,
     ShadowReviewObservationRequest,
     ShadowReviewObservationResponse,
@@ -498,6 +499,25 @@ class PlatformClient:
         if resp.status_code != 200:
             raise PlatformError(
                 f"shadow review rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return ShadowReviewObservationResponse.model_validate(resp.json())
+
+    async def submit_probe_battery(
+        self, agent_id: UUID, request: ProbeBatteryObservationRequest
+    ) -> ShadowReviewObservationResponse:
+        """Persist report-only probe battery leads without changing outcome."""
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/probe-battery"
+        try:
+            resp = await self._client.post(
+                url,
+                json=request.model_dump(mode="json"),
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"probe battery submission failed: {error}") from error
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"probe battery rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return ShadowReviewObservationResponse.model_validate(resp.json())
 

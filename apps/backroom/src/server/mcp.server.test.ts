@@ -761,8 +761,8 @@ describe('Backroom MCP tools', () => {
     // exact-artifact source handoffs (#3107) measures 206,434 on main.
     // The three whole-policy settings writes now list every field as required
     // (#2979), so an omission cannot overwrite live policy with a default:
-    // measured 206,757. Keep about 0.5 KB of headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(207_250)
+    // measured 206,951. Keep about 0.5 KB of headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(207_450)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

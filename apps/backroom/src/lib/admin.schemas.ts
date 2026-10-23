@@ -339,6 +339,8 @@ const screenerReviewSettingsBaseSchema = z.object({
   fanout_shadow_daily_cost_usd: z.number().positive().max(100).default(20),
   fanout_shadow_global_concurrency: z.literal(1).default(1),
   fanout_shadow_reserved_targon_slots: z.number().int().min(1).max(4).default(1),
+  probe_battery_mode: z.enum(['off', 'shadow']).default('off'),
+  probe_battery_timeout_seconds: z.number().int().min(30).max(600).default(120),
   max_input_tokens: z.number().int().min(1).max(5_000_000),
   max_output_tokens: z.number().int().min(1).max(1_000_000),
   max_completion_tokens: z.number().int().min(1).max(128_000),
@@ -456,12 +458,29 @@ export const shadowReviewObservationSchema = z.object({
   created_at: z.string(),
 })
 
+export const probeBatteryObservationSchema = z.object({
+  attempt_id: z.string(),
+  agent_id: z.string(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  settings_revision: z.number().int().nonnegative(),
+  settings_scope: z.string(),
+  status: z.enum(['complete', 'calibration_failed', 'timeout', 'error']),
+  encoding: z.string().nullable(),
+  seed_first: z.boolean(),
+  items_run: z.number().int().nonnegative(),
+  probe_count: z.number().int().nonnegative(),
+  leads: z.array(z.object({ item_id: z.string(), invariant: z.string() })),
+  battery_ms: z.number().int().nonnegative(),
+  created_at: z.string(),
+})
+
 export const screenerReviewControlSchema = z.object({
   current: z.array(screenerReviewRevisionSchema),
   history: z.array(screenerReviewRevisionSchema),
   known_instances: z.array(z.string()),
   applied_instances: z.array(appliedScreenerReviewSettingsSchema),
   shadow_observations: z.array(shadowReviewObservationSchema),
+  probe_battery_observations: z.array(probeBatteryObservationSchema).default([]),
   policy_manifests: z.array(screenerPolicyManifestSchema).default([]),
 })
 

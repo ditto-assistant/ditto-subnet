@@ -24,6 +24,7 @@ from ditto_screener.probe_review.checks import (
     as_dict,
     evaluate_all,
     executions,
+    predicate_problems,
     served_answer,
 )
 from ditto_screener.probe_review.sandbox import ProbeRecord, Session
@@ -605,6 +606,20 @@ def validate_verdict(verdict: dict[str, Any]) -> list[str]:
                 problems.append(f"finding {index} lacks {key}")
         if not re.fullmatch(r"I[1-8](/I[1-8])*", str(finding.get("invariant", ""))):
             problems.append(f"finding {index} invariant must be I1-I8")
+        for key in ("violation_checks", "control_checks"):
+            if key not in finding:
+                continue
+            listed = finding[key]
+            if not isinstance(listed, list):
+                # violation_checks already reports its own shape problem above.
+                if key == "control_checks":
+                    problems.append(f"finding {index} control_checks must be a list")
+                continue
+            for position, check in enumerate(listed):
+                problems.extend(
+                    f"finding {index} {key}[{position}]: {problem}"
+                    for problem in predicate_problems(check)
+                )
     return problems
 
 
@@ -761,6 +776,11 @@ def replay_verdict(
                 "stimulus_sha256": original.digest(),
                 "verified": held and control_ok,
                 "observations": [[r["observed"] for r in obs] for obs in observations],
+                # A failed control is otherwise invisible in the report.
+                "control_observations": [
+                    [r["observed"] for r in obs] for obs in control_obs
+                ],
+                "control_held": control_ok,
             }
         )
     verified = verdict["outcome"] == "violation" and any(r["verified"] for r in results)

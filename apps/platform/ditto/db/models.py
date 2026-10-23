@@ -7023,6 +7023,61 @@ class ScreenerShadowReview(Base):
     )
 
 
+class ScreenerProbeBattery(Base):
+    """Report-only zero-token probe battery leads bound to one live attempt."""
+
+    __tablename__ = "screener_probe_batteries"
+
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    encoding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seed_first: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    items_run: Mapped[int] = mapped_column(Integer, nullable=False)
+    probe_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    leads: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    battery_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+            name="screener_probe_batteries_attempt_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="screener_probe_batteries_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["settings_revision"],
+            ["screener_review_settings_revisions.revision"],
+            ondelete="RESTRICT",
+            name="screener_probe_batteries_settings_revision_fkey",
+        ),
+        CheckConstraint(
+            "length(artifact_sha256) = 64",
+            name="screener_probe_batteries_artifact_sha_check",
+        ),
+        CheckConstraint(
+            "status IN ('complete', 'calibration_failed', 'timeout', 'error')",
+            name="screener_probe_batteries_status_check",
+        ),
+        Index("screener_probe_batteries_created_idx", "created_at"),
+        Index("screener_probe_batteries_agent_idx", "agent_id", "created_at"),
+    )
+
+
 class ScreenerFanoutShadowReview(Base):
     """Durable, non-authoritative two-stage review and comparison record."""
 

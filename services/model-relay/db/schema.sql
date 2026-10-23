@@ -5234,6 +5234,31 @@ ALTER SEQUENCE public.screener_policy_activations_revision_seq OWNED BY public.s
 
 
 --
+-- Name: screener_probe_batteries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_probe_batteries (
+    attempt_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    screener_hotkey text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    settings_revision integer NOT NULL,
+    settings_scope text NOT NULL,
+    settings_checksum text NOT NULL,
+    status text NOT NULL,
+    encoding text,
+    seed_first boolean NOT NULL,
+    items_run integer NOT NULL,
+    probe_count integer NOT NULL,
+    leads jsonb NOT NULL,
+    battery_ms integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screener_probe_batteries_screener_probe_batteries_ar_68c0 CHECK ((length(artifact_sha256) = 64)),
+    CONSTRAINT ck_screener_probe_batteries_screener_probe_batteries_st_2d72 CHECK ((status = ANY (ARRAY['complete'::text, 'calibration_failed'::text, 'timeout'::text, 'error'::text])))
+);
+
+
+--
 -- Name: screener_provider_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9064,6 +9089,14 @@ ALTER TABLE ONLY public.screener_policy_activations
 
 
 --
+-- Name: screener_probe_batteries pk_screener_probe_batteries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_probe_batteries
+    ADD CONSTRAINT pk_screener_probe_batteries PRIMARY KEY (attempt_id);
+
+
+--
 -- Name: screener_provider_settings_revisions pk_screener_provider_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11249,6 +11282,20 @@ CREATE UNIQUE INDEX screener_node_channel_settings_node_revision_idx ON public.s
 --
 
 CREATE INDEX screener_nodes_provider_status_idx ON public.screener_nodes USING btree (provider, status);
+
+
+--
+-- Name: screener_probe_batteries_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screener_probe_batteries_agent_idx ON public.screener_probe_batteries USING btree (agent_id, created_at);
+
+
+--
+-- Name: screener_probe_batteries_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screener_probe_batteries_created_idx ON public.screener_probe_batteries USING btree (created_at);
 
 
 --
@@ -14209,6 +14256,30 @@ ALTER TABLE ONLY public.screener_l2_report_canaries
 
 ALTER TABLE ONLY public.screener_node_channel_settings_revisions
     ADD CONSTRAINT screener_node_channel_settings_node_id_fkey FOREIGN KEY (node_id) REFERENCES public.screener_nodes(node_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screener_probe_batteries screener_probe_batteries_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_probe_batteries
+    ADD CONSTRAINT screener_probe_batteries_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screener_probe_batteries screener_probe_batteries_attempt_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_probe_batteries
+    ADD CONSTRAINT screener_probe_batteries_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screener_probe_batteries screener_probe_batteries_settings_revision_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_probe_batteries
+    ADD CONSTRAINT screener_probe_batteries_settings_revision_fkey FOREIGN KEY (settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
 
 
 --

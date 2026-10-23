@@ -52,6 +52,27 @@ _COMPARISONS: dict[str, Callable[[float, float], bool]] = {
     "<": lambda a, b: a < b,
     "!=": lambda a, b: a != b,
 }
+# Word spellings a reviewer reaches for; without them a verdict written with
+# ``"cmp": "eq"`` fails every predicate silently and a proven finding is lost.
+_COMPARISON_ALIASES = {
+    "eq": "==",
+    "ne": "!=",
+    "gt": ">",
+    "ge": ">=",
+    "gte": ">=",
+    "lt": "<",
+    "le": "<=",
+    "lte": "<=",
+    "=": "==",
+}
+
+
+def comparison(op: Any) -> str | None:
+    """The canonical comparison operator for ``op``, or None when unknown."""
+    if not isinstance(op, str):
+        return None
+    op = _COMPARISON_ALIASES.get(op.strip().lower(), op.strip())
+    return op if op in _COMPARISONS else None
 
 
 def _compare(actual: Any, op: Any, expected: Any) -> bool:
@@ -65,11 +86,10 @@ def _compare(actual: Any, op: Any, expected: Any) -> bool:
         # Huge ints are exact and finite; isfinite would overflow on them.
         or (not isinstance(actual, int) and not math.isfinite(actual))
         or (not isinstance(expected, int) and not math.isfinite(expected))
-        or not isinstance(op, str)
     ):
         return False
-    compare = _COMPARISONS.get(op)
-    return compare(actual, expected) if compare is not None else False
+    canonical = comparison(op)
+    return _COMPARISONS[canonical](actual, expected) if canonical else False
 
 
 def _parse_args(value: Any) -> Any:
@@ -231,6 +251,82 @@ def _request_matches(view: dict[str, Any], spec: Mapping[str, Any]) -> bool:
     if "offers_tool" in spec and spec["offers_tool"] not in view["tool_names"]:
         return False
     return not ("lacks_tool" in spec and spec["lacks_tool"] in view["tool_names"])
+
+
+PREDICATES = frozenset(
+    {
+        "http_ok",
+        "answer_equals",
+        "answer_not_equals",
+        "answer_contains",
+        "answer_lacks",
+        "answer_matches",
+        "final_text_contains",
+        "final_text_lacks",
+        "field_equals",
+        "model_calls",
+        "tool_executed",
+        "tool_not_executed",
+        "tool_execution_count",
+        "reported_not_executed",
+        "executed_not_reported",
+        "any_model_request",
+        "no_model_request",
+        "last_model_request",
+        "model_requests_matching",
+        "model_request_after_tool",
+    }
+)
+_COUNTED = {"model_calls", "tool_execution_count", "model_requests_matching"}
+_WHERE = {
+    "any_model_request",
+    "no_model_request",
+    "last_model_request",
+    "model_requests_matching",
+}
+
+
+def _usable_count(n: Any) -> bool:
+    """A threshold ``_compare`` can match: a non-bool int or finite float."""
+    if isinstance(n, bool) or not isinstance(n, (int, float)):
+        return False
+    return isinstance(n, int) or math.isfinite(n)
+
+
+def predicate_problems(check: Any) -> list[str]:
+    """Why a predicate can never be evaluated as written (empty when usable).
+
+    Evaluation treats a malformed predicate as failing, which is right for
+    replay but loses a proven finding to a typo; ``verdict`` reports these so
+    the reviewer can fix the file.
+    """
+    if not isinstance(check, Mapping):
+        return ["predicate must be an object"]
+    op = check.get("op")
+    if not isinstance(op, str) or op not in PREDICATES:
+        return [f"unknown predicate {op!r}"]
+    problems = []
+    if op in _COUNTED:
+        if comparison(check.get("cmp")) is None:
+            problems.append(
+                f"{op} cmp {check.get('cmp')!r} is not one of == != > >= < <="
+            )
+        if not _usable_count(check.get("n")):
+            problems.append(f"{op} n must be a finite number")
+    if op in _WHERE:
+        where = check.get("where")
+        if where is not None and not isinstance(where, Mapping):
+            problems.append(f"{op} where must be an object")
+        elif isinstance(where, Mapping) and "tools_count" in where:
+            pair = where["tools_count"]
+            if (
+                not isinstance(pair, (list, tuple))
+                or len(pair) != 2
+                or comparison(pair[0]) is None
+                or not _usable_count(pair[1])
+            ):
+                problems.append(f"{op} where.tools_count must be [cmp, n]")
+    return problems
 
 
 def evaluate(record: ProbeRecord, check: Check) -> tuple[bool, str]:

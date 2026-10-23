@@ -39,6 +39,10 @@ FANOUT_SHADOW_SETTINGS_FIELDS = (
     "fanout_shadow_global_concurrency",
     "fanout_shadow_reserved_targon_slots",
 )
+PROBE_BATTERY_SETTINGS_FIELDS = (
+    "probe_battery_mode",
+    "probe_battery_timeout_seconds",
+)
 PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
 # The reviewer posture (stronger L2/L3 models and budgets) a top-five integrity
 # double-check deep pass is pinned to. No worker heartbeats under this scope, so
@@ -171,6 +175,11 @@ class ScreenerReviewSettings(BaseModel):
     fanout_shadow_daily_cost_usd: Annotated[float, Field(gt=0, le=100)] = 20.0
     fanout_shadow_global_concurrency: Literal[1] = 1
     fanout_shadow_reserved_targon_slots: Annotated[int, Field(ge=1, le=4)] = 1
+    # Zero-token probe battery run against the gate's built image after the
+    # signed decision. ``shadow`` only records bounded observations; it can
+    # never change an outcome. ``off`` is the code and rolling-deploy default.
+    probe_battery_mode: Literal["off", "shadow"] = "off"
+    probe_battery_timeout_seconds: Annotated[int, Field(ge=30, le=600)] = 120
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
     # Send every L1 result through the L2/L3 models, even a certified low-risk
     # clear. Workers OR this with their ``SCREENER_L2_ALWAYS_ESCALATE`` env, so
@@ -242,6 +251,10 @@ def review_settings_checksum(settings: ScreenerReviewSettings) -> str:
     if settings.adjudicator_max_completion_tokens is None:
         # Keep the checksums of already-persisted revisions unchanged.
         value.pop("adjudicator_max_completion_tokens")
+    if settings.probe_battery_mode == "off":
+        # Workers that predate the battery drop both keys before hashing.
+        for field in PROBE_BATTERY_SETTINGS_FIELDS:
+            value.pop(field)
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
@@ -323,6 +336,31 @@ class AdminShadowReviewObservation(BaseModel):
     created_at: datetime
 
 
+class AdminProbeBatteryLead(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    item_id: str
+    invariant: str
+
+
+class AdminProbeBatteryObservation(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    attempt_id: UUID
+    agent_id: UUID
+    artifact_sha256: str
+    settings_revision: int
+    settings_scope: str
+    status: Literal["complete", "calibration_failed", "timeout", "error"]
+    encoding: str | None
+    seed_first: bool
+    items_run: int
+    probe_count: int
+    leads: list[AdminProbeBatteryLead]
+    battery_ms: int
+    created_at: datetime
+
+
 class ScreenerPolicyManifestView(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -345,6 +383,7 @@ class AdminScreenerReviewSettingsResponse(BaseModel):
     known_instances: list[str]
     applied_instances: list[AppliedScreenerReviewSettings]
     shadow_observations: list[AdminShadowReviewObservation]
+    probe_battery_observations: list[AdminProbeBatteryObservation] = []
     policy_manifests: list[ScreenerPolicyManifestView]
 
 

@@ -96,6 +96,7 @@ from ditto.api_models import (
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import (
+    ProbeBatteryObservationRequest,
     ScreeningVerificationReceiptRequest,
     ShadowReviewObservationRequest,
     ShadowReviewObservationResponse,
@@ -192,6 +193,7 @@ from ditto.db.models import (
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
     ScreenerPolicyActivation,
+    ScreenerProbeBattery,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
     ScreeningAttempt,
@@ -2493,6 +2495,93 @@ async def review_settings_revision(
         settings=ScreenerReviewSettings.model_validate(row.settings),
         checksum=row.checksum,
     )
+
+
+@router.post(
+    "/agent/{agent_id}/probe-battery",
+    response_model=ShadowReviewObservationResponse,
+)
+async def submit_probe_battery(
+    agent_id: UUID,
+    payload: ProbeBatteryObservationRequest,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+) -> ShadowReviewObservationResponse:
+    """Persist report-only probe battery leads without mutating submission state.
+
+    A lead is an unverified black-box observation from dictated model replies;
+    it never participates in the signed decision or any queue transition.
+    """
+    async with session.begin():
+        attempt = await get_screening_attempt(
+            session, attempt_id=payload.attempt_id, for_update=True
+        )
+        if (
+            attempt is None
+            or attempt.agent_id != agent_id
+            or attempt.screener_hotkey != screener_hotkey
+            or attempt.status != "running"
+            or attempt.build_only
+        ):
+            raise AgentNotScreenableError(
+                "probe battery does not match an active screening attempt"
+            )
+        if (
+            attempt.review_settings_revision != payload.settings_revision
+            or attempt.review_settings_scope != payload.settings_scope
+            or attempt.review_settings_checksum != payload.settings_checksum
+        ):
+            raise AgentNotScreenableError(
+                "probe battery settings differ from the attempt's claimed revision"
+            )
+        deadline = attempt.deadline
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if datetime.now(UTC) > deadline:
+            raise AgentNotScreenableError("probe battery arrived after lease expiry")
+        agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
+        if agent is None:
+            raise AgentNotFoundError(f"no agent with id={agent_id}")
+        if agent.sha256.lower() != payload.artifact_sha256:
+            raise AgentNotScreenableError(
+                "probe battery artifact does not match the claimed submission"
+            )
+        settings = await session.get(
+            ScreenerReviewSettingsRevision, payload.settings_revision
+        )
+        if (
+            settings is None
+            or settings.scope != payload.settings_scope
+            or settings.checksum != payload.settings_checksum
+            or settings.settings.get("probe_battery_mode") != "shadow"
+        ):
+            raise AgentNotScreenableError(
+                "probe battery does not match a revision that enables it"
+            )
+        values = {
+            "agent_id": agent_id,
+            "screener_hotkey": screener_hotkey,
+            "artifact_sha256": payload.artifact_sha256,
+            "settings_revision": payload.settings_revision,
+            "settings_scope": payload.settings_scope,
+            "settings_checksum": payload.settings_checksum,
+            "status": payload.status,
+            "encoding": payload.encoding,
+            "seed_first": payload.seed_first,
+            "items_run": payload.items_run,
+            "probe_count": payload.probe_count,
+            "leads": [lead.model_dump(mode="json") for lead in payload.leads],
+            "battery_ms": payload.battery_ms,
+        }
+        existing = await session.get(ScreenerProbeBattery, payload.attempt_id)
+        if existing is not None:
+            if any(getattr(existing, key) != value for key, value in values.items()):
+                raise AgentNotScreenableError(
+                    "probe battery conflicts with the stored attempt observation"
+                )
+            return ShadowReviewObservationResponse(accepted=True)
+        session.add(ScreenerProbeBattery(attempt_id=payload.attempt_id, **values))
+    return ShadowReviewObservationResponse(accepted=True)
 
 
 @router.post(
