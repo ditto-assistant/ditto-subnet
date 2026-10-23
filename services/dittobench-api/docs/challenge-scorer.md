@@ -53,7 +53,10 @@ go run ./cmd/challenge-scorer run -dir ../../miners/dittobench-generator-starter
   -generator-owner me -out run.json
 ```
 
-`run` prints the run score with the default parameters. It writes the full
+Generators build and run in the Docker sandbox by default; `-sandbox local`
+runs the generator's code directly on your machine, so use it only for your own
+source. `run` rejects two `-agent` flags with the same id. It prints the run
+score with the default parameters. It writes the full
 verdict file: a `challenge.RunInput`, the params, and the `challenge.RunScore`.
 Use `-archive` to rehearse an exact upload, or `-pack` to run a single pack file
 instead of a generator.
@@ -64,6 +67,10 @@ instead of a generator.
 DITTO_GENERATOR_SCORER_TOKEN=... go run ./cmd/challenge-scorer serve \
   -platform https://platform.example -harness-map panel-harnesses.json
 ```
+
+`-platform` must be an `https://` URL, because the scorer token is a bearer
+credential. Use `-insecure-platform` only for a local stack. `-once` processes
+at most one item and exits nonzero if that cycle failed.
 
 The `serve` loop works through Platform one run at a time:
 

@@ -2,7 +2,8 @@
 // builds a generator's source in a no-network sandbox, runs it on seeds, and
 // runs every resulting challenge pack against a panel of agent harnesses.
 //
-// Local rehearsal (a generator miner, or an operator spot-check):
+// Local rehearsal (a generator miner, or an operator spot-check). Generators
+// build and run in the Docker sandbox unless -sandbox local opts out:
 //
 //	challenge-scorer run -dir ./my-generator -hotkey 5Grw... -seeds 2 -cases 16 \
 //	    -agent a1=http://127.0.0.1:7070,owner=me \
@@ -144,7 +145,7 @@ func runLocal(ctx context.Context, args []string) error {
 	seeds := fs.Int("seeds", 2, "seeds to generate (1..8)")
 	firstSeed := fs.Int64("seed", 1, "first rehearsal seed (challenge.SeedFromInt64)")
 	cases := fs.Int("cases", 16, "cases per pack")
-	sandbox := fs.String("sandbox", "local", "local or docker")
+	sandbox := fs.String("sandbox", "docker", "docker (isolated) or local (runs generator code on this host)")
 	generatorOwner := fs.String("generator-owner", "", "owner key of the generator; its agents are excluded when scoring")
 	out := fs.String("out", "", "write the verdict file here (default: stdout)")
 	concurrency := fs.Int("concurrency", challengerun.DefaultConcurrency, "concurrent cases per wave")
@@ -166,6 +167,9 @@ func runLocal(ctx context.Context, args []string) error {
 	urls := map[string]string{}
 	for i, a := range agents {
 		slots[i] = panelSlot{AgentID: a.ID, OwnerKey: a.Owner, Champion: a.Champion}
+		if _, dup := urls[a.ID]; dup {
+			return fmt.Errorf("run: duplicate -agent id %q", a.ID)
+		}
 		urls[a.ID] = a.URL
 	}
 
@@ -417,10 +421,17 @@ func serve(ctx context.Context, args []string) error {
 	allowPrivate := fs.Bool("allow-private-harness", false, "allow loopback/private harness URLs (local stacks)")
 	unsandboxed := fs.Bool("unsafe-local-sandbox", false, "build and run generators on the host with no isolation (local stacks only)")
 	concurrency := fs.Int("concurrency", challengerun.DefaultConcurrency, "concurrent cases per wave")
+	insecure := fs.Bool("insecure-platform", false, "allow an http:// Platform URL (local stacks only; the token travels in clear text)")
 	_ = fs.Parse(args)
 	token := strings.TrimSpace(os.Getenv(tokenEnv))
 	if *platform == "" || *harnessMap == "" || token == "" {
 		return fmt.Errorf("serve: -platform, -harness-map, and %s are required", tokenEnv)
+	}
+	if *interval <= 0 {
+		return errors.New("serve: -interval must be positive")
+	}
+	if !strings.HasPrefix(strings.ToLower(*platform), "https://") && !*insecure {
+		return errors.New("serve: -platform must be an https URL (the scorer token is a bearer credential); pass -insecure-platform only for a local stack")
 	}
 	runner.Configure(*allowPrivate)
 	var sb genrun.Sandbox = genrun.Docker{}
@@ -442,8 +453,12 @@ func serve(ctx context.Context, args []string) error {
 		if err != nil {
 			log.Printf("scorer cycle failed: %v", err)
 		}
-		if *once || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return nil
+		}
+		if *once {
+			// One-shot automation must see a failed cycle as a failure.
+			return err
 		}
 		if processed && err == nil {
 			continue
