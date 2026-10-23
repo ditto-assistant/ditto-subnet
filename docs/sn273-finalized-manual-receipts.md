@@ -34,6 +34,13 @@ Absent or altered movement proofs keep the fence closed. Missing epoch
 snapshots are past and never reappear, so this is the only path that lets an
 aggregate transfer that spans them stop blocking new transfers.
 
+The movement proof anchors wallet identity to the request's first source epoch
+snapshot. When that epoch is itself in a gap (request 4f31375b, source epoch
+25588, 2026-10-22), it anchors instead to the newest snapshot pinned at or
+before the settlement block, at most 720 blocks earlier, which must be
+enforcing and sign the request's exact collector policy digest. The loop logs
+each refused movement check with its fixed reason.
+
 Full ingress still requires every immutable source epoch, independent finalized
 source events, historical signed allocations and cumulative consumption bounds.
 It now checks missing epochs before archive reads. Successful full ingress

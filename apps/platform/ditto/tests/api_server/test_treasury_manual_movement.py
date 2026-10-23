@@ -451,3 +451,60 @@ async def test_verified_wallet_movement_releases_delivery_fence_not_source_audit
             view["blocked_reason"]
             == "A previous transfer or its public receipt is still pending"
         )
+
+
+async def settle_in_gap(maker, request_id, **settlement):
+    async with maker() as session, session.begin():
+        row = await session.get(TreasuryManualTransfer, request_id)
+        report = ManualReport.model_validate(row.report)
+        updated = report.settlement.model_copy(update={"epoch_index": 5, **settlement})
+        row.report = report.model_copy(update={"settlement": updated}).model_dump()
+
+
+async def test_source_epoch_gap_anchors_to_ledger_pinned_at_settlement(
+    app, client, session_maker
+):
+    """Never-reconstructed source snapshots must not strand delivery proof."""
+    request_id, _ = await seed_movement(app, session_maker)
+    await settle_in_gap(session_maker, request_id)
+    async with session_maker() as session, session.begin():
+        row = await session.get(TreasuryManualTransfer, request_id)
+        await publish_finalized_movement(session, app.state.chain, row)
+        assert row.status == "audit_pending"
+        assert row.receipt["source_attribution"] == "incomplete"
+    items = (
+        await client.get("/api/v1/public/treasury-activity/manual-movements")
+    ).json()["items"]
+    assert [item["deposit_amount_atomic"] for item in items] == ["40"]
+
+
+@pytest.mark.parametrize("fault", ["stale", "policy"])
+async def test_settlement_anchor_must_be_recent_and_bind_request_policy(
+    app, client, session_maker, monkeypatch, fault
+):
+    from ditto.api_server import treasury_manual_movement as module
+
+    request_id, _ = await seed_movement(app, session_maker)
+    await settle_in_gap(session_maker, request_id)
+    async with session_maker() as session, session.begin():
+        row = await session.get(TreasuryManualTransfer, request_id)
+        if fault == "policy":
+            row.envelope = {**row.envelope, "collector_policy_digest": "0" * 64}
+            envelope = ManualEnvelope.model_validate(row.envelope)
+            row.digest = envelope.digest
+            row.report = {
+                **row.report,
+                "collector_policy_digest": "0" * 64,
+                "request_digest": envelope.digest,
+            }
+    if fault == "stale":
+        # Pin at block 101, settlement at 120: a 10-block window is stale.
+        monkeypatch.setattr(module, "SETTLEMENT_ANCHOR_MAX_LAG", 10)
+    error = ReceiptHistoryUnavailable if fault == "stale" else ValueError
+    with pytest.raises(error):
+        async with session_maker() as session, session.begin():
+            row = await session.get(TreasuryManualTransfer, request_id)
+            await publish_finalized_movement(session, app.state.chain, row)
+    assert (
+        await client.get("/api/v1/public/treasury-activity/manual-movements")
+    ).json() == {"items": []}

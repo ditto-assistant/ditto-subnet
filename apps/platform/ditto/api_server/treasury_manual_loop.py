@@ -25,6 +25,18 @@ from ditto_screening_protocol.treasury_pubsub import TreasuryMailbox
 logger = logging.getLogger(__name__)
 
 
+def log_movement_refusal(row, error):
+    # Our refusal reasons are fixed strings; a chain error may echo an
+    # endpoint, so only its type is logged.
+    detail = "" if isinstance(error, ChainError) else f": {error}"
+    logger.warning(
+        "manual wallet movement unverified for %s (%s%s)",
+        row.request_id,
+        type(error).__name__,
+        detail,
+    )
+
+
 class TreasuryManualLoop:
     def __init__(self, app_state, *, mailbox=None):
         self.state = app_state
@@ -134,10 +146,10 @@ class TreasuryManualLoop:
                 try:
                     async with session.begin_nested():
                         await publish_finalized_movement(session, self.state.chain, row)
-                except (ChainError, ReceiptHistoryUnavailable, ValueError):
+                except (ChainError, ReceiptHistoryUnavailable, ValueError) as error:
                     # Failed/contradictory reads cannot publish or erase the
                     # existing source-audit refusal. A later read may recover.
-                    pass
+                    log_movement_refusal(row, error)
         async with self.state.session_maker() as session, session.begin():
             row = await session.scalar(
                 select(Transfer)
@@ -160,10 +172,10 @@ class TreasuryManualLoop:
                 try:
                     async with session.begin_nested():
                         await publish_finalized_movement(session, self.state.chain, row)
-                except (ChainError, ReceiptHistoryUnavailable, ValueError):
+                except (ChainError, ReceiptHistoryUnavailable, ValueError) as error:
                     # The full ingress may still succeed for legacy requests.
                     # Neither an unavailable nor contradictory read is a receipt.
-                    pass
+                    log_movement_refusal(row, error)
                 try:
                     # A failed chain read rolls back only this attempt. Nothing
                     # invokes custody or resends funds to repair publication.
