@@ -389,6 +389,17 @@ describe('Backroom MCP tools', () => {
         'get_generator_board',
         'rescore_generator_submission',
         'reject_generator_submission',
+        'list_generator_rounds',
+        'get_generator_round',
+        'preview_generator_round',
+        'get_generator_round_loop',
+        'tick_generator_rounds',
+        'get_generator_round_dataset',
+        'void_generator_round',
+        'close_generator_round',
+        'republish_generator_round_commitment',
+        'release_generator_round_lease',
+        'register_default_generator',
         'get_ath_review',
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
@@ -727,7 +738,11 @@ describe('Backroom MCP tools', () => {
     // publish compact uuid inputs and one-line summaries; the whole-object
     // settings write carries its 15 bounded fields (~1.6 KB). On top of the
     // retirement above, measured 203,881 bytes; keep about 0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(204_400)
+    // Eleven generator-round tools (five reads, six guarded writes; the
+    // round dataset download is artifact-scoped) publish compact string
+    // inputs and one-line summaries with procedures in tool help. Measured
+    // 210,748 bytes; keep about 0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(211_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

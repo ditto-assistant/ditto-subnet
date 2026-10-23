@@ -1,11 +1,13 @@
 import { z } from 'zod'
 import { auditReasonSchema } from './admin.schemas'
 
-// Shadow DittoBench generator competition (ditto-subnet #3094-#3097). Miners
-// submit CPU-only Go generator source; Platform runs each generator on secret
-// seeds against a top-agent panel and publishes a weight-zero ledger. These
-// schemas mirror apps/platform/ditto/api_models/generator.py. Reads strip
-// unknown fields; Platform stays the authority on every bound and refusal.
+// Shadow DittoBench generator competition. Miners submit CPU-only Go generator
+// source; the scorer qualifies it (build, valid packs on secret seeds,
+// determinism, probe copy check), and qualified generators compete in
+// chain-epoch rounds whose cases validators run against the top agents. These
+// schemas mirror apps/platform/ditto/api_models/generator.py and
+// generator_rounds.py. Reads strip unknown fields; Platform stays the
+// authority on every bound and refusal.
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/)
 const uuid = z.string().uuid()
@@ -14,6 +16,17 @@ const ss58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{47,48}$/)
 export const GENERATOR_SETTINGS_SCOPE = '*'
 export const PROBE_ROTATION_CONFIRMATION = 'ROTATE GENERATOR PROBE SEED'
 export const REJECT_GENERATOR_CONFIRMATION = 'REJECT GENERATOR SUBMISSION'
+export const REGISTER_DEFAULT_GENERATOR_CONFIRMATION = 'REGISTER DEFAULT GENERATOR'
+export const REPUBLISH_COMMITMENT_CONFIRMATION = 'REPUBLISH GENERATOR ROUND COMMITMENT'
+export const RELEASE_ROUND_LEASE_CONFIRMATION = 'RELEASE GENERATOR ROUND LEASE'
+
+export function voidRoundConfirmation(roundIndex: number) {
+  return `VOID GENERATOR ROUND ${roundIndex}`
+}
+
+export function closeRoundConfirmation(roundIndex: number) {
+  return `CLOSE GENERATOR ROUND ${roundIndex}`
+}
 
 export function generatorSettingsConfirmation(mode: string) {
   return `APPLY GENERATOR COMPETITION ${mode.toUpperCase()}`
@@ -29,13 +42,19 @@ export const generatorCompetitionSettingsSchema = z.object({
   champion_bonus: z.number().min(0).max(2),
   seeds_per_run: z.number().int().min(1).max(4),
   cases_per_seed: z.number().int().min(8).max(32),
-  rescore_interval_hours: z.number().int().min(6).max(168),
   window_days: z.number().int().min(1).max(30),
   copy_overlap_threshold: z.number().min(0.2).max(1),
   upload_cooldown_seconds: z.number().int().min(60).max(86_400),
   lease_ttl_seconds: z.number().int().min(600).max(21_600),
   max_attempts: z.number().int().min(1).max(20),
   retry_backoff_seconds: z.number().int().min(60).max(86_400),
+  epochs_per_round: z.number().int().min(1).max(48),
+  counted_columns: z.number().int().min(1).max(6),
+  challenger_columns: z.number().int().min(0).max(2),
+  reference_agent_ids: z.array(uuid).max(3),
+  privacy_window_rounds: z.number().int().min(1).max(180),
+  onchain_commitment: z.boolean(),
+  validator_rounds_enabled: z.boolean(),
 })
 
 export const generatorSettingsRevisionSchema = z.object({
@@ -88,7 +107,15 @@ const caseCountsSchema = z.object({
   duplicate: z.number().int(),
 })
 
-const runStatus = z.enum(['leased', 'scored', 'invalid', 'insufficient_panel', 'copy', 'abandoned'])
+const runStatus = z.enum([
+  'leased',
+  'scored',
+  'qualified',
+  'invalid',
+  'insufficient_panel',
+  'copy',
+  'abandoned',
+])
 const submissionStatus = z.enum(['active', 'superseded', 'rejected'])
 
 const runSummarySchema = z.object({
@@ -116,6 +143,10 @@ const submissionSummarySchema = z.object({
   next_run_at: z.string().nullable(),
   submitted_at: z.string(),
   latest_run: runSummarySchema.nullable(),
+  qualified_at: z.string().nullable().optional(),
+  public_default: z.boolean().optional(),
+  round_score: z.number().nullable().optional(),
+  round_scored_index: z.number().int().nullable().optional(),
 })
 
 export const generatorSubmissionListSchema = z.object({
@@ -192,10 +223,10 @@ export const generatorProbeSchema = z.object({
 export const generatorPromotionCandidatesSchema = z.object({
   candidates: z.array(
     z.object({
-      run_id: uuid,
+      round_index: z.number().int(),
+      column_id: z.string(),
       submission_id: uuid,
       miner_hotkey: z.string(),
-      seed_index: z.number().int(),
       case_id: z.string(),
       fingerprint: z.string(),
       mean_score: z.number(),
@@ -212,7 +243,7 @@ export const generatorBoardSchema = z.object({
     z.object({
       miner_hotkey: z.string(),
       submission_id: uuid,
-      run_id: uuid,
+      round_index: z.number().int(),
       weight_eligible: z.boolean(),
       score: z.number(),
       discriminating_cases: z.number().int(),
@@ -255,4 +286,254 @@ export const rejectGeneratorInputSchema = z.object({
   expectedStatus: z.enum(['active', 'superseded']),
   reason: auditReasonSchema(8),
   confirmation: z.literal(REJECT_GENERATOR_CONFIRMATION),
+})
+
+// --- rounds ----------------------------------------------------------------
+
+const roundStatus = z.enum(['committed', 'generating', 'running', 'scoring', 'scored', 'void'])
+
+const roundScheduleSchema = z.object({
+  mode: z.string(),
+  epochs_per_round: z.number().int(),
+  subnet_epoch_index: z.number().int().nullable().optional(),
+  current_round: z.number().int().nullable().optional(),
+  next_round_epoch: z.number().int().nullable().optional(),
+  tempo: z.number().int().nullable().optional(),
+  block: z.number().int().nullable().optional(),
+  observed_at: z.string().nullable().optional(),
+  last_error: z.string().nullable().optional(),
+})
+
+const roundSummarySchema = z.object({
+  round_index: z.number().int(),
+  status: roundStatus,
+  epochs_per_round: z.number().int(),
+  commitment: z.string(),
+  commitment_publication: z.enum(['pending', 'published', 'failed', 'disabled']),
+  committed_at: z.string(),
+  open_epoch_index: z.number().int().nullable().optional(),
+  open_block: z.number().int().nullable().optional(),
+  open_block_hash: z.string().nullable().optional(),
+  opened_at: z.string().nullable().optional(),
+  column_count: z.number().int(),
+  panel_size: z.number().int(),
+  results: z.number().int(),
+  closed_at: z.string().nullable().optional(),
+  scored_at: z.string().nullable().optional(),
+  void_reason: z.string().nullable().optional(),
+  revealed_at: z.string().nullable().optional(),
+  secret_hex: z.string().nullable().optional(),
+  seed: z.string().nullable().optional(),
+  dataset_sha256: z.string().nullable().optional(),
+})
+
+export const generatorRoundListSchema = z.object({
+  schedule: roundScheduleSchema,
+  rounds: z.array(roundSummarySchema),
+  counts_by_status: z.record(z.string(), z.number().int()),
+})
+
+const columnSlotSchema = z.object({
+  column_id: z.string(),
+  submission_id: uuid,
+  miner_hotkey: z.string(),
+  owner_key: z.string(),
+  source_sha256: z.string(),
+  counted: z.boolean(),
+  public_default: z.boolean(),
+})
+
+const roundPanelSlotSchema = z.object({
+  agent_id: uuid,
+  owner_key: z.string(),
+  miner_hotkey: z.string().nullable().optional(),
+  champion: z.boolean(),
+  reference: z.boolean(),
+})
+
+const standingSchema = z.object({
+  agent_id: uuid,
+  rank: z.number().int(),
+  pairwise_score: z.number(),
+  wins: z.number().int(),
+  ties: z.number().int(),
+  losses: z.number().int(),
+  opponents: z.number().int(),
+  common_mean: z.number(),
+  common_cases: z.number().int(),
+  reference: z.boolean(),
+})
+
+const columnViewSchema = z.object({
+  column_id: z.string(),
+  submission_id: uuid,
+  miner_hotkey: z.string().nullable(),
+  counted: z.boolean(),
+  public_default: z.boolean(),
+  generated: z.boolean().nullable().optional(),
+  score: z.number().nullable().optional(),
+  discriminating: z.number().int().nullable().optional(),
+  trivial: z.number().int().nullable().optional(),
+  unsolved: z.number().int().nullable().optional(),
+  duplicate: z.number().int().nullable().optional(),
+})
+
+export const generatorRoundDetailSchema = z.object({
+  summary: roundSummarySchema,
+  settings_revision: z.number().int().nullable(),
+  cases_per_column: z.number().int().nullable(),
+  seed: z.string().nullable(),
+  columns: z.array(columnSlotSchema),
+  panel: z.array(roundPanelSlotSchema),
+  generation: z.record(z.string(), z.unknown()).nullable(),
+  column_case_counts: z.record(z.string(), z.number().int()),
+  dataset_bytes: z.number().int().nullable(),
+  lease_id: uuid.nullable(),
+  lease_expires_at: z.string().nullable(),
+  lease_attempts: z.number().int(),
+  commitment_published_at: z.string().nullable(),
+  commitment_error: z.string().nullable(),
+  attempts: z.array(
+    z.object({
+      agent_id: uuid,
+      validator_hotkey: z.string(),
+      ticket_deadline: z.string(),
+      slot_id: z.string(),
+      status: z.enum(['leased', 'completed', 'failed']),
+      detail: z.string().nullable(),
+      issued_at: z.string(),
+      finished_at: z.string().nullable(),
+    }),
+  ),
+  results: z.array(
+    z.object({
+      agent_id: uuid,
+      validator_hotkey: z.string(),
+      run_id: z.string(),
+      answered: z.number().int(),
+      faulted: z.number().int(),
+      mean_score: z.number().nullable(),
+      recorded_at: z.string(),
+    }),
+  ),
+  pending_agents: z.array(uuid),
+  score: z.record(z.string(), z.unknown()).nullable(),
+  scorer_version: z.string().nullable(),
+  standings: z.array(standingSchema),
+  columns_scored: z.array(columnViewSchema),
+})
+
+export const generatorRoundPreviewSchema = z.object({
+  schedule: roundScheduleSchema,
+  columns: z.array(columnSlotSchema),
+  panel: z.array(roundPanelSlotSchema),
+  qualified_generators: z.number().int(),
+  awaiting_qualification: z.number().int(),
+  blockers: z.array(z.string()),
+})
+
+export const generatorRoundLoopSchema = z.object({
+  available: z.boolean(),
+  status: z
+    .object({
+      last_tick_at: z.string().nullable(),
+      last_success_at: z.string().nullable(),
+      last_error: z.string().nullable(),
+      last_actions: z.array(z.string()),
+      ticks: z.number().int(),
+    })
+    .nullable(),
+  schedule: roundScheduleSchema.nullable(),
+})
+
+export const generatorRoundTickSchema = z.object({
+  actions: z.array(z.string()),
+  schedule: roundScheduleSchema.nullable(),
+  error: z.string().nullable().optional(),
+})
+
+export const generatorRoundDatasetSchema = z.object({
+  round_index: z.number().int(),
+  dataset_sha256: sha256,
+  seed: sha256,
+  size_bytes: z.number().int(),
+  dataset_base64: z.string(),
+})
+
+export const defaultGeneratorResponseSchema = z.object({
+  submission_id: uuid,
+  source_sha256: z.string(),
+  tree_sha256: z.string(),
+  status: submissionStatus,
+  superseded: z.array(uuid),
+})
+
+export const tickGeneratorRoundsInputSchema = z.object({
+  reason: auditReasonSchema(8),
+})
+
+export const listGeneratorRoundsInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(20),
+  offset: z.number().int().min(0).default(0),
+})
+
+export const generatorRoundIndexInputSchema = z.object({
+  roundIndex: z.number().int().nonnegative(),
+})
+
+export const voidGeneratorRoundInputSchema = z
+  .object({
+    roundIndex: z.number().int().nonnegative(),
+    expectedStatus: roundStatus,
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = voidRoundConfirmation(input.roundIndex)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+export const closeGeneratorRoundInputSchema = z
+  .object({
+    roundIndex: z.number().int().nonnegative(),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = closeRoundConfirmation(input.roundIndex)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+export const republishRoundCommitmentInputSchema = z.object({
+  roundIndex: z.number().int().nonnegative(),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(REPUBLISH_COMMITMENT_CONFIRMATION),
+})
+
+export const releaseRoundLeaseInputSchema = z.object({
+  roundIndex: z.number().int().nonnegative(),
+  agentId: uuid,
+  validatorHotkey: ss58,
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(RELEASE_ROUND_LEASE_CONFIRMATION),
+})
+
+export const registerDefaultGeneratorInputSchema = z.object({
+  minerHotkey: ss58,
+  sourceSha256: sha256,
+  sourceBase64: z.string().min(4).max(5_600_000),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(REGISTER_DEFAULT_GENERATOR_CONFIRMATION),
 })

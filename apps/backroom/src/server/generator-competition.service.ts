@@ -1,4 +1,19 @@
 import {
+  closeGeneratorRoundInputSchema,
+  defaultGeneratorResponseSchema,
+  generatorRoundDatasetSchema,
+  generatorRoundDetailSchema,
+  generatorRoundIndexInputSchema,
+  generatorRoundListSchema,
+  generatorRoundLoopSchema,
+  generatorRoundPreviewSchema,
+  generatorRoundTickSchema,
+  listGeneratorRoundsInputSchema,
+  registerDefaultGeneratorInputSchema,
+  tickGeneratorRoundsInputSchema,
+  releaseRoundLeaseInputSchema,
+  republishRoundCommitmentInputSchema,
+  voidGeneratorRoundInputSchema,
   generatorBoardSchema,
   generatorProbeSchema,
   generatorPromotionCandidatesSchema,
@@ -22,8 +37,8 @@ import { PlatformAdminError, platformAdminRequest } from './ditto.server'
 // Shadow generator competition operator surface. Reads are plain admin GETs
 // over Platform's /admin/generator-competition endpoints plus the public
 // board. Generator source never crosses this boundary (Platform does not serve
-// it to admins), a run's seeds appear only after it finished, and probe seeds
-// are never served at all.
+// it to admins), a run's seeds appear only after it finished, probe seeds are
+// never served at all, and a round's secret only after its privacy window.
 
 const BASE = '/api/v1/admin/generator-competition'
 
@@ -148,6 +163,151 @@ export async function rejectGenerator(rawInput: unknown, actor: string) {
           confirmation: input.confirmation,
         },
       },
+    ),
+  )
+}
+
+// --- rounds ----------------------------------------------------------------
+
+function roundRefusal(cause: unknown) {
+  if (!(cause instanceof PlatformAdminError)) return null
+  if (cause.status !== 409 && cause.status !== 422) return null
+  return new Error(
+    `${cause.message}. Nothing was applied: re-read get_generator_round and retry with its current status.`,
+  )
+}
+
+async function roundWrite<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation()
+  } catch (cause) {
+    throw roundRefusal(cause) ?? cause
+  }
+}
+
+export async function listGeneratorRounds(rawInput: unknown) {
+  const { limit, offset } = listGeneratorRoundsInputSchema.parse(rawInput)
+  return generatorRoundListSchema.parse(
+    await platformAdminRequest(`${BASE}/rounds?limit=${limit}&offset=${offset}`),
+  )
+}
+
+export async function fetchGeneratorRound(rawInput: unknown) {
+  const { roundIndex } = generatorRoundIndexInputSchema.parse(rawInput)
+  return generatorRoundDetailSchema.parse(await platformAdminRequest(`${BASE}/rounds/${roundIndex}`))
+}
+
+export async function fetchGeneratorRoundPreview() {
+  return generatorRoundPreviewSchema.parse(await platformAdminRequest(`${BASE}/rounds/preview`))
+}
+
+export async function fetchGeneratorRoundLoop() {
+  return generatorRoundLoopSchema.parse(await platformAdminRequest(`${BASE}/rounds/loop`))
+}
+
+export async function tickGeneratorRounds(rawInput: unknown, actor: string) {
+  tickGeneratorRoundsInputSchema.parse(rawInput)
+  return generatorRoundTickSchema.parse(
+    await platformAdminRequest(`${BASE}/rounds/tick`, { method: 'POST', actor, body: {} }),
+  )
+}
+
+export async function fetchGeneratorRoundDataset(rawInput: unknown) {
+  const { roundIndex } = generatorRoundIndexInputSchema.parse(rawInput)
+  return generatorRoundDatasetSchema.parse(
+    await platformAdminRequest(`${BASE}/rounds/${roundIndex}/dataset`),
+  )
+}
+
+export async function voidGeneratorRound(rawInput: unknown, actor: string) {
+  const input = voidGeneratorRoundInputSchema.parse(rawInput)
+  return roundWrite(async () =>
+    generatorRoundDetailSchema.parse(
+      await platformAdminRequest(`${BASE}/rounds/${input.roundIndex}/void`, {
+        method: 'POST',
+        actor,
+        body: {
+          expected_status: input.expectedStatus,
+          reason: input.reason,
+          actor,
+          confirmation: input.confirmation,
+        },
+      }),
+    ),
+  )
+}
+
+export async function closeGeneratorRound(rawInput: unknown, actor: string) {
+  const input = closeGeneratorRoundInputSchema.parse(rawInput)
+  return roundWrite(async () =>
+    generatorRoundDetailSchema.parse(
+      await platformAdminRequest(`${BASE}/rounds/${input.roundIndex}/close`, {
+        method: 'POST',
+        actor,
+        body: {
+          expected_status: 'running',
+          reason: input.reason,
+          actor,
+          confirmation: input.confirmation,
+        },
+      }),
+    ),
+  )
+}
+
+export async function republishGeneratorRoundCommitment(rawInput: unknown, actor: string) {
+  const input = republishRoundCommitmentInputSchema.parse(rawInput)
+  return roundWrite(async () =>
+    generatorRoundDetailSchema.parse(
+      await platformAdminRequest(`${BASE}/rounds/${input.roundIndex}/republish-commitment`, {
+        method: 'POST',
+        actor,
+        body: {
+          expected_status: 'committed',
+          reason: input.reason,
+          actor,
+          confirmation: input.confirmation,
+        },
+      }),
+    ),
+  )
+}
+
+export async function releaseGeneratorRoundLease(rawInput: unknown, actor: string) {
+  const input = releaseRoundLeaseInputSchema.parse(rawInput)
+  return roundWrite(async () =>
+    generatorRoundDetailSchema.parse(
+      await platformAdminRequest(`${BASE}/rounds/${input.roundIndex}/release-lease`, {
+        method: 'POST',
+        actor,
+        body: {
+          agent_id: input.agentId,
+          validator_hotkey: input.validatorHotkey,
+          reason: input.reason,
+          actor,
+          confirmation: input.confirmation,
+        },
+      }),
+    ),
+  )
+}
+
+export async function registerDefaultGenerator(rawInput: unknown, actor: string) {
+  const input = registerDefaultGeneratorInputSchema.parse(rawInput)
+  return roundWrite(async () =>
+    defaultGeneratorResponseSchema.parse(
+      await platformAdminRequest(`${BASE}/default-generator`, {
+        method: 'POST',
+        actor,
+        body: {
+          miner_hotkey: input.minerHotkey,
+          source_sha256: input.sourceSha256,
+          source_base64: input.sourceBase64,
+          reason: input.reason,
+          actor,
+          confirmation: input.confirmation,
+        },
+      }),
     ),
   )
 }

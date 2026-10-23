@@ -1862,6 +1862,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/default-generator": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Register Default Generator
+         * @description Register the public default generator that fills empty counted columns.
+         *
+         *     The source is checked like any upload, owned by nobody, never on the
+         *     ledger, and qualified by the scorer like any generator before it can fill
+         *     a column. A new registration supersedes the previous default.
+         */
+        post: operations["admin_register_default_generator_api_v1_admin_generator_competition_default_generator_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/probe": {
         parameters: {
             query?: never;
@@ -1914,11 +1938,221 @@ export interface paths {
         };
         /**
          * Promotion Candidates
-         * @description Discriminating cases from scored runs, highest credit first.
+         * @description Discriminating cases from scored rounds, highest credit first.
+         *
+         *     The public default generator's cases are included: a default family that
+         *     still splits the top agents is as useful to promote as a miner's.
          */
         get: operations["promotion_candidates_api_v1_admin_generator_competition_promotion_candidates_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin List Rounds
+         * @description Recent rounds newest first, the chain schedule, and counts by status.
+         */
+        get: operations["admin_list_rounds_api_v1_admin_generator_competition_rounds_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/loop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Round Loop
+         * @description The round driver's last tick: actions taken, errors, chain position.
+         */
+        get: operations["admin_round_loop_api_v1_admin_generator_competition_rounds_loop_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Round Preview
+         * @description What a round opened now would freeze, and every reason it could not.
+         */
+        get: operations["admin_round_preview_api_v1_admin_generator_competition_rounds_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/tick": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Round Tick
+         * @description Run one round-driver tick now instead of waiting for the next one.
+         *
+         *     Ticks are idempotent: at a given chain position a second tick changes
+         *     nothing, so this only ever applies transitions that are already due.
+         */
+        post: operations["admin_round_tick_api_v1_admin_generator_competition_rounds_tick_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Round Detail */
+        get: operations["admin_round_detail_api_v1_admin_generator_competition_rounds__round_index__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Close Round
+         * @description Close a running round now and score it with the results it has.
+         *
+         *     For a round that will not complete (a panel agent no validator can run).
+         *     Fewer than ``min_panel`` results voids it instead.
+         */
+        post: operations["admin_close_round_api_v1_admin_generator_competition_rounds__round_index__close_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/dataset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Round Dataset
+         * @description The exact round dataset bytes, for reproducing a closed round.
+         */
+        get: operations["admin_round_dataset_api_v1_admin_generator_competition_rounds__round_index__dataset_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/release-lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Release Round Lease
+         * @description Release one validator's live round lease so the agent can be re-leased.
+         *
+         *     For a validator that took a panel run and went quiet: the lease would
+         *     otherwise hold the agent until it expires.
+         */
+        post: operations["admin_release_round_lease_api_v1_admin_generator_competition_rounds__round_index__release_lease_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/republish-commitment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Republish Commitment
+         * @description Retry a failed on-chain commitment publication for a committed round.
+         */
+        post: operations["admin_republish_commitment_api_v1_admin_generator_competition_rounds__round_index__republish_commitment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/void": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Void Round
+         * @description Void a round by operator ruling. Live round leases are expired and no
+         *     column score from it is ever credited.
+         */
+        post: operations["admin_void_round_api_v1_admin_generator_competition_rounds__round_index__void_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2013,8 +2247,10 @@ export interface paths {
          * Reject Submission
          * @description Reject a generator by operator ruling (abuse, a copy the probe missed).
          *
-         *     Its runs stop counting on the ledger at once, an in-flight run is abandoned,
-         *     and it is never leased again. The miner can still upload a new generator.
+         *     It leaves the ledger at once, an in-flight qualification run is abandoned,
+         *     and it never holds another round column. A column it holds in a round
+         *     already generated keeps running (the dataset is frozen) but its score is
+         *     never credited. The miner can still upload a new generator.
          */
         post: operations["reject_submission_api_v1_admin_generator_competition_submissions__submission_id__reject_post"];
         delete?: never;
@@ -2034,8 +2270,9 @@ export interface paths {
         put?: never;
         /**
          * Rescore Submission
-         * @description Make an active generator due now, so its next run starts on fresh seeds
-         *     against the current panel. An in-flight run is left to finish.
+         * @description Re-qualify an active generator now on fresh seeds (build, validity,
+         *     determinism, probe). It stays out of new round columns until it passes
+         *     again; an in-flight qualification run is left to finish.
          */
         post: operations["rescore_submission_api_v1_admin_generator_competition_submissions__submission_id__rescore_post"];
         delete?: never;
@@ -5374,6 +5611,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/generator-scorer/round-results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Round Results
+         * @description Store a round's generated dataset for the current generation lease.
+         */
+        post: operations["post_round_results_api_v1_generator_scorer_round_results_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator-scorer/round-score": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Round Score
+         * @description Store a round's scored matrix for the current scoring lease.
+         */
+        post: operations["post_round_score_api_v1_generator_scorer_round_score_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator-scorer/round-work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lease Round
+         * @description Lease the oldest round needing generation or scoring, if any.
+         */
+        get: operations["lease_round_api_v1_generator_scorer_round_work_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/generator-scorer/work": {
         parameters: {
             query?: never;
@@ -5383,7 +5680,7 @@ export interface paths {
         };
         /**
          * Lease Work
-         * @description Lease the most overdue generator run, or return ``{"work": null}``.
+         * @description Lease the most overdue qualification run, or return ``{"work": null}``.
          */
         get: operations["lease_work_api_v1_generator_scorer_work_get"];
         put?: never;
@@ -5406,6 +5703,50 @@ export interface paths {
          * @description The shadow generator ledger (each hotkey's latest scored run).
          */
         get: operations["board_api_v1_generator_board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator/rounds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Rounds
+         * @description Recent rounds: commitments, chain anchors, and status.
+         *
+         *     A round's secret, seed, and dataset digest appear only after its privacy
+         *     window, so anyone can then check the secret against the commitment
+         *     published before the round opened and recompute every case.
+         */
+        get: operations["public_rounds_api_v1_generator_rounds_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator/rounds/{round_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Round
+         * @description One round: columns and their scores, and agent standings once scored.
+         */
+        get: operations["public_round_api_v1_generator_rounds__round_index__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8367,6 +8708,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/agent/{agent_id}/generator-round-fail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fail Generator Round Job
+         * @description Release a round lease the validator could not finish.
+         *
+         *     The agent goes back to the round's pending set for another validator. No
+         *     attempt is charged: a round run is never a scoring attempt.
+         */
+        post: operations["fail_generator_round_job_api_v1_validator_agent__agent_id__generator_round_fail_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/agent/{agent_id}/generator-round-score": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Generator Round Score
+         * @description Accept one panel agent's signed round results for its open lease.
+         */
+        post: operations["submit_generator_round_score_api_v1_validator_agent__agent_id__generator_round_score_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/agent/{agent_id}/private-dataset": {
         parameters: {
             query?: never;
@@ -8820,6 +9204,26 @@ export interface paths {
          * @description Revoke one active generation through its revocation-only bearer.
          */
         post: operations["revoke_coding_inference_grant_capability_endpoint_api_v1_validator_coding_shadow_inference_revoke_capability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/generator-round-job": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Generator Round Job
+         * @description Lease the next round panel run onto this validator slot, if any.
+         */
+        post: operations["request_generator_round_job_api_v1_validator_generator_round_job_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11426,6 +11830,46 @@ export interface components {
             reason: string;
         };
         /**
+         * AdminDefaultGeneratorRequest
+         * @description Register (or replace) the public default generator's source.
+         */
+        AdminDefaultGeneratorRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Reason */
+            reason: string;
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+        };
+        /** AdminDefaultGeneratorResponse */
+        AdminDefaultGeneratorResponse: {
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "superseded" | "rejected";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Superseded */
+            superseded?: string[];
+            /** Tree Sha256 */
+            tree_sha256: string;
+        };
+        /**
          * AdminDeferredReviewEvidence
          * @description Public-safe trigger snapshot for a score-qualified source review.
          */
@@ -11801,6 +12245,128 @@ export interface components {
         AdminGeneratorPromotionCandidatesResponse: {
             /** Candidates */
             candidates: components["schemas"]["GeneratorPromotionCandidate"][];
+        };
+        /**
+         * AdminGeneratorRoundActionRequest
+         * @description An audited operator action on one round, guarded by its status.
+         */
+        AdminGeneratorRoundActionRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * AdminGeneratorRoundDetail
+         * @description Operator view of a round. The seed is shown once the round closed.
+         */
+        AdminGeneratorRoundDetail: {
+            /** Attempts */
+            attempts: components["schemas"]["GeneratorRoundAttemptView"][];
+            /** Cases Per Column */
+            cases_per_column: number | null;
+            /** Column Case Counts */
+            column_case_counts: {
+                [key: string]: number;
+            };
+            /** Columns */
+            columns: components["schemas"]["GeneratorRoundColumnSlot"][];
+            /** Columns Scored */
+            columns_scored: components["schemas"]["GeneratorRoundColumnView"][];
+            /** Commitment Error */
+            commitment_error: string | null;
+            /** Commitment Published At */
+            commitment_published_at: string | null;
+            /** Dataset Bytes */
+            dataset_bytes: number | null;
+            /** Generation */
+            generation: {
+                [key: string]: unknown;
+            } | null;
+            /** Lease Attempts */
+            lease_attempts: number;
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Lease Id */
+            lease_id: string | null;
+            /** Panel */
+            panel: components["schemas"]["GeneratorRoundPanelSlot"][];
+            /** Pending Agents */
+            pending_agents: string[];
+            /** Results */
+            results: components["schemas"]["GeneratorRoundResultView"][];
+            /** Score */
+            score: {
+                [key: string]: unknown;
+            } | null;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /** Seed */
+            seed: string | null;
+            /** Settings Revision */
+            settings_revision: number | null;
+            /** Standings */
+            standings: components["schemas"]["GeneratorRoundStandingView"][];
+            summary: components["schemas"]["GeneratorRoundSummary"];
+        };
+        /**
+         * AdminGeneratorRoundLeaseReleaseRequest
+         * @description Release one stuck round panel lease so another validator can take it.
+         */
+        AdminGeneratorRoundLeaseReleaseRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** AdminGeneratorRoundListResponse */
+        AdminGeneratorRoundListResponse: {
+            /** Counts By Status */
+            counts_by_status: {
+                [key: string]: number;
+            };
+            /** Rounds */
+            rounds: components["schemas"]["GeneratorRoundSummary"][];
+            schedule: components["schemas"]["GeneratorRoundSchedule"];
+        };
+        /**
+         * AdminGeneratorRoundPreview
+         * @description What a round opened now would freeze, and anything blocking it.
+         */
+        AdminGeneratorRoundPreview: {
+            /** Awaiting Qualification */
+            awaiting_qualification: number;
+            /** Blockers */
+            blockers: string[];
+            /** Columns */
+            columns: components["schemas"]["GeneratorRoundColumnSlot"][];
+            /** Panel */
+            panel: components["schemas"]["GeneratorRoundPanelSlot"][];
+            /** Qualified Generators */
+            qualified_generators: number;
+            schedule: components["schemas"]["GeneratorRoundSchedule"];
         };
         /**
          * AdminGeneratorRunDetail
@@ -24222,7 +24788,8 @@ export interface components {
          *
          *     Scoring fields mirror ``challenge.ScoreParams`` in the Go contract and are
          *     bounded identically; ``cases_per_seed`` is both the exact case count every
-         *     pack must contain and the score's ``target_cases``.
+         *     pack (qualification seed or round column) must contain and the score's
+         *     ``target_cases``.
          */
         GeneratorCompetitionSettings: {
             /**
@@ -24230,6 +24797,11 @@ export interface components {
              * @default 16
              */
             cases_per_seed: number;
+            /**
+             * Challenger Columns
+             * @default 1
+             */
+            challenger_columns: number;
             /**
              * Champion Bonus
              * @default 0.5
@@ -24240,6 +24812,16 @@ export interface components {
              * @default 0.5
              */
             copy_overlap_threshold: number;
+            /**
+             * Counted Columns
+             * @default 5
+             */
+            counted_columns: number;
+            /**
+             * Epochs Per Round
+             * @default 4
+             */
+            epochs_per_round: number;
             /**
              * Lease Ttl Seconds
              * @default 7200
@@ -24267,15 +24849,22 @@ export interface components {
              */
             mode: "off" | "shadow";
             /**
+             * Onchain Commitment
+             * @default true
+             */
+            onchain_commitment: boolean;
+            /**
              * Panel Size
              * @default 5
              */
             panel_size: number;
             /**
-             * Rescore Interval Hours
-             * @default 24
+             * Privacy Window Rounds
+             * @default 6
              */
-            rescore_interval_hours: number;
+            privacy_window_rounds: number;
+            /** Reference Agent Ids */
+            reference_agent_ids?: string[];
             /**
              * Retry Backoff Seconds
              * @default 3600
@@ -24296,6 +24885,11 @@ export interface components {
              * @default 3600
              */
             upload_cooldown_seconds: number;
+            /**
+             * Validator Rounds Enabled
+             * @default false
+             */
+            validator_rounds_enabled: boolean;
             /**
              * Window Days
              * @default 7
@@ -24322,11 +24916,8 @@ export interface components {
             generator_contract_version: 1;
             /** Miner Hotkey */
             miner_hotkey: string;
-            /**
-             * Run Id
-             * Format: uuid
-             */
-            run_id: string;
+            /** Round Index */
+            round_index: number;
             /** Score */
             score: number;
             /**
@@ -24402,12 +24993,17 @@ export interface components {
             /** Retired At */
             retired_at: string | null;
         };
-        /** GeneratorPromotionCandidate */
+        /**
+         * GeneratorPromotionCandidate
+         * @description A discriminating case from a scored round.
+         */
         GeneratorPromotionCandidate: {
             /** Case Id */
             case_id: string;
             /** Champion Failed */
             champion_failed: boolean;
+            /** Column Id */
+            column_id: string;
             /** Credit */
             credit: number;
             /** Fingerprint */
@@ -24416,18 +25012,13 @@ export interface components {
             mean_score: number;
             /** Miner Hotkey */
             miner_hotkey: string;
-            /**
-             * Run Id
-             * Format: uuid
-             */
-            run_id: string;
+            /** Round Index */
+            round_index: number;
             /**
              * Scored At
              * Format: date-time
              */
             scored_at: string;
-            /** Seed Index */
-            seed_index: number;
             /** Solver Owners */
             solver_owners: number;
             /**
@@ -24460,7 +25051,7 @@ export interface components {
             /** Scorer Version */
             scorer_version: string;
             /** Seeds */
-            seeds?: components["schemas"]["GeneratorSeedResult"][] | null;
+            seeds?: components["schemas"]["GeneratorSeedOutput"][] | null;
             /** Source Sha256 */
             source_sha256: string;
             /**
@@ -24484,12 +25075,582 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "leased" | "scored" | "invalid" | "insufficient_panel" | "copy" | "abandoned";
+            status: "leased" | "scored" | "qualified" | "invalid" | "insufficient_panel" | "copy" | "abandoned";
             /**
              * Submission Status
              * @enum {string}
              */
             submission_status: "active" | "superseded" | "rejected";
+        };
+        /** GeneratorRoundAck */
+        GeneratorRoundAck: {
+            /** Round Index */
+            round_index: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+        };
+        /** GeneratorRoundAttemptView */
+        GeneratorRoundAttemptView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Detail */
+            detail: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Slot Id */
+            slot_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "leased" | "completed" | "failed";
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** GeneratorRoundCaseResult */
+        GeneratorRoundCaseResult: {
+            /** Case Id */
+            case_id: string;
+            /**
+             * Fault
+             * @default false
+             */
+            fault: boolean;
+            /**
+             * Score
+             * @default 0
+             */
+            score: number;
+        };
+        /** GeneratorRoundColumnSlot */
+        GeneratorRoundColumnSlot: {
+            /** Column Id */
+            column_id: string;
+            /** Counted */
+            counted: boolean;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /**
+             * Public Default
+             * @default false
+             */
+            public_default: boolean;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** GeneratorRoundColumnView */
+        GeneratorRoundColumnView: {
+            /** Column Id */
+            column_id: string;
+            /** Counted */
+            counted: boolean;
+            /** Discriminating */
+            discriminating?: number | null;
+            /** Duplicate */
+            duplicate?: number | null;
+            /** Generated */
+            generated?: boolean | null;
+            /** Miner Hotkey */
+            miner_hotkey: string | null;
+            /** Public Default */
+            public_default: boolean;
+            /** Score */
+            score?: number | null;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Trivial */
+            trivial?: number | null;
+            /** Unsolved */
+            unsolved?: number | null;
+        };
+        /** GeneratorRoundDatasetResponse */
+        GeneratorRoundDatasetResponse: {
+            /** Dataset Base64 */
+            dataset_base64: string;
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /** Round Index */
+            round_index: number;
+            /** Seed */
+            seed: string;
+            /** Size Bytes */
+            size_bytes: number;
+        };
+        /** GeneratorRoundDetail */
+        GeneratorRoundDetail: {
+            /** Columns */
+            columns: components["schemas"]["GeneratorRoundColumnView"][];
+            /** Standings */
+            standings: components["schemas"]["GeneratorRoundStandingView"][];
+            summary: components["schemas"]["GeneratorRoundSummary"];
+        };
+        /**
+         * GeneratorRoundFailRequest
+         * @description Hand a round panel run back without charging the agent an attempt.
+         */
+        GeneratorRoundFailRequest: {
+            /** Detail */
+            detail?: string | null;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "scoring_error" | "infrastructure";
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Round Index */
+            round_index: number;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** GeneratorRoundFailResponse */
+        GeneratorRoundFailResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Released */
+            released: boolean;
+            /** Round Index */
+            round_index: number;
+        };
+        /** GeneratorRoundGenerateResult */
+        GeneratorRoundGenerateResult: {
+            /** Columns */
+            columns: components["schemas"]["RoundColumnResult"][];
+            /** Dataset Base64 */
+            dataset_base64?: string | null;
+            /** Dataset Sha256 */
+            dataset_sha256?: string | null;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Round Index */
+            round_index: number;
+            /**
+             * Sandbox
+             * @default
+             */
+            sandbox: string;
+            /** Scorer Version */
+            scorer_version: string;
+        };
+        /**
+         * GeneratorRoundJobRequest
+         * @description Ask Platform for one round panel run on a free slot.
+         */
+        GeneratorRoundJobRequest: {
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /** Slot Id */
+            slot_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * GeneratorRoundJobResponse
+         * @description One leased round panel run.
+         *
+         *     ``seed`` is a positive placeholder the scorer requires on ``/v2/score``;
+         *     the round dataset, not the seed, determines every case.
+         */
+        GeneratorRoundJobResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Benchmark Runtime */
+            benchmark_runtime?: {
+                [key: string]: unknown;
+            } | null;
+            /** Case Count */
+            case_count: number;
+            /**
+             * Dataset Mode
+             * @default generator-round-v1
+             * @constant
+             */
+            dataset_mode: "generator-round-v1";
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            inference?: components["schemas"]["InferenceGrantOffer"] | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Minimum Screening Policy Version */
+            minimum_screening_policy_version?: number | null;
+            /**
+             * Requires Screened Image
+             * @default true
+             */
+            requires_screened_image: boolean;
+            /** Round Index */
+            round_index: number;
+            /**
+             * Run Size
+             * @default full
+             */
+            run_size: string;
+            /** Seed */
+            seed: number;
+            /** Sha256 */
+            sha256: string;
+            /** Slot Id */
+            slot_id: string;
+        };
+        /** GeneratorRoundListResponse */
+        GeneratorRoundListResponse: {
+            /** Rounds */
+            rounds: components["schemas"]["GeneratorRoundSummary"][];
+            schedule: components["schemas"]["GeneratorRoundSchedule"];
+        };
+        /** GeneratorRoundLoopResponse */
+        GeneratorRoundLoopResponse: {
+            /** Available */
+            available: boolean;
+            schedule: components["schemas"]["GeneratorRoundSchedule"] | null;
+            status: components["schemas"]["GeneratorRoundLoopStatus"] | null;
+        };
+        /**
+         * GeneratorRoundLoopStatus
+         * @description The round driver's last tick, for diagnosing a stalled lane.
+         */
+        GeneratorRoundLoopStatus: {
+            /** Last Actions */
+            last_actions: string[];
+            /** Last Error */
+            last_error: string | null;
+            /** Last Success At */
+            last_success_at: string | null;
+            /** Last Tick At */
+            last_tick_at: string | null;
+            /** Ticks */
+            ticks: number;
+        };
+        /** GeneratorRoundPanelSlot */
+        GeneratorRoundPanelSlot: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Champion
+             * @default false
+             */
+            champion: boolean;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            /** Owner Key */
+            owner_key: string;
+            /**
+             * Reference
+             * @default false
+             */
+            reference: boolean;
+        };
+        /** GeneratorRoundResultView */
+        GeneratorRoundResultView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Answered */
+            answered: number;
+            /** Faulted */
+            faulted: number;
+            /** Mean Score */
+            mean_score: number | null;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Run Id */
+            run_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * GeneratorRoundSchedule
+         * @description Where the chain is relative to rounds, as last observed by Platform.
+         */
+        GeneratorRoundSchedule: {
+            /** Block */
+            block?: number | null;
+            /** Current Round */
+            current_round?: number | null;
+            /** Epochs Per Round */
+            epochs_per_round: number;
+            /** Last Error */
+            last_error?: string | null;
+            /** Mode */
+            mode: string;
+            /** Next Round Epoch */
+            next_round_epoch?: number | null;
+            /** Observed At */
+            observed_at?: string | null;
+            /** Subnet Epoch Index */
+            subnet_epoch_index?: number | null;
+            /** Tempo */
+            tempo?: number | null;
+        };
+        /**
+         * GeneratorRoundScoreRequest
+         * @description Signed per-case results of one round panel run.
+         */
+        GeneratorRoundScoreRequest: {
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /** Results */
+            results: components["schemas"]["GeneratorRoundCaseResult"][];
+            /** Round Index */
+            round_index: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** GeneratorRoundScoreResponse */
+        GeneratorRoundScoreResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Duplicate
+             * @default false
+             */
+            duplicate: boolean;
+            /** Round Index */
+            round_index: number;
+        };
+        /** GeneratorRoundScoreResult */
+        GeneratorRoundScoreResult: {
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Round Index */
+            round_index: number;
+            score: components["schemas"]["RoundScore"];
+            /** Scorer Version */
+            scorer_version: string;
+        };
+        /** GeneratorRoundStandingView */
+        GeneratorRoundStandingView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Common Cases */
+            common_cases: number;
+            /** Common Mean */
+            common_mean: number;
+            /** Losses */
+            losses: number;
+            /** Opponents */
+            opponents: number;
+            /** Pairwise Score */
+            pairwise_score: number;
+            /** Rank */
+            rank: number;
+            /**
+             * Reference
+             * @default false
+             */
+            reference: boolean;
+            /** Ties */
+            ties: number;
+            /** Wins */
+            wins: number;
+        };
+        /** GeneratorRoundSummary */
+        GeneratorRoundSummary: {
+            /** Closed At */
+            closed_at?: string | null;
+            /**
+             * Column Count
+             * @default 0
+             */
+            column_count: number;
+            /** Commitment */
+            commitment: string;
+            /**
+             * Commitment Publication
+             * @enum {string}
+             */
+            commitment_publication: "pending" | "published" | "failed" | "disabled";
+            /**
+             * Committed At
+             * Format: date-time
+             */
+            committed_at: string;
+            /** Dataset Sha256 */
+            dataset_sha256?: string | null;
+            /** Epochs Per Round */
+            epochs_per_round: number;
+            /** Open Block */
+            open_block?: number | null;
+            /** Open Block Hash */
+            open_block_hash?: string | null;
+            /** Open Epoch Index */
+            open_epoch_index?: number | null;
+            /** Opened At */
+            opened_at?: string | null;
+            /**
+             * Panel Size
+             * @default 0
+             */
+            panel_size: number;
+            /**
+             * Results
+             * @default 0
+             */
+            results: number;
+            /** Revealed At */
+            revealed_at?: string | null;
+            /** Round Index */
+            round_index: number;
+            /** Scored At */
+            scored_at?: string | null;
+            /** Secret Hex */
+            secret_hex?: string | null;
+            /** Seed */
+            seed?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            /** Void Reason */
+            void_reason?: string | null;
+        };
+        /** GeneratorRoundTickResponse */
+        GeneratorRoundTickResponse: {
+            /** Actions */
+            actions: string[];
+            /** Error */
+            error?: string | null;
+            schedule: components["schemas"]["GeneratorRoundSchedule"] | null;
+        };
+        /** GeneratorRoundWork */
+        GeneratorRoundWork: {
+            /** Cases Per Column */
+            cases_per_column?: number | null;
+            /** Columns */
+            columns?: components["schemas"]["RoundSourceColumn"][] | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "generate" | "score";
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            matrix?: components["schemas"]["RoundMatrix"] | null;
+            /** Params */
+            params?: {
+                [key: string]: unknown;
+            } | null;
+            /** Round Index */
+            round_index: number;
+            /** Seed */
+            seed?: string | null;
+        };
+        /** GeneratorRoundWorkResponse */
+        GeneratorRoundWorkResponse: {
+            work?: components["schemas"]["GeneratorRoundWork"] | null;
         };
         /**
          * GeneratorRunSummary
@@ -24521,7 +25682,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "leased" | "scored" | "invalid" | "insufficient_panel" | "copy" | "abandoned";
+            status: "leased" | "scored" | "qualified" | "invalid" | "insufficient_panel" | "copy" | "abandoned";
         };
         /**
          * GeneratorSeedOutput
@@ -24537,23 +25698,6 @@ export interface components {
             error?: string | null;
             /** Pack Sha256 */
             pack_sha256?: string | null;
-            /** Seed */
-            seed: string;
-            validation?: components["schemas"]["ValidationReport"];
-        };
-        /** GeneratorSeedResult */
-        GeneratorSeedResult: {
-            /**
-             * Duration Ms
-             * @default 0
-             */
-            duration_ms: number;
-            /** Error */
-            error?: string | null;
-            /** Pack Sha256 */
-            pack_sha256?: string | null;
-            /** Panel */
-            panel?: components["schemas"]["PanelMemberResult"][] | null;
             /** Seed */
             seed: string;
             validation?: components["schemas"]["ValidationReport"];
@@ -24605,6 +25749,17 @@ export interface components {
             module: string;
             /** Next Run At */
             next_run_at: string | null;
+            /**
+             * Public Default
+             * @default false
+             */
+            public_default: boolean;
+            /** Qualified At */
+            qualified_at?: string | null;
+            /** Round Score */
+            round_score?: number | null;
+            /** Round Scored Index */
+            round_scored_index?: number | null;
             /** Size Bytes */
             size_bytes: number;
             /** Source Sha256 */
@@ -24685,8 +25840,6 @@ export interface components {
             lease_id: string;
             /** Miner Hotkey */
             miner_hotkey: string;
-            /** Panel */
-            panel: components["schemas"]["GeneratorPanelSlot"][];
             /** Probe Seed */
             probe_seed: string;
             /**
@@ -28484,23 +29637,6 @@ export interface components {
              * @default 0
              */
             score: number;
-        };
-        /** PanelMemberResult */
-        PanelMemberResult: {
-            /** Agent Id */
-            agent_id: string;
-            /**
-             * Champion
-             * @default false
-             */
-            champion: boolean;
-            /**
-             * Owner Key
-             * @default
-             */
-            owner_key: string;
-            /** Results */
-            results?: components["schemas"]["PanelCaseResult"][] | null;
         };
         /** PendingWeightObservation */
         PendingWeightObservation: {
@@ -34535,6 +35671,178 @@ export interface components {
             reason: string;
         };
         /**
+         * RoundAgentStanding
+         * @description Mirror of ``challenge.AgentStanding``.
+         */
+        RoundAgentStanding: {
+            /** Agent Id */
+            agent_id: string;
+            /** Common Cases */
+            common_cases: number;
+            /** Common Mean */
+            common_mean: number;
+            /** Losses */
+            losses: number;
+            /** Opponents */
+            opponents: number;
+            /** Pairwise Score */
+            pairwise_score: number;
+            /** Rank */
+            rank: number;
+            /** Ties */
+            ties: number;
+            /** Wins */
+            wins: number;
+        };
+        /** RoundCaseRef */
+        RoundCaseRef: {
+            /** Case Id */
+            case_id: string;
+            /** Fingerprint */
+            fingerprint: string;
+        };
+        /**
+         * RoundCaseVerdict
+         * @description Mirror of ``challenge.CaseVerdict``.
+         */
+        RoundCaseVerdict: {
+            /** Case Id */
+            case_id: string;
+            /** Champion Failed */
+            champion_failed: boolean;
+            /** Credit */
+            credit: number;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Mean Score */
+            mean_score: number;
+            /** Panel Size */
+            panel_size: number;
+            /** Solver Owners */
+            solver_owners: number;
+            /** Solvers */
+            solvers: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "discriminating" | "trivial" | "unsolved" | "duplicate" | "insufficient_panel";
+        };
+        /** RoundColumnResult */
+        RoundColumnResult: {
+            build?: components["schemas"]["GeneratorBuildResult"];
+            /** Column Id */
+            column_id: string;
+            /** Error */
+            error?: string | null;
+            /**
+             * Ok
+             * @default false
+             */
+            ok: boolean;
+            seed?: components["schemas"]["GeneratorSeedOutput"] | null;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** RoundColumnScore */
+        RoundColumnScore: {
+            /** Column Id */
+            column_id: string;
+            pack: components["schemas"]["RoundPackScore"];
+        };
+        /**
+         * RoundMatrix
+         * @description Mirror of ``challenge.RoundInput``.
+         */
+        RoundMatrix: {
+            /** Agents */
+            agents: components["schemas"]["RoundMatrixAgent"][];
+            /** Claimed Fingerprints */
+            claimed_fingerprints?: string[];
+            /** Columns */
+            columns: components["schemas"]["RoundMatrixColumn"][];
+        };
+        /** RoundMatrixAgent */
+        RoundMatrixAgent: {
+            /** Agent Id */
+            agent_id: string;
+            /**
+             * Champion
+             * @default false
+             */
+            champion: boolean;
+            /** Owner Key */
+            owner_key: string;
+            /**
+             * Reference
+             * @default false
+             */
+            reference: boolean;
+            /** Results */
+            results: components["schemas"]["PanelCaseResult"][];
+        };
+        /** RoundMatrixColumn */
+        RoundMatrixColumn: {
+            /** Cases */
+            cases: components["schemas"]["RoundCaseRef"][];
+            /** Column Id */
+            column_id: string;
+            /** Counted */
+            counted: boolean;
+            /** Owner Key */
+            owner_key: string;
+        };
+        /**
+         * RoundPackScore
+         * @description Mirror of ``challenge.PackScore``.
+         */
+        RoundPackScore: {
+            /** Cases */
+            cases: components["schemas"]["RoundCaseVerdict"][];
+            /** Discriminating */
+            discriminating: number;
+            /** Duplicate */
+            duplicate: number;
+            /** Raw Credit */
+            raw_credit: number;
+            /** Score */
+            score: number;
+            /** Status */
+            status: string;
+            /** Trivial */
+            trivial: number;
+            /** Unsolved */
+            unsolved: number;
+            /** Unsolved Rate */
+            unsolved_rate: number;
+        };
+        /** RoundScore */
+        RoundScore: {
+            /** Agents */
+            agents: components["schemas"]["RoundAgentStanding"][];
+            /** Columns */
+            columns: components["schemas"]["RoundColumnScore"][];
+        };
+        /** RoundSourceColumn */
+        RoundSourceColumn: {
+            /** Column Id */
+            column_id: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /**
          * RouteCalibrationRequest
          * @description Exact reviewed manifest decision for one immutable route profile.
          */
@@ -35119,6 +36427,11 @@ export interface components {
              * @default false
              */
             deterministic_v13_datasets: boolean;
+            /**
+             * Generator Rounds
+             * @default false
+             */
+            generator_rounds: boolean;
             /** Observed At */
             observed_at?: number | null;
             /**
@@ -38340,7 +39653,7 @@ export interface components {
          * @description Authoritative reason the platform issued the current ticket lease.
          * @enum {string}
          */
-        TicketPurpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary";
+        TicketPurpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary" | "generator_round";
         /**
          * ToolProvenanceEvidence
          * @description Per-case v10+ broker-to-endpoint tool provenance (``tool_provenance``).
@@ -46641,6 +47954,41 @@ export interface operations {
             };
         };
     };
+    admin_register_default_generator_api_v1_admin_generator_competition_default_generator_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDefaultGeneratorRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDefaultGeneratorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_probe_api_v1_admin_generator_competition_probe_get: {
         parameters: {
             query?: never;
@@ -46728,6 +48076,347 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminGeneratorPromotionCandidatesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_rounds_api_v1_admin_generator_competition_rounds_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorRoundListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_round_loop_api_v1_admin_generator_competition_rounds_loop_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundLoopResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_round_preview_api_v1_admin_generator_competition_rounds_preview_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorRoundPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_round_tick_api_v1_admin_generator_competition_rounds_tick_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundTickResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_round_detail_api_v1_admin_generator_competition_rounds__round_index__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorRoundDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_close_round_api_v1_admin_generator_competition_rounds__round_index__close_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorRoundActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorRoundDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_round_dataset_api_v1_admin_generator_competition_rounds__round_index__dataset_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundDatasetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_release_round_lease_api_v1_admin_generator_competition_rounds__round_index__release_lease_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorRoundLeaseReleaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorRoundDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_republish_commitment_api_v1_admin_generator_competition_rounds__round_index__republish_commitment_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorRoundActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorRoundDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_void_round_api_v1_admin_generator_competition_rounds__round_index__void_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorRoundActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorRoundDetail"];
                 };
             };
             /** @description Validation Error */
@@ -53454,6 +55143,107 @@ export interface operations {
             };
         };
     };
+    post_round_results_api_v1_generator_scorer_round_results_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorRoundGenerateResult"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_round_score_api_v1_generator_scorer_round_score_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorRoundScoreResult"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lease_round_api_v1_generator_scorer_round_work_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundWorkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     lease_work_api_v1_generator_scorer_work_get: {
         parameters: {
             query?: never;
@@ -53501,6 +55291,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GeneratorLedgerResponse"];
+                };
+            };
+        };
+    };
+    public_rounds_api_v1_generator_rounds_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_round_api_v1_generator_rounds__round_index__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -58682,6 +60535,76 @@ export interface operations {
             };
         };
     };
+    fail_generator_round_job_api_v1_validator_agent__agent_id__generator_round_fail_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorRoundFailRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundFailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_generator_round_score_api_v1_validator_agent__agent_id__generator_round_score_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorRoundScoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundScoreResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     download_private_dataset_api_v1_validator_agent__agent_id__private_dataset_post: {
         parameters: {
             query?: never;
@@ -59812,6 +61735,48 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    request_generator_round_job_api_v1_validator_generator_round_job_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorRoundJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundJobResponse"];
+                };
+            };
+            /** @description No round panel run is claimable. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

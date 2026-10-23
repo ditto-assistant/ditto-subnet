@@ -2,6 +2,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  BACKROOM_ARTIFACT_SCOPE,
   BACKROOM_READ_SCOPE,
   BACKROOM_WRITE_SCOPE,
   createBackroomMcpServer,
@@ -41,13 +42,15 @@ const RUN = '7d0a4c39-4c1f-4a5b-8f3e-9b1d2e3f4a5b'
 const SEED = 'ab'.repeat(32)
 const settings = {
   mode: 'shadow', panel_size: 5, min_panel: 3, min_solver_owners: 2, solve_threshold: 0.5,
-  champion_bonus: 0.5, seeds_per_run: 2, cases_per_seed: 16, rescore_interval_hours: 24,
+  champion_bonus: 0.5, seeds_per_run: 2, cases_per_seed: 16,
   window_days: 7, copy_overlap_threshold: 0.5, upload_cooldown_seconds: 3600,
   lease_ttl_seconds: 7200, max_attempts: 6, retry_backoff_seconds: 3600,
+  epochs_per_round: 4, counted_columns: 5, challenger_columns: 1, reference_agent_ids: [],
+  privacy_window_rounds: 6, onchain_commitment: true, validator_rounds_enabled: false,
 }
 const runSummary = {
-  run_id: RUN, attempt: 1, status: 'scored', outcome: 'scored', score: 0.42,
-  case_counts: { discriminating: 30, trivial: 2, unsolved: 0, duplicate: 0 },
+  run_id: RUN, attempt: 1, status: 'qualified', outcome: 'qualified', score: null,
+  case_counts: null,
   leased_at: '2026-10-23T10:00:00Z', finished_at: '2026-10-23T10:05:00Z',
 }
 const submission = {
@@ -82,7 +85,7 @@ describe('generator competition MCP tools', () => {
       [`/api/v1/admin/generator-competition/runs/${RUN}`]: {
         summary: runSummary, submission_id: SUBMISSION, miner_hotkey: submission.miner_hotkey,
         seeds: [SEED, 'cd'.repeat(32)], probe_epoch: 1, cases_per_seed: 16, settings_revision: 1,
-        scorer_version: 'challenge-scorer/2', panel: [{ agent_id: 'a', owner_key: 'o', champion: true }],
+        scorer_version: 'challenge-scorer/3', panel: [],
         evaluation: { deterministic: true }, score_summary: { discriminating: 30 }, verdicts: [],
       },
       '/api/v1/admin/generator-competition/probe': {
@@ -228,6 +231,142 @@ describe('generator competition MCP tools', () => {
         name: 'rotate_generator_probe_seed', arguments: { reason: 'suspected leak', confirmation: 'ROTATE GENERATOR PROBE SEED' },
       })
       expect(fetchMock.mock.calls[0][0]).toContain('/probe/rotate')
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('drives and debugs rounds: reads, artifact-scoped dataset, guarded writes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const summary = {
+      round_index: 7, status: 'running', epochs_per_round: 4, commitment: 'aa'.repeat(32),
+      commitment_publication: 'published', committed_at: '2026-10-24T00:00:00Z', column_count: 5,
+      panel_size: 3, results: 1, secret_hex: null, seed: null,
+    }
+    const roundDetail = {
+      summary, settings_revision: 2, cases_per_column: 16, seed: null, columns: [], panel: [],
+      generation: { columns: [] }, column_case_counts: { c0: 16 }, dataset_bytes: 1024,
+      lease_id: null, lease_expires_at: null, lease_attempts: 1, commitment_published_at: null,
+      commitment_error: null, attempts: [], results: [], pending_agents: [AGENT], score: null,
+      scorer_version: null, standings: [], columns_scored: [],
+    }
+    const schedule = { mode: 'shadow', epochs_per_round: 4, subnet_epoch_index: 29, current_round: 7 }
+    const calls: Array<[string, string, unknown]> = []
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = url.replace('https://platform-api.heyditto.ai', '')
+      const method = init?.method ?? 'GET'
+      calls.push([method, path, init?.body ? JSON.parse(String(init.body)) : null])
+      if (path.startsWith('/api/v1/admin/generator-competition/rounds?')) {
+        return Response.json({ schedule, rounds: [summary], counts_by_status: { running: 1 } })
+      }
+      if (path.endsWith('/rounds/preview')) {
+        return Response.json({ schedule, columns: [], panel: [], qualified_generators: 0, awaiting_qualification: 1, blockers: ['validator_rounds_enabled is false'] })
+      }
+      if (path.endsWith('/rounds/loop')) {
+        return Response.json({ available: true, status: { last_tick_at: null, last_success_at: null, last_error: null, last_actions: ['round 8: committed'], ticks: 3 }, schedule })
+      }
+      if (path.endsWith('/rounds/tick')) return Response.json({ actions: ['round 8: committed'], schedule })
+      if (path.endsWith('/rounds/7/dataset')) {
+        return Response.json({ round_index: 7, dataset_sha256: 'bb'.repeat(32), seed: 'cc'.repeat(32), size_bytes: 3, dataset_base64: 'e30=' })
+      }
+      if (path.endsWith('/default-generator')) {
+        return Response.json({ submission_id: SUBMISSION, source_sha256: 'dd'.repeat(32), tree_sha256: 'ee'.repeat(32), status: 'active', superseded: [] })
+      }
+      return Response.json(roundDetail)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const reader = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await reader.client.callTool({ name: 'list_generator_rounds', arguments: {} })))
+        .toMatchObject({ rounds: [{ round_index: 7 }], schedule: { current_round: 7 } })
+      expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 7 } })))
+        .toMatchObject({ pending_agents: [AGENT], column_case_counts: { c0: 16 } })
+      expect(json(await reader.client.callTool({ name: 'preview_generator_round', arguments: {} })))
+        .toMatchObject({ blockers: ['validator_rounds_enabled is false'] })
+      expect(json(await reader.client.callTool({ name: 'get_generator_round_loop', arguments: {} })))
+        .toMatchObject({ available: true, status: { ticks: 3 } })
+      const noArtifact = await reader.client.callTool({ name: 'get_generator_round_dataset', arguments: { roundIndex: 7 } })
+      expect(noArtifact.isError).toBe(true)
+      const noWrite = await reader.client.callTool({ name: 'tick_generator_rounds', arguments: { reason: 'advance the round now' } })
+      expect(noWrite.isError).toBe(true)
+    } finally {
+      await reader.client.close()
+      await reader.server.close()
+    }
+
+    const artifactReader = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      expect(json(await artifactReader.client.callTool({ name: 'get_generator_round_dataset', arguments: { roundIndex: 7 } })))
+        .toMatchObject({ dataset_sha256: 'bb'.repeat(32), size_bytes: 3 })
+    } finally {
+      await artifactReader.client.close()
+      await artifactReader.server.close()
+    }
+
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      calls.length = 0
+      expect(json(await client.callTool({ name: 'tick_generator_rounds', arguments: { reason: 'advance the round now' } })))
+        .toMatchObject({ actions: ['round 8: committed'] })
+      expect(calls[0].slice(0, 2)).toEqual(['POST', '/api/v1/admin/generator-competition/rounds/tick'])
+
+      calls.length = 0
+      const wrongVoid = await client.callTool({
+        name: 'void_generator_round',
+        arguments: { roundIndex: 7, expectedStatus: 'running', reason: 'bad dataset found', confirmation: 'VOID GENERATOR ROUND 8' },
+      })
+      expect(wrongVoid.isError).toBe(true)
+      expect(calls).toEqual([])
+      await client.callTool({
+        name: 'void_generator_round',
+        arguments: { roundIndex: 7, expectedStatus: 'running', reason: 'bad dataset found', confirmation: 'VOID GENERATOR ROUND 7' },
+      })
+      expect(calls[0]).toEqual([
+        'POST', '/api/v1/admin/generator-competition/rounds/7/void',
+        { expected_status: 'running', reason: 'bad dataset found', actor: session.email, confirmation: 'VOID GENERATOR ROUND 7' },
+      ])
+
+      calls.length = 0
+      await client.callTool({
+        name: 'close_generator_round',
+        arguments: { roundIndex: 7, reason: 'agent never runs', confirmation: 'CLOSE GENERATOR ROUND 7' },
+      })
+      expect(calls[0][2]).toMatchObject({ expected_status: 'running', confirmation: 'CLOSE GENERATOR ROUND 7' })
+
+      calls.length = 0
+      await client.callTool({
+        name: 'release_generator_round_lease',
+        arguments: {
+          roundIndex: 7, agentId: AGENT, validatorHotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY',
+          reason: 'validator went quiet', confirmation: 'RELEASE GENERATOR ROUND LEASE',
+        },
+      })
+      expect(calls[0][2]).toMatchObject({ agent_id: AGENT, confirmation: 'RELEASE GENERATOR ROUND LEASE' })
+      const badHotkey = await client.callTool({
+        name: 'release_generator_round_lease',
+        arguments: { roundIndex: 7, agentId: AGENT, validatorHotkey: 'nope', reason: 'validator went quiet', confirmation: 'RELEASE GENERATOR ROUND LEASE' },
+      })
+      expect(badHotkey.isError).toBe(true)
+
+      calls.length = 0
+      await client.callTool({
+        name: 'republish_generator_round_commitment',
+        arguments: { roundIndex: 8, reason: 'pylon is back now', confirmation: 'REPUBLISH GENERATOR ROUND COMMITMENT' },
+      })
+      expect(calls[0][1]).toBe('/api/v1/admin/generator-competition/rounds/8/republish-commitment')
+
+      calls.length = 0
+      expect(json(await client.callTool({
+        name: 'register_default_generator',
+        arguments: {
+          minerHotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY', sourceSha256: 'dd'.repeat(32),
+          sourceBase64: 'H4sIAAAAAAAA', reason: 'the public default', confirmation: 'REGISTER DEFAULT GENERATOR',
+        },
+      }))).toMatchObject({ submission_id: SUBMISSION, status: 'active' })
+      expect(calls[0][2]).toMatchObject({ source_sha256: 'dd'.repeat(32), actor: session.email })
     } finally {
       await client.close()
       await server.close()
