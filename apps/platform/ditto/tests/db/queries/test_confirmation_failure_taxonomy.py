@@ -258,9 +258,9 @@ async def test_a_still_started_request_is_in_flight_and_not_settled(
         lanes, groups = await load_confirmation_failure_taxonomy_rows(session)
 
     hour = CONFIRMATION_FAILURE_WINDOWS_SECONDS[0]
-    judge = {
-        (int(r["window_seconds"]), str(r["lane"])): r for r in lanes
-    }[(hour, "judge")]
+    judge = {(int(r["window_seconds"]), str(r["lane"])): r for r in lanes}[
+        (hour, "judge")
+    ]
 
     assert int(judge["calls"]) == 1
     assert int(judge["in_flight"]) == 1, "an open request must count as in flight"
