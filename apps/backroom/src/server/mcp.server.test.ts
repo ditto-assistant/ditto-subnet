@@ -477,6 +477,7 @@ describe('Backroom MCP tools', () => {
         'get_v13_report_only_current_packet',
         'get_screening_submission',
         'get_source_release_policy',
+        'get_agent_source_release_evidence',
         'get_miner_github_link',
         'get_github_contributor_status',
         'get_github_link_revocation_preflight',
@@ -726,7 +727,9 @@ describe('Backroom MCP tools', () => {
     // Keep procedure text in tool help and retain about 0.5 KB headroom.
     // Six official-control operations add compact UUID schemas and short
     // summaries. Detailed procedures stay in help; services validate IDs.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(205_300)
+    // One publication-evidence read adds two compact UUIDs and a one-line
+    // summary: measured 205,900 bytes. Retain about 0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(206_400)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

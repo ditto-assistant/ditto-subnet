@@ -313,6 +313,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/source-release-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Source Release Evidence
+         * @description Read publication proof without source URLs or fetcher information.
+         */
+        get: operations["get_agent_source_release_evidence_api_v1_admin_agents__agent_id__source_release_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/artifact-release-settings": {
         parameters: {
             query?: never;
@@ -36217,6 +36237,51 @@ export interface components {
             /** Weight Confirmed At */
             weight_confirmed_at: string | null;
         };
+        /** SourceReleaseEvidence */
+        SourceReleaseEvidence: {
+            /**
+             * Absence Proves Nonpublication
+             * @default false
+             * @constant
+             */
+            absence_proves_nonpublication: false;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Candidate Agent Id */
+            candidate_agent_id: string | null;
+            /** Derived Eligibility At */
+            derived_eligibility_at: string | null;
+            disclosure: components["schemas"]["SourceDisclosure"];
+            /** Earliest Exact Sha Public Handoff At */
+            earliest_exact_sha_public_handoff_at: string | null;
+            /** Embargo Hours */
+            embargo_hours: number;
+            /** Emission Confirmed At */
+            emission_confirmed_at: string | null;
+            /** Exact Sha Public Handoff Count */
+            exact_sha_public_handoff_count: number;
+            /**
+             * Limitations
+             * @default Public fetch auditing is fail-open. Missing rows do not prove no public handoff. Eligibility uses the policy at the reference time and current source status; an earlier shorter release window may be omitted. Derived eligibility is not historical availability proof: emission confirmation may arrive late with an earlier payout-block time. Private operator, miner, screener and validator reads are not publication.
+             */
+            limitations: string;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Publication Evidence At */
+            publication_evidence_at: string | null;
+            /** Publication Proven By Reference Time */
+            publication_proven_by_reference_time: boolean;
+            /**
+             * Reference Time
+             * Format: date-time
+             */
+            reference_time: string;
+        };
         /** SourceReleaseGateStatus */
         SourceReleaseGateStatus: {
             archive_provider?: components["schemas"]["SourceArchiveProviderStatus"] | null;
@@ -41616,6 +41681,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentScoringReadiness"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_source_release_evidence_api_v1_admin_agents__agent_id__source_release_evidence_get: {
+        parameters: {
+            query?: {
+                candidate_agent_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceReleaseEvidence"];
                 };
             };
             /** @description Validation Error */

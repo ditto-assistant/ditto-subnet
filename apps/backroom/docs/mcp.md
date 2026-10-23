@@ -1,5 +1,15 @@
 # SN118 Backroom MCP
 
+`get_agent_source_release_evidence` reads exact-artifact publication evidence
+without downloading source. With `candidateAgentId`, its reference time is
+that submission's upload, and its policy revision is the one effective then.
+The result distinguishes conservative eligibility/publication timing from
+actual exact-SHA anonymous public handoffs, which remain evidence after a
+longer embargo or status change. Missing fetch rows do not prove that source
+was private: the audit is fail-open and an earlier shorter release window may
+be omitted. Private operator/validator reads never count. Only `backroom:read`
+is needed; no URL, IP, requester identity or source bytes are returned.
+
 `get_validator_weight_diagnostics` reads revealed weights, last Yuma vTrust,
 consensus, epoch counters, and pending timelock rounds at one chain block/hash.
 It requires `backroom:read`, accepts an optional `validatorUid`, and never submits

@@ -3,6 +3,7 @@ import {
   claPolicyWriteInputSchema, claPublishInputSchema,
   githubRevocationReadInputSchema, githubRevocationWriteInputSchema,
 } from '../lib/contributor.schemas'
+import { fetchAgentSourceReleaseEvidence } from './source-release-evidence.service'
 import {
   fetchMinerGithubLink, fetchGithubContributor, fetchMinerClaStatus, fetchClaPolicy,
   updateClaPolicy, publishClaVersion,
@@ -542,6 +543,7 @@ export const WRITE_TOOL_NAMES = new Set([
 ])
 
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
+  ['get_agent_source_release_evidence', BACKROOM_READ_SCOPE],
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_v13_official_control_artifact', BACKROOM_ARTIFACT_SCOPE],
@@ -1025,6 +1027,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read rank, score, eligibility and registration; current benchmark default.',
   get_source_release_policy:
     'Read disclosure gate and receipts; history default 0.',
+  get_agent_source_release_evidence:
+    'Exact-SHA public handoffs versus candidate upload; derived eligibility is not publication proof. Missing audit is unknown, not private. See tool help.',
   set_burn_settings:
     'Change burn weights with CAS/reason/confirmation. MOVES TAO. See tool help.',
   get_burn_settings:
@@ -2575,6 +2579,13 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         ),
       ),
   )
+
+  registerTool('get_agent_source_release_evidence', {
+    title: 'Get exact-agent public source-release evidence',
+    description: 'Read publication timing for one exact source artifact. Supply candidateAgentId to compare against that submission upload under the policy effective then; omit it for a current snapshot. Returns source SHA, policy revision, completed-emission confirmation, derived eligibility time, and the count/earliest timestamp of exact-SHA unauthenticated public handoffs. Derived eligibility can be backdated by late emission proof and never establishes historical availability; publication_proven_by_reference_time uses only a recorded public handoff before that time. An actual public handoff remains publication after an embargo increase or status change. Private reads do not count. The audit is fail-open: missing rows or a false publication_proven_by_reference_time mean publication was not proved, never that the source was private or copying occurred. Earlier shorter eligibility windows may be omitted without a recorded handoff. No artifact URL, IP, requester identity or source bytes are returned. Requires backroom:read and changes nothing.',
+    inputSchema: { agentId: sourceAgentId(), candidateAgentId: sourceAgentId().optional() },
+    annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchAgentSourceReleaseEvidence(input)))
 
   registerTool(
     'set_source_release_policy',
