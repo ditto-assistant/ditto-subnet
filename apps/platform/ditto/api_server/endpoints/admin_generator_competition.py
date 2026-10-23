@@ -20,12 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import (
     PROBE_ROTATION_CONFIRMATION,
+    REJECT_SUBMISSION_CONFIRMATION,
     AdminGeneratorProbeResponse,
     AdminGeneratorProbeRotateRequest,
     AdminGeneratorPromotionCandidatesResponse,
     AdminGeneratorRunDetail,
     AdminGeneratorSettingsRequest,
     AdminGeneratorSettingsResponse,
+    AdminGeneratorSubmissionActionRequest,
     AdminGeneratorSubmissionDetail,
     AdminGeneratorSubmissionListResponse,
     EffectiveGeneratorSettings,
@@ -48,7 +50,9 @@ from ditto.api_server.generator_competition import (
 from ditto.db.models import GeneratorCompetitionSettingsRevision as RevisionRow
 from ditto.db.models import GeneratorProbeEpoch
 from ditto.db.queries.generator import (
+    abandon_run,
     case_status_counts,
+    clear_lease,
     get_run,
     get_submission,
     insert_generator_settings_revision,
@@ -229,6 +233,86 @@ async def admin_submission_detail(
             if (summary := run_summary(run, counts.get(run.run_id))) is not None
         ],
     )
+
+
+async def _locked_submission(
+    session: AsyncSession,
+    submission_id: UUID,
+    payload: AdminGeneratorSubmissionActionRequest,
+):
+    reason = payload.reason.strip()
+    actor = payload.actor.strip()
+    if len(reason) < MIN_REASON_LENGTH or not 1 <= len(actor) <= MAX_ACTOR_LENGTH:
+        raise HTTPException(status_code=422, detail="reason and actor are required")
+    row = await get_submission(session, submission_id, for_update=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown submission")
+    if row.status != payload.expected_status:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"submission is {row.status}, not {payload.expected_status}; "
+                "re-read it and retry"
+            ),
+        )
+    return row, reason, actor
+
+
+@router.post(
+    "/submissions/{submission_id}/rescore",
+    response_model=AdminGeneratorSubmissionDetail,
+)
+async def rescore_submission(
+    submission_id: UUID,
+    payload: AdminGeneratorSubmissionActionRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> AdminGeneratorSubmissionDetail:
+    """Make an active generator due now, so its next run starts on fresh seeds
+    against the current panel. An in-flight run is left to finish."""
+    row, _reason, _actor = await _locked_submission(session, submission_id, payload)
+    if row.status != "active":
+        raise HTTPException(status_code=409, detail="only an active generator runs")
+    now = datetime.now(UTC)
+    row.next_run_at = now
+    row.attempts = 0
+    row.updated_at = now
+    await session.commit()
+    return await admin_submission_detail(submission_id, _admin, session)
+
+
+@router.post(
+    "/submissions/{submission_id}/reject",
+    response_model=AdminGeneratorSubmissionDetail,
+)
+async def reject_submission(
+    submission_id: UUID,
+    payload: AdminGeneratorSubmissionActionRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> AdminGeneratorSubmissionDetail:
+    """Reject a generator by operator ruling (abuse, a copy the probe missed).
+
+    Its runs stop counting on the ledger at once, an in-flight run is abandoned,
+    and it is never leased again. The miner can still upload a new generator.
+    """
+    if payload.confirmation != REJECT_SUBMISSION_CONFIRMATION:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirmation must be exactly {REJECT_SUBMISSION_CONFIRMATION}",
+        )
+    row, reason, actor = await _locked_submission(session, submission_id, payload)
+    if row.status == "rejected":
+        raise HTTPException(status_code=409, detail="submission is already rejected")
+    now = datetime.now(UTC)
+    if row.lease_run_id is not None:
+        await abandon_run(session, row.lease_run_id, now=now)
+        clear_lease(row, now=now)
+    row.status = "rejected"
+    row.status_reason = f"operator ({actor}): {reason}"[:1000]
+    row.updated_at = now
+    await session.commit()
+    return await admin_submission_detail(submission_id, _admin, session)
 
 
 @router.get("/runs/{run_id}", response_model=AdminGeneratorRunDetail)

@@ -46,6 +46,7 @@ def generator_settings_confirmation(mode: str) -> str:
 
 
 PROBE_ROTATION_CONFIRMATION = "ROTATE GENERATOR PROBE SEED"
+REJECT_SUBMISSION_CONFIRMATION = "REJECT GENERATOR SUBMISSION"
 
 
 def source_signature_payload(
@@ -426,6 +427,21 @@ class AdminGeneratorProbeRotateRequest(BaseModel):
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
+
+
+class AdminGeneratorSubmissionActionRequest(BaseModel):
+    """An audited operator action on one submission.
+
+    ``expected_status`` guards against acting on a submission whose state moved
+    since the operator read it.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    expected_status: SubmissionStatus
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str | None = None
 
 
 class GeneratorPromotionCandidate(GeneratorModel):

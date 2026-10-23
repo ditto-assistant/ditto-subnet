@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 import ditto.api_server.generator_competition as competition_mod
 from ditto.api_models.generator import (
     PROBE_ROTATION_CONFIRMATION,
+    REJECT_SUBMISSION_CONFIRMATION,
     generator_settings_confirmation,
     source_signature_payload,
 )
@@ -819,3 +820,61 @@ class TestScorer:
         assert resp.status_code == 200
         assert resp.json()["entries"] == [] and resp.json()["mode"] == "off"
         assert (await client.get("/api/v1/scoring/generator-ledger")).status_code == 401
+
+
+class TestOperatorActions:
+    async def test_rescore_and_reject(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        fixed_panel: list[dict[str, Any]],  # noqa: ARG002 - pins the panel
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive())
+        sub_id = accepted["submission_id"]
+        base = f"/api/v1/admin/generator-competition/submissions/{sub_id}"
+        work = await _lease(client)
+        assert (await _post(client, _result(work, tag="r"))).json()[
+            "status"
+        ] == "scored"
+        assert (await _lease(client)) is None  # not due for 24 h
+
+        body = {"expected_status": "active", "reason": "panel changed today"}
+        assert (await client.post(f"{base}/rescore", json=body)).status_code == 401
+        stale = {**body, "expected_status": "rejected"}
+        assert (
+            await client.post(f"{base}/rescore", headers=_ADMIN, json=stale)
+        ).status_code == 409
+        resp = await client.post(f"{base}/rescore", headers=_ADMIN, json=body)
+        assert resp.status_code == 200, resp.text
+        rerun = await _lease(client)
+        assert rerun is not None and rerun["submission_id"] == sub_id
+
+        reject = {
+            "expected_status": "active",
+            "reason": "copy of another miner's generator",
+        }
+        assert (
+            await client.post(f"{base}/reject", headers=_ADMIN, json=reject)
+        ).status_code == 409  # no confirmation
+        reject["confirmation"] = REJECT_SUBMISSION_CONFIRMATION
+        resp = await client.post(f"{base}/reject", headers=_ADMIN, json=reject)
+        assert resp.status_code == 200, resp.text
+        detail = resp.json()
+        assert detail["summary"]["status"] == "rejected"
+        assert detail["summary"]["status_reason"].startswith("operator (")
+        assert detail["lease_run_id"] is None
+        assert [r["status"] for r in detail["runs"]] == ["abandoned", "scored"]
+        # The in-flight run can no longer report, and the board drops the hotkey.
+        assert (await _post(client, _result(rerun, tag="r2"))).status_code == 409
+        board = (await client.get("/api/v1/generator/board")).json()
+        assert board["count"] == 0
+        assert (
+            await client.post(
+                f"{base}/reject",
+                headers=_ADMIN,
+                json={**reject, "expected_status": "rejected"},
+            )
+        ).status_code == 409
