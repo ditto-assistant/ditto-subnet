@@ -26,7 +26,7 @@ MAX_ARCHIVE_BYTES = 4 << 20
 MAX_SOURCE_BYTES = 32 << 20
 MAX_SOURCE_FILES = 4096
 MAX_SOURCE_PATH_LENGTH = 240
-BUILDER_GO_VERSION = "1.26.6"
+BUILDER_GO_VERSION = "1.27.3"
 
 _MODULE_LINE = re.compile(r'^module\s+("?)([^\s"]+)("?)\s*(//.*)?$')
 _GO_LINE = re.compile(r"^go\s+([0-9]+\.[0-9]+(\.[0-9]+)?)\s*(//.*)?$")
