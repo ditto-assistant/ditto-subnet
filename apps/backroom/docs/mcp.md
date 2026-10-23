@@ -428,11 +428,23 @@ once took eight 200-row pages and about 1.4 MB of JSON.
 
 ## The review queue
 
-`get_screening_review_queue` is the operator queue: unresolved `ath_reviews`
-rows, oldest hold first. It is **not** `list_screening_quarantines` — active
-quarantines are auto-resolved by the platform within milliseconds and that list
-is effectively always empty, which is what made the queue look empty when this
-tool pointed at it.
+`get_screening_review_queue` is the ATH operator queue: unresolved
+`ath_reviews` rows, oldest hold first. It is **not**
+`list_screening_quarantines`, which is the separate pre-score hold queue.
+Pointing this tool at the quarantine list made the ATH queue look empty.
+
+`list_screening_quarantines status=active` lists real operator holds:
+anti-cheat `quarantine` outcomes, the platform's `repeatedly-inconclusive`
+park, and reviewer-inconclusive screenings held for operator review (public
+reason "Screening was inconclusive; held for operator review"). Nothing
+resolves them automatically; settle each with `resolve_screening_quarantine`
+or `preview_screening_quarantine_batch` and
+`execute_screening_quarantine_batch` (`release`, `rescreen`, or `reject`).
+The evidence-only rows Platform writes next to an outcome that did not hold
+are recorded already resolved by `platform:deferred-source-review` and never
+appear as active. An inconclusive outcome whose reason code names a provider
+or transport fault is not held; it parks in `screening_failed` for
+`retry_failed_screening_now` (see `apps/platform/docs/screener-protocol.md`).
 
 Two platform parameters are deliberately not exposed. `status`, because a queue
 is unresolved work by definition. `generation`, because it filters on whether

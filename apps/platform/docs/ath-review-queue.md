@@ -201,12 +201,20 @@ first. Backroom reaches it as `search_ath_precedents`. The static path is
 declared before `/copy-reviews/{agent_id}` so `precedents` is never parsed as
 a UUID.
 
-## Two surfaces that are not the queue
+## Two surfaces that are not the ATH queue
 
-**`GET /admin/screening-quarantines?status=active` is effectively always
-empty.** The platform actor `platform:deferred-source-review` auto-resolves
-each quarantine to `rescreen` within milliseconds of it being raised. Active
-quarantines are a transient screener state, not operator work.
+**`GET /admin/screening-quarantines?status=active` is the pre-score hold
+queue, not the ATH queue.** Its active rows are real operator work: anti-cheat
+`quarantine` outcomes, the platform's `repeatedly-inconclusive` park, and
+reviewer-inconclusive screenings held for operator review (see
+`docs/screener-protocol.md`). Nothing resolves them automatically; the
+operator works them with `resolve_screening_quarantine` or the guarded
+preview/execute batch. What the platform records already resolved, by the
+actor `platform:deferred-source-review`, is the evidence-only row written
+next to an outcome that did not hold (a `pass` with review notes, a
+provisional admission, a deferred deep review whose evidence lives on its ATH
+review, or an infrastructure fault parked for retry). Those rows never appear
+as `active`.
 
 The exception is a quarantine a scored policy rescreen records while the agent
 keeps its board position. If an ATH reject then bans that exact agent, the

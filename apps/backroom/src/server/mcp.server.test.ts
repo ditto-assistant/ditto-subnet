@@ -7228,13 +7228,13 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('enumerates the ATH hold queue, not the auto-resolved quarantine queue', async () => {
+  it('enumerates the ATH hold queue, not the pre-score quarantine queue', async () => {
     // The defect: this tool read /admin/screening-quarantines?status=active,
-    // which the platform actor `platform:deferred-source-review` auto-resolves
-    // to `rescreen` within milliseconds. It therefore answered
-    // `{items: [], count: 0}` while agents sat in ath_pending_review, and the
-    // only working enumeration was an eight-call ~1.5MB sweep of
-    // list_screening_submissions.
+    // the separate pre-score hold queue (its evidence-only rows are written
+    // already resolved by `platform:deferred-source-review`). It therefore
+    // answered `{items: [], count: 0}` while agents sat in
+    // ath_pending_review, and the only working enumeration was an eight-call
+    // ~1.5MB sweep of list_screening_submissions.
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({

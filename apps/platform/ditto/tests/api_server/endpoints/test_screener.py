@@ -130,6 +130,9 @@ from ditto.db.queries.screening_infra_retry import (
     INFRA_AUTO_RETRY_REASON_CODES,
     plan_infra_retries,
 )
+from ditto.db.queries.source_review_queue_slo import (
+    load_source_review_queue_slo_snapshot,
+)
 from ditto.db.queries.tickets import issue_ticket, ticket_attempt_cap
 from ditto.tests.legacy_era import retired_era_writes_allowed
 from ditto_screening_protocol import (
@@ -11885,6 +11888,108 @@ class TestSubmitResult:
             assert release is not None
             assert release.state == "paused"
 
+    async def test_scored_policy_rescreen_inconclusive_pauses_without_quarantine(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A reviewer non-verdict on a retained canary pauses; it never quarantines.
+
+        The quarantine court resolves only a ``quarantined`` agent, so a scored
+        canary that keeps its board position keeps the one-row rollout's
+        paused-for-retry contract instead of opening an unresolvable hold.
+        """
+        target_policy = SCREENING_POLICY_VERSION + 1
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            activation = ScreenerPolicyActivation(
+                parent_revision=0,
+                target_policy_version=target_policy,
+                activate_at=now - timedelta(minutes=1),
+                rescreen_scored=True,
+                reason="release one scored v11 canary while retaining its v10 rank",
+                actor="test",
+            )
+            session.add(activation)
+            await session.flush()
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=target_policy,
+                    status="running",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now + timedelta(minutes=44),
+                    reason_code=POLICY_ONLY_RESCREEN_REASON,
+                    public_reason=None,
+                )
+            )
+            await session.flush()
+            session.add(
+                ScoredPolicyRescreenRelease(
+                    release_id=uuid4(),
+                    activation_revision=activation.revision,
+                    target_policy_version=target_policy,
+                    agent_id=agent_id,
+                    position=1,
+                    state="running",
+                    attempt_id=attempt_id,
+                    actor="test",
+                    reason="release one scored v11 canary while retaining its v10 rank",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.screener_policy_activation.invalidate()
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                attempt_id=attempt_id,
+                policy_version=target_policy,
+                passed=False,
+                outcome="inconclusive",
+                policy_only=True,
+                reason_code="l2-model-inconclusive",
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.SCORED
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.SCORED
+            assert agent.screening_reason == (
+                "Screening was inconclusive; manual retry required"
+            )
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert attempt is not None
+            assert attempt.status == "expired"
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert quarantine is not None
+            assert quarantine.status == "resolved"
+            release = await session.scalar(
+                select(ScoredPolicyRescreenRelease).where(
+                    ScoredPolicyRescreenRelease.attempt_id == attempt_id
+                )
+            )
+            assert release is not None
+            assert release.state == "paused"
+
     async def test_isolated_scored_policy_rescreen_pass_retains_score_and_stamps_target(
         self,
         app: FastAPI,
@@ -12772,8 +12877,15 @@ class TestSubmitResult:
             f"/api/v1/screener/agent/{agent_id}/result", json=payload
         )
 
+        # The signed-runtime preflight is fleet infrastructure carried as
+        # inconclusive and keeps the retry path; every reviewer non-verdict is
+        # held as an active quarantine for the operator.
+        infrastructure = reason_code == "l2-runtime-evidence-unavailable"
+        expected_status = (
+            AgentStatus.SCREENING_FAILED if infrastructure else AgentStatus.QUARANTINED
+        )
         assert response.status_code == 200, response.text
-        assert response.json()["status"] == AgentStatus.SCREENING_FAILED
+        assert response.json()["status"] == expected_status
         async with session_maker() as session:
             agent = await session.get(Agent, agent_id)
             attempt = await session.get(ScreeningAttempt, attempt_id)
@@ -12782,10 +12894,17 @@ class TestSubmitResult:
                     ScreeningQuarantine.attempt_id == attempt_id
                 )
             )
-            assert agent is not None and agent.status == AgentStatus.SCREENING_FAILED
-            assert attempt is not None and attempt.status == "expired"
+            assert agent is not None and agent.status == expected_status
+            assert agent.screening_reason == (
+                "Screening was inconclusive; manual retry required"
+                if infrastructure
+                else "Screening was inconclusive; held for operator review"
+            )
+            assert attempt is not None
+            assert attempt.status == ("expired" if infrastructure else "quarantined")
             assert attempt.reason_code == reason_code
             assert quarantine is not None
+            assert quarantine.status == ("resolved" if infrastructure else "active")
             assert quarantine.reason_code == reason_code
             assert quarantine.review_audit_digest == audit.canonical_digest()
             assert quarantine.review_audit == audit.model_dump(mode="json")
@@ -12801,7 +12920,7 @@ class TestSubmitResult:
             (0, None, "none"),
         ],
     )
-    async def test_v13_repeated_static_inconclusive_stays_parked(
+    async def test_v13_repeated_static_inconclusive_is_held_for_operator(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -12811,7 +12930,7 @@ class TestSubmitResult:
         budget_stop_reason: str | None,
     ) -> None:
         # Repetition cannot turn missing evidence into rejection authority.
-        # Every explicit retry ends once and remains parked for an operator.
+        # Every reviewer non-verdict ends once and is held for an operator.
         agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
         for _ in range(prior_count):
             prior_id = await _seed_running_attempt(
@@ -12860,13 +12979,13 @@ class TestSubmitResult:
             f"/api/v1/screener/agent/{agent_id}/result", json=payload
         )
         assert response.status_code == 200, response.text
-        assert response.json()["status"] == AgentStatus.SCREENING_FAILED
+        assert response.json()["status"] == AgentStatus.QUARANTINED
         # A worker that retries the same signed report gets the same answer.
         replay = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result", json=payload
         )
         assert replay.status_code == 200, replay.text
-        assert replay.json()["status"] == AgentStatus.SCREENING_FAILED
+        assert replay.json()["status"] == AgentStatus.QUARANTINED
 
         async with session_maker() as session:
             agent = await session.get(Agent, agent_id)
@@ -12878,25 +12997,27 @@ class TestSubmitResult:
             )
             assert agent is not None and attempt is not None
             assert quarantine is not None
-            assert agent.status == AgentStatus.SCREENING_FAILED
+            assert agent.status == AgentStatus.QUARANTINED
+            assert agent.screening_reason == (
+                "Screening was inconclusive; held for operator review"
+            )
             assert agent.screening_reason_code == "l2-model-inconclusive"
-            assert attempt.status == "expired"
+            assert attempt.status == "quarantined"
             assert attempt.reason_code == "l2-model-inconclusive"
             # Preserve the signed audit without falsely recording an admission
-            # or policy rejection. No automatic next attempt is scheduled.
+            # or policy rejection. The hold stays open: nothing resolves it but
+            # an operator, and no automatic next attempt is scheduled.
             assert quarantine.review_audit == audit.model_dump(mode="json")
-            assert quarantine.status == "resolved"
+            assert quarantine.status == "active"
             assert quarantine.reason_code == "l2-model-inconclusive"
-            assert quarantine.resolution != "reject"
-            assert quarantine.resolution_reason == (
-                "Screening did not complete; manual review or retry required"
-            )
+            assert quarantine.resolution is None
+            assert quarantine.resolved_by is None
             attempts = await session.scalars(
                 select(ScreeningAttempt).where(ScreeningAttempt.agent_id == agent_id)
             )
             assert len(attempts.all()) == prior_count + 1
 
-    async def test_inconclusive_prior_policy_reviews_stay_parked(
+    async def test_inconclusive_prior_policy_reviews_are_held_for_operator(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -12943,7 +13064,7 @@ class TestSubmitResult:
         )
         # An older policy history does not turn an inconclusive into rejection.
         assert response.status_code == 200, response.text
-        assert response.json()["status"] == AgentStatus.SCREENING_FAILED
+        assert response.json()["status"] == AgentStatus.QUARANTINED
 
     @pytest.mark.parametrize(
         ("variant", "expected_status"),
@@ -14672,7 +14793,7 @@ class TestQuarantineReviewContext:
                 "Screening was interrupted; manual retry required"
             )
 
-    async def test_inconclusive_finishes_attempt_and_stays_parked(
+    async def test_inconclusive_finishes_attempt_and_holds_for_operator(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -14694,20 +14815,28 @@ class TestQuarantineReviewContext:
             ),
         )
         assert response.status_code == 200
-        assert response.json()["status"] == AgentStatus.SCREENING_FAILED
+        assert response.json()["status"] == AgentStatus.QUARANTINED
         async with session_maker() as session:
             refreshed = await session.get(Agent, agent_id)
             assert refreshed is not None
-            assert refreshed.status == AgentStatus.SCREENING_FAILED
+            assert refreshed.status == AgentStatus.QUARANTINED
             assert refreshed.screening_reason == (
-                "Screening was inconclusive; manual retry required"
+                "Screening was inconclusive; held for operator review"
             )
             attempt = await session.get(ScreeningAttempt, attempt_id)
             assert attempt is not None
-            assert attempt.status == "expired"
+            assert attempt.status == "quarantined"
             assert attempt.finished_at is not None
             assert attempt.deadline > attempt.finished_at
             assert attempt.reason_code == "behavioral-oracle-inconclusive"
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert quarantine is not None
+            assert quarantine.status == "active"
+            assert quarantine.reason_code == "behavioral-oracle-inconclusive"
 
         # Completing the attempt must not hot-loop the ambiguous submission.
         blocked = await client.post(_CLAIM_URL)
@@ -14725,14 +14854,112 @@ class TestQuarantineReviewContext:
         assert parked.json()["items"] == []
 
     @pytest.mark.parametrize(
-        "reason_code",
+        ("resolution", "expected_status"),
         [
-            "l2-model-inconclusive",
-            "l3-adjudicator-model-provider-fault",
-            "l3-critic-model-provider-fault",
-            "l3-violation-adjudicator-model-provider-fault",
-            "l3-cause-disagreement-model-provider-fault",
-            "l2-causal-role-incomplete",
+            ("release", AgentStatus.EVALUATING),
+            ("reject", AgentStatus.REJECTED),
+            ("rescreen", AgentStatus.SCREENING_FAILED),
+        ],
+    )
+    async def test_inconclusive_hold_is_operator_work(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        resolution: str,
+        expected_status: AgentStatus,
+    ) -> None:
+        # A reviewer non-verdict lands in the queue an operator works: an
+        # active quarantine counted as escalation, never auto-retried or
+        # auto-resolved, and settled only by an operator's release, reject,
+        # or rescreen.
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claimed = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+        held = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="inconclusive",
+                reason_code="l3-adjudicator-inconclusive",
+            ),
+        )
+        assert held.status_code == 200, held.text
+        assert held.json()["status"] == AgentStatus.QUARANTINED
+
+        async with session_maker() as session:
+            snapshot = await load_source_review_queue_slo_snapshot(session)
+            assert snapshot.escalation_count == 1
+            assert snapshot.infrastructure_backoff_count == 0
+            plan = await plan_infra_retries(
+                session, now=datetime.now(UTC), agent_ids=[agent_id]
+            )
+            assert agent_id not in plan.decisions
+        # Neither the claim nor the infrastructure planner re-runs it.
+        blocked = await client.post(_CLAIM_URL)
+        assert blocked.json()["items"] == []
+
+        admin_headers = {
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+            "X-Admin-Actor": "backroom:test-user",
+        }
+        listing = await client.get(
+            "/api/v1/admin/screening-quarantines", headers=admin_headers
+        )
+        assert listing.status_code == 200
+        [item] = listing.json()["items"]
+        assert item["agent_id"] == str(agent_id)
+        assert item["status"] == "active"
+        assert item["screening_reason_code"] == "l3-adjudicator-inconclusive"
+        assert item["resolution"] is None
+
+        resolved = await client.post(
+            f"/api/v1/admin/screening-quarantines/{item['quarantine_id']}/resolve",
+            headers=admin_headers,
+            json={
+                "resolution": resolution,
+                "reason": "Operator ruling on an inconclusive screening hold",
+            },
+        )
+        assert resolved.status_code == 200, resolved.text
+        assert resolved.json()["agent_status"] == expected_status
+
+        reclaimed = await client.post(_CLAIM_URL)
+        assert reclaimed.status_code == 200
+        reclaimed_ids = [entry["agent_id"] for entry in reclaimed.json()["items"]]
+        if resolution == "rescreen":
+            # A rescreen authorizes exactly one new attempt.
+            assert reclaimed_ids == [str(agent_id)]
+        else:
+            assert str(agent_id) not in reclaimed_ids
+
+    @pytest.mark.parametrize(
+        ("reason_code", "outcome"),
+        [
+            ("l3-adjudicator-model-provider-fault", "retryable_infra"),
+            ("l3-critic-model-provider-fault", "retryable_infra"),
+            ("l3-violation-adjudicator-model-provider-fault", "retryable_infra"),
+            ("l3-cause-disagreement-model-provider-fault", "retryable_infra"),
+            ("l2-causal-role-incomplete", "retryable_infra"),
+            # The worker carries an L2/L3 provider or transport fault as
+            # ``inconclusive`` once an earlier stage recorded a finding, and the
+            # signed-runtime preflight reports ``inconclusive`` too. Those name
+            # a fault, not a verdict, so they keep the operator-retry path
+            # instead of entering the quarantine court.
+            ("l3-adjudicator-model-provider-fault", "inconclusive"),
+            ("l3-violation-adjudicator-model-response-contract", "inconclusive"),
+            ("l3-critic-http-503", "inconclusive"),
+            ("l3-adjudicator-connecterror", "inconclusive"),
+            ("source-review-provider-credits-exhausted", "inconclusive"),
+            ("l2-runtime-evidence-unavailable", "inconclusive"),
         ],
     )
     async def test_review_failure_requires_manual_retry(
@@ -14741,6 +14968,7 @@ class TestQuarantineReviewContext:
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
         reason_code: str,
+        outcome: str,
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
@@ -14756,9 +14984,7 @@ class TestQuarantineReviewContext:
                 agent_id,
                 passed=False,
                 attempt_id=attempt_id,
-                outcome="inconclusive"
-                if reason_code == "l2-model-inconclusive"
-                else "retryable_infra",
+                outcome=outcome,
                 reason_code=reason_code,
                 detail="Review did not complete",
             ),
@@ -14769,6 +14995,16 @@ class TestQuarantineReviewContext:
             agent = await session.get(Agent, agent_id)
             assert agent is not None
             assert agent.screening_reason_code == reason_code
+            if outcome == "inconclusive":
+                assert agent.screening_reason == (
+                    "Screening was inconclusive; manual retry required"
+                )
+                quarantine = await session.scalar(
+                    select(ScreeningQuarantine).where(
+                        ScreeningQuarantine.agent_id == agent_id
+                    )
+                )
+                assert quarantine is not None and quarantine.status == "resolved"
             grant = await session.scalar(
                 select(ScreeningRetryOverride).where(
                     ScreeningRetryOverride.agent_id == agent_id,

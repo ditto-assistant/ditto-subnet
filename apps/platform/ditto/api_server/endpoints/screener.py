@@ -163,6 +163,11 @@ from ditto.api_server.screener_policy_activation import (
     EffectiveScreenerPolicy,
     resolve_screener_policy_activation,
 )
+from ditto.api_server.screening_inconclusive import (
+    INCONCLUSIVE_OPERATOR_REVIEW_PUBLIC_REASON,
+    INCONCLUSIVE_RETRY_PUBLIC_REASON,
+    inconclusive_requires_operator_review,
+)
 from ditto.api_server.storage import (
     ObjectDownloadFailedError,
     ObjectNotFoundError,
@@ -5354,12 +5359,30 @@ async def submit_result(
             if deferred_mechanical_admission
             else "Bounded source review exhausted; admitted for scoring"
         )
+    elif (
+        payload.outcome == ScreenResultOutcome.INCONCLUSIVE
+        and inconclusive_requires_operator_review(payload.reason_code)
+        and not (
+            reported_attempt is not None
+            and reported_attempt.build_only
+            and not (deferred_mechanical_admission and payload.deferred_source_review)
+        )
+    ):
+        # A reviewer non-verdict: the source review ran and could not decide.
+        # It neither passes nor rejects the submission, and retrying the same
+        # artifact under the same policy has no reason to conclude otherwise,
+        # so hold it as an active screening quarantine. Nothing resolves that
+        # row automatically; an operator releases, rejects, or rescreens it.
+        # (A build-only attempt ran no source review and cannot hold.)
+        target = AgentStatus.QUARANTINED
+        public_reason = INCONCLUSIVE_OPERATOR_REVIEW_PUBLIC_REASON
     elif payload.outcome == ScreenResultOutcome.INCONCLUSIVE:
-        # Inconclusive remains a NON-verdict: it neither passes nor rejects the
-        # submission. Persist the completed attempt and park it for an exact
-        # operator-issued retry.
+        # An infrastructure fault the worker carried as ``inconclusive`` (a
+        # provider or transport failure after an earlier finding, or the
+        # signed-runtime preflight). Persist the completed attempt and park it
+        # for an exact operator-issued retry.
         target = AgentStatus.SCREENING_FAILED
-        public_reason = "Screening was inconclusive; manual retry required"
+        public_reason = INCONCLUSIVE_RETRY_PUBLIC_REASON
     elif payload.outcome == ScreenResultOutcome.QUARANTINE:
         # A build-only attempt rebuilds an already-adjudicated submission's
         # prerequisites and runs no source review, so it must not be able to
@@ -5469,6 +5492,7 @@ async def submit_result(
             and outcome_value in {"pass", "pass_inconclusive", "inconclusive"}
             else "expired"
             if payload.outcome == ScreenResultOutcome.INCONCLUSIVE
+            and target != AgentStatus.QUARANTINED
             else "quarantined"
             if target == AgentStatus.QUARANTINED or outcome_value == "quarantine"
             else "passed"
@@ -5734,6 +5758,19 @@ async def submit_result(
                 )
             )
         ) and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+        if (
+            payload.outcome == ScreenResultOutcome.INCONCLUSIVE
+            and target == AgentStatus.QUARANTINED
+            and retain_scored_policy_rescreen
+        ):
+            # A released scored policy canary keeps its board position until
+            # L4 clears or rejects it, so a reviewer non-verdict here cannot
+            # move the agent into the quarantine court (whose resolvers need
+            # a ``quarantined`` agent). Keep the one-row rollout's existing
+            # contract: record the evidence and pause for an operator retry.
+            target = AgentStatus.SCREENING_FAILED
+            public_reason = INCONCLUSIVE_RETRY_PUBLIC_REASON
+            attempt_status = "expired"
         if late_deferred_result:
             # An operator resolution is authoritative. A screener response that
             # was already in flight may finish after clear/reject; retain its
@@ -5901,9 +5938,14 @@ async def submit_result(
                 else "paused"
             )
         if target == AgentStatus.QUARANTINED or records_review_evidence:
-            if target == AgentStatus.QUARANTINED and (
-                payload.manifest_digest is None or payload.reason_code is None
+            if (
+                target == AgentStatus.QUARANTINED
+                and payload.outcome != ScreenResultOutcome.INCONCLUSIVE
+                and (payload.manifest_digest is None or payload.reason_code is None)
             ):
+                # An inconclusive hold may arrive without a review binding
+                # (no audit); it falls back to the inconclusive sentinels
+                # below instead of being refused.
                 raise AgentNotScreenableError(
                     "quarantine result is missing bounded evidence"
                 )
