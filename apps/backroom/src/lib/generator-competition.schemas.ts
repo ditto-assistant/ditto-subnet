@@ -38,7 +38,7 @@ export const generatorCompetitionSettingsSchema = z.object({
   retry_backoff_seconds: z.number().int().min(60).max(86_400),
 })
 
-const settingsRevisionSchema = z.object({
+export const generatorSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
   scope: z.string(),
@@ -51,8 +51,8 @@ const settingsRevisionSchema = z.object({
 })
 
 export const generatorSettingsControlSchema = z.object({
-  current: z.array(settingsRevisionSchema),
-  history: z.array(settingsRevisionSchema),
+  current: z.array(generatorSettingsRevisionSchema),
+  history: z.array(generatorSettingsRevisionSchema),
   default: generatorCompetitionSettingsSchema,
   effective: z.object({
     revision: z.number().int().nonnegative(),
@@ -159,6 +159,8 @@ export const generatorRunDetailSchema = z.object({
   summary: runSummarySchema,
   submission_id: uuid,
   miner_hotkey: z.string(),
+  // Only a run that reported reveals its seeds: a leased run's are live
+  // secrets and an abandoned run's reached a scorer that never reported.
   seeds: z.array(sha256).nullable(),
   probe_epoch: z.number().int(),
   cases_per_seed: z.number().int(),
@@ -168,7 +170,10 @@ export const generatorRunDetailSchema = z.object({
   evaluation: z.record(z.string(), z.unknown()).nullable(),
   score_summary: z.record(z.string(), z.unknown()).nullable(),
   verdicts: z.array(verdictSchema),
-})
+}).refine(
+  (run) => run.seeds === null || !['leased', 'abandoned'].includes(run.summary.status),
+  { message: 'Platform served seeds for a run that has not reported', path: ['seeds'] },
+)
 
 const probeEpochSchema = z.object({
   epoch: z.number().int(),

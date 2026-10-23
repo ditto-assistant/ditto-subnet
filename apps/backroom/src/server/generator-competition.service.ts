@@ -5,6 +5,7 @@ import {
   generatorRunDetailSchema,
   generatorRunIdInputSchema,
   generatorSettingsControlSchema,
+  generatorSettingsRevisionSchema,
   generatorSubmissionDetailSchema,
   generatorSubmissionIdInputSchema,
   generatorSubmissionListSchema,
@@ -46,7 +47,9 @@ function settingsRefusal(cause: unknown) {
 export async function setGeneratorSettings(rawInput: unknown, actor: string) {
   const input = setGeneratorSettingsInputSchema.parse(rawInput)
   try {
-    await platformAdminRequest(`${BASE}/settings`, {
+    // The POST's own response is the revision this write created; a re-read
+    // could report a concurrent write as if it were this one.
+    return generatorSettingsRevisionSchema.parse(await platformAdminRequest(`${BASE}/settings`, {
       method: 'POST',
       actor,
       body: {
@@ -57,11 +60,10 @@ export async function setGeneratorSettings(rawInput: unknown, actor: string) {
         actor,
         confirmation: input.confirmation,
       },
-    })
+    }))
   } catch (cause) {
     throw settingsRefusal(cause) ?? cause
   }
-  return fetchGeneratorSettings()
 }
 
 export async function listGeneratorSubmissions(rawInput: unknown) {

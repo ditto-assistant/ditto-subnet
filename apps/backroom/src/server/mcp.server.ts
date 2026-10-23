@@ -1782,7 +1782,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('set_generator_competition_settings', {
     title: 'Set generator competition settings',
-    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel or min_panel > panel_size. There is no enforcing mode: every ledger entry stays weight_eligible=false and the validator track stays SHADOW. Requires backroom:write.',
+    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel or min_panel > panel_size. Returns the revision this write created. There is no enforcing mode: every ledger entry stays weight_eligible=false and the validator track stays SHADOW. Requires backroom:write.',
     inputSchema: setGeneratorSettingsInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => setGeneratorSettings(input, props.session.email)))
 

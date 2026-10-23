@@ -7,6 +7,7 @@ import {
   createBackroomMcpServer,
   type McpGrantProps,
 } from './mcp.server'
+import { generatorRunDetailSchema } from '../lib/generator-competition.schemas'
 
 const session = {
   version: 2 as const,
@@ -121,6 +122,20 @@ describe('generator competition MCP tools', () => {
     }
   })
 
+  it('refuses a run detail that serves seeds before the run reported', () => {
+    const run = {
+      summary: runSummary, submission_id: SUBMISSION, miner_hotkey: '5'.repeat(48),
+      seeds: [SEED], probe_epoch: 1, cases_per_seed: 16, settings_revision: 1,
+      scorer_version: null, panel: [], evaluation: null, score_summary: null, verdicts: [],
+    }
+    expect(generatorRunDetailSchema.safeParse(run).success).toBe(true)
+    for (const status of ['leased', 'abandoned']) {
+      const unreported = { ...run, summary: { ...runSummary, status } }
+      expect(generatorRunDetailSchema.safeParse(unreported).success).toBe(false)
+      expect(generatorRunDetailSchema.safeParse({ ...unreported, seeds: null }).success).toBe(true)
+    }
+  })
+
   it('guards writes with write scope, confirmations and the operator actor', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -128,6 +143,12 @@ describe('generator competition MCP tools', () => {
         return Response.json({
           current: [], history: [], default: settings,
           effective: { revision: 1, settings, checksum: 'a'.repeat(64), source: 'revision' },
+        })
+      }
+      if (url.endsWith('/settings')) {
+        return Response.json({
+          revision: 2, parent_revision: 1, scope: '*', settings, reason: 'open shadow lane',
+          actor: session.email, created_at: '2026-10-23T00:00:00Z', checksum: 'b'.repeat(64),
         })
       }
       if (url.endsWith('/probe/rotate')) {
@@ -158,10 +179,12 @@ describe('generator competition MCP tools', () => {
       expect(wrongPhrase.isError).toBe(true)
       expect(fetchMock).not.toHaveBeenCalled()
 
-      await client.callTool({
+      const applied = json(await client.callTool({
         name: 'set_generator_competition_settings',
         arguments: { expectedRevision: 1, settings, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
-      })
+      })) as { revision: number }
+      expect(applied.revision).toBe(2)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
       const [settingsUrl, settingsInit] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }]
       expect(settingsUrl).toContain('/api/v1/admin/generator-competition/settings')
       expect(JSON.parse(String(settingsInit.body))).toMatchObject({
