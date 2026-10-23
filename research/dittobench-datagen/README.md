@@ -144,6 +144,9 @@ Every package is importable, so this module is the single source of truth for th
 generator. The scoring and generation services depend on it rather
 than keeping their own copies.
 
+- `cmd/challenge`: the generator competition tool. Emits the reference pack,
+  validates a challenge pack exactly as the scorer will, prints its identity, and
+  scores it against a panel verdict file. See `docs/generator-competition.md`.
 - `cmd/generate`: the CLI entry point.
 - `cmd/generate-service`: the same generation behind HTTP
   (`POST /generate?seed=&run_size=&bench_version=2|3|4|5|6|7|8|9|10` → DatasetArtifact JSON +
@@ -193,6 +196,8 @@ than keeping their own copies.
   point and rejects unsupported versions. The scorer must echo the selected
   version into its job/result and score-report details and must fail closed if
   the artifact version differs.
+- `challenge`: the generator competition contract (challenge packs, validation,
+  discrimination scoring, and the reference generator).
 - `persona`, `datagen`: case content builders.
 - `protocol`: the wire shapes, including the `DatasetArtifact` schema validators
   score.
