@@ -43,3 +43,10 @@ it('rejects path injection before requesting Platform', async () => {
   await expect(fetchAgentSourceReleaseEvidence({ agentId, candidateAgentId: '../secret' })).rejects.toThrow()
   expect(mock).not.toHaveBeenCalled()
 })
+
+it.each([1, 5, 8761])('rejects out-of-contract embargo hours %i from Platform', async (embargo_hours) => {
+  vi.stubEnv('DITTO_ADMIN_API_TOKEN', 'synthetic-source-evidence-token')
+  vi.stubEnv('DITTO_PLATFORM_API_BASE_URL', 'https://platform.example.test')
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ...evidence, embargo_hours })))
+  await expect(fetchAgentSourceReleaseEvidence({ agentId, candidateAgentId })).rejects.toThrow()
+})

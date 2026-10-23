@@ -18,7 +18,7 @@ class SourceReleaseEvidence(BaseModel):
     reference_time: datetime
     policy_revision: int
     disclosure: SourceDisclosure
-    embargo_hours: int
+    embargo_hours: int = Field(ge=6, le=8760)
     emission_confirmed_at: datetime | None
     derived_eligibility_at: datetime | None
     publication_evidence_at: datetime | None
