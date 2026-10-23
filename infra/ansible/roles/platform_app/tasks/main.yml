@@ -12,6 +12,11 @@
 - name: Validate env-sourced configuration before rendering anything
   ansible.builtin.import_tasks: preflight.yml
 
+# A new SDK/symlink cannot repair an old distro binary or a running PM2 daemon.
+# Refuse that migration before host writes; maintenance is a separate operation.
+- name: Check remaining Node runtimes before changing the host
+  ansible.builtin.import_tasks: node_runtime_guard.yml
+
 # --- gcloud (used to read secrets via the VM's attached runtime SA / ADC) ---
 - name: Ensure gcloud is available (GCE Debian images normally ship it)
   ansible.builtin.command: gcloud --version

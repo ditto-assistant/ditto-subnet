@@ -63,7 +63,13 @@ and its pm2 daemon remain unverified. No production mutation was performed.
 
 After authorized merge/release, rebuild and publish the affected images and
 verify the deployed image digest plus `node --version` in the actual runtime.
-A separately authorized Platform Ansible converge selects the fixed host
-binary; a running pm2 daemon can retain its previous executable until an
-operator restarts/updates it. Inventory and plan that maintenance separately.
+Platform provisioning now reads any remaining `/usr/bin/node` and the actual
+`/proc/<pid>/exe` of each existing Platform-owner PM2 daemon before host writes.
+It refuses to proceed if any observed version is affected or unsupported,
+including an old daemon behind an already-updated `/usr/local/bin/node` link.
+Fresh hosts and patched supported versions pass this admission check. It never
+purges distro packages or restarts the application. Existing-host upgrades must
+first inventory package dependents and complete separately authorized Node
+retirement and/or PM2 maintenance, then rerun the role. A separately authorized
+converge selects the fixed host binary only after those checks pass.
 Do not treat a new symlink or a successful CI build as running-process proof.
