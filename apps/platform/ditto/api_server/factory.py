@@ -89,6 +89,7 @@ from ditto.api_server.endpoints import (
     admin_database_backup_router,
     admin_efficiency_bonus_settings_router,
     admin_emission_eligibility_router,
+    admin_generator_competition_router,
     admin_hotkey_bans_router,
     admin_inference_admission_router,
     admin_inference_concurrency_settings_router,
@@ -131,6 +132,8 @@ from ditto.api_server.endpoints import (
     contributor_cla_router,
     ditto_callback_challenge_router,
     feedback_track_router,
+    generator_router,
+    generator_scorer_router,
     health_router,
     inference_router,
     metrics_router,
@@ -768,6 +771,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Root path (no /api/v1): Ditto fetches the challenge at the origin root.
     app.include_router(ditto_callback_challenge_router)
     app.include_router(upload_router, prefix="/api/v1")
+    app.include_router(generator_router, prefix="/api/v1")
+    app.include_router(generator_scorer_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
     app.include_router(validator_private_dataset.router, prefix="/api/v1")
@@ -800,6 +805,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_v13_scorer_cohort_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
     app.include_router(admin_scoring_lease_settings_router, prefix="/api/v1")
+    app.include_router(admin_generator_competition_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")

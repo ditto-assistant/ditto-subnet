@@ -13127,3 +13127,164 @@ class BountyEvaluationDecision(Base):
         ),
         Index("bounty_evaluation_decisions_bounty_idx", "bounty_id", "decision_id"),
     )
+
+
+class GeneratorCompetitionSettingsRevision(Base):
+    """Append-only operator policy for the shadow generator competition.
+
+    Each revision stores the whole policy (mode, panel size, scoring
+    parameters, freshness window, upload limits); see
+    ``ditto.api_models.generator`` for the bounds. An empty table resolves to
+    ``mode=off``, so deploying the lane accepts no uploads.
+    """
+
+    __tablename__ = "generator_competition_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="generator_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="generator_settings_checksum_check"
+        ),
+        CheckConstraint(
+            "parent_revision >= 0", name="generator_settings_parent_revision_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="generator_settings_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="generator_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "scope", "parent_revision", name="generator_settings_scope_parent_key"
+        ),
+    )
+
+
+class GeneratorPack(Base):
+    """One generator-competition challenge pack and its scoring lifecycle.
+
+    ``pack_bytes`` are the exact uploaded bytes; ``pack_sha256`` is their digest
+    (the identity the miner signed and the scorer re-checks). Contents are
+    private: no public or miner endpoint serves them. Lifecycle:
+    ``queued -> leased -> scored | invalid``, with ``insufficient_panel``
+    results returning the pack to ``queued`` after a backoff until
+    ``attempts`` reaches the policy's cap (``failed``).
+    """
+
+    __tablename__ = "generator_packs"
+
+    pack_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_key: Mapped[str] = mapped_column(Text, nullable=False)
+    """Emission owner key (``coldkey:``/``hotkey:``) of the uploading hotkey;
+    panel agents under the same owner never count toward its score."""
+    pack_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    pack_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    case_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    generator_name: Mapped[str] = mapped_column(Text, nullable=False)
+    generator_version: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    not_before: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    panel: Mapped[list | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    """The panel snapshot served with the current lease; results are accepted
+    only for these agents, with these owner keys and champion flags."""
+    validation: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    panel_results: Mapped[list | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    score_summary: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    settings_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scorer_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    scored_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("pack_sha256", name="generator_packs_sha256_key"),
+        CheckConstraint(
+            "pack_sha256 ~ '^[0-9a-f]{64}$'", name="generator_packs_sha256_check"
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'scored', 'invalid', 'failed')",
+            name="generator_packs_status_check",
+        ),
+        CheckConstraint(
+            "size_bytes > 0 AND size_bytes = octet_length(pack_bytes)",
+            name="generator_packs_size_check",
+        ),
+        CheckConstraint(
+            "case_count BETWEEN 1 AND 64", name="generator_packs_case_count_check"
+        ),
+        CheckConstraint(
+            "(status = 'leased') = (lease_id IS NOT NULL)",
+            name="generator_packs_lease_check",
+        ),
+        CheckConstraint(
+            "score IS NULL OR (score >= 0 AND score <= 1)",
+            name="generator_packs_score_check",
+        ),
+        Index("generator_packs_queue_idx", "status", "not_before", "submitted_at"),
+        Index("generator_packs_hotkey_idx", "miner_hotkey", "submitted_at"),
+    )
+
+
+class GeneratorCaseVerdict(Base):
+    """The judged outcome of one case in a scored generator pack.
+
+    ``fingerprint`` is the case's content identity across packs. The first
+    scored pack holding a fingerprint keeps it; later copies are ``duplicate``
+    and earn nothing. ``discriminating`` rows are the promotion candidates
+    operators curate into future private benchmark pools.
+    """
+
+    __tablename__ = "generator_case_verdicts"
+
+    pack_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    case_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    panel_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    solvers: Mapped[int] = mapped_column(Integer, nullable=False)
+    solver_owners: Mapped[int] = mapped_column(Integer, nullable=False)
+    mean_score: Mapped[float] = mapped_column(Float, nullable=False)
+    champion_failed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    credit: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["pack_id"], ["generator_packs.pack_id"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "fingerprint ~ '^[0-9a-f]{64}$'",
+            name="generator_case_verdicts_fingerprint_check",
+        ),
+        CheckConstraint(
+            "status IN ('discriminating', 'trivial', 'unsolved', 'duplicate')",
+            name="generator_case_verdicts_status_check",
+        ),
+        Index("generator_case_verdicts_fingerprint_idx", "fingerprint"),
+    )

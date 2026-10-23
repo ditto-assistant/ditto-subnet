@@ -71,6 +71,9 @@ from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
 from ditto.api_server.endpoints.admin_emission_eligibility import (
     router as admin_emission_eligibility_router,
 )
+from ditto.api_server.endpoints.admin_generator_competition import (
+    router as admin_generator_competition_router,
+)
 from ditto.api_server.endpoints.admin_hotkey_bans import (
     router as admin_hotkey_bans_router,
 )
@@ -178,6 +181,10 @@ from ditto.api_server.endpoints.ditto_callback_challenge import (
     router as ditto_callback_challenge_router,
 )
 from ditto.api_server.endpoints.feedback_track import router as feedback_track_router
+from ditto.api_server.endpoints.generator import router as generator_router
+from ditto.api_server.endpoints.generator_scorer import (
+    router as generator_scorer_router,
+)
 from ditto.api_server.endpoints.health import router as health_router
 from ditto.api_server.endpoints.inference import router as inference_router
 from ditto.api_server.endpoints.l2_report_canary import (
@@ -250,7 +257,10 @@ __all__ = [
     "admin_inference_admission_router",
     "admin_inference_concurrency_settings_router",
     "admin_inference_observability_router",
+    "admin_generator_competition_router",
     "admin_scoring_lease_settings_router",
+    "generator_router",
+    "generator_scorer_router",
     "admin_traces_router",
     "admin_queue_policy_settings_router",
     "admin_efficiency_bonus_settings_router",
