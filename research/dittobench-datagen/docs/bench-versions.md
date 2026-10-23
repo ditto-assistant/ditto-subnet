@@ -1104,9 +1104,71 @@ V14 counts those cases in the memory over-call denominator and exempts only
 reads and no-call baselines remain unpenalized. Unrelated and mixed actions
 count once per case. Legacy lifecycle-write cases stay excluded at all versions.
 
-The generated surface, question-family identifiers, envelope, grader policy,
-v13 gate postures, LongMem instrument, and public harness wire version (9) carry
-forward. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
+V14 also folds the typographic hyphens U+2010 and U+2011 in the reply text
+(answer slot and `final_text`) to the ASCII hyphen before grading, on the
+memory axis and on the text-graded tool cases (restraint, effect reads)
+(#2734). The pinned model writes U+2011 inside most identifiers and compounds
+it copies from an ASCII record, so V13 misses `VK‑48HJXP6A63` for
+`VK-48HJXP6A63`. The fold is a new grading-policy floor with its own audit
+bank (`v14-1`: the v13-1 bank plus hyphen positives and negatives); it also
+catches a forbidden or distractor value written with those hyphens. V13 keeps
+the unfolded match.
+
+The rest of the v14 scorer reads the reply the same way. The claim-span
+provenance gate keeps the published `NormalizeSpan` unchanged; that normaliser
+keeps the ASCII `-` (so `VK-48HJXP6A63` tokenizes with a signed `-48`) while
+NFKC turns a completion's U+2011 into U+2010, a separator. So from v14
+`ClaimAlternatives` adds the U+2010 variant of every hyphenated claim form, and
+an honest completion that wrote U+2011 is not flagged
+`served_text_not_model_emitted`. The twin post-pass compares asserted answers
+and the result-usage check reads the reply after the same fold (memory twins
+also after the hyphen-joined-value rewrite below), so a hyphen variant cannot
+make two credited answers compare unequal.
+
+The same v14 floor adds three memory-axis matcher changes from #2734; v13 and
+older grade byte-identically:
+
+- **Hyphen-joined multi-word values.** A hyphen (after the fold) that joins
+  two letter-ended words of a known multi-word value reads as the space it
+  replaces, so `blue‑purple` grades as `blue purple` and `true‑blue accent`
+  as `true blue accent` on every rule, including the
+  `conversational-declarative` acknowledgement. Known values are every hidden
+  value (expected, accepted, list items, claim values, distractors, forbidden,
+  dump guard), so a joined distractor or forbidden value is still caught. The
+  words must match (`blue‑green` stays a miss for `bluey green`), values
+  without a space are unaffected, and a join is not undone where it would
+  break a known value that itself contains a hyphen.
+- **Set removal with a place phrase.** A set-membership clause ending in
+  ` has been removed` / ` was removed` / ` is removed` followed only by a
+  preposition (`from`, `in`, `off`) and at most three plain words
+  (`from the list`, `from it`, `from your packing list`) reads as removal, as
+  does the bare form with trailing punctuation. A phrase that names a case
+  value, names a time (`is removed on Friday`, `in two weeks`; `on` is not a
+  place preposition at all), runs longer, or sits in a hedged clause does not:
+  a scheduled removal is a plan. An item asserted in another clause is still
+  asserted.
+- **Progressive action claims.** An `action` claim also accepts the -ing form
+  of the first word of each accepted form (`pausing` for `pause`,
+  `upgrading`, `stopping`, `canceling`/`cancelling`; a multisyllabic verb
+  doubles its final consonant only as a listed exception such as `admitting`
+  or `cancelling`, so `open` gives `opening`), and the case's
+  distractors get the same forms so a progressive distractor is caught. Past
+  -ed forms stay misses. Because the -ing form makes gerund negation
+  natural, an action claim also reads a gerund-taking negator (`avoid`,
+  `against`, `stop`, `quit` and their inflections) immediately before a
+  reviewed action value, and a post-posed predicate (`isn't possible`,
+  `is not an option`, `isn't allowed`) right after one, as rejecting that
+  value: `I'd avoid pausing it`, `we decided against pausing it`,
+  `we stopped pausing it` and `pausing isn't possible` are misses. The
+  negator must govern the value directly (`to stop the charges, we are
+  pausing it` still states the action), and the post-posed predicate rejects
+  only the value before it, not the rest of its clause.
+
+Audit bank `v14-1` carries reviewed positives and negatives for each.
+
+The generated surface, question-family identifiers, envelope, the rest of the
+grader policy, v13 gate postures, LongMem instrument, and public harness wire
+version (9) carry forward. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
 version. It introduces no deferred private surface research or screening-policy
 activation. `CurrentBenchVersion` stays at its existing value (8).
 

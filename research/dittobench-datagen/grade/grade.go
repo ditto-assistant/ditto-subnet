@@ -131,10 +131,44 @@ type gradingPolicy struct {
 	// v13 claim-span provenance gate can check it. It changes no score: v13
 	// grades byte-identically to v12 and only reports which span won.
 	claimProvenance bool
+	// foldTypographicHyphens (v14) folds U+2010 HYPHEN and U+2011 NON-BREAKING
+	// HYPHEN in the reply text to the ASCII hyphen before grading (#2734). The
+	// pinned model writes U+2011 inside most identifiers and compounds it
+	// copies from an ASCII record, so "VK‑48HJXP6A63" missed "VK-48HJXP6A63".
+	// V13 is a frozen scored contract and keeps the unfolded match.
+	foldTypographicHyphens bool
+	// hyphenJoinedValues (v14) reads a hyphen that joins the words of a known
+	// multi-word value as the space it replaces, so "blue-purple" grades as
+	// "blue purple" (#2734). It applies to every hidden value alike (expected,
+	// accepted, distractor, forbidden), so a hyphen-joined distractor is still
+	// caught. A changed word ("blue-green" for "bluey green") stays a miss.
+	hyphenJoinedValues bool
+	// setRemovalPlace (v14) lets a set-membership clause that ends in completed
+	// passive removal carry a short trailing place phrase ("PE kit has been
+	// removed from the list") and still read as removal (#2734).
+	setRemovalPlace bool
+	// progressiveActions (v14) accepts the progressive -ing form of an action
+	// claim's verb ("pausing" for "pause"), for accepted and distractor forms
+	// alike (#2734). Past -ed forms describe an earlier action and stay misses.
+	progressiveActions bool
 }
 
 func gradingPolicyForVersion(benchVersion int) gradingPolicy {
 	switch {
+	case benchVersion >= protocol.BenchVersionV14:
+		return gradingPolicy{
+			strictGenericKinds:      true,
+			authoritativeAnswerSlot: true,
+			rejectQuestionEcho:      true,
+			chitchatCredit:          0.5,
+			distractorScanSlotOnly:  true,
+			typedClaims:             true,
+			claimProvenance:         true,
+			foldTypographicHyphens:  true,
+			hyphenJoinedValues:      true,
+			setRemovalPlace:         true,
+			progressiveActions:      true,
+		}
 	case benchVersion >= protocol.BenchVersionV13:
 		return gradingPolicy{
 			strictGenericKinds:      true,
@@ -491,6 +525,32 @@ func ClaimAlternatives(mc protocol.MemoryCase) [][]string {
 			}
 			group(forms...)
 		}
+	}
+	if gradingPolicyForVersion(mc.BenchVersion).foldTypographicHyphens {
+		out = withTypographicHyphenForms(out)
+	}
+	return out
+}
+
+// withTypographicHyphenForms adds, to each claim group, the U+2010 HYPHEN
+// variant of every form carrying an ASCII hyphen (v14, foldTypographicHyphens).
+// The grader folds a reply's U+2010/U+2011 to ASCII before matching, but the
+// relay tokenizes the model's raw completion: NFKC maps U+2011 to U+2010, which
+// the published claim-span normaliser reads as a separator, while it keeps the
+// ASCII '-' and so reads "VK-48HJXP6A63" as carrying a signed "-48". Without
+// this variant the gate would flag an honest model that wrote U+2011 as
+// served_text_not_model_emitted. The variant differs from its form only in the
+// hyphen, so it accepts no value the grader does not.
+func withTypographicHyphenForms(groups [][]string) [][]string {
+	out := make([][]string, len(groups))
+	for i, group := range groups {
+		forms := append([]string(nil), group...)
+		for _, form := range group {
+			if strings.Contains(form, "-") {
+				forms = append(forms, strings.ReplaceAll(form, "-", "\u2010"))
+			}
+		}
+		out[i] = forms
 	}
 	return out
 }

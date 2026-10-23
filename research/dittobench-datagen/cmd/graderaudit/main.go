@@ -237,7 +237,7 @@ func robustnessBankV12Bank() grade.AuditBank {
 
 // auditBanks lists every versioned bank, ascending by policy floor.
 func auditBanks() []grade.AuditBank {
-	return []grade.AuditBank{robustnessBankV9(), robustnessBankV12Bank(), grade.AuditBankV13()}
+	return []grade.AuditBank{robustnessBankV9(), robustnessBankV12Bank(), grade.AuditBankV13(), grade.AuditBankV14()}
 }
 
 // bankForVersion resolves the bank auditing the grading policy that governs
