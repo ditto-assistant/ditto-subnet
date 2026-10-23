@@ -122,6 +122,21 @@ describe('generator competition MCP tools', () => {
     }
   })
 
+  it('refuses a malformed hotkey filter before calling Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const bad = await client.callTool({ name: 'list_generator_submissions', arguments: { hotkey: 'not-a-hotkey' } })
+      expect(bad.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('refuses a run detail that serves seeds before the run reported', () => {
     const run = {
       summary: runSummary, submission_id: SUBMISSION, miner_hotkey: '5'.repeat(48),

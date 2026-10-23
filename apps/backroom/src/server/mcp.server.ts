@@ -1789,7 +1789,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool('list_generator_submissions', {
     title: 'List generator submissions',
     description: 'Newest-first generator submissions with identity (source and tree SHA-256, Go module and version, file count, size), status (active is the hotkey\'s one leased generator; superseded by a newer upload; rejected with status_reason naming build_failed, generation_failed, invalid_pack, invalid_probe, nondeterministic, behavioral_copy or an operator ruling), next_run_at, and the latest non-abandoned run with case status counts. counts_by_status covers every submission. Filter by hotkey or status. Source is never returned. Requires backroom:read.',
-    inputSchema: listGeneratorSubmissionsInputSchema.extend({ hotkey: z.string().optional() }), annotations: toolAnnotations('read'),
+    inputSchema: listGeneratorSubmissionsInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await listGeneratorSubmissions(input)))
 
   registerTool('get_generator_submission', {
