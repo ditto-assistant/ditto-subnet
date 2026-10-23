@@ -153,6 +153,12 @@ func Digest(raw []byte) string {
 // question and gold answer. Platform uses it to give the first generator that
 // emitted a case the credit and to zero later repeats, regardless of IDs or
 // haystack, and to compare generators' outputs on a shared probe seed.
+//
+// Grading settings (answer kind, alternatives, distractors, guards, typed-list
+// options) are deliberately excluded. They change how an answer is graded,
+// not what the agent is asked, so flipping one never turns a repeated
+// question and answer into a new case that earns credit or escapes the copy
+// check.
 func Fingerprint(c Case) string {
 	h := sha256.New()
 	h.Write([]byte(grade.Normalize(c.Question)))
