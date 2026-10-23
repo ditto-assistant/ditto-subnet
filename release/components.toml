@@ -213,6 +213,13 @@ paths = [
   ".github/workflows/reranker-ci.yml",
 ]
 
+[components.dittobench_reranker_starter_kit]
+description = "Season 2 reranker practice kit and the pinned incumbent model"
+depends_on = ["dittobench_reranker"]
+paths = [
+  "miners/dittobench-reranker-starter-kit/**",
+]
+
 [components.platform_api]
 description = "Subnet API, database migrations, relays, and control plane"
 depends_on = ["screening_protocol"]

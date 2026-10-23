@@ -138,3 +138,13 @@ The README's ~14 ms was measured on different hardware with shorter texts, so
 absolute milliseconds are not portable. That is why the gate is a ratio.
 The Python tokenizer reproduces the product's Go tokenizer exactly: 0
 mismatches over 19,536 (query, memory) pairs, including Unicode edge cases.
+
+### Starter-kit trial (2026-10-13)
+
+On 976 pools from four unseen seeds, a one-epoch fine-tune of the incumbent on
+ten practice seeds scored 0.831 (public wording) and 0.832 (held-salt wording),
+against the incumbent's 0.792 and 0.789. MiniLM-L2 off the shelf scored
+0.797/0.794 at 1.6× latency, which does not clear the dethrone margin. The salt
+and post-commit seeds stop memorisation, but not learning the generator's
+world; the LongMemEval-S transfer gate is what guards against that and must be
+in force before the season pays.
