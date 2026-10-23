@@ -221,7 +221,9 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        target: [runtime, sandbox, coding-executor-scorer]
+        # The coding-executor-scorer image is coding-competition CI and stays
+        # operator-dispatched (SN-120).
+        target: [runtime, sandbox]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
