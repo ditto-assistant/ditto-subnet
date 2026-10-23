@@ -115,6 +115,7 @@ def _docker(args: list[str], *, timeout: float, stdin: Any = None) -> tuple[int,
 
 
 _ARCHIVE_LABEL = "probe-review.archive-sha256"
+_MAX_ARCHIVE_MEMBERS = 100_000
 _ROOT_LOCKS: dict[str, threading.RLock] = {}
 _ROOT_LOCKS_GUARD = threading.Lock()
 _LOCK_DEPTH = threading.local()
@@ -164,10 +165,13 @@ def _session_lock(root: Path) -> Iterator[None]:
 def _refused_build_entitlement(archive: Path) -> str | None:
     """The gate's contract check: no RUN --network=host / --security=insecure."""
     with tarfile.open(archive) as tar:
-        member = next(
-            (m for m in tar.getmembers() if m.name in {"Dockerfile", "./Dockerfile"}),
-            None,
-        )
+        # Stream the headers with a bound instead of materializing them all.
+        member = None
+        for count, candidate in enumerate(tar, start=1):
+            if count > _MAX_ARCHIVE_MEMBERS:
+                return "archive contains too many members"
+            if member is None and candidate.name in {"Dockerfile", "./Dockerfile"}:
+                member = candidate
         handle = tar.extractfile(member) if member is not None else None
         if handle is None:
             return "archive has no readable Dockerfile"

@@ -278,7 +278,8 @@ def dispatch(
 def review(
     session: Session,
     *,
-    # Called as complete(messages, schemas, max_tokens=N); it must honor N.
+    # Called as complete(messages, schemas, max_tokens=N); it must honor N and
+    # bound its own duration (a stuck call is abandoned on a daemon thread).
     complete: Callable[..., dict[str, Any]],
     ledger: Ledger | None = None,
     deadline_seconds: float = 1800.0,
@@ -321,9 +322,12 @@ def review(
         remaining = deadline_seconds - (time.monotonic() - started)
         if remaining <= 0:
             break
-        # Roughly four characters per token; refuse a request whose capped
-        # completion could not fit what is left of the budgets.
-        prompt_estimate = len(json.dumps(messages, default=str)) // 4
+        # A conservative upper bound (two characters per token, schemas
+        # included): code-heavy transcripts tokenize denser than prose. Refuse
+        # a request whose capped completion could not fit the budgets.
+        prompt_estimate = (
+            len(json.dumps(messages, default=str)) + len(json.dumps(TOOL_SCHEMAS))
+        ) // 2
         max_tokens = ledger.completion_allowance(prompt_estimate)
         if max_tokens < 256:
             ledger.allowance_spent = True
@@ -350,6 +354,10 @@ def review(
             )
         response = _call_with_deadline(invoke, remaining)
         if response is None:
+            if isinstance(complete, HttpCompleter):
+                # Closing the pool aborts the stuck request, so the abandoned
+                # thread fails fast instead of running past the review.
+                complete.close()
             # The abandoned call may still bill; its usage is unknowable,
             # so the result reports untracked spend.
             ledger.requests += 1

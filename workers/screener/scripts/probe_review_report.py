@@ -68,7 +68,11 @@ def rows(corpus: list[dict[str, Any]], sessions: Path) -> list[dict[str, Any]]:
         leads = [lead["item_id"] for lead in battery["leads"]]
         # A replay that failed validation or citation checks is inconclusive,
         # not a completed review that found nothing.
-        replay_failed = replay is not None and not _complete_replay(replay)
+        # A present but unreadable replay is a failed attempt, not "no replay".
+        replay_present = (root / "replay.json").exists()
+        replay_failed = replay_present and (
+            replay is None or not _complete_replay(replay)
+        )
         reviewed = replay is not None and not replay_failed
         verified = bool(replay and not replay_failed and replay.get("verified"))
         # A failed replay's findings may be malformed; never iterate them.

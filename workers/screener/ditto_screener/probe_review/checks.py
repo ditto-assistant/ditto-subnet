@@ -160,8 +160,11 @@ def _choice_pinned(choice: Any) -> bool:
 
 
 _REGEX_TIMEOUT_S = 5.0
+# Pattern and text both arrive on stdin, so neither is bounded by argv limits.
 _REGEX_SCRIPT = (
-    "import re,sys\nprint(1 if re.search(sys.argv[1], sys.stdin.read()) else 0)"
+    "import json,re,sys\n"
+    "d=json.load(sys.stdin)\n"
+    "print(1 if re.search(d['pattern'], d['text']) else 0)"
 )
 
 
@@ -177,14 +180,14 @@ def _search(pattern: str, text: str) -> bool:
         return False
     try:
         completed = subprocess.run(
-            [sys.executable, "-I", "-c", _REGEX_SCRIPT, pattern],
-            input=text,
+            [sys.executable, "-I", "-c", _REGEX_SCRIPT],
+            input=json.dumps({"pattern": pattern, "text": text}),
             capture_output=True,
             text=True,
             timeout=_REGEX_TIMEOUT_S,
             check=False,
         )
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, OSError):
         return False
     return completed.returncode == 0 and completed.stdout.strip() == "1"
 
