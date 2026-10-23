@@ -26,9 +26,10 @@ logger = logging.getLogger(__name__)
 
 
 def log_movement_refusal(row, error):
-    # Our refusal reasons are fixed strings; a chain error may echo an
-    # endpoint, so only its type is logged.
-    detail = "" if isinstance(error, ChainError) else f": {error}"
+    # Only our own refusals carry fixed reason strings. Chain errors may echo
+    # an endpoint and validation errors may echo stored values: type only.
+    fixed = type(error) in (ValueError, ReceiptHistoryUnavailable)
+    detail = f": {error}" if fixed else ""
     logger.warning(
         "manual wallet movement unverified for %s (%s%s)",
         row.request_id,

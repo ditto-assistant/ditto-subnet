@@ -508,3 +508,22 @@ async def test_settlement_anchor_must_be_recent_and_bind_request_policy(
     assert (
         await client.get("/api/v1/public/treasury-activity/manual-movements")
     ).json() == {"items": []}
+
+
+async def test_movement_refusal_log_never_echoes_validation_input(caplog):
+    from pydantic import BaseModel
+
+    from ditto.api_server.treasury_manual_loop import log_movement_refusal
+
+    class Strict(BaseModel):
+        amount: int
+
+    try:
+        Strict.model_validate({"amount": "PRIVATE stored value"})
+    except ValueError as error:
+        validation = error
+    row = SimpleNamespace(request_id="r1")
+    log_movement_refusal(row, validation)
+    log_movement_refusal(row, ReceiptHistoryUnavailable("anchor absent"))
+    assert "PRIVATE" not in caplog.text
+    assert "ValidationError" in caplog.text and "anchor absent" in caplog.text
