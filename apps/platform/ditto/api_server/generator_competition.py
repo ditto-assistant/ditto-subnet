@@ -154,6 +154,11 @@ def inspect_upload(*, source_base64: str, source_sha256: str) -> InspectedUpload
         raw = base64.b64decode(source_base64, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise UploadRejected("source_base64 is not valid base64") from exc
+    return inspect_source(raw, source_sha256=source_sha256)
+
+
+def inspect_source(raw: bytes, *, source_sha256: str) -> InspectedUpload:
+    """Check raw archive bytes. Raises :class:`UploadRejected`."""
     if not raw or len(raw) > MAX_SOURCE_ARCHIVE_BYTES:
         raise UploadRejected(
             f"source archive must be 1..{MAX_SOURCE_ARCHIVE_BYTES} bytes"

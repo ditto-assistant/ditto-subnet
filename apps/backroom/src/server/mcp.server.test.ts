@@ -400,6 +400,7 @@ describe('Backroom MCP tools', () => {
         'republish_generator_round_commitment',
         'release_generator_round_lease',
         'register_default_generator',
+        'create_default_generator_upload',
         'get_ath_review',
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
@@ -1681,10 +1682,11 @@ describe('Backroom MCP tools', () => {
 
       // An intersection publishes as `{}`: clients then cannot send the
       // arguments the tool validates, so every write must publish properties.
-      // create_ath_rulings_upload is the one write that takes no arguments.
+      // The two presigned-upload writes are the only ones that take no arguments.
       const opaque = tools
         .filter((tool) => tool.annotations?.readOnlyHint === false)
         .filter((tool) => tool.name !== 'create_ath_rulings_upload')
+        .filter((tool) => tool.name !== 'create_default_generator_upload')
         .filter((tool) => Object.keys(tool.inputSchema?.properties ?? {}).length === 0)
         .map((tool) => tool.name)
       expect(opaque).toEqual([])

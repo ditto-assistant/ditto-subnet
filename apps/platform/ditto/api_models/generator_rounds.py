@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ditto.api_models.generator import (
     GeneratorBuildResult,
@@ -36,6 +36,13 @@ RoundCaseStatus = Literal[
 
 ROUND_COMMITMENT_TAG = "dgr1"
 REGISTER_DEFAULT_GENERATOR_CONFIRMATION = "REGISTER DEFAULT GENERATOR"
+# A starter-kit archive with its vendored datagen is a few hundred KiB, too
+# large to inline through an MCP tool argument, so an operator can PUT it to a
+# five-minute presigned URL under their own prefix of the private trace bucket
+# and register it by key.
+DEFAULT_GENERATOR_UPLOAD_PREFIX = "generator-default/v1/"
+DEFAULT_GENERATOR_UPLOAD_TTL_SECONDS = 300
+DEFAULT_GENERATOR_UPLOAD_CONTENT_TYPE: Literal["application/gzip"] = "application/gzip"
 REPUBLISH_COMMITMENT_CONFIRMATION = "REPUBLISH GENERATOR ROUND COMMITMENT"
 RELEASE_ROUND_LEASE_CONFIRMATION = "RELEASE GENERATOR ROUND LEASE"
 
@@ -242,10 +249,32 @@ class AdminDefaultGeneratorRequest(BaseModel):
     miner_hotkey: Annotated[str, Field(pattern=_SS58)]
     """The hotkey the default generator's packs echo; any operator hotkey."""
     source_sha256: Annotated[str, Field(pattern=_SHA256)]
-    source_base64: Annotated[str, Field(min_length=4, max_length=5_600_000)]
+    source_base64: Annotated[str, Field(min_length=4, max_length=5_600_000)] | None = (
+        None
+    )
+    upload_key: Annotated[str, Field(min_length=1, max_length=512)] | None = None
+    """A key from ``POST /default-generator/upload-url``, instead of inline bytes."""
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
+
+    @model_validator(mode="after")
+    def _one_source(self) -> AdminDefaultGeneratorRequest:
+        if (self.source_base64 is None) == (self.upload_key is None):
+            raise ValueError("provide exactly one of source_base64 or upload_key")
+        return self
+
+
+class AdminDefaultGeneratorUploadResponse(RoundModel):
+    """A presigned PUT for one default-generator source archive."""
+
+    bucket: str
+    key: str
+    url: str
+    method: Literal["PUT"] = "PUT"
+    content_type: str
+    expires_in: int
+    max_bytes: int
 
 
 class AdminDefaultGeneratorResponse(RoundModel):

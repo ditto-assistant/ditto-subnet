@@ -23,12 +23,17 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.generator import MAX_SOURCE_ARCHIVE_BYTES
 from ditto.api_models.generator_rounds import (
+    DEFAULT_GENERATOR_UPLOAD_CONTENT_TYPE,
+    DEFAULT_GENERATOR_UPLOAD_PREFIX,
+    DEFAULT_GENERATOR_UPLOAD_TTL_SECONDS,
     REGISTER_DEFAULT_GENERATOR_CONFIRMATION,
     RELEASE_ROUND_LEASE_CONFIRMATION,
     REPUBLISH_COMMITMENT_CONFIRMATION,
     AdminDefaultGeneratorRequest,
     AdminDefaultGeneratorResponse,
+    AdminDefaultGeneratorUploadResponse,
     AdminGeneratorRoundActionRequest,
     AdminGeneratorRoundDetail,
     AdminGeneratorRoundLeaseReleaseRequest,
@@ -42,9 +47,12 @@ from ditto.api_models.generator_rounds import (
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.endpoints.admin_ath_rulings import ActorDep, actor_slug
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.generator_competition import (
+    InspectedUpload,
     UploadRejected,
+    inspect_source,
     inspect_upload,
     load_settings,
 )
@@ -65,6 +73,11 @@ from ditto.api_server.generator_rounds import (
     select_round_panel,
     standing_views,
     void_round,
+)
+from ditto.api_server.hippius import HippiusClient, normalize_object_key
+from ditto.api_server.storage.errors import (
+    ObjectDownloadFailedError,
+    ObjectNotFoundError,
 )
 from ditto.db.models import (
     GeneratorRoundAttempt,
@@ -528,9 +541,97 @@ async def admin_release_round_lease(
     return await admin_round_detail(round_index, _admin, session)
 
 
+def _default_generator_store(request: Request) -> HippiusClient:
+    # The private inference-trace bucket, as ATH rulings uploads use; never a
+    # bucket that may serve a public prefix.
+    client = getattr(request.app.state, "traces_hippius", None)
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "default generator upload storage is not configured; send source_base64"
+            ),
+        )
+    return client
+
+
+def _default_generator_prefix(actor: str) -> str:
+    return f"{DEFAULT_GENERATOR_UPLOAD_PREFIX}{actor_slug(actor)}/"
+
+
+@router.post(
+    "/default-generator/upload-url",
+    response_model=AdminDefaultGeneratorUploadResponse,
+)
+async def admin_create_default_generator_upload(
+    request: Request, _admin: AdminDep, x_admin_actor: ActorDep = None
+) -> AdminDefaultGeneratorUploadResponse:
+    """Issue a five-minute presigned PUT for one default-generator archive.
+
+    Register it with ``POST /default-generator`` and ``upload_key``; the key is
+    scoped to the issuing operator.
+    """
+    actor = (x_admin_actor or "").strip()
+    if not 1 <= len(actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    client = _default_generator_store(request)
+    now = datetime.now(UTC)
+    key = f"{_default_generator_prefix(actor)}{now:%Y-%m-%d}/{uuid4()}.tar.gz"
+    url = await client.presigned_put_url(
+        key=key,
+        content_type=DEFAULT_GENERATOR_UPLOAD_CONTENT_TYPE,
+        expires_in=DEFAULT_GENERATOR_UPLOAD_TTL_SECONDS,
+    )
+    return AdminDefaultGeneratorUploadResponse(
+        bucket=client.bucket,
+        key=key,
+        url=url,
+        content_type=DEFAULT_GENERATOR_UPLOAD_CONTENT_TYPE,
+        expires_in=DEFAULT_GENERATOR_UPLOAD_TTL_SECONDS,
+        max_bytes=MAX_SOURCE_ARCHIVE_BYTES,
+    )
+
+
+async def _inspect_default_source(
+    request: Request, payload: AdminDefaultGeneratorRequest, actor: str
+) -> InspectedUpload:
+    if payload.upload_key is None:
+        assert payload.source_base64 is not None
+        return inspect_upload(
+            source_base64=payload.source_base64, source_sha256=payload.source_sha256
+        )
+    key = normalize_object_key(payload.upload_key)
+    scope = _default_generator_prefix(actor)
+    if not key.startswith(scope):
+        raise HTTPException(
+            status_code=403,
+            detail=f"upload_key must be under this operator's prefix {scope}",
+        )
+    client = _default_generator_store(request)
+    try:
+        raw = await client.get_object(key=key, max_bytes=MAX_SOURCE_ARCHIVE_BYTES)
+    except ObjectNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="default generator upload not found; upload it first",
+        ) from None
+    except ObjectDownloadFailedError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "default generator upload could not be read within "
+                f"{MAX_SOURCE_ARCHIVE_BYTES} bytes: {exc}"
+            ),
+        ) from None
+    return inspect_source(raw, source_sha256=payload.source_sha256)
+
+
 @router.post("/default-generator", response_model=AdminDefaultGeneratorResponse)
 async def admin_register_default_generator(
-    payload: AdminDefaultGeneratorRequest, _admin: AdminDep, session: SessionDep
+    payload: AdminDefaultGeneratorRequest,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
 ) -> AdminDefaultGeneratorResponse:
     """Register the public default generator that fills empty counted columns.
 
@@ -548,9 +649,7 @@ async def admin_register_default_generator(
         )
     reason, actor = _check_reason(payload.reason, payload.actor)
     try:
-        inspected = inspect_upload(
-            source_base64=payload.source_base64, source_sha256=payload.source_sha256
-        )
+        inspected = await _inspect_default_source(request, payload, actor)
     except UploadRejected as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     info = inspected.info
@@ -616,6 +715,7 @@ async def admin_register_default_generator(
         reason=reason,
         detail={
             "source_sha256": payload.source_sha256,
+            "upload_key": payload.upload_key,
             "superseded": [str(sid) for sid in superseded],
         },
     )

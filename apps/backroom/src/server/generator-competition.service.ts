@@ -10,6 +10,7 @@ import {
   generatorRoundTickSchema,
   listGeneratorRoundsInputSchema,
   registerDefaultGeneratorInputSchema,
+  defaultGeneratorUploadResponseSchema,
   tickGeneratorRoundsInputSchema,
   releaseRoundLeaseInputSchema,
   republishRoundCommitmentInputSchema,
@@ -193,7 +194,7 @@ async function defaultGeneratorWrite<T>(operation: () => Promise<T>): Promise<T>
   } catch (cause) {
     if (cause instanceof PlatformAdminError && (cause.status === 409 || cause.status === 422)) {
       throw new Error(
-        `${cause.message}. Nothing was registered: send the confirmation "REGISTER DEFAULT GENERATOR" with a source archive whose SHA-256 matches sourceSha256 and that no earlier upload already holds.`,
+        `${cause.message}. Nothing was registered: send the confirmation "REGISTER DEFAULT GENERATOR" with a source archive (an uploadKey from this operator's create_default_generator_upload, or sourceBase64) whose SHA-256 matches sourceSha256 and that no earlier upload already holds.`,
       )
     }
     throw cause
@@ -307,8 +308,23 @@ export async function releaseGeneratorRoundLease(rawInput: unknown, actor: strin
   )
 }
 
+export async function createDefaultGeneratorUpload(actor: string) {
+  return defaultGeneratorUploadResponseSchema.parse(
+    await platformAdminRequest(`${BASE}/default-generator/upload-url`, {
+      method: 'POST',
+      actor,
+      body: {},
+    }),
+  )
+}
+
 export async function registerDefaultGenerator(rawInput: unknown, actor: string) {
   const input = registerDefaultGeneratorInputSchema.parse(rawInput)
+  if ((input.sourceBase64 === undefined) === (input.uploadKey === undefined)) {
+    throw new Error(
+      'Provide exactly one of uploadKey (from create_default_generator_upload) or sourceBase64. Nothing was registered.',
+    )
+  }
   return defaultGeneratorWrite(async () =>
     defaultGeneratorResponseSchema.parse(
       await platformAdminRequest(`${BASE}/default-generator`, {
@@ -317,7 +333,8 @@ export async function registerDefaultGenerator(rawInput: unknown, actor: string)
         body: {
           miner_hotkey: input.minerHotkey,
           source_sha256: input.sourceSha256,
-          source_base64: input.sourceBase64,
+          source_base64: input.sourceBase64 ?? null,
+          upload_key: input.uploadKey ?? null,
           reason: input.reason,
           actor,
           confirmation: input.confirmation,

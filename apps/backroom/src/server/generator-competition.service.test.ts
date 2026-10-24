@@ -272,6 +272,9 @@ describe('generator competition MCP tools', () => {
       if (path.endsWith('/rounds/7/dataset')) {
         return Response.json({ round_index: 7, dataset_sha256: 'bb'.repeat(32), seed: 'cc'.repeat(32), size_bytes: 3, dataset_base64: 'e30=' })
       }
+      if (path.endsWith('/default-generator/upload-url')) {
+        return Response.json({ bucket: 'traces', key: 'generator-default/v1/op/k.tar.gz', url: 'https://s3.example/put', method: 'PUT', content_type: 'application/gzip', expires_in: 300, max_bytes: 4194304 })
+      }
       if (path.endsWith('/default-generator')) {
         return Response.json({ submission_id: SUBMISSION, source_sha256: 'dd'.repeat(32), tree_sha256: 'ee'.repeat(32), status: 'active', superseded: [] })
       }
@@ -376,6 +379,32 @@ describe('generator competition MCP tools', () => {
         },
       }))).toMatchObject({ submission_id: SUBMISSION, status: 'active' })
       expect(calls[0][2]).toMatchObject({ source_sha256: 'dd'.repeat(32), actor: session.email })
+
+      calls.length = 0
+      expect(json(await client.callTool({ name: 'create_default_generator_upload', arguments: {} })))
+        .toMatchObject({ key: 'generator-default/v1/op/k.tar.gz', method: 'PUT' })
+      expect(calls[0].slice(0, 2)).toEqual(['POST', '/api/v1/admin/generator-competition/default-generator/upload-url'])
+
+      calls.length = 0
+      expect(json(await client.callTool({
+        name: 'register_default_generator',
+        arguments: {
+          minerHotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY', sourceSha256: 'dd'.repeat(32),
+          uploadKey: 'generator-default/v1/op/k.tar.gz', reason: 'the public default', confirmation: 'REGISTER DEFAULT GENERATOR',
+        },
+      }))).toMatchObject({ submission_id: SUBMISSION })
+      expect(calls[0][2]).toMatchObject({ upload_key: 'generator-default/v1/op/k.tar.gz', source_base64: null })
+
+      calls.length = 0
+      const neither = await client.callTool({
+        name: 'register_default_generator',
+        arguments: {
+          minerHotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY', sourceSha256: 'dd'.repeat(32),
+          reason: 'the public default', confirmation: 'REGISTER DEFAULT GENERATOR',
+        },
+      })
+      expect(neither.isError).toBe(true)
+      expect(calls).toEqual([])
     } finally {
       await client.close()
       await server.close()

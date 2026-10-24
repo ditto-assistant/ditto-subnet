@@ -66,6 +66,7 @@ import {
   fetchGeneratorRoundPreview,
   listGeneratorRounds,
   registerDefaultGenerator,
+  createDefaultGeneratorUpload,
   releaseGeneratorRoundLease,
   republishGeneratorRoundCommitment,
   tickGeneratorRounds,
@@ -454,6 +455,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'republish_generator_round_commitment',
   'release_generator_round_lease',
   'register_default_generator',
+  'create_default_generator_upload',
   'advance_scored_policy_rescreen',
   'record_treasury_settings',
   'record_treasury_runtime',
@@ -909,7 +911,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   close_generator_round: 'Close a running round now with CLOSE GENERATOR ROUND {n}; scores what it has.',
   republish_generator_round_commitment: 'Retry a failed on-chain commitment for a committed round.',
   release_generator_round_lease: 'Release one validator\'s stuck round lease so the agent re-leases.',
-  register_default_generator: 'Register the public default generator that fills empty counted columns.',
+  register_default_generator: 'Register the public default generator (uploadKey or sourceBase64) that fills empty counted columns.',
+  create_default_generator_upload: 'Presigned five-minute PUT for one default-generator archive under this operator\'s prefix.',
   rescore_generator_submission: 'Re-qualify an active generator now on fresh seeds.',
   reject_generator_submission: 'Reject a generator by ruling; abandons its live run, drops it from the ledger.',
   get_bounty: 'Operator view of one bounty: claims, appeals, full private audit.',
@@ -1867,10 +1870,16 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     inputSchema: releaseRoundLeaseInputSchema.extend({ agentId: sourceAgentId(), validatorHotkey: z.string() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => releaseGeneratorRoundLease(input, props.session.email)))
 
+  registerTool('create_default_generator_upload', {
+    title: 'Create default generator upload',
+    description: 'Issue a five-minute presigned PUT URL for one default-generator source archive (the gzip tar `ditto generator package` or `challenge pack` writes; at most max_bytes, 4 MiB). The object lands under this operator\'s own prefix (generator-default/v1/<actor>/...) of the private trace bucket. Upload it with `curl -X PUT -H "Content-Type: application/gzip" --data-binary @generator.tar.gz "<url>"`, then call register_default_generator with uploadKey set to the returned key. Requires backroom:write; answers 503 when upload storage is not configured (send sourceBase64 instead).',
+    annotations: toolAnnotations('write', false),
+  }, async () => write(() => createDefaultGeneratorUpload(props.session.email)))
+
   registerTool('register_default_generator', {
     title: 'Register default generator',
-    description: 'Register (or replace) the public default generator: the base64 gzip tar of a Go generator module (for example `challenge pack` of miners/dittobench-generator-starter-kit) with its SHA-256 and the hotkey its packs echo. It is checked like any upload, qualified by the scorer like any generator, owned by nobody, never on the ledger, and fills every counted column no qualified miner generator holds, each on its own column seed. A new registration supersedes the previous default. Confirmation: REGISTER DEFAULT GENERATOR. Requires backroom:write.',
-    inputSchema: registerDefaultGeneratorInputSchema.extend({ minerHotkey: z.string(), sourceSha256: z.string(), sourceBase64: z.string() }), annotations: toolAnnotations('write', true),
+    description: 'Register (or replace) the public default generator: a gzip tar of a Go generator module (for example `ditto generator package` of miners/dittobench-generator-starter-kit) with its SHA-256 and the hotkey its packs echo. Send exactly one of uploadKey (from create_default_generator_upload; use this for anything with vendored dependencies, which is too large to inline) or sourceBase64. It is checked like any upload, qualified by the scorer like any generator, owned by nobody, never on the ledger, and fills every counted column no qualified miner generator holds, each on its own column seed. A new registration supersedes the previous default. Confirmation: REGISTER DEFAULT GENERATOR. Requires backroom:write.',
+    inputSchema: registerDefaultGeneratorInputSchema.extend({ minerHotkey: z.string(), sourceSha256: z.string(), sourceBase64: z.string().optional(), uploadKey: z.string().optional() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => registerDefaultGenerator(input, props.session.email)))
 
   registerTool('get_bounty_board', {

@@ -534,10 +534,23 @@ export const releaseRoundLeaseInputSchema = z.object({
   confirmation: z.literal(RELEASE_ROUND_LEASE_CONFIRMATION),
 })
 
+// Exactly one of sourceBase64 or uploadKey; the service checks that, so the
+// object stays extendable for the MCP input schema.
 export const registerDefaultGeneratorInputSchema = z.object({
   minerHotkey: ss58,
   sourceSha256: sha256,
-  sourceBase64: z.string().min(4).max(5_600_000),
+  sourceBase64: z.string().min(4).max(5_600_000).optional(),
+  uploadKey: z.string().min(1).max(512).optional(),
   reason: auditReasonSchema(8),
   confirmation: z.literal(REGISTER_DEFAULT_GENERATOR_CONFIRMATION),
+})
+
+export const defaultGeneratorUploadResponseSchema = z.object({
+  bucket: z.string(),
+  key: z.string(),
+  url: z.string(),
+  method: z.literal('PUT'),
+  content_type: z.string(),
+  expires_in: z.number().int().positive(),
+  max_bytes: z.number().int().positive(),
 })

@@ -1608,6 +1608,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/default-generator/upload-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Create Default Generator Upload
+         * @description Issue a five-minute presigned PUT for one default-generator archive.
+         *
+         *     Register it with ``POST /default-generator`` and ``upload_key``; the key is
+         *     scoped to the issuing operator.
+         */
+        post: operations["admin_create_default_generator_upload_api_v1_admin_generator_competition_default_generator_upload_url_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/probe": {
         parameters: {
             query?: never;
@@ -10937,9 +10960,11 @@ export interface components {
             /** Reason */
             reason: string;
             /** Source Base64 */
-            source_base64: string;
+            source_base64?: string | null;
             /** Source Sha256 */
             source_sha256: string;
+            /** Upload Key */
+            upload_key?: string | null;
         };
         /** AdminDefaultGeneratorResponse */
         AdminDefaultGeneratorResponse: {
@@ -10959,6 +10984,30 @@ export interface components {
             superseded?: string[];
             /** Tree Sha256 */
             tree_sha256: string;
+        };
+        /**
+         * AdminDefaultGeneratorUploadResponse
+         * @description A presigned PUT for one default-generator source archive.
+         */
+        AdminDefaultGeneratorUploadResponse: {
+            /** Bucket */
+            bucket: string;
+            /** Content Type */
+            content_type: string;
+            /** Expires In */
+            expires_in: number;
+            /** Key */
+            key: string;
+            /** Max Bytes */
+            max_bytes: number;
+            /**
+             * Method
+             * @default PUT
+             * @constant
+             */
+            method: "PUT";
+            /** Url */
+            url: string;
         };
         /**
          * AdminDeferredReviewEvidence
@@ -43384,6 +43433,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminDefaultGeneratorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_create_default_generator_upload_api_v1_admin_generator_competition_default_generator_upload_url_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDefaultGeneratorUploadResponse"];
                 };
             };
             /** @description Validation Error */
