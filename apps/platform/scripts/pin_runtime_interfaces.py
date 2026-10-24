@@ -47,10 +47,15 @@ PINS = (
         9336443,
         "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62",
     ),
+    (
+        "v483",
+        9346596,
+        "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2",
+    ),
 )
 # The runtime the treasury signer's cold-signed policy binds; its per-call
 # digests are the baseline the treasury runtime report compares against.
-TREASURY_CALL_BASELINE = "v482"
+TREASURY_CALL_BASELINE = "v483"
 TARGET = (
     Path(__file__).resolve().parents[1] / "ditto/chain/audited_runtime_interfaces.py"
 )

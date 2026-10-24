@@ -39,10 +39,10 @@ from ditto_screening_protocol.collector_receipts import (
 )
 from ditto_screening_protocol.runtime_interface import runtime_interface
 
-# Exact v482 official artifact and reviewed source that the cold-signed policy
-# names. Historical receipt hashes are accepted only on the observation path,
-# never for preparation/broadcast. A later runtime is read and signed as this
-# one only when COLLECTOR_SIGNER_SURFACE is byte-identical to it.
+# Exact v483 runtime that the cold-signed policy names (revision 9). Historical
+# receipt hashes are accepted only on the observation path, never for
+# preparation/broadcast. A later runtime is read and signed as this one only
+# when COLLECTOR_SIGNER_SURFACE is byte-identical to it.
 AUDITED_CODE_HASH = AUDITED_COLLECTOR_CODE_HASH
 # (signed runtime, live runtime) -> whether the signer surface is unchanged.
 SIGNER_SURFACE_VERDICTS: dict[tuple[str, str], bool] = {}

@@ -18,9 +18,16 @@ hashes to the finalized Finney `:code`: blake2b
 Signing no longer needs a new cold signature for every runtime upgrade. Custody
 now fingerprints `COLLECTOR_SIGNER_SURFACE`
 (`ditto_screening_protocol.collector_receipts`) twice. It reads the exact
-metadata at a finalized block running the signed v482 runtime
-(`AUDITED_COLLECTOR_REFERENCE_BLOCK`, 9336443) and at the live block. If the
-two match, custody reads and signs as v482 under the existing revision-8 policy.
+metadata at a finalized block running the signed runtime
+(`AUDITED_COLLECTOR_REFERENCE_BLOCK`) and at the live block. If the two match,
+custody reads and signs as the signed runtime under the existing policy.
+
+The live policy is revision 9 and names v483 (see
+[collector-finney-v483](../collector-finney-v483/README.md)). The reference
+block is 9346596, so v484 is compared against v483. v483 never got an official
+release artifact. Current signing now happens on v484, whose official artifact
+is verified above; v483's hash is only the signature anchor and the reader for
+blocks 9342487–9348409.
 
 The surface covers:
 
@@ -34,7 +41,7 @@ Both fingerprints are computed in the signer's own process. No digest from
 Platform or another library version is trusted.
 
 The live runtime must also keep the signed runtime's `transactionVersion`
-(1 at v482 and v484) and must not have a lower `specVersion`. Runtimes bump
+(1 at v482, v483 and v484) and must not have a lower `specVersion`. Runtimes bump
 `transactionVersion` when a dispatchable's encoding or meaning changes for
 signed transactions.
 

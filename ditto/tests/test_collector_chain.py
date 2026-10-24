@@ -1247,19 +1247,21 @@ def test_v473_historical_receipt_does_not_require_new_consensus_storage():
     )
 
 
-@pytest.mark.parametrize("release", ["v478", "v479", "v481"])
-def test_old_runtime_is_read_only_under_new_v482_policy(release):
+@pytest.mark.parametrize("release", ["v478", "v479", "v481", "v482"])
+def test_old_runtime_is_read_only_under_new_v483_policy(release):
     from ditto_screening_protocol.collector_receipts import (
         AUDITED_COLLECTOR_RECEIPT_HASHES,
         V478_COLLECTOR_CODE_HASH,
         V479_READONLY_CODE_HASH,
         V481_COLLECTOR_CODE_HASH,
+        V482_COLLECTOR_CODE_HASH,
     )
 
     code = {
         "v478": V478_COLLECTOR_CODE_HASH,
         "v479": V479_READONLY_CODE_HASH,
         "v481": V481_COLLECTOR_CODE_HASH,
+        "v482": V482_COLLECTOR_CODE_HASH,
     }[release]
     c, filters = runtime_adapter(code)
     with pytest.raises(ValueError, match="runtime changed"):
@@ -1287,10 +1289,10 @@ def test_old_runtime_is_read_only_under_new_v482_policy(release):
     assert V479_READONLY_CODE_HASH not in AUDITED_COLLECTOR_RECEIPT_HASHES
 
 
-def test_v482_is_the_exact_current_published_artifact():
-    # docs/audits/collector-finney-v482: official compressed WASM blake2b-256.
+def test_v483_is_the_exact_current_published_artifact():
+    # docs/audits/collector-finney-v483: official compressed WASM blake2b-256.
     assert AUDITED_CODE_HASH == (
-        "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62"
+        "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2"
     )
     c, _ = runtime_adapter(AUDITED_CODE_HASH)
     assert c.guard_runtime(policy(), "current") == AUDITED_CODE_HASH
@@ -1443,7 +1445,7 @@ def surface_adapter(
 
     def rpc(method, params):
         if method == "state_getRuntimeVersion":
-            spec, tx = (482, 1) if params[0] == pinned else live_version
+            spec, tx = (483, 1) if params[0] == pinned else live_version
             return {"result": {"specVersion": spec, "transactionVersion": tx}}
         at = params[1]
         return {
@@ -1542,7 +1544,7 @@ def test_unreadable_live_surface_refuses(monkeypatch):
 
 
 @pytest.mark.usefixtures("fingerprint")
-@pytest.mark.parametrize("live_version", [(484, 2), (481, 1), (484, True)])
+@pytest.mark.parametrize("live_version", [(484, 2), (482, 1), (484, True)])
 def test_transaction_version_bump_or_downgrade_stops_for_audit(live_version):
     c, pinned, reads = surface_adapter("0x" + "bb" * 32, {}, live_version=live_version)
     c._metadata = lambda at: reads.append(at) or "same"

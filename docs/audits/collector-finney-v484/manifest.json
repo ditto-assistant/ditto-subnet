@@ -3,10 +3,11 @@
   "independent_rebuild_performed": false,
   "admission": "collector_signer_surface",
   "signed_runtime": {
-    "version": 482,
-    "runtime_code_hash": "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62",
-    "reference_block": 9336443,
-    "reference_block_hash": "0x462f5051b205f26f487491fbd02fedc9128dd484110e11ba98ae2e1a9462e338"
+    "version": 483,
+    "policy_revision": 9,
+    "runtime_code_hash": "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2",
+    "reference_block": 9346596,
+    "reference_block_hash": "0x340d9c7e2ddd903873527ae6ff699dad3d58028ae6ef6b566938799c9db02dfa"
   },
   "upgrades": [
     {
@@ -39,6 +40,7 @@
     "collector_signer": true,
     "treasury_receipt": "9e0d036eb8e9b4ab3d7b28aa28c66bd0ec3770c36769826cda8fd814b5dbaf5d",
     "source_emission": "1ef98cc80020ae30fd6db2c7ab1cb3d9be974facca18b51e88682ff434d518fe",
-    "changed_calls": []
+    "changed_calls": [],
+    "note": "v482, v483 and v484 share every measured surface"
   }
 }

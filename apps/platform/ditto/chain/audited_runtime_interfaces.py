@@ -450,7 +450,7 @@ TREASURY_RECEIPT_INTERFACES: dict[str, tuple[str, RuntimeInterface]] = {
 
 # Per-call digests of the runtime the treasury signer policy binds.
 TREASURY_CALL_BASELINE: tuple[str, dict[str, str]] = (
-    "v482",
+    "v483",
     {
         "AdminUtils.schedule_grandpa_change": "d7eff8a076c628c8",
         "AdminUtils.sudo_set_activity_cutoff": "4c1778efff010af4",

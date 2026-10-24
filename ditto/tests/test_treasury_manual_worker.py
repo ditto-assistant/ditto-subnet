@@ -549,14 +549,15 @@ def test_cold_approved_runtime_migration_preserves_used_manual_history(
     )
     from ditto_screening_protocol.collector_receipts import (
         AUDITED_COLLECTOR_CODE_HASH,
-        V473_COLLECTOR_CODE_HASH,
+        V482_COLLECTOR_CODE_HASH,
     )
 
     key = Keypair.create_from_seed("0x" + "22" * 32)
+    # The reviewed live path: revision 8 (v482) -> revision 9 (v483).
     old, c, journal, env, mailbox = setup(
         tmp_path,
         collector_coldkey=key.ss58_address,
-        runtime_code_hash=V473_COLLECTOR_CODE_HASH,
+        runtime_code_hash=V482_COLLECTOR_CODE_HASH,
         gcp_project="sn118-gamma-custody",
         registration_service_account="sn118-collector-registration@sn118-gamma-custody.iam.gserviceaccount.com",
         transfer_service_account="sn118-collector-transfer@sn118-gamma-custody.iam.gserviceaccount.com",
