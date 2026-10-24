@@ -291,12 +291,16 @@ def _runtime_interface(metadata: Any, surface: RuntimeSurface) -> RuntimeInterfa
         index = (pallets.get(pallet_name) or {}).get("index")
         entries[f"pallet:{pallet_name}"] = None if type(index) is not int else index
     if surface.signed_extensions:
-        extensions = (body.get("extrinsic") or {}).get("signed_extensions")
+        extrinsic = body.get("extrinsic") or {}
+        extensions = extrinsic.get("signed_extensions")
         if not isinstance(extensions, list) or not extensions:
             raise ValueError("runtime metadata has no signed extensions")
         # The extrinsic version selects the transaction encoding custody signs.
+        version = extrinsic.get("version")
+        if type(version) is not int:
+            raise ValueError("runtime metadata has an invalid extrinsic version")
         entries["extrinsic:signed_extensions"] = {
-            "version": (body.get("extrinsic") or {}).get("version"),
+            "version": version,
             "extensions": [
                 {
                     "identifier": item["identifier"],

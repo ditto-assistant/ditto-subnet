@@ -124,3 +124,14 @@ def test_plain_surfaces_keep_their_entries():
     assert set(runtime_interface(metadata(), plain).entries) == {
         "call:SubtensorModule.transfer_stake"
     }
+
+
+@pytest.mark.parametrize("version", [None, "4", True])
+def test_malformed_extrinsic_version_fails_closed(version):
+    changed = metadata()
+    if version is None:
+        del changed["V14"]["extrinsic"]["version"]
+    else:
+        changed["V14"]["extrinsic"]["version"] = version
+    with pytest.raises(ValueError, match="extrinsic version"):
+        runtime_interface(changed, SURFACE)
