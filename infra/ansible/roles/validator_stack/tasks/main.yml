@@ -465,6 +465,13 @@
     fail_msg: The validator-wandb-key Secret Manager version is empty or malformed
   no_log: true
 
+- name: Require a supported chain provider auth mode
+  ansible.builtin.assert:
+    that:
+      - validator_stack_subtensor_rpc_auth_mode in ['none', 'query', 'path']
+    fail_msg: validator_stack_subtensor_rpc_auth_mode must be none, query, or path (as Platform's ChainConfig)
+  when: validator_stack_subtensor_rpc_url | length > 0
+
 - name: Read the paid chain provider key from Secret Manager
   ansible.builtin.command:
     argv:
