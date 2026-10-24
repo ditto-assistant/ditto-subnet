@@ -2465,6 +2465,37 @@ describe('screener settings write contracts', () => {
     )
   })
 
+  it('applies the read-side cross-field rules to a screener review write', () => {
+    const complete = screenerReviewSettingsSchema.parse({
+      mode: 'shadow',
+      l2_model: 'openai/gpt-5.6-terra',
+      l2_fallback_models: [],
+      l3_model: 'openai/gpt-5.6-sol',
+      timeout_seconds: 900,
+      max_steps: 18,
+      max_input_tokens: 425_000,
+      max_output_tokens: 20_000,
+      max_completion_tokens: 2_400,
+      max_cost_usd: 2,
+      critic_reasoning_effort: 'medium',
+      cache_ttl_seconds: 604_800,
+      audit_retention_days: 30,
+    })
+    const write = (settings: Record<string, unknown>) =>
+      applyScreenerReviewSettingsInputSchema.safeParse({
+        scope: '*',
+        expectedRevision: 3,
+        settings,
+        reason: 'enable the probe reviewer',
+        confirmation: 'APPLY SCREENER REVIEW * SHADOW',
+      })
+
+    const reviewerAlone = write({ ...complete, probe_review_mode: 'shadow', probe_battery_mode: 'off' })
+    expect(reviewerAlone.success).toBe(false)
+    expect(reviewerAlone.error?.issues.map((issue) => issue.path.join('.'))).toContain('settings.probe_review_mode')
+    expect(write({ ...complete, probe_review_mode: 'shadow', probe_battery_mode: 'shadow' }).success).toBe(true)
+  })
+
   it('refuses a provider write missing any field', () => {
     const complete = screenerProviderSettingsSchema.parse({
       build_provider_priority: ['targon', 'gcp'],
