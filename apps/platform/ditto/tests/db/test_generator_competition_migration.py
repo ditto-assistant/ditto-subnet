@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-_PARENT = "73bd92c14f60"
+_PARENT = "5f2c8e1a9d47"
 
 
 def _alembic(*args: str) -> subprocess.CompletedProcess[str]:

@@ -10,7 +10,7 @@ generators on new seeds periodically, and folds hotkeys into a weight-zero
 generator ledger.
 
 Revision ID: 5c1e9a7d2b40
-Revises: 73bd92c14f60
+Revises: 5f2c8e1a9d47
 """
 
 from collections.abc import Sequence
@@ -21,7 +21,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "5c1e9a7d2b40"
-down_revision: str | Sequence[str] | None = "73bd92c14f60"
+down_revision: str | Sequence[str] | None = "5f2c8e1a9d47"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
