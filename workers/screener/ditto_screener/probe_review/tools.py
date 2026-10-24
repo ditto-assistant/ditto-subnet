@@ -467,6 +467,16 @@ def diff(session: Session, probe_a: str, probe_b: str) -> dict[str, Any]:
 # -- source localization -------------------------------------------------------
 
 
+def triage(archive: Path) -> dict[str, Any]:
+    """Zero-token static triage: the shadow semantic-discovery location hints."""
+    from ditto_screener.fanout_discovery import semantic_discovery
+
+    try:
+        return semantic_discovery(str(archive), max_hints=12)
+    except Exception as error:  # noqa: BLE001 - triage is advisory
+        return {"error": type(error).__name__, "leads": []}
+
+
 def extract_source(archive: Path, dest: Path) -> int:
     dest.mkdir(parents=True, exist_ok=True)
     count = 0

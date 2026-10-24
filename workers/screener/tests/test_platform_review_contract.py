@@ -70,6 +70,14 @@ def test_platform_revision_deserializes_and_applies(
         {"probe_battery_mode": "shadow", "probe_battery_timeout_seconds": 300},
         {"probe_battery_timeout_seconds": 300},
         {"probe_battery_mode": "shadow", "l2_always_escalate": True},
+        {"probe_battery_mode": "shadow", "probe_review_mode": "shadow"},
+        {
+            "probe_battery_mode": "shadow",
+            "probe_review_mode": "shadow",
+            "probe_review_timeout_seconds": 600,
+            "probe_review_max_cost_usd": 0.5,
+        },
+        {"probe_review_timeout_seconds": 600},
         {
             "probe_battery_mode": "shadow",
             "fanout_shadow_mode": "shadow",
@@ -92,4 +100,9 @@ def test_probe_battery_revisions_verify_and_apply(platform_contract, overrides):
     assert (
         effective.settings.probe_battery_timeout_seconds
         == settings.probe_battery_timeout_seconds
+    )
+    assert effective.settings.probe_review_mode == settings.probe_review_mode
+    assert (
+        effective.settings.probe_review_max_cost_usd
+        == settings.probe_review_max_cost_usd
     )

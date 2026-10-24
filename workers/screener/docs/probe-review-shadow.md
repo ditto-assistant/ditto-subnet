@@ -336,3 +336,53 @@ path. Operators read the latest 100 under `probe_battery_observations` on
 Checksum compatibility: an `off` battery is hashed without its two keys on both
 sides, so every existing revision keeps verifying. Enabling `shadow` binds both
 keys and therefore requires the upgraded worker release.
+
+## Gate reviewer agent (report-only)
+
+`probe_review_mode: shadow` runs the reviewer agent after the battery, in the
+same killable child, on nodes that hold the reviewer key. It requires
+`probe_battery_mode: shadow`, and Platform refuses a revision without it.
+
+- **Key:** the dedicated Ditto Router key lives in
+  `projects/ditto-app-dev/secrets/screener-probe-review-router-key`.
+  - It was created with `ditto endpoints keys create probe-review-shadow
+    --gcp-secret …` and is never printed.
+  - The `probe-review-shadow` endpoint has memory recall and record off. Its
+    daily spend cap (20B Ditto tokens, about $20) is the second billing guard,
+    enforced by the Router.
+  - Terraform grants the fleet's x509 identities read access only.
+  - Ansible `screener_fleet_probe_review_enabled: true` materializes the key to
+    `secrets/probe-review-router-key` (mode 0400, worker-owned) and sets
+    `SCREENER_PROBE_REVIEW_KEY_FILE`. Without that file the reviewer never runs,
+    whatever the revision says.
+- **Limits:**
+  - per artifact: `probe_review_max_cost_usd` (default $1, at most $5), enforced
+    by the agent ledger with fail-closed untracked spend;
+  - wall time: `probe_review_timeout_seconds` (default 420 s), also bounded by
+    the lease left after the decision;
+  - the agent's own 48-request, 40-tool and 30-probe caps.
+
+  The child prints the battery line first, so a reviewer killed at the budget
+  still leaves the battery.
+- **What the child sees:** the archive path, for source and triage, and the key
+  file path. It gets no Platform, node or other provider credentials. Only
+  `SSL_CERT_FILE` and proxy variables are added to its environment, for the
+  Router call.
+- **What is stored:** a bounded `review` object next to the battery:
+  - status (`complete`, `no_verdict`, `budget_exhausted`, `untracked_spend`,
+    `skipped`, `timeout`, `error`);
+  - whether the replay verified;
+  - verified invariants, and up to 4 findings with up to 4 `path:line`
+    citations each;
+  - requests, tokens, cost and time.
+
+  Claims, prompts and transcripts never leave the node.
+
+Rollout:
+
+1. Apply the Terraform IAM grant through the protected plan/apply.
+2. Converge one node with `screener_fleet_probe_review_enabled: true`.
+3. Publish a revision for that node's exact scope with
+   `probe_battery_mode: shadow` and `probe_review_mode: shadow`.
+4. Compare `probe_battery_observations[].review` against L1/L2/L3 outcomes for
+   the next 50 v13 attempts before widening.

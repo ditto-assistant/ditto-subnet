@@ -42,16 +42,6 @@ def _json_arg(value: str | None) -> Any:
     return json.loads(value)
 
 
-def _triage(archive: Path) -> dict[str, Any]:
-    """Zero-token static triage: the shadow semantic-discovery location hints."""
-    from ditto_screener.fanout_discovery import semantic_discovery
-
-    try:
-        return semantic_discovery(str(archive), max_hints=12)
-    except Exception as error:  # noqa: BLE001 - triage is advisory
-        return {"error": type(error).__name__, "leads": []}
-
-
 def prepare(args: argparse.Namespace) -> dict[str, Any]:
     archive = Path(args.archive)
     digest = file_sha256(archive)
@@ -82,7 +72,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         (out / stale).unlink(missing_ok=True)
     files = tools.extract_source(archive, out / "src")
     t0 = time.monotonic()
-    triage = _triage(archive)
+    triage = tools.triage(archive)
     timings["triage_s"] = round(time.monotonic() - t0, 2)
     t0 = time.monotonic()
     session.start()
@@ -161,6 +151,15 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--artifact-sha256", required=True)
     g.add_argument("--bench-version", type=int, default=13)
     g.add_argument("--token", required=True)
+    g.add_argument("--archive", help="screened archive: enables source + triage")
+    g.add_argument("--deadline-seconds", type=float)
+    g.add_argument(
+        "--review-key-file", help="enable the reviewer agent with this Router key"
+    )
+    g.add_argument("--review-base-url", default="https://router.heyditto.ai/v1")
+    g.add_argument("--review-model", default="anthropic/claude-sonnet-5.5")
+    g.add_argument("--review-max-cost-usd", type=float, default=1.0)
+    g.add_argument("--review-timeout-seconds", type=float, default=420.0)
     for name in (
         "run",
         "show",
@@ -212,15 +211,33 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "prepare":
         result: Any = prepare(args)
     elif args.cmd == "gate-battery":
-        from ditto_screener.probe_review.gate_shadow import run_gate_battery
+        from ditto_screener.probe_review.gate_shadow import ReviewSpec, run_gate_battery
 
-        result = run_gate_battery(
+        def emit(line: dict[str, Any]) -> None:
+            # One JSON object per line, flushed, so a kill keeps earlier lines.
+            sys.stdout.write(json.dumps(line, default=str) + "\n")
+            sys.stdout.flush()
+
+        run_gate_battery(
             image=args.image,
             root=args.root,
             artifact_sha256=args.artifact_sha256,
             bench_version=args.bench_version,
             token=args.token,
+            emit=emit,
+            archive=args.archive,
+            review=ReviewSpec(
+                key_file=args.review_key_file,
+                base_url=args.review_base_url,
+                model=args.review_model,
+                max_cost_usd=args.review_max_cost_usd,
+                timeout_seconds=args.review_timeout_seconds,
+            )
+            if args.review_key_file
+            else None,
+            deadline_seconds=args.deadline_seconds,
         )
+        return 0
     else:
         session = Session.load(args.session)
         if args.cmd == "run":

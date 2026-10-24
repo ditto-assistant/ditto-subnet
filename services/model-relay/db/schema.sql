@@ -5253,6 +5253,7 @@ CREATE TABLE public.screener_probe_batteries (
     leads jsonb NOT NULL,
     battery_ms integer NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    review jsonb,
     CONSTRAINT ck_screener_probe_batteries_screener_probe_batteries_ar_68c0 CHECK ((length(artifact_sha256) = 64)),
     CONSTRAINT ck_screener_probe_batteries_screener_probe_batteries_st_2d72 CHECK ((status = ANY (ARRAY['complete'::text, 'calibration_failed'::text, 'timeout'::text, 'error'::text])))
 );

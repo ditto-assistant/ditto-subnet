@@ -43,6 +43,7 @@ from ditto.api_models.screener_review_settings import (
     FANOUT_SHADOW_SETTINGS_FIELDS,
     INTEGRITY_DOUBLE_CHECK_SCOPE,
     PROBE_BATTERY_SETTINGS_FIELDS,
+    PROBE_REVIEW_SETTINGS_FIELDS,
     ScreenerReviewSettings,
 )
 from ditto.api_models.system_health import (
@@ -190,7 +191,11 @@ def test_inactive_fanout_checksum_keeps_the_pre_fanout_wire_shape() -> None:
         fanout_shadow_daily_cost_usd=5,
     )
     legacy = settings.model_dump(mode="json")
-    for field in (*FANOUT_SHADOW_SETTINGS_FIELDS, *PROBE_BATTERY_SETTINGS_FIELDS):
+    for field in (
+        *FANOUT_SHADOW_SETTINGS_FIELDS,
+        *PROBE_BATTERY_SETTINGS_FIELDS,
+        *PROBE_REVIEW_SETTINGS_FIELDS,
+    ):
         legacy.pop(field)
     legacy.pop("l2_always_escalate")
     legacy.pop("adjudicator_max_completion_tokens")
@@ -206,7 +211,11 @@ def test_always_escalate_is_bound_into_the_checksum_only_when_enabled() -> None:
     normal = ScreenerReviewSettings(mode="enforce")
     escalating = normal.model_copy(update={"l2_always_escalate": True})
     shape = escalating.model_dump(mode="json")
-    for field in (*FANOUT_SHADOW_SETTINGS_FIELDS, *PROBE_BATTERY_SETTINGS_FIELDS):
+    for field in (
+        *FANOUT_SHADOW_SETTINGS_FIELDS,
+        *PROBE_BATTERY_SETTINGS_FIELDS,
+        *PROBE_REVIEW_SETTINGS_FIELDS,
+    ):
         shape.pop(field)
     shape.pop("adjudicator_max_completion_tokens")
     expected = hashlib.sha256(
@@ -224,6 +233,19 @@ def test_probe_battery_is_bound_into_the_checksum_only_when_enabled() -> None:
         off.model_copy(update={"probe_battery_timeout_seconds": 300})
     )
     assert len({_review_settings_checksum(x) for x in (off, on, longer)}) == 3
+
+
+def test_probe_review_is_bound_only_when_enabled_and_needs_the_battery() -> None:
+    off = ScreenerReviewSettings(probe_battery_mode="shadow")
+    on = off.model_copy(update={"probe_review_mode": "shadow"})
+    assert _review_settings_checksum(off) == _review_settings_checksum(
+        off.model_copy(update={"probe_review_max_cost_usd": 0.5})
+    )
+    assert _review_settings_checksum(on) != _review_settings_checksum(
+        on.model_copy(update={"probe_review_max_cost_usd": 0.5})
+    )
+    with pytest.raises(ValueError, match="requires the probe battery"):
+        ScreenerReviewSettings(probe_review_mode="shadow")
 
 
 def test_explicit_l4_cap_changes_checksum_without_changing_l2() -> None:
@@ -2612,6 +2634,23 @@ class TestProbeBattery:
             "probe_count": 31,
             "leads": [{"item_id": "i7_identical_twice", "invariant": "I7"}],
             "battery_ms": 41_000,
+            "review": {
+                "status": "complete",
+                "verified": True,
+                "invariants": ["I7"],
+                "findings": [
+                    {
+                        "invariant": "I7",
+                        "verified": True,
+                        "citations": ["src/tma/tools/executor.py:172"],
+                    }
+                ],
+                "requests": 7,
+                "prompt_tokens": 40_000,
+                "completion_tokens": 2_000,
+                "cost_usd": 0.09,
+                "review_ms": 35_000,
+            },
         }
         url = f"/api/v1/screener/agent/{agent_id}/probe-battery"
 
@@ -2623,6 +2662,7 @@ class TestProbeBattery:
             assert row is not None and row.leads == [
                 {"item_id": "i7_identical_twice", "invariant": "I7"}
             ]
+            assert row.review is not None and row.review["invariants"] == ["I7"]
             assert agent is not None and agent.status == AgentStatus.SCREENING
 
         conflicting = {**payload, "leads": []}

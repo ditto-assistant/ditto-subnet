@@ -83,6 +83,50 @@ class ProbeBatteryLead(BaseModel):
     invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
 
 
+class ProbeReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
+    verified: bool
+    citations: tuple[Annotated[str, Field(max_length=170)], ...] = ()
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeReviewFinding:
+        if len(self.citations) > 4:
+            raise ValueError("probe review finding has too many citations")
+        return self
+
+
+class ProbeReviewSummary(BaseModel):
+    """Bounded report-only reviewer agent result: no claims or transcripts."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    status: Literal[
+        "complete",
+        "no_verdict",
+        "budget_exhausted",
+        "untracked_spend",
+        "skipped",
+        "timeout",
+        "error",
+    ]
+    verified: bool = False
+    invariants: tuple[Annotated[str, Field(pattern=r"^I[1-8]$")], ...] = ()
+    findings: tuple[ProbeReviewFinding, ...] = ()
+    requests: Annotated[int, Field(ge=0, le=1000)] = 0
+    prompt_tokens: Annotated[int, Field(ge=0, le=50_000_000)] = 0
+    completion_tokens: Annotated[int, Field(ge=0, le=5_000_000)] = 0
+    cost_usd: Annotated[float, Field(ge=0, le=50)] = 0.0
+    review_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeReviewSummary:
+        if len(self.findings) > 4 or len(self.invariants) > 8:
+            raise ValueError("probe review summary is too large")
+        return self
+
+
 class ProbeBatteryObservationRequest(BaseModel):
     """Bounded report-only probe battery leads for one active attempt."""
 
@@ -100,6 +144,7 @@ class ProbeBatteryObservationRequest(BaseModel):
     probe_count: Annotated[int, Field(ge=0, le=512)] = 0
     leads: tuple[ProbeBatteryLead, ...] = ()
     battery_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+    review: ProbeReviewSummary | None = None
 
     @model_validator(mode="after")
     def validate_bounds(self) -> ProbeBatteryObservationRequest:
@@ -166,6 +211,11 @@ class ReviewSettings(BaseModel):
     # Report-only zero-token probe battery against the gate's built image.
     probe_battery_mode: Literal["off", "shadow"] = "off"
     probe_battery_timeout_seconds: Annotated[int, Field(ge=30, le=600)] = 120
+    # Report-only probe reviewer agent after the battery (needs the battery on
+    # and a node-local Router key). Per-artifact cost and wall-time caps.
+    probe_review_mode: Literal["off", "shadow"] = "off"
+    probe_review_timeout_seconds: Annotated[int, Field(ge=60, le=900)] = 420
+    probe_review_max_cost_usd: Annotated[float, Field(gt=0, le=5)] = 1.0
     # Aggregate effective input: uncached tokens plus 10% of cached tokens.
     max_input_tokens: Annotated[int, Field(ge=1, le=5_000_000)]
     max_output_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
@@ -264,6 +314,23 @@ _PROBE_BATTERY_FIELDS: tuple[str, ...] = (
     "probe_battery_mode",
     "probe_battery_timeout_seconds",
 )
+_PROBE_REVIEW_FIELDS: tuple[str, ...] = (
+    "probe_review_mode",
+    "probe_review_timeout_seconds",
+    "probe_review_max_cost_usd",
+)
+
+
+def _inactive_probe_fields(settings: ReviewSettings) -> tuple[str, ...]:
+    """Probe controls Platform leaves out of the checksum while they are off."""
+    fields: tuple[str, ...] = ()
+    if settings.probe_battery_mode == "off":
+        fields += _PROBE_BATTERY_FIELDS
+    if settings.probe_review_mode == "off":
+        fields += _PROBE_REVIEW_FIELDS
+    return fields
+
+
 _DEFAULTS = {
     name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
 }
@@ -284,11 +351,12 @@ class EffectiveReviewSettings(BaseModel):
         payload = json.dumps(current, sort_keys=True, separators=(",", ":")).encode()
         if hashlib.sha256(payload).hexdigest() == self.checksum:
             return self
-        if self.settings.probe_battery_mode == "off":
-            # Platform hashes an inactive battery in the shape that predates
-            # it, so every existing revision keeps verifying; every legacy
-            # shape below is derived from this battery-free payload.
-            for name in _PROBE_BATTERY_FIELDS:
+        inactive_probe = _inactive_probe_fields(self.settings)
+        if inactive_probe:
+            # Platform hashes an inactive battery or reviewer in the shape that
+            # predates it, so every existing revision keeps verifying; every
+            # legacy shape below is derived from this probe-free payload.
+            for name in inactive_probe:
                 current.pop(name)
             payload = json.dumps(
                 current, sort_keys=True, separators=(",", ":")
@@ -486,10 +554,9 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
     canonical = settings.model_dump(mode="json")
     if settings.adjudicator_max_completion_tokens is None:
         canonical.pop("adjudicator_max_completion_tokens")
-    if settings.probe_battery_mode == "off":
-        # Same shape Platform hashes for an inactive battery.
-        for name in _PROBE_BATTERY_FIELDS:
-            canonical.pop(name)
+    # Same shape Platform hashes for an inactive battery or reviewer.
+    for name in _inactive_probe_fields(settings):
+        canonical.pop(name)
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return EffectiveReviewSettings(
         revision=0,

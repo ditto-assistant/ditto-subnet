@@ -2572,6 +2572,9 @@ async def submit_probe_battery(
             "probe_count": payload.probe_count,
             "leads": [lead.model_dump(mode="json") for lead in payload.leads],
             "battery_ms": payload.battery_ms,
+            "review": payload.review.model_dump(mode="json")
+            if payload.review is not None
+            else None,
         }
         existing = await session.get(ScreenerProbeBattery, payload.attempt_id)
         if existing is not None:

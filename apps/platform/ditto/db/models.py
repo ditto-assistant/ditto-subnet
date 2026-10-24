@@ -7042,6 +7042,7 @@ class ScreenerProbeBattery(Base):
     probe_count: Mapped[int] = mapped_column(Integer, nullable=False)
     leads: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
     battery_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    review: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

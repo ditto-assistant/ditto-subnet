@@ -43,6 +43,11 @@ PROBE_BATTERY_SETTINGS_FIELDS = (
     "probe_battery_mode",
     "probe_battery_timeout_seconds",
 )
+PROBE_REVIEW_SETTINGS_FIELDS = (
+    "probe_review_mode",
+    "probe_review_timeout_seconds",
+    "probe_review_max_cost_usd",
+)
 PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
 # The reviewer posture (stronger L2/L3 models and budgets) a top-five integrity
 # double-check deep pass is pinned to. No worker heartbeats under this scope, so
@@ -180,6 +185,11 @@ class ScreenerReviewSettings(BaseModel):
     # never change an outcome. ``off`` is the code and rolling-deploy default.
     probe_battery_mode: Literal["off", "shadow"] = "off"
     probe_battery_timeout_seconds: Annotated[int, Field(ge=30, le=600)] = 120
+    # Report-only probe reviewer agent after the battery: it spends Router
+    # tokens through a node-local key whose own daily cap is the second guard.
+    probe_review_mode: Literal["off", "shadow"] = "off"
+    probe_review_timeout_seconds: Annotated[int, Field(ge=60, le=900)] = 420
+    probe_review_max_cost_usd: Annotated[float, Field(gt=0, le=5)] = 1.0
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
     # Send every L1 result through the L2/L3 models, even a certified low-risk
     # clear. Workers OR this with their ``SCREENER_L2_ALWAYS_ESCALATE`` env, so
@@ -236,6 +246,9 @@ class ScreenerReviewSettings(BaseModel):
             and self.fanout_shadow_image_source_sha == "0" * 40
         ):
             raise ValueError("shadow mode requires an exact trusted image source SHA")
+        if self.probe_review_mode == "shadow" and self.probe_battery_mode != "shadow":
+            # The reviewer starts from the battery's calibration and leads.
+            raise ValueError("the probe reviewer requires the probe battery")
         return self
 
 
@@ -254,6 +267,10 @@ def review_settings_checksum(settings: ScreenerReviewSettings) -> str:
     if settings.probe_battery_mode == "off":
         # Workers that predate the battery drop both keys before hashing.
         for field in PROBE_BATTERY_SETTINGS_FIELDS:
+            value.pop(field)
+    if settings.probe_review_mode == "off":
+        # Workers that predate the reviewer drop its keys before hashing.
+        for field in PROBE_REVIEW_SETTINGS_FIELDS:
             value.pop(field)
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -343,6 +360,30 @@ class AdminProbeBatteryLead(BaseModel):
     invariant: str
 
 
+class AdminProbeReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    invariant: str
+    verified: bool
+    citations: list[str] = []
+
+
+class AdminProbeReview(BaseModel):
+    """Bounded report-only reviewer summary: status, invariants and usage."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    status: str
+    verified: bool = False
+    invariants: list[str] = []
+    findings: list[AdminProbeReviewFinding] = []
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+    review_ms: int = 0
+
+
 class AdminProbeBatteryObservation(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -358,6 +399,7 @@ class AdminProbeBatteryObservation(BaseModel):
     probe_count: int
     leads: list[AdminProbeBatteryLead]
     battery_ms: int
+    review: AdminProbeReview | None = None
     created_at: datetime
 
 

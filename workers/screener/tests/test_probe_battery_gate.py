@@ -76,6 +76,10 @@ def _child(monkeypatch: pytest.MonkeyPatch, script: str) -> list[list[str]]:
             "XDG_RUNTIME_DIR",
             "PROBE_REVIEW_DOCKER_BIN",
             "DOCKER_HOST",
+            "SSL_CERT_FILE",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
         }
         return await real(sys.executable, "-c", script, **kwargs)
 
@@ -173,3 +177,232 @@ async def test_worker_stamps_the_revision_the_gate_ran_under() -> None:
         summary={**summary, "settings_revision": 0},
     )
     worker._platform.submit_probe_battery.assert_not_awaited()
+
+
+# --- report-only reviewer agent -------------------------------------------
+
+
+def test_review_summary_keeps_only_bounded_identifiers() -> None:
+    from ditto_screener.probe_review.gate_shadow import summarize_review
+
+    result = {
+        "replay": {
+            "verified": True,
+            "findings": [
+                {
+                    "invariant": "I7",
+                    "verified": True,
+                    "claim": "private text never leaves the node",
+                    "source_citations": ["src/tma/tools/executor.py:172", "x y:1"],
+                },
+                {"invariant": "I9", "verified": True},
+            ]
+            + [{"invariant": "I2", "verified": False}] * 6,
+        },
+        "requests": 9,
+        "prompt_tokens": 50_000,
+        "completion_tokens": 3_000,
+        "cost_usd": 0.31,
+        "wall_s": 41.5,
+    }
+    summary = summarize_review(result, status="complete")
+    assert summary["verified"] and summary["invariants"] == ["I7"]
+    assert summary["findings"][0]["citations"] == ["src/tma/tools/executor.py:172"]
+    assert len(summary["findings"]) == 4
+    assert "private" not in json.dumps(summary)
+    from ditto_screener.review_settings import ProbeReviewSummary
+
+    ProbeReviewSummary.model_validate(summary, strict=False)
+
+
+class _FakeSession:
+    def __init__(self, **kwargs: Any) -> None:
+        self.root = kwargs["root"]
+        self.image = kwargs["image"]
+        self.probe_count = 3
+        self.events: list[str] = []
+
+    def start(self) -> None:
+        self.events.append("start")
+
+    def stop(self) -> None:
+        self.events.append("stop")
+
+    def restart_harness(self) -> None:
+        self.events.append("restart")
+
+
+def _fake_child(
+    monkeypatch: pytest.MonkeyPatch, *, encoding: str | None = "answer_line"
+):
+    from ditto_screener.probe_review import gate_shadow
+
+    sessions: list[_FakeSession] = []
+
+    def session(**kwargs: Any) -> _FakeSession:
+        sessions.append(_FakeSession(**kwargs))
+        return sessions[-1]
+
+    monkeypatch.setattr(gate_shadow, "Session", session)
+    monkeypatch.setattr(
+        gate_shadow.battery,
+        "run_battery",
+        lambda _s: {"format": encoding, "items": [], "leads": []},
+    )
+    monkeypatch.setattr(gate_shadow.tools, "extract_source", lambda *_a: 1)
+    monkeypatch.setattr(gate_shadow.tools, "triage", lambda _a: {"leads": []})
+    return gate_shadow, sessions
+
+
+def test_gate_child_emits_battery_before_review(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    gate_shadow, sessions = _fake_child(monkeypatch)
+    seen: dict[str, Any] = {}
+
+    class Completer:
+        def __enter__(self) -> str:
+            return "completer"
+
+        def __exit__(self, *_: object) -> None:
+            seen["closed"] = True
+
+    monkeypatch.setattr(
+        gate_shadow.agent_loop, "http_completer", lambda *_a, **_k: Completer()
+    )
+
+    def review(_session: Any, **kwargs: Any) -> dict[str, Any]:
+        seen.update(kwargs)
+        return {"complete": True, "replay": {"verified": False, "findings": []}}
+
+    monkeypatch.setattr(gate_shadow.agent_loop, "review", review)
+    lines: list[dict[str, Any]] = []
+    spec = gate_shadow.ReviewSpec(
+        key_file="/k", base_url="u", model="m", max_cost_usd=0.5, timeout_seconds=300
+    )
+    gate_shadow.run_gate_battery(
+        image="img",
+        root=str(tmp_path),
+        artifact_sha256="a" * 64,
+        bench_version=13,
+        token="t",
+        emit=lines.append,
+        archive=str(tmp_path / "a.tar"),
+        review=spec,
+        deadline_seconds=400,
+    )
+    assert lines[0]["status"] == "complete" and "review" not in lines[0]
+    assert lines[1]["review"]["status"] == "complete"
+    assert seen["ledger"].max_cost_usd == 0.5 and seen["closed"]
+    assert seen["deadline_seconds"] <= 300 - 45
+    assert sessions[0].events == ["start", "restart", "stop"]
+    assert (tmp_path / "prepare.json").exists()
+
+
+def test_gate_child_skips_review_without_time_or_calibration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    spec_args = {"key_file": "/k", "base_url": "u", "model": "m", "max_cost_usd": 1.0}
+    for encoding, deadline in (("answer_line", 90.0), (None, 900.0)):
+        gate_shadow, sessions = _fake_child(monkeypatch, encoding=encoding)
+        monkeypatch.setattr(
+            gate_shadow.agent_loop,
+            "review",
+            lambda *_a, **_k: pytest.fail("review must not run"),
+        )
+        lines: list[dict[str, Any]] = []
+        gate_shadow.run_gate_battery(
+            image="img",
+            root=str(tmp_path),
+            artifact_sha256="a" * 64,
+            bench_version=13,
+            token="t",
+            emit=lines.append,
+            archive=str(tmp_path / "a.tar"),
+            review=gate_shadow.ReviewSpec(timeout_seconds=420, **spec_args),
+            deadline_seconds=deadline,
+        )
+        assert lines[1]["review"]["status"] == "skipped"
+        assert sessions[-1].events[-1] == "stop"
+
+
+def test_gate_child_review_failure_reports_error_without_text(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    gate_shadow, _ = _fake_child(monkeypatch)
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("secret detail")
+
+    monkeypatch.setattr(gate_shadow.agent_loop, "http_completer", boom)
+    lines: list[dict[str, Any]] = []
+    gate_shadow.run_gate_battery(
+        image="img",
+        root=str(tmp_path),
+        artifact_sha256="a" * 64,
+        bench_version=13,
+        token="t",
+        emit=lines.append,
+        archive=str(tmp_path / "a.tar"),
+        review=gate_shadow.ReviewSpec(
+            key_file="/k", base_url="u", model="m", max_cost_usd=1, timeout_seconds=420
+        ),
+        deadline_seconds=900,
+    )
+    assert lines[1]["review"]["status"] == "error"
+    assert "secret" not in json.dumps(lines)
+
+
+async def test_gate_keeps_the_battery_when_the_review_is_killed(
+    make_config: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("k")
+    line = json.dumps({"status": "complete", "encoding": "answer_line", "leads": []})
+    seen = _child(
+        monkeypatch,
+        f"import sys,time; print({json.dumps(line)}, flush=True); time.sleep(30)",
+    )
+    gate = BuildGate(
+        make_config(probe_review_key_file=str(key)),
+        Mock(),
+        policy=Mock(),
+        journal=Mock(),
+    )
+    gate._run = AsyncMock(return_value=(0, ""))  # type: ignore[method-assign]
+    summary = await gate._run_probe_battery(
+        image_id="sha256:" + "c" * 64,
+        artifact_sha256="a" * 64,
+        bench_version=13,
+        budget=1.5,
+        archive_path=str(tmp_path / "a.tar"),
+    )
+    assert summary["status"] == "complete"
+    assert summary["review"]["status"] == "timeout"
+    args = seen[0]
+    assert args[args.index("--review-key-file") + 1] == str(key)
+    assert "--archive" in args
+
+
+async def test_gate_without_archive_passes_no_key(
+    make_config: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("k")
+    payload = {"status": "complete", "encoding": "answer_line", "leads": []}
+    seen = _child(monkeypatch, f"print({json.dumps(json.dumps(payload))})")
+    gate = BuildGate(
+        make_config(probe_review_key_file=str(key)),
+        Mock(),
+        policy=Mock(),
+        journal=Mock(),
+    )
+    gate._run = AsyncMock(return_value=(0, ""))  # type: ignore[method-assign]
+    summary = await gate._run_probe_battery(
+        image_id="sha256:" + "c" * 64,
+        artifact_sha256="a" * 64,
+        bench_version=13,
+        budget=30,
+    )
+    assert "review" not in summary
+    assert "--review-key-file" not in seen[0]
