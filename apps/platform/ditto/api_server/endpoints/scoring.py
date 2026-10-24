@@ -63,6 +63,11 @@ from ditto.api_server.continual_retest_settings import (
     tie_weighting_is_active,
 )
 from ditto.api_server.efficiency import ensure_current_efficiency_state
+from ditto.api_server.efficiency_projection import (
+    EfficiencyProjectionUnavailable,
+    FrozenEfficiencyProjection,
+    project_frozen_efficiency,
+)
 from ditto.api_server.emission_eligibility import (
     DEFAULT_POLICY,
     ResolvedEligibilityPolicy,
@@ -247,6 +252,8 @@ class _LedgerSnapshot:
     fleet_readiness: dict[str, bool] | None = None
     treasury_pin: TreasuryPin | None = None
     """Default-off; populated only by a future reviewed finalized producer."""
+    efficiency_context: str | None = None
+    efficiency_values_digest: str | None = None
     confirmation_seed_anchors: tuple[ConfirmationSeedAnchorPin, ...] = ()
     """Pinned finalized-block anchors of the active version's seed families.
 
@@ -715,6 +722,7 @@ async def _ledger_entries(
     requesting_validator_hotkey: str | None,
     emit: Callable[[LedgerRow], bool] | None = None,
     registered_hotkeys: AbstractSet[str] | None = None,
+    efficiency_projection: FrozenEfficiencyProjection | None = None,
 ) -> tuple[list[LedgerRow], list[LedgerEntry]]:
     """Build the fold's ``LedgerEntry`` list from materialized rows.
 
@@ -771,6 +779,11 @@ async def _ledger_entries(
         efficiency_config=efficiency_config,
         now=now,
         requesting_validator_hotkey=requesting_validator_hotkey,
+        diagnostic_assignments=(
+            efficiency_projection.assignments
+            if efficiency_projection is not None
+            else None
+        ),
     )
     ranking_scores = official_composites(
         rows,
@@ -982,27 +995,19 @@ async def materialize_ledger_snapshot(
             bench_versions={row.agent_id: row.bench_version for row in rows},
         )
         rows = [row for row in rows if counts.get(row.agent_id, 0) >= SCORING_QUORUM]
-    if (
-        diagnostic_read_only
-        and efficiency_config.enabled
-        and efficiency_config.fold_enabled
-    ):
-        # Authority reads may create these rows; a dry-run must only consume
-        # existing current-epoch assignments, never silently omit a factor.
-        from ditto.api_server.efficiency import epoch_index_for
-        from ditto.db.queries.efficiency import get_bonus_rows
-
-        adjustments = await get_bonus_rows(
-            session,
-            [row.agent_id for row in rows if row.eligible],
-            bench_versions={row.agent_id: row.bench_version for row in rows},
-            epoch_index=epoch_index_for(now, efficiency_config.epoch_hours),
-        )
-        if any(row.eligible and row.agent_id not in adjustments for row in rows):
-            raise HTTPException(
-                status_code=409,
-                detail="current efficiency assignments unavailable for court",
+    efficiency_projection = None
+    if diagnostic_read_only:
+        try:
+            efficiency_projection = await project_frozen_efficiency(
+                session,
+                config=efficiency_config,
+                rows=rows,
+                bench_version=ledger_context.active_bench_version,
+                now=now,
+                restored_ids=diagnostic_scored_agent_ids,
             )
+        except EfficiencyProjectionUnavailable as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
     v9_confirmation_mode: Literal["enforce"] | None = (
         "enforce" if await v9_confirmation_enforcement_active(session) else None
     )
@@ -1100,6 +1105,7 @@ async def materialize_ledger_snapshot(
         now=now,
         requesting_validator_hotkey=requesting_validator_hotkey,
         registered_hotkeys=registered_hotkeys,
+        efficiency_projection=efficiency_projection,
         emit=(
             lambda row: (
                 row.eligible
@@ -1149,8 +1155,15 @@ async def materialize_ledger_snapshot(
                 and (not diagnostic_read_only or (row.eligible and row.composite > 0.0))
             ),
             registered_hotkeys=registered_hotkeys,
+            efficiency_projection=efficiency_projection,
         )
     return _LedgerSnapshot(
+        efficiency_context=(
+            efficiency_projection.context if efficiency_projection else None
+        ),
+        efficiency_values_digest=(
+            efficiency_projection.values_digest if efficiency_projection else None
+        ),
         entries=entries,
         generated_at=generated_at,
         active_bench_version=canonical_version,

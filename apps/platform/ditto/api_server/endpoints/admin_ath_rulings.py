@@ -47,6 +47,7 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,6 +96,10 @@ from ditto.api_server.koth import (
     _ranked_entries,
     koth_entries_from_ledger,
     project_koth,
+)
+from ditto.api_server.middleware.error_envelope import (
+    ERROR_CODE_HTTP_EXCEPTION,
+    envelope_response,
 )
 from ditto.api_server.storage.errors import (
     ObjectDownloadFailedError,
@@ -228,6 +233,8 @@ class BoardSnapshot:
     excluded_agent_ids: frozenset[UUID]
     restored_agent_ids: frozenset[UUID]
     projection: KothProjection | None
+    efficiency_context: str | None
+    efficiency_values_digest: str | None
     ranked_agent_ids: tuple[UUID, ...]
 
     @classmethod
@@ -237,6 +244,8 @@ class BoardSnapshot:
         bench_version: int,
         read_at: datetime,
         entries: Sequence[KothEntry],
+        efficiency_context: str | None,
+        efficiency_values_digest: str | None,
         distinct_hotkeys: bool,
         ceiling_band_clamp: bool,
         statistical_band_cap: bool,
@@ -254,6 +263,8 @@ class BoardSnapshot:
             bench_version=bench_version,
             read_at=read_at,
             entries=scored,
+            efficiency_context=efficiency_context,
+            efficiency_values_digest=efficiency_values_digest,
             distinct_hotkeys=distinct_hotkeys,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
@@ -280,7 +291,11 @@ class BoardSnapshot:
     @property
     def context_fingerprint(self) -> str:
         payload = json.dumps(
-            {"ledger": asdict(self.ledger_context), "pin": self.pin_context},
+            {
+                "ledger": asdict(self.ledger_context),
+                "pin": self.pin_context,
+                "efficiency": self.efficiency_context,
+            },
             sort_keys=True,
             default=str,
             separators=(",", ":"),
@@ -293,6 +308,7 @@ class BoardSnapshot:
             str(self.champion_agent_id) if self.champion_agent_id else None,
             str(self.raw_leader_agent_id) if self.raw_leader_agent_id else None,
             self.context_fingerprint,
+            self.efficiency_values_digest,
         ]
 
     @property
@@ -418,6 +434,8 @@ async def _project_board(
     return BoardSnapshot.build(
         bench_version=snapshot.active_bench_version,
         read_at=read_at,
+        efficiency_context=snapshot.efficiency_context,
+        efficiency_values_digest=snapshot.efficiency_values_digest,
         entries=koth_entries_from_ledger(
             [*snapshot.entries, provisional] if provisional else snapshot.entries
         ),
@@ -1040,7 +1058,7 @@ async def execute_ath_rulings_batch(
     _admin: AdminDep,
     session: SessionDep,
     x_admin_actor: ActorDep = None,
-) -> AdminAthRulingsExecuteResponse:
+) -> AdminAthRulingsExecuteResponse | JSONResponse:
     """Apply the exact previewed rulings; each item is audited on its own.
 
     Refuses an item whose identity guards moved, or whose crown outcome
@@ -1229,7 +1247,37 @@ async def execute_ath_rulings_batch(
             agent = await session.get(Agent, ruling.agent_id)
             # Read before the rollback expires the instance's attributes.
             base["agent_status"] = agent.status.value if agent is not None else None
+            restored_scored = (
+                ruling.action == "clear"
+                and "clear" in steps_applied
+                and agent is not None
+                and agent.status == AgentStatus.SCORED
+            )
             await session.rollback()
+            if (
+                restored_scored
+                and board_before.ledger_context.policy.efficiency.enabled
+            ):
+                from ditto.api_server.efficiency import (
+                    ensure_efficiency_state,
+                    epoch_index_for,
+                )
+
+                config = board_before.ledger_context.policy.efficiency
+                now = datetime.now(UTC)
+                if epoch_index_for(now, config.epoch_hours) != epoch_index_for(
+                    board_before.read_at, config.epoch_hours
+                ):
+                    raise ValueError(
+                        "efficiency epoch changed after committed restoration"
+                    )
+                # The normal coordinator can still be inside its short poll TTL.
+                # Force the same idempotent writer after the committed restore,
+                # using an independent session; previews never enter this path.
+                async with AsyncSession(
+                    bind=session.bind, expire_on_commit=False
+                ) as materialization:
+                    await ensure_efficiency_state(materialization, config, now=now)
             board_now = await read_board_snapshot(session, request)
             await session.rollback()
         except Exception:
@@ -1265,7 +1313,30 @@ async def execute_ath_rulings_batch(
                 message=message,
             )
         )
-    board_after = await read_board_snapshot(session, request)
+    try:
+        if board_now is None:
+            raise ValueError("post-ruling board unavailable")
+        board_after = await read_board_snapshot(session, request)
+    except Exception:
+        await session.rollback()
+        logger.exception("ath rulings final board read failed batch_id=%s", batch_id)
+        # The writes above already committed. Preserve their exact outcomes in
+        # the failure response so an operator never blindly retries them.
+        return envelope_response(
+            503,
+            ERROR_CODE_HTTP_EXCEPTION,
+            "Board read failed after ruling processing; "
+            "inspect applied items before any retry",
+            detail={
+                "batch_id": str(batch_id),
+                "items": [item.model_dump(mode="json") for item in results],
+                "applied_count": sum(item.status == "applied" for item in results),
+                "already_applied_count": sum(
+                    item.status == "already_applied" for item in results
+                ),
+                "failed_count": sum(item.status == "failed" for item in results),
+            },
+        )
     await session.rollback()
     return AdminAthRulingsExecuteResponse(
         batch_id=batch_id,

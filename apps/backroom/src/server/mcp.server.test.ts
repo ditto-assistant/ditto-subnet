@@ -6828,6 +6828,45 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('retains committed court outcomes when the final board read fails without replay or raw detail', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const batchId = '0b3c5d7e-9f01-4a23-8b45-c67d89e0f123'
+    const agentId = 'c25489aa-faf0-46fc-8b06-8e2240a5ac01'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ detail: {
+      message: 'do-not-reflect-private-error',
+      private_secret: 'never-expose-this',
+      batch_id: batchId,
+      items: [{
+        index: 0, action: 'clear', agent_id: agentId, status: 'applied',
+        would_change_crown: true, steps_applied: ['open', 'clear'], annotated: true,
+        agent_status: 'scored', message: 'private audit context',
+      }],
+      applied_count: 1, already_applied_count: 0, failed_count: 0,
+    } }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const execute = await client.callTool({
+      name: 'execute_ath_rulings_batch',
+      arguments: {
+        previewToken: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`,
+        confirmation: 'APPLY ATH RULINGS BATCH',
+      },
+    })
+    expect(execute.isError).toBe(true)
+    const text = readTextResult(execute)
+    expect(text).toContain('inspect applied items before any retry')
+    expect(text).toContain(batchId)
+    expect(text).toContain(agentId)
+    expect(text).toContain('"status":"applied"')
+    expect(text).toContain('"steps_applied":["open","clear"]')
+    expect(text).toContain('"applied_count":1')
+    expect(text).not.toContain('private')
+    expect(text).not.toContain('never-expose-this')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await client.close()
+    await server.close()
+  })
+
   it('explains a durable ATH hold through a read-only grant', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
