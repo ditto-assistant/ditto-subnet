@@ -125,5 +125,12 @@ gcp:
 #
 # Comment lines are skipped so a template may document a placeholder token,
 # matching env_render_guard's own `reject('match', '\s*#')`.
+# awk, not a `grep | grep` pipeline: a pipeline reports only the LAST command's
+# status, so a first grep that cannot READ the file emits nothing, the second
+# returns 1 for no-match, and a leading `!` turns that into "accept". A gate
+# that accepts a file it never scanned is the exact failure this exists to stop.
+# awk is one process: 0 clean, 1 placeholder found, 2 unreadable or missing.
+# Keep it to a single %s -- Ansible substitutes the temp path with Python `%`
+# formatting, so a second %s (e.g. in a printf) raises instead of validating.
 env_render_validate_placeholders: >-
-  sh -c '! grep -vE "^[[:space:]]*#" "%s" | grep -qE "TODO_[A-Z0-9_]+|FIXME_[A-Z0-9_]+|CHANGEME|REPLACE_ME"'
+  awk '/^[[:space:]]*#/ {next} /TODO_[A-Z0-9_]+|FIXME_[A-Z0-9_]+|CHANGEME|REPLACE_ME/ {found=1} END {exit found?1:0}' %s
