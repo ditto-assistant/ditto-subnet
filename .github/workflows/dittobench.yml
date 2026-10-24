@@ -217,13 +217,14 @@ jobs:
 
   docker-build:
     name: docker image builds (${{ matrix.target }})
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        # The coding-executor-scorer image is coding-competition CI and stays
-        # operator-dispatched (SN-120).
-        target: [runtime, sandbox]
+        # Pull requests build the runtime and sandbox images. The
+        # coding-executor-scorer image is coding-competition CI and builds only
+        # on operator dispatch (SN-120).
+        target: ${{ github.event_name == 'pull_request' && fromJSON('["runtime", "sandbox"]') || fromJSON('["coding-executor-scorer"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
