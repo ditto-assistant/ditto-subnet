@@ -639,6 +639,27 @@ def _bounded_usage(payload: dict[str, Any]) -> tuple[int, int, int] | None:
     return prompt, completion, 0
 
 
+def _bounded_reasoning_tokens(payload: dict[str, Any], completion: int) -> int | None:
+    """The provider's reasoning tokens, counted inside ``completion_tokens``.
+
+    The v13 cost ledger books answer tokens as completion minus reasoning
+    (#2972). Optional, so anything but an integer in [0, completion] is
+    omitted rather than refused.
+    """
+    usage = payload.get("usage")
+    details = (
+        usage.get("completion_tokens_details") if isinstance(usage, dict) else None
+    )
+    reasoning = details.get("reasoning_tokens") if isinstance(details, dict) else None
+    if (
+        not isinstance(reasoning, int)
+        or isinstance(reasoning, bool)
+        or not 0 <= reasoning <= completion
+    ):
+        return None
+    return reasoning
+
+
 def _bounded_provider_cost(payload: dict[str, Any]) -> int | None:
     """Convert OpenRouter's direct response cost to bounded integer micro-USD."""
     usage = payload.get("usage")
@@ -770,6 +791,16 @@ def _public_provider_response(payload: dict[str, Any]) -> dict[str, Any]:
     logprobs = choice.get("logprobs")
     if logprobs is not None and not isinstance(logprobs, dict):
         raise HTTPException(status_code=502, detail="invalid provider response")
+    public_usage: dict[str, Any] = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+    }
+    reasoning_tokens = _bounded_reasoning_tokens(payload, completion_tokens)
+    if reasoning_tokens is not None:
+        public_usage["completion_tokens_details"] = {
+            "reasoning_tokens": reasoning_tokens
+        }
     return {
         "id": response_id,
         "object": "chat.completion",
@@ -783,11 +814,7 @@ def _public_provider_response(payload: dict[str, Any]) -> dict[str, Any]:
                 "logprobs": logprobs,
             }
         ],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        },
+        "usage": public_usage,
     }
 
 

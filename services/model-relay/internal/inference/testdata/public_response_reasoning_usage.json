@@ -1,0 +1,1 @@
+{"id":"gen-1","object":"chat.completion","created":1755000000,"model":"openai/gpt-oss-20b","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"hi"},"logprobs":null}],"usage":{"prompt_tokens":10,"completion_tokens":1500,"total_tokens":1510,"completion_tokens_details":{"reasoning_tokens":1200}}}

@@ -4550,20 +4550,7 @@ func (b *inferenceBroker) proxy(
 		writeError(w, http.StatusBadGateway, "inference provider unavailable")
 		return
 	}
-	var decoded struct {
-		Usage *struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			// Bench v13 cost ledger: OpenRouter folds reasoning tokens into
-			// completion_tokens on the agent-selected reasoning route and
-			// reports them here; the ledger books them separately from the
-			// answer output. Absent on providers/routes without reasoning.
-			CompletionTokensDetails *struct {
-				ReasoningTokens int `json:"reasoning_tokens"`
-			} `json:"completion_tokens_details"`
-		} `json:"usage"`
-	}
-	usageOK := json.Unmarshal(responseBody, &decoded) == nil && decoded.Usage != nil && decoded.Usage.PromptTokens >= 0 && decoded.Usage.CompletionTokens >= 0
+	usageOK, promptTokens, completionTokens, reasoningTokens := completionUsage(responseBody)
 	session.mu.Lock()
 	session.successes++
 	// The delay fingerprint is computed and booked in the same locked section
@@ -4602,18 +4589,10 @@ func (b *inferenceBroker) proxy(
 	// Metadata only; no-op for bench_version<13.
 	recordCatalogCompletionLocked(session, catalogAttribution, body, responseBody)
 	session.providerLatency += totalLatency
-	completionTokens, reasoningTokens := uint64(0), uint64(0)
 	if usageOK {
 		session.usageAvailable++
-		session.promptTokens += uint64(decoded.Usage.PromptTokens)
-		session.completionTokens += uint64(decoded.Usage.CompletionTokens)
-		completionTokens = uint64(decoded.Usage.CompletionTokens)
-		if details := decoded.Usage.CompletionTokensDetails; details != nil && details.ReasoningTokens > 0 {
-			reasoningTokens = uint64(details.ReasoningTokens)
-			if reasoningTokens > completionTokens {
-				reasoningTokens = completionTokens
-			}
-		}
+		session.promptTokens += promptTokens
+		session.completionTokens += completionTokens
 	} else {
 		session.usageUnavailable++
 	}
