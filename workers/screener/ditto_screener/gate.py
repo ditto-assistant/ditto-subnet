@@ -2330,6 +2330,14 @@ class BuildGate:
                 else:
                     async with asyncio.timeout_at(overall):
                         await proc.wait()
+            except asyncio.CancelledError:
+                # A cancelled screen must not leave the battery or the Router
+                # review running.
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+                raise
             except (TimeoutError, ValueError):
                 status = "timeout"
                 with contextlib.suppress(ProcessLookupError):

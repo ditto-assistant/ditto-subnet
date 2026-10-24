@@ -349,7 +349,7 @@ class ProbeReviewSummary(BaseModel):
     requests: Annotated[int, Field(ge=0, le=1000)] = 0
     prompt_tokens: Annotated[int, Field(ge=0, le=50_000_000)] = 0
     completion_tokens: Annotated[int, Field(ge=0, le=5_000_000)] = 0
-    cost_usd: Annotated[float, Field(ge=0, le=50)] = 0.0
+    cost_usd: Annotated[float, Field(ge=0, le=50, allow_inf_nan=False)] = 0.0
     review_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
 
     @model_validator(mode="after")

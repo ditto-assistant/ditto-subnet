@@ -3943,6 +3943,212 @@ CREATE TABLE public.feedback_track_contributions (
 
 
 --
+-- Name: generator_case_verdicts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_case_verdicts (
+    run_id uuid NOT NULL,
+    seed_index integer NOT NULL,
+    case_id text NOT NULL,
+    "position" integer NOT NULL,
+    fingerprint text NOT NULL,
+    status text NOT NULL,
+    panel_size integer NOT NULL,
+    solvers integer NOT NULL,
+    solver_owners integer NOT NULL,
+    mean_score double precision NOT NULL,
+    champion_failed boolean NOT NULL,
+    credit double precision NOT NULL,
+    CONSTRAINT ck_generator_case_verdicts_generator_case_verdicts_fing_6dd6 CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_generator_case_verdicts_generator_case_verdicts_status_check CHECK ((status = ANY (ARRAY['discriminating'::text, 'trivial'::text, 'unsolved'::text, 'duplicate'::text])))
+);
+
+
+--
+-- Name: generator_competition_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_competition_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_generator_competition_settings_revisions_generator_s_10b7 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_generator_competition_settings_revisions_generator_s_7bff CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_generator_competition_settings_revisions_generator_s_8b8b CHECK ((scope = '*'::text)),
+    CONSTRAINT ck_generator_competition_settings_revisions_generator_s_950c CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_generator_competition_settings_revisions_generator_s_9ef0 CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: generator_competition_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.generator_competition_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: generator_competition_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.generator_competition_settings_revisions_revision_seq OWNED BY public.generator_competition_settings_revisions.revision;
+
+
+--
+-- Name: generator_operator_actions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_operator_actions (
+    id bigint NOT NULL,
+    action text NOT NULL,
+    subject text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    detail jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: generator_operator_actions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.generator_operator_actions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: generator_operator_actions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.generator_operator_actions_id_seq OWNED BY public.generator_operator_actions.id;
+
+
+--
+-- Name: generator_probe_epochs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_probe_epochs (
+    epoch integer NOT NULL,
+    seed text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    retired_at timestamp with time zone,
+    CONSTRAINT ck_generator_probe_epochs_generator_probe_epochs_seed_check CHECK ((seed ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: generator_probe_epochs_epoch_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.generator_probe_epochs_epoch_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: generator_probe_epochs_epoch_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.generator_probe_epochs_epoch_seq OWNED BY public.generator_probe_epochs.epoch;
+
+
+--
+-- Name: generator_probe_results; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_probe_results (
+    submission_id uuid NOT NULL,
+    epoch integer NOT NULL,
+    run_id uuid NOT NULL,
+    fingerprints jsonb NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: generator_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_runs (
+    run_id uuid NOT NULL,
+    submission_id uuid NOT NULL,
+    attempt integer NOT NULL,
+    seeds jsonb NOT NULL,
+    probe_epoch integer NOT NULL,
+    cases_per_seed integer NOT NULL,
+    panel jsonb NOT NULL,
+    settings_revision integer NOT NULL,
+    status text NOT NULL,
+    outcome text,
+    score double precision,
+    score_summary jsonb,
+    evaluation jsonb,
+    panel_results jsonb,
+    scorer_version text,
+    leased_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT ck_generator_runs_generator_runs_cases_check CHECK (((cases_per_seed >= 8) AND (cases_per_seed <= 64))),
+    CONSTRAINT ck_generator_runs_generator_runs_finished_check CHECK (((status = 'leased'::text) = (finished_at IS NULL))),
+    CONSTRAINT ck_generator_runs_generator_runs_score_check CHECK (((status = 'scored'::text) = (score IS NOT NULL))),
+    CONSTRAINT ck_generator_runs_generator_runs_status_check CHECK ((status = ANY (ARRAY['leased'::text, 'scored'::text, 'invalid'::text, 'insufficient_panel'::text, 'copy'::text, 'abandoned'::text])))
+);
+
+
+--
+-- Name: generator_submissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_submissions (
+    submission_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    owner_key text NOT NULL,
+    source_sha256 text NOT NULL,
+    tree_sha256 text NOT NULL,
+    source_bytes bytea NOT NULL,
+    size_bytes integer NOT NULL,
+    module text NOT NULL,
+    go_version text NOT NULL,
+    file_count integer NOT NULL,
+    status text NOT NULL,
+    status_reason text,
+    next_run_at timestamp with time zone NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    lease_id uuid,
+    lease_run_id uuid,
+    lease_expires_at timestamp with time zone,
+    submitted_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_generator_submissions_generator_submissions_attempts_check CHECK ((attempts >= 0)),
+    CONSTRAINT ck_generator_submissions_generator_submissions_digest_check CHECK (((source_sha256 ~ '^[0-9a-f]{64}$'::text) AND (tree_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_generator_submissions_generator_submissions_lease_check CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((lease_id IS NULL) = (lease_run_id IS NULL)))),
+    CONSTRAINT ck_generator_submissions_generator_submissions_size_check CHECK (((size_bytes > 0) AND (size_bytes = octet_length(source_bytes)) AND (size_bytes <= 4194304))),
+    CONSTRAINT ck_generator_submissions_generator_submissions_status_check CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'rejected'::text])))
+);
+
+
+--
 -- Name: hotkey_ban_audit; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7069,6 +7275,27 @@ ALTER TABLE ONLY public.emission_eligibility_settings_revisions ALTER COLUMN rev
 
 
 --
+-- Name: generator_competition_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_competition_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.generator_competition_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: generator_operator_actions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_operator_actions ALTER COLUMN id SET DEFAULT nextval('public.generator_operator_actions_id_seq'::regclass);
+
+
+--
+-- Name: generator_probe_epochs epoch; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_epochs ALTER COLUMN epoch SET DEFAULT nextval('public.generator_probe_epochs_epoch_seq'::regclass);
+
+
+--
 -- Name: hotkey_ban_audit seq; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -8066,6 +8293,22 @@ ALTER TABLE ONLY public.feedback_track_contributions
 
 
 --
+-- Name: generator_competition_settings_revisions generator_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_competition_settings_revisions
+    ADD CONSTRAINT generator_settings_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
+-- Name: generator_submissions generator_submissions_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submissions
+    ADD CONSTRAINT generator_submissions_sha256_key UNIQUE (source_sha256);
+
+
+--
 -- Name: hotkey_ban_audit hotkey_ban_audit_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8855,6 +9098,62 @@ ALTER TABLE ONLY public.emission_eligibility_shadow_records
 
 ALTER TABLE ONLY public.feedback_track_contributions
     ADD CONSTRAINT pk_feedback_track_contributions PRIMARY KEY (contribution_id);
+
+
+--
+-- Name: generator_case_verdicts pk_generator_case_verdicts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_case_verdicts
+    ADD CONSTRAINT pk_generator_case_verdicts PRIMARY KEY (run_id, seed_index, case_id);
+
+
+--
+-- Name: generator_competition_settings_revisions pk_generator_competition_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_competition_settings_revisions
+    ADD CONSTRAINT pk_generator_competition_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: generator_operator_actions pk_generator_operator_actions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_operator_actions
+    ADD CONSTRAINT pk_generator_operator_actions PRIMARY KEY (id);
+
+
+--
+-- Name: generator_probe_epochs pk_generator_probe_epochs; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_epochs
+    ADD CONSTRAINT pk_generator_probe_epochs PRIMARY KEY (epoch);
+
+
+--
+-- Name: generator_probe_results pk_generator_probe_results; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_results
+    ADD CONSTRAINT pk_generator_probe_results PRIMARY KEY (submission_id, epoch);
+
+
+--
+-- Name: generator_runs pk_generator_runs; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_runs
+    ADD CONSTRAINT pk_generator_runs PRIMARY KEY (run_id);
+
+
+--
+-- Name: generator_submissions pk_generator_submissions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submissions
+    ADD CONSTRAINT pk_generator_submissions PRIMARY KEY (submission_id);
 
 
 --
@@ -10905,6 +11204,69 @@ CREATE INDEX evaluation_payments_miner_hotkey_idx ON public.evaluation_payments 
 --
 
 CREATE INDEX feedback_track_user_idx ON public.feedback_track_contributions USING btree (ditto_user_id, recorded_at);
+
+
+--
+-- Name: generator_case_verdicts_fingerprint_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_case_verdicts_fingerprint_idx ON public.generator_case_verdicts USING btree (fingerprint);
+
+
+--
+-- Name: generator_operator_actions_subject_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_operator_actions_subject_idx ON public.generator_operator_actions USING btree (subject, created_at);
+
+
+--
+-- Name: generator_probe_epochs_current_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX generator_probe_epochs_current_key ON public.generator_probe_epochs USING btree (((retired_at IS NULL))) WHERE (retired_at IS NULL);
+
+
+--
+-- Name: generator_probe_results_epoch_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_probe_results_epoch_idx ON public.generator_probe_results USING btree (epoch);
+
+
+--
+-- Name: generator_runs_scored_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_runs_scored_idx ON public.generator_runs USING btree (finished_at) WHERE (status = 'scored'::text);
+
+
+--
+-- Name: generator_runs_submission_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_runs_submission_idx ON public.generator_runs USING btree (submission_id, leased_at DESC);
+
+
+--
+-- Name: generator_submissions_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_submissions_hotkey_idx ON public.generator_submissions USING btree (miner_hotkey, submitted_at DESC);
+
+
+--
+-- Name: generator_submissions_runnable_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_submissions_runnable_idx ON public.generator_submissions USING btree (next_run_at) WHERE (status = 'active'::text);
+
+
+--
+-- Name: generator_submissions_tree_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_submissions_tree_idx ON public.generator_submissions USING btree (tree_sha256);
 
 
 --
@@ -13657,6 +14019,54 @@ ALTER TABLE ONLY public.conversation_assessments
 
 ALTER TABLE ONLY public.emission_eligibility_shadow_records
     ADD CONSTRAINT fk_emission_eligibility_shadow_records_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_case_verdicts fk_generator_case_verdicts_run_id_generator_runs; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_case_verdicts
+    ADD CONSTRAINT fk_generator_case_verdicts_run_id_generator_runs FOREIGN KEY (run_id) REFERENCES public.generator_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_probe_results fk_generator_probe_results_epoch_generator_probe_epochs; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_results
+    ADD CONSTRAINT fk_generator_probe_results_epoch_generator_probe_epochs FOREIGN KEY (epoch) REFERENCES public.generator_probe_epochs(epoch);
+
+
+--
+-- Name: generator_probe_results fk_generator_probe_results_run_id_generator_runs; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_results
+    ADD CONSTRAINT fk_generator_probe_results_run_id_generator_runs FOREIGN KEY (run_id) REFERENCES public.generator_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_probe_results fk_generator_probe_results_submission_id_generator_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_results
+    ADD CONSTRAINT fk_generator_probe_results_submission_id_generator_submissions FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_runs fk_generator_runs_probe_epoch_generator_probe_epochs; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_runs
+    ADD CONSTRAINT fk_generator_runs_probe_epoch_generator_probe_epochs FOREIGN KEY (probe_epoch) REFERENCES public.generator_probe_epochs(epoch);
+
+
+--
+-- Name: generator_runs fk_generator_runs_submission_id_generator_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_runs
+    ADD CONSTRAINT fk_generator_runs_submission_id_generator_submissions FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE CASCADE;
 
 
 --

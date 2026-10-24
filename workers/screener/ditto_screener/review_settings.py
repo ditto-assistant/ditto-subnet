@@ -117,7 +117,7 @@ class ProbeReviewSummary(BaseModel):
     requests: Annotated[int, Field(ge=0, le=1000)] = 0
     prompt_tokens: Annotated[int, Field(ge=0, le=50_000_000)] = 0
     completion_tokens: Annotated[int, Field(ge=0, le=5_000_000)] = 0
-    cost_usd: Annotated[float, Field(ge=0, le=50)] = 0.0
+    cost_usd: Annotated[float, Field(ge=0, le=50, allow_inf_nan=False)] = 0.0
     review_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
 
     @model_validator(mode="after")
@@ -256,6 +256,9 @@ class ReviewSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_chain(self) -> ReviewSettings:
+        if self.probe_review_mode == "shadow" and self.probe_battery_mode != "shadow":
+            # Same rule Platform enforces: the reviewer starts from the battery.
+            raise ValueError("the probe reviewer requires the probe battery")
         chain = (self.l2_model, *self.l2_fallback_models)
         if len(chain) != len(set(chain)):
             raise ValueError("L2 model chain must not contain duplicates")

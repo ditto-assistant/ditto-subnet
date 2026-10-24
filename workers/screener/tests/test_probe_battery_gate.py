@@ -451,3 +451,57 @@ def test_review_timeout_floor_leaves_a_usable_review(make_config: Any) -> None:
     )
     with pytest.raises(ValidationError, match="probe_review_timeout_seconds"):
         ReviewSettings.model_validate({**valid, "probe_review_timeout_seconds": 90})
+
+
+async def test_cancelled_battery_kills_its_child(
+    make_config: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    pid_file = tmp_path / "pid"
+    _child(
+        monkeypatch,
+        f"import os,time; open({str(pid_file)!r},'w').write(str(os.getpid()));"
+        " time.sleep(60)",
+    )
+    gate = _gate(make_config)
+    task = asyncio.create_task(
+        gate._run_probe_battery(
+            image_id="sha256:" + "c" * 64,
+            artifact_sha256="a" * 64,
+            bench_version=13,
+            budget=60,
+        )
+    )
+    for _ in range(100):
+        if pid_file.exists() and pid_file.read_text():
+            break
+        await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    import os
+
+    pid = int(pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def test_review_summary_rejects_nan_and_reviewer_without_battery(
+    make_config: Any,
+) -> None:
+    from pydantic import ValidationError
+
+    from ditto_screener.review_settings import (
+        ProbeReviewSummary,
+        ReviewSettings,
+        bootstrap_review_settings,
+    )
+
+    with pytest.raises(ValidationError):
+        ProbeReviewSummary.model_validate(
+            {"status": "complete", "cost_usd": float("nan")}, strict=False
+        )
+    valid = bootstrap_review_settings(make_config()).settings.model_dump(mode="json")
+    with pytest.raises(ValidationError, match="requires the probe battery"):
+        ReviewSettings.model_validate({**valid, "probe_review_mode": "shadow"})
+    both = {**valid, "probe_review_mode": "shadow", "probe_battery_mode": "shadow"}
+    assert ReviewSettings.model_validate(both).probe_review_mode == "shadow"
