@@ -1301,6 +1301,7 @@ class AdminValidatorAssignment(BaseModel):
     deadline: datetime
     bench_version: int
     attempt_count: int
+    """Scoring leases on this row; zero for a lease on a round-only row."""
     score_count: int
     provisional_composite: float | None
     slot_id: str = "slot-0"
@@ -1309,6 +1310,7 @@ class AdminValidatorAssignment(BaseModel):
         "canonical_quorum",
         "continual_retest",
         "benchmark_canary",
+        "generator_round",
     ] = "legacy_unclassified"
     agent_status: str | None = None
     first_reported_at: datetime | None = None

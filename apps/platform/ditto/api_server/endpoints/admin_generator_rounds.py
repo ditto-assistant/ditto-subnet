@@ -92,6 +92,7 @@ from ditto.db.queries.generator import (
     record_operator_action,
 )
 from ditto.db.queries.inference import revoke_ticket_inference
+from ditto.db.queries.tickets import finish_generator_round_ticket
 
 router = APIRouter(prefix="/admin/generator-competition", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -514,7 +515,7 @@ async def admin_release_round_lease(
     if attempt is None or ticket is None:
         raise HTTPException(status_code=409, detail="no live round lease to release")
     await revoke_ticket_inference(session, ticket=ticket, now=now)
-    ticket.status = TicketStatus.SCORED
+    finish_generator_round_ticket(ticket)
     attempt.status = "failed"
     attempt.detail = f"operator ({actor}): {reason}"
     attempt.finished_at = now

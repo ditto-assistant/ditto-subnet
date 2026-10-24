@@ -6104,12 +6104,20 @@ export const validatorAssignmentSchema = z.object({
   issued_at: z.string(),
   deadline: z.string(),
   bench_version: z.number().int().positive(),
-  attempt_count: z.number().int().positive(),
+  // Scoring leases on the row. A generator-round lease on a row no scoring
+  // lane has used yet carries zero.
+  attempt_count: z.number().int().nonnegative(),
   score_count: z.number().int().nonnegative(),
   provisional_composite: z.number().nullable(),
   slot_id: z.string().nullish().default(null),
   purpose: z
-    .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest', 'benchmark_canary'])
+    .enum([
+      'legacy_unclassified',
+      'canonical_quorum',
+      'continual_retest',
+      'benchmark_canary',
+      'generator_round',
+    ])
     .nullish()
     .default(null),
   agent_status: z.string().nullish().default(null),
@@ -6219,7 +6227,13 @@ export const validationRetryTicketSchema = z.object({
   // from `false`, "this expiry came with a reported reason".
   silently_expired: z.boolean().nullish().default(null),
   purpose: z
-    .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest', 'benchmark_canary'])
+    .enum([
+      'legacy_unclassified',
+      'canonical_quorum',
+      'continual_retest',
+      'benchmark_canary',
+      'generator_round',
+    ])
     .nullish()
     .default(null),
   first_reported_at: z.string().nullish().default(null),

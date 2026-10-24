@@ -67,9 +67,11 @@ from ditto.db.models import (
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
+    ProviderOutageCircuit,
     ValidatorTicket,
 )
 from ditto.db.queries.generator import claimed_fingerprints
+from ditto.db.queries.provider_outages import park_scoring_leases
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
     _ADMIN_TOKEN,
@@ -573,7 +575,8 @@ class TestRoundLifecycle:
                 )
                 assert ticket is not None
                 assert ticket.purpose == TicketPurpose.GENERATOR_ROUND
-                assert ticket.attempt_count == 1
+                # A round-created row has had no scoring lease (SN-334).
+                assert ticket.attempt_count == 0
             if index == 0:
                 download = PrivateDatasetRequest(
                     validator_hotkey=_VALIDATOR.ss58_address,
@@ -1093,3 +1096,178 @@ class TestOperatorControls:
                 )
                 is None
             )
+
+
+class TestRoundRunsNeverSpendScoringAttempts:
+    """SN-334: a round run never counts toward canonical scoring retries."""
+
+    @pytest.fixture(autouse=True)
+    def _pinned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _allowed(*_a: Any, **_k: Any) -> bool:
+            return True
+
+        import ditto.api_server.v13_scorer_cohort as cohort_mod
+
+        monkeypatch.setattr(cohort_mod, "pinned_validator_allowed", _allowed)
+
+    @staticmethod
+    async def _lease(
+        maker: async_sessionmaker[AsyncSession],
+        agent_id: UUID,
+        *,
+        now: datetime,
+        slot_id: str = "slot-0",
+    ) -> ValidatorTicket:
+        async with maker() as session, session.begin():
+            ticket = await tickets_mod.issue_generator_round_ticket(
+                session,
+                agent_id=agent_id,
+                validator_hotkey=_VALIDATOR.ss58_address,
+                now=now,
+                ttl=timedelta(minutes=90),
+                seed=5,
+                dataset_sha256="ef" * 32,
+                slot_id=slot_id,
+            )
+            assert ticket is not None
+            assert ticket.purpose == TicketPurpose.GENERATOR_ROUND
+            return ticket
+
+    @staticmethod
+    def _open_circuit(at: datetime) -> ProviderOutageCircuit:
+        return ProviderOutageCircuit(
+            provider="openrouter",
+            state="open",
+            epoch=uuid4(),
+            opened_at=at,
+            retry_at=at + timedelta(minutes=10),
+            last_failure_at=at,
+            failure_count=3,
+            last_error_code="upstream_5xx",
+        )
+
+    async def test_round_on_an_agent_with_no_prior_row_leaves_the_budget(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, 0)
+        key = (agent_id, 13, _VALIDATOR.ss58_address)
+        now = datetime.now(UTC)
+
+        # Created by the round lane: no scoring lease yet.
+        ticket = await self._lease(session_maker, agent_id, now=now)
+        assert ticket.attempt_count == 0
+        assert not tickets_mod.counts_toward_scoring_retry(ticket)
+
+        # Finished by a result, a validator fail, or an operator release: the
+        # row reads as no row at all -- not scored, no cooldown, not spent.
+        async with session_maker() as session, session.begin():
+            row = await session.get(ValidatorTicket, key, with_for_update=True)
+            assert row is not None
+            tickets_mod.finish_generator_round_ticket(row)
+        async with session_maker() as session:
+            row = await session.get(ValidatorTicket, key)
+            assert row is not None
+            assert (row.status, row.attempt_count, row.retry_after) == (
+                TicketStatus.EXPIRED,
+                0,
+                None,
+            )
+            assert not tickets_mod.ticket_retry_budget_spent(row)
+            assert not tickets_mod.counts_toward_scoring_retry(row)
+
+        # The next round re-leases it without charging, and a lapse past the
+        # deadline starts no scoring cooldown.
+        await self._lease(session_maker, agent_id, now=now)
+        async with session_maker() as session, session.begin():
+            await tickets_mod.expire_overdue_tickets(
+                session, now=now + timedelta(hours=2)
+            )
+        async with session_maker() as session:
+            row = await session.get(ValidatorTicket, key)
+            assert row is not None
+            assert (row.status, row.attempt_count, row.retry_after) == (
+                TicketStatus.EXPIRED,
+                0,
+                None,
+            )
+
+        # Nor does a provider-outage park mint a scoring resume or write
+        # scoring failure evidence onto the row.
+        later = now + timedelta(hours=3)
+        await self._lease(session_maker, agent_id, now=later)
+        async with session_maker() as session, session.begin():
+            parked = await park_scoring_leases(
+                session, circuit=self._open_circuit(later), now=later
+            )
+            assert parked == 1
+        async with session_maker() as session:
+            row = await session.get(ValidatorTicket, key)
+            assert row is not None
+            assert row.status == TicketStatus.EXPIRED
+            assert row.attempt_count == 0
+            assert row.retry_after is None
+            assert row.provider_outage_epoch is None
+            assert row.failure_reason is None
+            assert not tickets_mod.ticket_retry_budget_spent(row)
+
+    async def test_round_on_an_existing_row_keeps_its_scoring_history(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, 0)
+        key = (agent_id, 13, _VALIDATOR.ss58_address)
+        now = datetime.now(UTC)
+        failed_at = now - timedelta(days=1)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATOR.ss58_address,
+                    slot_id="slot-1",
+                    status=TicketStatus.EXPIRED,
+                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    purpose_revision=1,
+                    issued_at=failed_at - timedelta(hours=1),
+                    deadline=failed_at,
+                    bench_version=13,
+                    seed=77,
+                    attempt_count=1,
+                    manual_retry_grants=1,
+                    failure_reason="scoring_error",
+                    failure_detail="harness_crashed",
+                    failed_at=failed_at,
+                    legacy_completion_allowed=False,
+                )
+            )
+
+        ticket = await self._lease(session_maker, agent_id, now=now)
+        assert (ticket.attempt_count, ticket.manual_retry_grants) == (1, 1)
+        later = now + timedelta(minutes=5)
+        async with session_maker() as session, session.begin():
+            parked = await park_scoring_leases(
+                session, circuit=self._open_circuit(later), now=later
+            )
+            assert parked == 1
+        async with session_maker() as session:
+            row = await session.get(ValidatorTicket, key)
+            assert row is not None
+            # The canonical attempt, grant and failure evidence are untouched.
+            assert (row.attempt_count, row.manual_retry_grants) == (1, 1)
+            assert row.provider_outage_epoch is None
+            assert row.retry_after is None
+            assert (row.failure_reason, row.failure_detail) == (
+                "scoring_error",
+                "harness_crashed",
+            )
+            # A finished round lease on a row with history still counts.
+            assert tickets_mod.counts_toward_scoring_retry(row)
+
+        await self._lease(session_maker, agent_id, now=later + timedelta(minutes=1))
+        async with session_maker() as session, session.begin():
+            row = await session.get(ValidatorTicket, key, with_for_update=True)
+            assert row is not None
+            tickets_mod.finish_generator_round_ticket(row)
+        async with session_maker() as session:
+            row = await session.get(ValidatorTicket, key)
+            assert row is not None
+            assert row.status == TicketStatus.SCORED
+            assert (row.attempt_count, row.manual_retry_grants) == (1, 1)

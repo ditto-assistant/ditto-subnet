@@ -7510,7 +7510,11 @@ class ValidatorTicket(Base):
     """Hash used to independently re-derive the validator-specific seed."""
 
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    """Number of leases issued to this validator for this agent/version."""
+    """Number of scoring leases issued to this validator for this agent/version.
+
+    Generator-round leases never count. A row a round lease created starts at
+    zero, which is how every retry and quorum surface tells it apart from a row
+    with scoring history (SN-334)."""
 
     manual_retry_grants: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
@@ -7688,8 +7692,8 @@ class ValidatorTicket(Base):
             name="validator_tickets_purpose_revision_nonnegative",
         ),
         CheckConstraint(
-            "attempt_count > 0",
-            name="validator_tickets_attempt_count_positive",
+            "attempt_count >= 0",
+            name="validator_tickets_attempt_count_nonnegative",
         ),
         CheckConstraint(
             "manual_retry_grants >= 0",

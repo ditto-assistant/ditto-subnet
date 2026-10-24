@@ -457,6 +457,7 @@ from ditto.db.queries.source_review_queue_slo import (
     load_source_review_queue_slo_snapshot,
 )
 from ditto.db.queries.tickets import (
+    generator_round_free_ticket,
     get_score_continuation_floor,
     get_score_continuation_floor_row,
     get_score_priority_floors,
@@ -7952,7 +7953,12 @@ async def agent_pipeline(
     tickets = list(
         await session.scalars(
             select(ValidatorTicket)
-            .where(ValidatorTicket.agent_id == agent_id)
+            .where(
+                ValidatorTicket.agent_id == agent_id,
+                # A generator-round lease is not a validation attempt, and a
+                # round-only row has none to report.
+                generator_round_free_ticket(),
+            )
             .order_by(
                 ValidatorTicket.issued_at.desc(),
                 ValidatorTicket.validator_hotkey,

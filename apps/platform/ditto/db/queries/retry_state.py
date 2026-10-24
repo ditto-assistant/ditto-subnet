@@ -39,7 +39,7 @@ from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollou
 from ditto.db.queries.provider_outages import provider_outage_active
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
-from ditto.db.queries.tickets import ticket_retry_budget_spent
+from ditto.db.queries.tickets import scoring_retry_ticket, ticket_retry_budget_spent
 from ditto.screener_policy_state import effective_screening_policy_version
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)
@@ -145,7 +145,10 @@ def resolve_bench_version(
         ticket
         for ticket in all_tickets
         if ticket.status in (TicketStatus.ISSUED, TicketStatus.EXPIRED)
-        and ticket.purpose != TicketPurpose.BENCHMARK_CANARY
+        # Neither a canary nor a generator-round lease is scoring work, so
+        # neither may pull the agent's retry era toward its version.
+        and ticket.purpose
+        not in (TicketPurpose.BENCHMARK_CANARY, TicketPurpose.GENERATOR_ROUND)
     ]
     if work_tickets:
         return max(
@@ -744,7 +747,7 @@ async def classify_agent_retry_states(
         await session.scalars(
             select(ValidatorTicket).where(
                 ValidatorTicket.agent_id.in_(id_subq),
-                ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+                scoring_retry_ticket(),
             )
         )
     ).all():

@@ -58,7 +58,10 @@ from ditto.db.models import (
 )
 from ditto.db.queries.benchmark_rollout import heartbeat_supports_version
 from ditto.db.queries.inference import ensure_inference_grant, revoke_ticket_inference
-from ditto.db.queries.tickets import issue_generator_round_ticket
+from ditto.db.queries.tickets import (
+    finish_generator_round_ticket,
+    issue_generator_round_ticket,
+)
 from ditto.db.queries.validator_auth import nonce_expires_at
 
 logger = logging.getLogger(__name__)
@@ -345,7 +348,7 @@ async def submit_generator_round_score(
         except RoundSubmissionRejected as exc:
             raise HTTPException(422, str(exc)) from exc
         await revoke_ticket_inference(session, ticket=ticket, now=now)
-        ticket.status = TicketStatus.SCORED
+        finish_generator_round_ticket(ticket)
         accepted = await record_panel_result(
             session,
             row,
@@ -444,7 +447,7 @@ async def fail_generator_round_job(
         if attempt is None or attempt.status != "leased":
             raise HTTPException(409, "round attempt is not open")
         await revoke_ticket_inference(session, ticket=ticket, now=now)
-        ticket.status = TicketStatus.SCORED
+        finish_generator_round_ticket(ticket)
         attempt.status = "failed"
         attempt.detail = f"{payload.reason}: {payload.detail or ''}".strip()[:500]
         attempt.finished_at = now

@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
-from sqlalchemy import and_, func, select, text, tuple_
+from sqlalchemy import and_, func, or_, select, text, tuple_
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
@@ -144,6 +144,94 @@ def retry_budget_spent() -> ColumnElement[bool]:
         ValidatorTicket.attempt_count
         >= (MAX_ATTEMPTS_PER_VERSION + ValidatorTicket.manual_retry_grants),
     )
+
+
+# Generator-round leases share the canonical ``(agent, version, validator)``
+# row but are never scoring work. ``attempt_count`` counts only scoring leases:
+# a round lease never increments it, and a row a round lease created starts at
+# zero. So a zero-attempt row is one no scoring lane has ever leased, and it
+# must read exactly like a missing row to every retry and quorum surface.
+#
+# Unlike a benchmark canary, a round may also lease a row that already carries
+# canonical history. That history (its real attempt count, grants and parked
+# outage resume) is left intact and keeps counting; only the round lease
+# itself is excluded.
+
+
+def is_round_only_ticket(ticket: ValidatorTicket) -> bool:
+    """A row only generator-round leases have used: no scoring history."""
+    return ticket.purpose == TicketPurpose.GENERATOR_ROUND and ticket.attempt_count == 0
+
+
+def counts_toward_scoring_retry(ticket: ValidatorTicket) -> bool:
+    """Whether this row belongs in canonical scoring retry accounting.
+
+    Benchmark canaries never do. A live generator-round lease is not scoring
+    work, and a round-only row has no scoring history to account for. A
+    finished round lease on a row with prior scoring history still counts,
+    because that history is the canonical one.
+    """
+    if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+        return False
+    if ticket.purpose == TicketPurpose.GENERATOR_ROUND:
+        return ticket.status != TicketStatus.ISSUED and ticket.attempt_count > 0
+    return True
+
+
+def generator_round_free_ticket() -> ColumnElement[bool]:
+    """Rows that hold no scoring evidence because of generator rounds.
+
+    False for a live generator-round lease and for a round-only row; true for
+    everything else, including canaries (callers exclude those on their own
+    terms) and a finished round lease on a row with prior scoring history.
+    """
+    return or_(
+        ValidatorTicket.purpose != TicketPurpose.GENERATOR_ROUND,
+        and_(
+            ValidatorTicket.status != TicketStatus.ISSUED,
+            ValidatorTicket.attempt_count > 0,
+        ),
+    )
+
+
+def scoring_retry_ticket() -> ColumnElement[bool]:
+    """SQL twin of :func:`counts_toward_scoring_retry`."""
+    return and_(
+        ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+        generator_round_free_ticket(),
+    )
+
+
+def release_generator_round_dataset_pin(ticket: ValidatorTicket) -> None:
+    """Drop a generator round's dataset pin before a scoring lane reuses a row.
+
+    The round lease pins the round's own dataset on the shared row. A scoring
+    lease re-derives its seed from the agent's dataset block and this
+    validator's identity at job time, so clearing the pin restores exactly the
+    one a prior scoring lease held. Without this, the scoring job is refused
+    because its seed does not match the validator identity. No-op otherwise.
+    """
+    if ticket.purpose != TicketPurpose.GENERATOR_ROUND:
+        return
+    ticket.seed = None
+    ticket.dataset_sha256 = None
+    ticket.seed_block = None
+    ticket.seed_block_hash = None
+
+
+def finish_generator_round_ticket(ticket: ValidatorTicket) -> None:
+    """Close a generator-round lease without leaving scoring evidence behind.
+
+    A round-only row closes ``expired`` with no cooldown, so it occupies no
+    quorum slot and blocks no later scoring lease: it reads as no row at all. A
+    row with prior scoring history closes ``scored`` as it always has, which
+    keeps that validator off a canonical reissue it was already barred from.
+    Never touches ``attempt_count``, grants, or failure evidence.
+    """
+    ticket.status = (
+        TicketStatus.EXPIRED if ticket.attempt_count == 0 else TicketStatus.SCORED
+    )
+    ticket.retry_after = None
 
 
 # ``EMISSION_CONTENDER_COUNT`` and ``PROVISIONAL_CONTENDER_LANE_SIZE`` now live
@@ -395,6 +483,12 @@ async def expire_overdue_tickets(session: AsyncSession, *, now: datetime) -> int
         .all()
     )
     for ticket in overdue:
+        if ticket.purpose == TicketPurpose.GENERATOR_ROUND:
+            # A round run is not a scoring attempt, so its lapse starts no
+            # scoring cooldown on the shared row.
+            ticket.status = TicketStatus.EXPIRED
+            ticket.retry_after = None
+            continue
         ticket.status = TicketStatus.EXPIRED
         # Cooldown begins at the lease deadline, not whenever a later sweep
         # happens to notice it.
@@ -855,7 +949,8 @@ async def issue_ticket(
                 ValidatorTicket.agent_id == agent_id,
                 ValidatorTicket.bench_version == bench_version,
                 ValidatorTicket.status.in_(_LIVE_TICKET_STATUSES),
-                ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+                # A live round lease will never produce a quorum score.
+                scoring_retry_ticket(),
             )
         )
         if (occupied or 0) >= SCORING_QUORUM:
@@ -944,6 +1039,10 @@ async def issue_ticket(
             ticket.seed_block_hash = None
             ticket.provider_outage_epoch = None
             ticket.provider_outage_attempted_epoch = None
+        else:
+            # ``attempt_count`` already counts only scoring leases, so it
+            # continues from its true value below.
+            release_generator_round_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
@@ -1206,7 +1305,10 @@ async def issue_generator_round_ticket(
     agents, whose canonical quorum is already complete. The purpose is
     ``generator_round``, so no agent-score endpoint will accept the lease.
     ``attempt_count`` and the retry grants are left untouched: a round run is
-    not a scoring attempt and must never consume the agent's retry budget.
+    not a scoring attempt and must never consume the agent's retry budget. A
+    row this lane creates therefore starts at ``attempt_count = 0`` (no scoring
+    lease yet), so a later canonical or continual-retest lease on it is that
+    validator's first scoring attempt. See :func:`counts_toward_scoring_retry`.
     """
     await lock_validator_slot(
         session, validator_hotkey=validator_hotkey, slot_id=slot_id
@@ -1276,10 +1378,10 @@ async def issue_generator_round_ticket(
             bench_version=13,
             seed=seed,
             dataset_sha256=dataset_sha256,
-            # The table requires a positive count. A fresh row records one
-            # (this round run) and is never consulted by canonical retry
-            # budgets: the agent's quorum completed before it was eligible.
-            attempt_count=1,
+            # ``attempt_count`` counts scoring leases only. This row has had
+            # none, so it carries no retry history: it reads as no row to
+            # every retry and quorum surface until a scoring lane leases it.
+            attempt_count=0,
             manual_retry_grants=0,
             retry_after=None,
             legacy_completion_allowed=False,

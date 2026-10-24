@@ -29,6 +29,7 @@ from ditto.api_models.miner_logs import (
     MinerHarnessLogsResponse,
 )
 from ditto.db.models import Agent, TicketStatus, ValidatorTicket
+from ditto.db.queries.tickets import generator_round_free_ticket
 
 
 def _aware(value: datetime) -> datetime:
@@ -92,7 +93,12 @@ async def load_owned_agent_logs(
         (
             await session.execute(
                 select(ValidatorTicket)
-                .where(ValidatorTicket.agent_id == agent_id)
+                .where(
+                    ValidatorTicket.agent_id == agent_id,
+                    # Round leases record no harness diagnostics, and a
+                    # round-only row has no scoring attempt to label.
+                    generator_round_free_ticket(),
+                )
                 .order_by(ValidatorTicket.issued_at.desc())
             )
         )

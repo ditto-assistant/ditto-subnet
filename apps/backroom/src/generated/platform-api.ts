@@ -14882,7 +14882,7 @@ export interface components {
              * @default legacy_unclassified
              * @enum {string}
              */
-            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary";
+            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary" | "generator_round";
             /** Retry After */
             retry_after: string | null;
             /** Retry Budget Exhausted */
@@ -14935,7 +14935,7 @@ export interface components {
              * @default legacy_unclassified
              * @enum {string}
              */
-            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary";
+            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary" | "generator_round";
             /** Score Count */
             score_count: number;
             /**
