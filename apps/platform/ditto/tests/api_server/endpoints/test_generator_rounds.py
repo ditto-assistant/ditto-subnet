@@ -122,7 +122,9 @@ def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> MagicMock
     return chain
 
 
-async def _apply_settings(client: httpx.AsyncClient, **overrides: Any) -> None:
+async def _apply_settings(
+    client: httpx.AsyncClient, *, status: int = 200, **overrides: Any
+) -> httpx.Response:
     current = (await client.get(_SETTINGS_URL, headers=_ADMIN)).json()
     settings = _settings(min_panel=3, panel_size=3, **overrides)
     resp = await client.post(
@@ -136,7 +138,8 @@ async def _apply_settings(client: httpx.AsyncClient, **overrides: Any) -> None:
             "confirmation": generator_settings_confirmation(settings["mode"]),
         },
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == status, resp.text
+    return resp
 
 
 async def _seed_agent(maker: async_sessionmaker[AsyncSession], rank: int) -> UUID:
@@ -861,6 +864,39 @@ class TestRoundLifecycle:
             row = await get_round(session, 1)
             assert row is not None and row.status == "void" and row.seed is None
             assert row.void_reason == "round opening epoch was missed"
+
+    async def test_an_interval_change_never_remaps_an_open_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)  # commits round 1 (epochs 4..7)
+
+        # A committed round never opened, so it is voided with the change.
+        await _apply_settings(client, epochs_per_round=5)
+        async with session_maker() as session:
+            row = await get_round(session, 1)
+            assert row is not None and row.status == "void"
+            assert row.void_reason == "round interval changed from 4 to 5"
+
+        # The voided index is never reused: under 5 epochs the next round is
+        # round 2 (epochs 10..14), and once it opens it blocks the change.
+        await _advance(session_maker, 9)  # commits round 2
+        await _advance(session_maker, 10)  # opens it
+        async with session_maker() as session:
+            opened = await get_round(session, 2)
+            assert opened is not None
+            assert opened.status in ("generating", "running")
+        refused = await _apply_settings(client, status=409, epochs_per_round=4)
+        assert "are open" in refused.text
 
     async def test_mode_off_and_missing_generators(
         self,

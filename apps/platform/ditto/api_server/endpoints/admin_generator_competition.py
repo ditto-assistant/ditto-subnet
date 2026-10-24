@@ -43,11 +43,13 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.generator_competition import (
     DEFAULT_SETTINGS,
+    load_settings,
     run_summary,
     settings_checksum,
     settings_from_row,
     submission_summary,
 )
+from ditto.api_server.generator_rounds import void_round
 from ditto.db.models import GeneratorCompetitionSettingsRevision as RevisionRow
 from ditto.db.models import (
     GeneratorProbeEpoch,
@@ -120,6 +122,42 @@ async def get_settings(
     )
 
 
+async def _retire_rounds_for_interval_change(
+    session: AsyncSession, *, old: int, new: int, actor: str, reason: str
+) -> None:
+    """A round's index is its first epoch divided by the interval, so a new
+    interval would remap rounds already in flight. A round that has opened
+    (seeded, generating or running) blocks the change; a committed round that
+    never opened holds no seed and is voided in this same transaction."""
+    open_rows = list(
+        await session.scalars(
+            select(GeneratorRound)
+            .where(GeneratorRound.status.in_(("committed", "generating", "running")))
+            .with_for_update()
+        )
+    )
+    started = [r.round_index for r in open_rows if r.status != "committed"]
+    if started:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"epochs_per_round cannot change while round(s) {started} are "
+                "open; let them finish or void them, then retry"
+            ),
+        )
+    now = datetime.now(UTC)
+    for row in open_rows:
+        void_round(row, f"round interval changed from {old} to {new}", now=now)
+        record_operator_action(
+            session,
+            action="void",
+            subject=f"round:{row.round_index}",
+            actor=actor,
+            reason=f"epochs_per_round {old} -> {new}: {reason}",
+        )
+
+
 @router.post("/settings", response_model=GeneratorSettingsRevision)
 async def create_settings_revision(
     payload: AdminGeneratorSettingsRequest, _admin: AdminDep, session: SessionDep
@@ -161,6 +199,15 @@ async def create_settings_revision(
                 "generator competition settings changed; refresh before applying "
                 f"(expected {payload.expected_revision}, current {actual})"
             ),
+        )
+    current = (await load_settings(session)).settings
+    if payload.settings.epochs_per_round != current.epochs_per_round:
+        await _retire_rounds_for_interval_change(
+            session,
+            old=current.epochs_per_round,
+            new=payload.settings.epochs_per_round,
+            actor=actor,
+            reason=reason,
         )
     try:
         row = await insert_generator_settings_revision(

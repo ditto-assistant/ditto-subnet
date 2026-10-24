@@ -190,7 +190,10 @@ async def request_generator_round_job(
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
         if not _round_capable(heartbeat, now=now):
             return _no_work()
-        row = await running_round(session)
+        # Locked so concurrent polls pick pending agents one at a time: the
+        # second sees the first's committed attempt instead of leasing the
+        # same panel agent.
+        row = await running_round(session, for_update=True)
         if row is None or row.dataset_sha256 is None:
             return _no_work()
         slot = await v._idle_retest_slot(

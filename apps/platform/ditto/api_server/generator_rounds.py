@@ -871,13 +871,18 @@ async def record_round_score(
 # --- validator panel runs ---------------------------------------------------
 
 
-async def running_round(session: AsyncSession) -> GeneratorRound | None:
-    return await session.scalar(
+async def running_round(
+    session: AsyncSession, *, for_update: bool = False
+) -> GeneratorRound | None:
+    stmt = (
         select(GeneratorRound)
         .where(GeneratorRound.status == "running")
         .order_by(GeneratorRound.round_index.desc())
         .limit(1)
     )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return await session.scalar(stmt)
 
 
 async def round_for_dataset(
