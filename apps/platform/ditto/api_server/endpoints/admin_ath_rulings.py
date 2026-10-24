@@ -1124,17 +1124,53 @@ async def execute_ath_rulings_batch(
     board_now: BoardSnapshot | None = board_before
     for index, ruling in enumerate(document.rulings):
         started_at = datetime.now(UTC)
-        preview, _projected = await _preview_ruling(
-            session, index=index, ruling=ruling, board=board_now or board_before
-        )
-        await session.rollback()
         base: dict[str, Any] = {
             "index": index,
             "action": ruling.action,
             "agent_id": ruling.agent_id,
-            "agent_status": preview.agent_status,
-            "would_change_crown": preview.would_change_crown,
+            "agent_status": None,
+            "would_change_crown": str(ruling.agent_id) in previewed_crown,
         }
+        if board_now is None:
+            # Do not even simulate later items against a known failed board:
+            # that can raise again and hide the already committed outcomes.
+            results.append(
+                AdminAthRulingExecuteItem(
+                    **base,
+                    status="failed",
+                    message="board unavailable after an earlier ruling; preview again",
+                )
+            )
+            continue
+        try:
+            preview, _projected = await _preview_ruling(
+                session, index=index, ruling=ruling, board=board_now
+            )
+            await session.rollback()
+        except Exception:
+            await session.rollback()
+            if not any(item.steps_applied for item in results):
+                raise
+            logger.exception(
+                "ath rulings next-item preview failed batch_id=%s index=%s",
+                batch_id,
+                index,
+            )
+            board_now = None
+            results.append(
+                AdminAthRulingExecuteItem(
+                    **base,
+                    status="failed",
+                    message=(
+                        "preview failed after an earlier ruling; inspect applied items"
+                    ),
+                )
+            )
+            continue
+        base.update(
+            agent_status=preview.agent_status,
+            would_change_crown=preview.would_change_crown,
+        )
         if preview.disposition == "already_applied":
             results.append(
                 AdminAthRulingExecuteItem(
@@ -1148,18 +1184,6 @@ async def execute_ath_rulings_batch(
                     **base,
                     status="failed",
                     message=preview.conflict_reason or preview.message,
-                )
-            )
-            continue
-        if board_now is None:
-            results.append(
-                AdminAthRulingExecuteItem(
-                    **base,
-                    status="failed",
-                    message=(
-                        "board re-read failed after an earlier ruling landed; "
-                        "preview again"
-                    ),
                 )
             )
             continue

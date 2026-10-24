@@ -2298,6 +2298,11 @@ async def test_court_restoration_materializes_after_commit_outside_poll_ttl(
     rulings = [
         _ruling("clear", agent_id, sha256, reason="Withdrawn ground restored", refs=())
     ]
+    if fail_materialization:
+        held_id, held_sha = board["held"]
+        rulings.append(
+            _ruling("clear", held_id, held_sha, reason="Clean source", refs=())
+        )
     preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
     assert preview.status_code == 200, preview.text
     assert seen == []
@@ -2317,6 +2322,11 @@ async def test_court_restoration_materializes_after_commit_outside_poll_ttl(
     assert result["applied_count"] == 1 and result["items"][0]["status"] == "applied"
     assert result["items"][0]["steps_applied"] == ["open", "clear"]
     assert "private materialization failure" not in response.text
+    if fail_materialization:
+        assert result["failed_count"] == 1
+        assert result["items"][1]["status"] == "failed"
+        assert result["items"][1]["steps_applied"] == []
+        assert await _status(maker, board["held"][0]) == "ath_pending_review"
 
 
 @pytest.mark.parametrize("changed_guard", ["context", "values"])
@@ -2365,3 +2375,61 @@ async def test_court_refuses_changed_efficiency_guard_with_unchanged_crown_ids(
     assert result["items"][0]["steps_applied"] == []
     assert "crown arithmetic moved" in result["items"][0]["message"]
     assert await _status(maker, agent_id) == "banned"
+
+
+@pytest.mark.parametrize("failure_stage", ["readback", "next_preview"])
+async def test_court_stops_later_simulation_without_losing_committed_items(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    board = await _seed_board(maker)
+    _install(app, maker)
+    first_id, first_sha = board["champion"]
+    next_id, next_sha = board["runner"]
+    rulings = [
+        _ruling("reject", first_id, first_sha),
+        _ruling("reject", next_id, next_sha),
+    ]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    original_read = rulings_mod.read_board_snapshot
+    original_preview = rulings_mod._preview_ruling
+    reads = 0
+
+    async def fail_read(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        if failure_stage == "readback" and reads == 2:
+            raise RuntimeError("private board-read failure")
+        return await original_read(*args, **kwargs)
+
+    async def fail_preview(*args, **kwargs):
+        if kwargs["index"] == 1:
+            if failure_stage == "readback":
+                pytest.fail("must not simulate a later item after known read failure")
+            raise RuntimeError("private next-item failure")
+        return await original_preview(*args, **kwargs)
+
+    monkeypatch.setattr(rulings_mod, "read_board_snapshot", fail_read)
+    monkeypatch.setattr(rulings_mod, "_preview_ruling", fail_preview)
+    response = await client.post(
+        _EXECUTE,
+        headers=_HEADERS,
+        json={
+            "preview_token": preview.json()["preview_token"],
+            "confirmation": ATH_RULINGS_CONFIRMATION,
+            "rulings": rulings,
+        },
+    )
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["applied_count"] == 1 and detail["failed_count"] == 1
+    assert [item["status"] for item in detail["items"]] == ["applied", "failed"]
+    assert detail["items"][0]["steps_applied"] == ["open", "reject"]
+    assert detail["items"][1]["steps_applied"] == []
+    assert "private" not in response.text
+    assert await _status(maker, first_id) == "banned"
+    assert await _status(maker, next_id) == "scored"
