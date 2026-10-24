@@ -108,8 +108,7 @@ async def test_ledger_source_fails_closed() -> None:
     async def _boom() -> GeneratorLedgerResponse:
         raise RuntimeError("platform down")
 
-    ledger = await PlatformGeneratorLedgerSource(read=_boom).fetch()
-    assert ledger.entries == []
+    assert await PlatformGeneratorLedgerSource(read=_boom).fetch() is None
 
 
 def test_ledger_ignores_unknown_fields() -> None:
@@ -168,6 +167,48 @@ async def test_a_deregistered_generator_never_takes_a_paid_slot() -> None:
     assert absent not in weights
     assert weights[present] == pytest.approx(0.2)
     assert weights[champion] == pytest.approx(0.8)
+
+
+async def test_an_unreadable_eligible_ledger_leaves_weights_unchanged() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from ditto.tests.validator.test_worker import (
+        _config,
+        _platform_with_ledger,
+    )
+    from ditto.tests.validator.test_worker import (
+        _entry as _memory_entry,
+    )
+    from ditto.validator.worker import ValidatorWorker
+
+    champion = "5Champion" + "x" * 39
+    present = "5GenPresent" + "x" * 36
+    platform = _platform_with_ledger(jobs=[], ledger=[_memory_entry(champion, 0.9)])
+    source = MagicMock()
+    source.fetch = AsyncMock(return_value=None)
+    chain = MagicMock()
+    chain.get_recent_neurons = AsyncMock(
+        return_value=[SimpleNamespace(hotkey=champion), SimpleNamespace(hotkey=present)]
+    )
+    chain.put_weights = AsyncMock()
+    config = _config()
+    config.track_shares_bps = {TRACK_MEMORY: 8000, TRACK_GENERATOR: 2000}
+    config.generator_track_state = TrackState.ACTIVE.value
+    config.generator_weight_eligible = True
+    config.generator_ledger_read_enabled = True
+    worker = ValidatorWorker(
+        config=config,
+        platform=platform,
+        dittobench=MagicMock(),
+        chain=chain,
+        keypair=MagicMock(),
+        generator_ledger_source=source,
+    )
+
+    await worker.run_once()
+
+    chain.put_weights.assert_not_awaited()
 
 
 def test_a_run_shaped_ledger_from_an_older_platform_still_folds() -> None:

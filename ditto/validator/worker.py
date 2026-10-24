@@ -771,24 +771,24 @@ class PlatformRouterLedgerSource:
 
 
 class PlatformGeneratorLedgerSource:
-    """Best-effort read of the shadow generator ledger Platform publishes.
+    """Read of the generator ledger Platform publishes.
 
-    Fail-closed like :class:`PlatformRouterLedgerSource`: any error folds an
-    empty ledger (zero generator emission) for the epoch.
+    Returns ``None`` when the read fails. The worker decides what that means:
+    while the track pays nothing it folds an empty ledger, but once generator
+    weights are eligible a failed read skips the epoch's weight submission, so
+    this validator never sets a vector that differs from validators whose read
+    succeeded.
     """
 
     def __init__(self, read: Callable[[], Awaitable[GeneratorLedgerResponse]]) -> None:
         self._read = read
 
-    async def fetch(self) -> GeneratorLedgerResponse:
+    async def fetch(self) -> GeneratorLedgerResponse | None:
         try:
             return await self._read()
         except Exception:
-            logger.warning(
-                "generator ledger read failed; folding an empty ledger this epoch",
-                exc_info=True,
-            )
-            return GeneratorLedgerResponse(count=0)
+            logger.warning("generator ledger read failed this epoch", exc_info=True)
+            return None
 
 
 class ValidatorWorker:
@@ -2380,6 +2380,15 @@ class ValidatorWorker:
             if self._generator_ledger_source is not None
             else GeneratorLedgerResponse(count=0)
         )
+        if generator_ledger is None:
+            if self._config.generator_weight_eligible:
+                logger.warning(
+                    "generator ledger unavailable while generator weights are "
+                    "eligible; weights unchanged this epoch"
+                )
+                return _WeightOutcome(leaderboard=leaderboard)
+            # Shadow: the track pays nothing, so an empty ledger changes no weight.
+            generator_ledger = GeneratorLedgerResponse(count=0)
         fold_inputs = TrackFoldInputs(
             memory_entries=registered_entries,
             memory_params=MemoryFoldParams(
