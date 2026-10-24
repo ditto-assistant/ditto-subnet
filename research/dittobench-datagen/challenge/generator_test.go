@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,6 +273,24 @@ func TestUnorderedListFingerprintIgnoresItemOrder(t *testing.T) {
 	}
 	if Fingerprint(list(protocol.AnswerOrderedList, "a", "b")) == Fingerprint(list(protocol.AnswerOrderedList, "b", "a")) {
 		t.Error("ordered list order must change the fingerprint")
+	}
+}
+
+func TestArchiveSizeLimitCannotOverflow(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	body := "module x\n\ngo 1.23\n"
+	if err := tw.WriteHeader(&tar.Header{Name: "go.mod", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))}); err != nil {
+		t.Fatal(err)
+	}
+	tw.Write([]byte(body))
+	// A header claiming a size near MaxInt64; the writer never finishes it.
+	tw.WriteHeader(&tar.Header{Name: "big.go", Typeflag: tar.TypeReg, Mode: 0o644, Size: math.MaxInt64 - 4})
+	gz.Close()
+	_, _, err := InspectArchive(buf.Bytes())
+	if err == nil || !strings.Contains(err.Error(), "expands past") {
+		t.Fatalf("want the size-limit refusal, got %v", err)
 	}
 }
 
