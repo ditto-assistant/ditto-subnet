@@ -32,13 +32,29 @@
         path: /etc/systemd/system/ditto-screener-worker@.service.d/conversation.conf
       register: conversation_dropin
 
-    - name: Refuse to drop or newly add the conversation key
+    - name: Check whether the conversation key is already materialized
+      ansible.builtin.stat:
+        path: "{{ screener_fleet_conversation_key_file }}"
+      register: conversation_key
+
+    - name: Check whether the host already uses the X.509 federation
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ screener_fleet_x509_credential_file }}"
+        - "{{ screener_fleet_source_review_key_file }}"
+      register: x509_state
+
+    - name: Refuse to change any capability the host does not already have
       ansible.builtin.assert:
         that:
           - conversation_dropin.stat.exists
+          - conversation_key.stat.exists
+          - x509_state.results | map(attribute='stat.exists') | min
         fail_msg: >-
-          This playbook re-renders the materializer with the conversation key on;
-          converge the full role instead on a host without conversation.conf.
+          This playbook re-renders the materializer with X.509 federation and the
+          conversation key on; converge the full role instead on a host that
+          lacks conversation.conf, the conversation key, or the X.509 identity.
 
     - name: Install the bounded secret materializer
       ansible.builtin.template:
