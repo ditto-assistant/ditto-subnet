@@ -361,12 +361,6 @@ import {
   batchRetryValidationResponseSchema,
   agentScoringReadinessInputSchema,
   agentScoringReadinessSchema,
-  agentCoreQualificationInputSchema,
-  agentCoreQualificationStatusSchema,
-  coreQualificationPolicyControlSchema,
-  getCoreQualificationPolicyInputSchema,
-  refreshAgentCoreQualificationInputSchema,
-  setCoreQualificationPolicyInputSchema,
   benchmarkContractRefreshLookupInputSchema,
   benchmarkContractRefreshDetailSchema,
   refreshBenchmarkContractInputSchema,
@@ -3124,56 +3118,6 @@ export async function fetchAgentScoringReadiness(rawInput: unknown) {
     `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/scoring-readiness`,
   )
   return agentScoringReadinessSchema.parse(payload)
-}
-
-export async function fetchCoreQualificationPolicy(rawInput: unknown) {
-  const input = getCoreQualificationPolicyInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/core-qualification/policy?bench_version=${input.benchVersion}&history_limit=${input.historyLimit}`,
-  )
-  return coreQualificationPolicyControlSchema.parse(payload)
-}
-
-export async function setCoreQualificationPolicy(rawInput: unknown, actor: string) {
-  const input = setCoreQualificationPolicyInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/core-qualification/policy', {
-    method: 'POST',
-    actor,
-    body: {
-      expected_revision: input.expectedRevision,
-      policy: input.policy,
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return coreQualificationPolicyControlSchema.parse(payload)
-}
-
-export async function fetchAgentCoreQualification(rawInput: unknown) {
-  const input = agentCoreQualificationInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/core-qualification?bench_version=${input.benchVersion}&limit=${input.limit}`,
-  )
-  return agentCoreQualificationStatusSchema.parse(payload)
-}
-
-export async function refreshAgentCoreQualification(rawInput: unknown, actor: string) {
-  const input = refreshAgentCoreQualificationInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/core-qualification/refresh`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        bench_version: input.benchVersion,
-        reason: input.reason,
-        actor,
-        confirmation: input.confirmation,
-      },
-    },
-  )
-  return agentCoreQualificationStatusSchema.parse(payload)
 }
 
 export async function fetchValidatorScoreReplacement(rawInput: unknown) {

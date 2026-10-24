@@ -10,7 +10,6 @@ from ditto.api_models.inference_concurrency_settings import (
     MAX_CHAT_REQUEST_BUDGET,
     MAX_CHAT_TOKEN_BUDGET,
 )
-from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
 from ditto.api_server.config import check_config, parse_api_server_config_from_env
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.validator_names import ValidatorNamesConfig
@@ -47,18 +46,6 @@ def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DITTO_TARGON_PUBLIC_PLATFORM_URL", raising=False)
     monkeypatch.delenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", raising=False)
     monkeypatch.delenv("DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("DITTO_CODING_CATALOG_CURATOR_HOTKEYS", raising=False)
-    for name in (
-        "DITTO_CODING_CATALOG_STORAGE_ENDPOINT_URL",
-        "DITTO_CODING_CATALOG_STORAGE_BUCKET",
-        "DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY",
-        "DITTO_CODING_CATALOG_STORAGE_SECRET_KEY",
-        "DITTO_CODING_CATALOG_STORAGE_REGION",
-        "DITTO_CODING_CATALOG_STORAGE_USE_TLS",
-        "DITTO_CODING_CATALOG_MAX_RECORD_BYTES",
-        "DITTO_CODING_CATALOG_TIMEOUT_SECONDS",
-    ):
-        monkeypatch.delenv(name, raising=False)
 
 
 class TestParseApiServerConfigFromEnv:
@@ -86,49 +73,6 @@ class TestParseApiServerConfigFromEnv:
         assert config.inference_proxy.per_ticket_concurrency == 16
         assert config.inference_proxy.per_validator_concurrency == 48
         assert config.inference_proxy.global_concurrency == 96
-        assert config.coding_catalog_curator_hotkeys == ()
-        assert config.coding_private_catalog is None
-        assert config.coding_shadow_reconciliation_enabled is False
-        assert config.coding_shadow_reconciliation_selection_delay_blocks == 20
-        assert config.coding_shadow_ticket_set_enabled is False
-        assert config.coding_shadow_ticket_lease_seconds == 3600
-
-    def test_shadow_reconciliation_requires_its_complete_activation_boundary(
-        self,
-    ) -> None:
-        base = make_api_server_config()
-        with pytest.raises(ApiServerConfigError, match="DITTO_ADMIN_API_TOKEN"):
-            check_config(replace(base, coding_shadow_reconciliation_enabled=True))
-
-        with pytest.raises(ApiServerConfigError, match="private coding catalog"):
-            check_config(
-                replace(
-                    base,
-                    admin_api_token="test-admin-token-at-least-32-characters",
-                    coding_shadow_reconciliation_enabled=True,
-                )
-            )
-        with pytest.raises(ApiServerConfigError, match="between 1 and 10000"):
-            check_config(
-                replace(
-                    base,
-                    coding_shadow_reconciliation_selection_delay_blocks=0,
-                )
-            )
-
-    def test_shadow_ticket_set_activation_is_independent_and_bounded(self) -> None:
-        base = make_api_server_config()
-        with pytest.raises(ApiServerConfigError, match="DITTO_ADMIN_API_TOKEN"):
-            check_config(replace(base, coding_shadow_ticket_set_enabled=True))
-        with pytest.raises(ApiServerConfigError, match="between 60 and 7200"):
-            check_config(replace(base, coding_shadow_ticket_lease_seconds=30))
-        check_config(
-            replace(
-                base,
-                admin_api_token="test-admin-token-at-least-32-characters",
-                coding_shadow_ticket_set_enabled=True,
-            )
-        )
 
     def test_capacity_event_retention_defaults_to_thirty_days(
         self, monkeypatch: pytest.MonkeyPatch
@@ -220,79 +164,6 @@ class TestParseApiServerConfigFromEnv:
 
         with pytest.raises(ApiServerConfigError):
             parse_api_server_config_from_env(commit_hash="abc")
-
-    def test_private_coding_catalog_config_is_optional_and_separate(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv(
-            "DITTO_CODING_CATALOG_STORAGE_ENDPOINT_URL",
-            "https://catalog.example.com",
-        )
-        monkeypatch.setenv("DITTO_CODING_CATALOG_STORAGE_BUCKET", "private-coding")
-        monkeypatch.setenv("DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY", "catalog-access")
-        monkeypatch.setenv("DITTO_CODING_CATALOG_STORAGE_SECRET_KEY", "catalog-secret")
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.coding_private_catalog is not None
-        assert config.coding_private_catalog.bucket == "private-coding"
-        assert config.coding_private_catalog.bucket != config.storage.bucket
-
-    def test_coding_catalog_curator_allowlist_is_explicit_and_validated(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        alice = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
-        bob = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUSeHQwZqE4tHtqWv"
-        monkeypatch.setenv(
-            "DITTO_CODING_CATALOG_CURATOR_HOTKEYS",
-            f" {alice}, {bob} ",
-        )
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.coding_catalog_curator_hotkeys == (alice, bob)
-        check_config(config)
-
-        with pytest.raises(ApiServerConfigError, match="duplicates"):
-            check_config(replace(config, coding_catalog_curator_hotkeys=(alice, alice)))
-        with pytest.raises(ApiServerConfigError, match="invalid SS58"):
-            check_config(replace(config, coding_catalog_curator_hotkeys=("invalid",)))
-
-    def test_private_catalog_cannot_reuse_upload_storage_authority(self) -> None:
-        base = make_api_server_config()
-        shared_credential = CodingPrivateCatalogConfig(
-            endpoint_url="https://catalog.example.com",
-            bucket="private-coding",
-            access_key=base.storage.access_key,
-            secret_key="different-secret",
-        )
-        with pytest.raises(ApiServerConfigError, match="distinct.*credentials"):
-            check_config(replace(base, coding_private_catalog=shared_credential))
-
-        upload = replace(
-            base.storage,
-            endpoint_url="https://catalog.example.com:443",
-            bucket="private-coding",
-            access_key="upload-access",
-            secret_key="upload-secret",
-            use_tls=True,
-        )
-        shared_bucket = CodingPrivateCatalogConfig(
-            endpoint_url="https://catalog.example.com/",
-            bucket="private-coding",
-            access_key="catalog-access",
-            secret_key="catalog-secret",
-        )
-        with pytest.raises(ApiServerConfigError, match="miner-upload bucket"):
-            check_config(
-                replace(
-                    base,
-                    storage=upload,
-                    coding_private_catalog=shared_bucket,
-                )
-            )
 
     def test_free_taostats_key_config_is_optional(
         self, monkeypatch: pytest.MonkeyPatch

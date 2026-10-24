@@ -4,7 +4,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -290,21 +289,6 @@ def test_cli_off_host_fails_with_a_fixed_message() -> None:
     assert result.returncode == 1
     assert result.stdout == ""
     assert result.stderr == "native custody lifecycle failed\n"
-
-
-def test_lifecycle_fields_match_exactly_what_the_custody_service_reads() -> None:
-    service = (ROOT / "apps/platform/ditto/coding_private_v2_custody.py").read_text()
-    serve = service.split("async def serve", 1)[1].split("\ndef main", 1)[0]
-    read = set(re.findall(r'config(?:\.get\()?\[?\(?"([a-z0-9_]+)"', serve))
-    read |= set(
-        re.findall(
-            r'^\s+"([a-z_]+)",$', serve.split("paths = {", 1)[1].split("}", 1)[0], re.M
-        )
-    )
-    assert read == RUN.STABLE_FIELDS | {"worker_id"}
-    template = (ROLE / "templates/base.json.j2").read_text()
-    config = template.split('"config": {', 1)[1].split("}", 1)[0]
-    assert set(re.findall(r'^\s+"([a-z0-9_]+)":', config, re.M)) == RUN.STABLE_FIELDS
 
 
 def test_install_is_default_off_confirmation_gated_and_never_starts_custody() -> None:

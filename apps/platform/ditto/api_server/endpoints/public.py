@@ -88,7 +88,6 @@ from ditto.api_models import (
     PublicChainWeight,
     PublicChainWeightsResponse,
     PublicClaimedSlot,
-    PublicCodingShadowScore,
     PublicCompositeBreakdown,
     PublicConfirmationProgress,
     PublicConfirmationScore,
@@ -360,10 +359,6 @@ from ditto.db.queries.benchmark_rollout import (
     protocol_serves_version,
     rollout_state,
     verified_scorer_for_version,
-)
-from ditto.db.queries.coding_evaluations import (
-    CodingShadowRunBundle,
-    latest_coding_shadow_runs,
 )
 from ditto.db.queries.confirmation_bundles import (
     ActiveConfirmationWork,
@@ -2385,64 +2380,6 @@ async def _attested_owner_roots_for_agents(
     }
 
 
-def _public_coding_shadow(
-    bundle: CodingShadowRunBundle | None,
-    *,
-    artifact_sha256: str,
-    screened_image_sha256: str | None,
-    bench_version: int,
-) -> PublicCodingShadowScore | None:
-    if bundle is None:
-        return None
-    run = bundle.run
-    results = tuple(bundle.results.values())
-    if len(results) > SCORING_QUORUM:
-        return None
-    current = (
-        screened_image_sha256 is not None
-        and run.artifact_sha256 == artifact_sha256
-        and run.screened_image_sha256 == screened_image_sha256
-        and run.bench_version == bench_version
-    )
-    if not current:
-        return PublicCodingShadowScore(
-            status="stale",
-            score=None,
-            result_count=min(len(results), SCORING_QUORUM),
-            bench_version=run.bench_version,
-            coding_contract_version=1,
-            completed_at=None,
-            shadow_only=True,
-            weight_eligible=False,
-        )
-    if len(results) >= SCORING_QUORUM:
-        return PublicCodingShadowScore(
-            status="complete",
-            score=(
-                statistics.median_low(
-                    sorted(result.repair_mean_micros for result in results)
-                )
-                / 1_000_000
-            ),
-            result_count=SCORING_QUORUM,
-            bench_version=run.bench_version,
-            coding_contract_version=1,
-            completed_at=max(result.created_at for result in results),
-            shadow_only=True,
-            weight_eligible=False,
-        )
-    return PublicCodingShadowScore(
-        status="collecting" if bundle.tickets else "scheduled",
-        score=None,
-        result_count=len(results),
-        bench_version=run.bench_version,
-        coding_contract_version=1,
-        completed_at=None,
-        shadow_only=True,
-        weight_eligible=False,
-    )
-
-
 def _public_reward_eligibility(
     record: Any | None,
 ) -> PublicRewardEligibility | None:
@@ -2610,7 +2547,6 @@ def _public_entry(
     v9_confirmation: V9ConfirmationPublicProjection | None = None,
     name_handle: PublicNameHandle | None = None,
     avatar_url: str | None = None,
-    coding_shadow: PublicCodingShadowScore | None = None,
     router_shadow_by_hotkey: Mapping[str, float] | None = None,
     router_shadow_queued: bool = False,
     reward_eligibility: Any | None = None,
@@ -2705,7 +2641,6 @@ def _public_entry(
         agent_version=agent_version,
         artifact_release=artifact_release,
         submission_family=submission_family,
-        coding_shadow=coding_shadow,
         miner_hotkey=r.miner_hotkey,
         miner_uid=miner_uid,
         registered=registered,
@@ -4084,7 +4019,6 @@ async def build_public_leaderboard(
                     Agent.agent_id,
                     Agent.name,
                     Agent.version,
-                    Agent.screened_image_sha256,
                 ).where(Agent.agent_id.in_([row.agent_id for row in rows]))
             )
         )
@@ -4092,14 +4026,8 @@ async def build_public_leaderboard(
         .all()
     )
     agent_metadata = {
-        agent_id: (name, version, screened_image_sha256)
-        for agent_id, name, version, screened_image_sha256 in agent_rows
+        agent_id: (name, version) for agent_id, name, version in agent_rows
     }
-    coding_runs = await latest_coding_shadow_runs(
-        session,
-        agent_ids=[row.agent_id for row in rows],
-        bench_version=display_version,
-    )
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
     from ditto.db.queries.name_claims import active_handle_claims
 
@@ -4243,9 +4171,7 @@ async def build_public_leaderboard(
             else None
         )
         adjustment_present = bounded_factor is not None or legacy_bonus is not None
-        stored_name, stored_version, screened_image_sha256 = agent_metadata[
-            row.agent_id
-        ]
+        stored_name, stored_version = agent_metadata[row.agent_id]
         display_name, name_handle = _public_named(
             stored_name,
             row.emission_owner_root,
@@ -4260,12 +4186,6 @@ async def build_public_leaderboard(
                 stored_version,
                 name_handle=name_handle,
                 avatar_url=avatar_urls.get(row.miner_hotkey),
-                coding_shadow=_public_coding_shadow(
-                    coding_runs.get(row.agent_id),
-                    artifact_sha256=row.sha256,
-                    screened_image_sha256=screened_image_sha256,
-                    bench_version=row.bench_version,
-                ),
                 finalized=True,
                 score_count=score_counts.get(row.agent_id, SCORING_QUORUM),
                 settled_composite=settled,
@@ -4364,9 +4284,7 @@ async def build_public_leaderboard(
         settled, rolling, rolling_count = rollout_states.get(
             row.agent_id, (None, None, None)
         )
-        stored_name, stored_version, screened_image_sha256 = agent_metadata[
-            row.agent_id
-        ]
+        stored_name, stored_version = agent_metadata[row.agent_id]
         display_name, name_handle = _public_named(
             stored_name,
             row.emission_owner_root,
@@ -4381,12 +4299,6 @@ async def build_public_leaderboard(
                 stored_version,
                 name_handle=name_handle,
                 avatar_url=avatar_urls.get(row.miner_hotkey),
-                coding_shadow=_public_coding_shadow(
-                    coding_runs.get(row.agent_id),
-                    artifact_sha256=row.sha256,
-                    screened_image_sha256=screened_image_sha256,
-                    bench_version=row.bench_version,
-                ),
                 finalized=False,
                 score_count=count,
                 settled_composite=settled,
@@ -6220,7 +6132,6 @@ def _public_activity_response(
     owner_roots: dict[UUID, str] | None = None,
     strike_colliding_names: bool = True,
     avatar_urls: dict[str, str] | None = None,
-    coding_runs: dict[UUID, CodingShadowRunBundle] | None = None,
     miner_uids: dict[str, int] | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health."""
@@ -6463,16 +6374,6 @@ def _public_activity_response(
                     row.agent.agent_id
                 ),
                 score_count=row.score_count,
-                coding_shadow=(
-                    _public_coding_shadow(
-                        (coding_runs or {}).get(row.agent.agent_id),
-                        artifact_sha256=row.agent.sha256,
-                        screened_image_sha256=row.agent.screened_image_sha256,
-                        bench_version=active_bench_version,
-                    )
-                    if active_bench_version is not None
-                    else None
-                ),
                 provisional_composite=row.provisional_composite,
                 validator_queue_rank=_queue_rank(queue_preview, row.agent.agent_id),
                 validator_queue_gate=_queue_gate(queue_preview, row.agent.agent_id),
@@ -7136,11 +7037,6 @@ async def activity(
         owner_roots=await _attested_owner_roots_for_rows(session, rows),
         strike_colliding_names=True,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
-        coding_runs=await latest_coding_shadow_runs(
-            session,
-            agent_ids=[row.agent.agent_id for row in rows],
-            bench_version=active_version,
-        ),
         miner_uids=registered_uids,
     )
 
@@ -7402,11 +7298,6 @@ async def operations(
         owner_roots=owner_roots,
         strike_colliding_names=False,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
-        coding_runs=await latest_coding_shadow_runs(
-            session,
-            agent_ids=[row.agent.agent_id for row in activity_rows],
-            bench_version=active_version,
-        ),
         miner_uids=registered_uids,
     )
     validator_snapshot = _validator_heartbeats_response(

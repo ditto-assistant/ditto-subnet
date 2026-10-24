@@ -24,16 +24,6 @@ from ditto.api_server.bounty_claims import SimulatedBountyFeeVerifier
 from ditto.api_server.bounty_deadlines import BountyDeadlineSweeper
 from ditto.api_server.bounty_settlement import SimulatedTransferExecutor
 from ditto.api_server.burn_settings import BurnSettingsResolver
-from ditto.api_server.coding_artifact_capabilities import (
-    CodingArtifactCapabilityMinter,
-)
-from ditto.api_server.coding_hippius_custody import (
-    create_hippius_evidence_runtime_from_env,
-)
-from ditto.api_server.coding_hosted_signer import load_hosted_control_signer
-from ditto.api_server.coding_private_catalog import (
-    create_coding_private_catalog_source,
-)
 from ditto.api_server.config import (
     ApiServerConfig,
     parse_api_server_config_from_env,
@@ -73,19 +63,11 @@ from ditto.api_server.endpoints import (
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
     admin_claim_provenance_router,
-    admin_coding_catalog_router,
-    admin_coding_certifications_router,
-    admin_coding_control_plane_router,
-    admin_coding_evaluations_router,
-    admin_coding_private_v2_releases_router,
-    admin_coding_reconciliation_router,
-    admin_coding_ticket_sets_router,
     admin_confirmation_bundles_router,
     admin_confirmation_seed_anchors_router,
     admin_continual_retest_settings_router,
     admin_copy_court_router,
     admin_copy_review_router,
-    admin_core_qualification_router,
     admin_database_backup_router,
     admin_efficiency_bonus_settings_router,
     admin_emission_eligibility_router,
@@ -151,15 +133,6 @@ from ditto.api_server.endpoints import (
     screener_l2_report_canary_router,
     screener_router,
     upload_router,
-    validator_coding_certification_leases_router,
-    validator_coding_certification_router,
-    validator_coding_claims_router,
-    validator_coding_delivery_router,
-    validator_coding_evaluation_router,
-    validator_coding_freezes_router,
-    validator_coding_grading_router,
-    validator_coding_harness_router,
-    validator_coding_inference_router,
     validator_confirmation_router,
     validator_generator_round,
     validator_private_dataset,
@@ -179,13 +152,6 @@ from ditto.api_server.endpoints.screener_conversation import (
 )
 from ditto.api_server.endpoints.v13_official_control import (
     router as admin_v13_official_control_router,
-)
-from ditto.api_server.endpoints.validator_coding_hosted import HostedCodingControl
-from ditto.api_server.endpoints.validator_coding_hosted import (
-    router as validator_coding_hosted_router,
-)
-from ditto.api_server.endpoints.validator_coding_inference import (
-    coding_inference_transport_from_env,
 )
 from ditto.api_server.endpoints.verification_replay import (
     admin_router as admin_verification_replay_router,
@@ -354,16 +320,7 @@ def _render_dashboard(wandb_url: str) -> str | None:
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     config: ApiServerConfig = app.state.config
     async with AsyncExitStack() as stack:
-        # Register teardown before opening dependencies. If anything fails,
-        # no control signer remains reachable through this application.
-        app.state.coding_hosted_control = None
-        stack.callback(setattr, app.state, "coding_hosted_control", None)
         try:
-            signer = load_hosted_control_signer(
-                config.coding_hosted_signer, process_role=_process_role()
-            )
-            if signer is not None:
-                stack.callback(signer.close)
             engine = create_db_engine(config.postgres)
             stack.push_async_callback(engine.dispose)
             app.state.engine = engine
@@ -380,13 +337,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 app.state.private_preparation_sessions = create_session_maker(
                     preparation_engine
                 )
-            app.state.coding_hippius_evidence_runtime = (
-                create_hippius_evidence_runtime_from_env(
-                    session_maker=app.state.session_maker
-                )
-                if _process_role() == PLATFORM_ROLE
-                else None
-            )
 
             chain = await stack.enter_async_context(create_chain_client(config.chain))
             app.state.chain = chain
@@ -406,23 +356,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 create_storage_client(config.storage)
             )
             app.state.storage = storage
-            app.state.coding_private_catalog_source = (
-                create_coding_private_catalog_source(config.coding_private_catalog)
-                if config.coding_private_catalog is not None
-                and _process_role() == PLATFORM_ROLE
-                else None
-            )
-            app.state.coding_artifact_capability_minter = (
-                CodingArtifactCapabilityMinter(config.coding_private_catalog)
-                if config.coding_private_catalog is not None
-                and _process_role() == PLATFORM_ROLE
-                else None
-            )
-            app.state.coding_inference_grant_transport = (
-                coding_inference_transport_from_env()
-                if _process_role() == PLATFORM_ROLE
-                else None
-            )
 
             # Shadow router-track ledger relay: reads the ledger the offloaded
             # dittobench-api scorer publishes so validators can fold it via
@@ -605,8 +538,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 f"failed to open dependencies during startup: {e}"
             ) from e
 
-        if signer is not None:
-            app.state.coding_hosted_control = HostedCodingControl(signer)
         logger.info(
             f"api server ready on {config.host}:{config.port} "
             f"commit={config.commit_hash}"
@@ -636,13 +567,6 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     )
     app.state.config = config
     app.state.commit_hash = config.commit_hash
-    # This internal source has no HTTP route and is absent unless Platform has
-    # a separate least-privilege private-catalog credential set.
-    app.state.coding_private_catalog_source = None
-    app.state.coding_hippius_evidence_runtime = None
-    app.state.coding_artifact_capability_minter = None
-    app.state.coding_inference_grant_transport = None
-    app.state.coding_hosted_control = None
     # Hot-swappable efficiency-bonus policy: the compute path resolves the
     # latest append-only revision through this resolver (short TTL), falling
     # back to the env seed (config.efficiency_bonus) when none exists. The DB
@@ -790,16 +714,6 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(validator_router, prefix="/api/v1")
     app.include_router(validator_private_dataset.router, prefix="/api/v1")
     app.include_router(validator_generator_round.router, prefix="/api/v1")
-    app.include_router(validator_coding_certification_router, prefix="/api/v1")
-    app.include_router(validator_coding_certification_leases_router, prefix="/api/v1")
-    app.include_router(validator_coding_claims_router, prefix="/api/v1")
-    app.include_router(validator_coding_hosted_router, prefix="/api/v1")
-    app.include_router(validator_coding_delivery_router, prefix="/api/v1")
-    app.include_router(validator_coding_freezes_router, prefix="/api/v1")
-    app.include_router(validator_coding_grading_router, prefix="/api/v1")
-    app.include_router(validator_coding_inference_router, prefix="/api/v1")
-    app.include_router(validator_coding_harness_router, prefix="/api/v1")
-    app.include_router(validator_coding_evaluation_router, prefix="/api/v1")
     app.include_router(validator_confirmation_router, prefix="/api/v1")
     app.include_router(inference_router, prefix="/api/v1")
     app.include_router(screener_router, prefix="/api/v1")
@@ -851,16 +765,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_ath_rulings_router, prefix="/api/v1")
     app.include_router(admin_copy_court_router, prefix="/api/v1")
     app.include_router(admin_confirmation_seed_anchors_router, prefix="/api/v1")
-    app.include_router(admin_coding_certifications_router, prefix="/api/v1")
-    app.include_router(admin_coding_control_plane_router, prefix="/api/v1")
-    app.include_router(admin_coding_catalog_router, prefix="/api/v1")
-    app.include_router(admin_coding_private_v2_releases_router, prefix="/api/v1")
-    app.include_router(admin_coding_evaluations_router, prefix="/api/v1")
-    app.include_router(admin_coding_reconciliation_router, prefix="/api/v1")
-    app.include_router(admin_coding_ticket_sets_router, prefix="/api/v1")
     app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
-    app.include_router(admin_core_qualification_router, prefix="/api/v1")
     app.include_router(admin_claim_provenance_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
     app.include_router(admin_emission_eligibility_router, prefix="/api/v1")

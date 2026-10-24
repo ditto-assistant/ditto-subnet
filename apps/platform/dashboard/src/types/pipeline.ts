@@ -38,7 +38,7 @@ export interface ActivityEntry {
   status?: string;
   submitted_at?: string;
   score_count?: number | null;
-  /** Exact-artifact aggregate only; parallel shadow work never gates this lifecycle. */
+  /** @deprecated Coding is retired: always absent. Tolerated until the field is removed. */
   coding_shadow?: CodingShadowScore | null;
   quorum?: number | null;
   score_floor?: number | null;

@@ -621,7 +621,12 @@ class PublicLeaderboardFamily(BaseModel):
 
 
 class PublicCodingShadowScore(BaseModel):
-    """Aggregate-only Coding result; never ranking or weight authority."""
+    """Deprecated aggregate Coding result; the Coding competition is retired.
+
+    No endpoint produces this any more. It stays in the schema only so the
+    deprecated ``coding_shadow`` fields keep their published type until they
+    are removed.
+    """
 
     status: Literal["scheduled", "collecting", "complete", "stale"]
     score: Annotated[
@@ -887,9 +892,11 @@ class PublicLeaderboardEntry(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
         description=(
-            "Latest aggregate Coding-shadow status for this exact leaderboard "
-            "artifact. Display-only; never changes rank, score, weights, or emissions."
+            "Deprecated: the Coding competition is retired, so this is always "
+            "null and omitted. Kept only so existing clients keep parsing; it "
+            "will be removed from the schema."
         ),
+        json_schema_extra={"deprecated": True},
     )
     miner_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Miner's SS58 hotkey.")
@@ -3368,10 +3375,11 @@ class PublicActivityEntry(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
         description=(
-            "Latest aggregate Coding-shadow status for this exact submission "
-            "artifact, screened image, and active benchmark. Display-only; never "
-            "changes pipeline state, rank, score, weights, or emissions."
+            "Deprecated: the Coding competition is retired, so this is always "
+            "null and omitted. Kept only so existing clients keep parsing; it "
+            "will be removed from the schema."
         ),
+        json_schema_extra={"deprecated": True},
     )
     provisional_composite: Annotated[
         float | None,

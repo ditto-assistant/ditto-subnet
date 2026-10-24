@@ -255,23 +255,6 @@ def test_coding_execution_plan_vector_selects_delivery_consumers(
     assert root_verification(components, ignored_paths, path) == "full"
 
 
-def test_coding_execution_delivery_generator_selects_every_consumer(
-    components, ignored_paths
-) -> None:
-    path = "packages/dittobench-coding-contract/generate_execution_delivery_vectors.py"
-    assert selected(components, ignored_paths, path) == {
-        "backroom",
-        "dittobench_api",
-        "dittobench_coding_datagen",
-        "dittobench_coding_starter_kit",
-        "platform",
-        "platform_api",
-        "validator",
-        "validator_stack",
-    }
-    assert root_verification(components, ignored_paths, path) == "full"
-
-
 def test_coding_contract_models_select_scorer_and_validator_stack(
     components, ignored_paths
 ) -> None:
