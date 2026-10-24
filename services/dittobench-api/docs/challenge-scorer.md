@@ -105,3 +105,27 @@ ledger.
 
 The token is read from the environment, is sent only as a Bearer header, and is
 never logged.
+
+## Production deployment
+
+The scorer runs on its own private VM, `ditto-generator-scorer-prod`, and
+nowhere else, because it executes untrusted miner code. The Platform,
+screener, and validator hosts never build a generator.
+
+1. Protected Terraform apply with `enable_generator_scorer = true`
+   (`infra/terraform/stacks/gcp-platform/generator-scorer.tf`). This creates
+   the VM, its identity, and the `generator-scorer-token-prod` secret. Both
+   the scorer identity and the Platform identity can read the secret.
+2. Add one secret version without printing it:
+   `openssl rand -hex 32 | gcloud secrets versions add generator-scorer-token-prod --data-file=- --project=ditto-app-dev`.
+3. Converge Platform (`infra/ansible/playbooks/gcp-platform-app.yml`) so that
+   `DITTO_GENERATOR_SCORER_TOKEN` is rendered, then restart the API.
+4. Converge the scorer at the released commit:
+   `infra/ansible/playbooks/gcp-generator-scorer.yml -e generator_scorer_revision=<sha>`.
+   This builds `challenge-scorer` with the base role's pinned Go toolchain,
+   pre-pulls the pinned sandbox images, and runs `challenge-scorer serve`
+   under systemd. The unit gets Docker access and only its own bearer.
+
+The unit sets `TMPDIR` under `/var/lib/ditto-generator-scorer`, because the
+sandbox bind-mounts its build directories. `PrivateTmp` would hide them from
+dockerd.

@@ -1,0 +1,21 @@
+---
+generator_scorer_owner: "{{ deploy_user | default('deploy') }}"
+generator_scorer_group: "{{ deploy_group | default('ditto') }}"
+generator_scorer_checkout: /opt/ditto-subnet
+generator_scorer_repo_url: https://github.com/ditto-assistant/ditto-subnet.git
+# Pin an exact released commit for production converges; main is the default
+# for a first bring-up only.
+generator_scorer_revision: main
+generator_scorer_state_dir: /var/lib/ditto-generator-scorer
+generator_scorer_config_dir: /etc/ditto-generator-scorer
+generator_scorer_binary: /usr/local/bin/challenge-scorer
+generator_scorer_unit: ditto-generator-scorer
+
+generator_scorer_gcp_project: ditto-app-dev
+generator_scorer_platform_url: https://platform-api.heyditto.ai
+generator_scorer_interval: 30s
+generator_scorer_token_secret: generator-scorer-token-prod
+
+# Pinned Docker apt key (download.docker.com/linux/debian/gpg).
+docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
+generator_scorer_docker_apt_arch: amd64

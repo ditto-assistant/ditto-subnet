@@ -288,6 +288,11 @@ func evaluateArchive(ctx context.Context, sb genrun.Sandbox, raw []byte, plan ge
 		return genrun.Evaluation{}, fmt.Errorf("%w: %v", genrun.ErrSandbox, err)
 	}
 	defer os.RemoveAll(dir)
+	// The Docker sandbox bind-mounts this directory read-only for an
+	// unprivileged container user, which cannot traverse MkdirTemp's 0700.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return genrun.Evaluation{}, fmt.Errorf("%w: %v", genrun.ErrSandbox, err)
+	}
 	if _, err := challenge.ExtractArchive(raw, dir); err != nil {
 		return genrun.Evaluation{Sandbox: sb.Name(), Build: genrun.BuildOutput{Error: "archive: " + err.Error()}}, nil
 	}

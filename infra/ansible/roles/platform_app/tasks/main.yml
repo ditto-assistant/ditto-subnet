@@ -385,6 +385,19 @@
   no_log: true
   when: secret_screener_controller_api_token | length > 0
 
+- name: Read the generator-scorer bearer from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_generator_scorer_token }} --project={{ gcp_project }}"
+  register: platform_generator_scorer_token_read
+  changed_when: false
+  no_log: true
+  when: secret_generator_scorer_token | length > 0
+
+- name: Fold the generator-scorer bearer into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'generator_scorer_token': platform_generator_scorer_token_read.stdout | trim}) }}"
+  no_log: true
+  when: secret_generator_scorer_token | length > 0
+
 - name: Validate backup reader secret references before fetching
   ansible.builtin.assert:
     that:

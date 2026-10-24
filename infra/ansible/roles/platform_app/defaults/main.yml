@@ -271,6 +271,9 @@ platform_treasury_manual_request_topic: sn118-manual-requests
 platform_treasury_manual_report_subscription: sn118-manual-reports
 # Separate bearer used only by the provider-mutating capacity controller.
 secret_screener_controller_api_token: ""
+# Bearer for the generator competition scorer (generator_scorer role). Empty
+# leaves every /api/v1/generator-scorer endpoint disabled.
+secret_generator_scorer_token: ""
 
 # Platform-owned inference stays dark until the coordinated rollout enables it.
 platform_inference_proxy_enabled: false
