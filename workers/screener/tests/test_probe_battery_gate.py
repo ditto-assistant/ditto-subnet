@@ -522,6 +522,10 @@ def test_extract_source_writes_only_contained_regular_files(tmp_path: Any) -> No
             ("/abs.py", tarfile.REGTYPE),
             ("link", tarfile.SYMTYPE),
             ("link/through.py", tarfile.REGTYPE),
+            ("clash", tarfile.REGTYPE),
+            ("clash/inner.py", tarfile.REGTYPE),
+            ("dir/file.py", tarfile.REGTYPE),
+            ("dir", tarfile.REGTYPE),
         ):
             info = tarfile.TarInfo(name)
             info.type = kind
@@ -538,3 +542,5 @@ def test_extract_source_writes_only_contained_regular_files(tmp_path: Any) -> No
     assert not (tmp_path / "escape.py").exists()
     assert not (dest / "link").is_symlink()
     assert not (tmp_path / "outside").exists()
+    # Conflicting file/directory names keep the first and do not abort.
+    assert (dest / "clash").is_file() and (dest / "dir" / "file.py").is_file()

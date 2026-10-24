@@ -507,7 +507,12 @@ def extract_source(archive: Path, dest: Path) -> int:
             target = dest / name
             if root not in target.resolve().parents:
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+            except (FileExistsError, NotADirectoryError):
+                continue  # a file and a directory share a path: keep the first
+            if target.is_dir():
+                continue
             handle = tar.extractfile(member)
             if handle is not None:
                 target.write_bytes(handle.read())
