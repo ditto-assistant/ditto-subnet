@@ -51,6 +51,7 @@ from ditto.miner_cli.errors import (
     PaymentCancelledError,
     PaymentFinalizationTimeoutError,
     PaymentRecoveryExpiredError,
+    PaymentReplayedError,
     PaymentSubmissionError,
     PreCheckRejectedError,
     RegistrationCancelledError,
@@ -221,8 +222,9 @@ def add_subparser(
         action="store_true",
         help=(
             "If the platform definitively rejects a saved receipt for amount "
-            "mismatch or expiry, retire it and continue to a newly confirmed "
-            "payment. Never causes a second transfer for other failures."
+            "mismatch, expiry, or because it already funded another upload, "
+            "retire it and continue to a newly confirmed payment. Never causes "
+            "a second transfer for other failures."
         ),
     )
     parser.set_defaults(func=run)
@@ -437,7 +439,11 @@ def _run_upload(
 
         try:
             check_response = _check(receipt)
-        except (PaymentAmountMismatchError, PaymentRecoveryExpiredError) as error:
+        except (
+            PaymentAmountMismatchError,
+            PaymentRecoveryExpiredError,
+            PaymentReplayedError,
+        ) as error:
             if receipt is None:
                 raise
             if cla_error is not None:
@@ -635,9 +641,12 @@ def _run_upload(
             print(
                 f"\nupload could not be confirmed after payment. "
                 f"Your finalized payment was saved and can be reused.\n"
-                f"Rerun upload with this hotkey using either the same archive or "
-                f"a replacement; the CLI will reuse this proof and will not send "
-                f"another transfer.\n"
+                f"Rerun upload with this hotkey and the same archive first: if "
+                f"the upload was recorded, that returns it, and either way the "
+                f"CLI reuses this proof and will not send another transfer. A "
+                f"replacement archive can reuse it only if the upload was not "
+                f"recorded; otherwise the platform reports the proof as already "
+                f"used, and the CLI asks before paying again.\n"
                 f"If the saved proof is unavailable, rerun with:\n"
                 f"  --payment-block-hash {receipt.block_hash} "
                 f"--payment-block-number {receipt.block_number} "
@@ -1077,7 +1086,9 @@ def _offer_owner_link(
 def _authorize_replacement_payment(
     *,
     args: argparse.Namespace,
-    error: PaymentAmountMismatchError | PaymentRecoveryExpiredError,
+    error: PaymentAmountMismatchError
+    | PaymentRecoveryExpiredError
+    | PaymentReplayedError,
     receipt: PaymentReceipt,
 ) -> None:
     """Require explicit consent before abandoning a finalized payment proof."""
@@ -1085,9 +1096,18 @@ def _authorize_replacement_payment(
         f"block={receipt.block_number} index={receipt.extrinsic_index} "
         f"hash={receipt.block_hash}"
     )
+    spent = (
+        "This proof cannot fund this upload: it already funded another one, "
+        "or it belongs to another hotkey or owner. If it funded an earlier "
+        "upload whose response was lost, rerunning that upload's exact archive "
+        "returns it without paying again.\n"
+        if isinstance(error, PaymentReplayedError)
+        else ""
+    )
     print(
         f"warning: the platform rejected the saved payment proof ({error}).\n"
         f"Rejected proof: {proof}\n"
+        f"{spent}"
         "No second transfer has been sent.",
         file=sys.stderr,
     )
@@ -1135,6 +1155,24 @@ def _retire_rejected_saved_payment(
             sha256=sha256,
             payment=payment,
         )
+    elif receipt_source == "explicit":
+        # Several saved credits must be chosen by proof flags. A rejected one
+        # named that way leaves the saved list too, or every later upload stops
+        # at "multiple unconsumed payments" again.
+        retired = [
+            clear_pending_payment(
+                network=saved.network,
+                hotkey=saved.hotkey,
+                name=saved.name,
+                sha256=saved.sha256,
+                payment=saved.payment,
+            )
+            for saved in load_pending_payments_for_hotkey(
+                network=network, hotkey=hotkey
+            )
+            if saved.payment == payment
+        ]
+        cleared = all(retired)
     else:
         return
     if not cleared:
