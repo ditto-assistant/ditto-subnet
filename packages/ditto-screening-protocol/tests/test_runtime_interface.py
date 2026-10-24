@@ -45,9 +45,10 @@ def metadata():
                 }
             ],
             "extrinsic": {
+                "version": 4,
                 "signed_extensions": [
                     {"identifier": "CheckNonce", "ty": U64, "additional_signed": UNIT}
-                ]
+                ],
             },
         }
     }
@@ -94,6 +95,10 @@ def test_signer_fields_are_entries_and_constant_values_are_not():
             lambda b: b["extrinsic"]["signed_extensions"].append(
                 {"identifier": "New", "ty": UNIT, "additional_signed": UNIT}
             ),
+            "extrinsic:signed_extensions",
+        ),
+        (
+            lambda b: b["extrinsic"].update(version=5),
             "extrinsic:signed_extensions",
         ),
     ],

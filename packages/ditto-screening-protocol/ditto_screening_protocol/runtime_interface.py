@@ -294,14 +294,18 @@ def _runtime_interface(metadata: Any, surface: RuntimeSurface) -> RuntimeInterfa
         extensions = (body.get("extrinsic") or {}).get("signed_extensions")
         if not isinstance(extensions, list) or not extensions:
             raise ValueError("runtime metadata has no signed extensions")
-        entries["extrinsic:signed_extensions"] = [
-            {
-                "identifier": item["identifier"],
-                "type": types.canonical(item["ty"]),
-                "additional_signed": types.canonical(item["additional_signed"]),
-            }
-            for item in extensions
-        ]
+        # The extrinsic version selects the transaction encoding custody signs.
+        entries["extrinsic:signed_extensions"] = {
+            "version": (body.get("extrinsic") or {}).get("version"),
+            "extensions": [
+                {
+                    "identifier": item["identifier"],
+                    "type": types.canonical(item["ty"]),
+                    "additional_signed": types.canonical(item["additional_signed"]),
+                }
+                for item in extensions
+            ],
+        }
     missing = sorted(
         name for name, value in entries.items() if value is None and name != _EPOCH
     )
