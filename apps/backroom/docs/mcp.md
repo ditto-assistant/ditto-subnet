@@ -134,6 +134,32 @@ unknown upstream fields are stripped. The raw and folded seed IDs it returns
 are already-scored confirmation seeds, as exact decimal strings. The snapshot
 grants no work and changes nothing.
 
+The shadow DittoBench generator competition has its own operator surface.
+Miners submit CPU-only Go generator source. Platform runs each generator on
+fresh secret seeds against a top-agent panel and publishes a weight-zero ledger.
+
+- **Reads (`backroom:read`):**
+  - `get_generator_competition_settings` returns the policy.
+  - `list_generator_submissions` and `get_generator_submission` return
+    identity, status and runs, never source.
+  - `get_generator_run` returns the evaluation, panel snapshot and per-case
+    verdicts. Seeds appear only after the run finished, so an operator can
+    regenerate its packs.
+  - `get_generator_probe` returns probe epochs. The probe seed is never served.
+  - `list_generator_promotion_candidates` returns discriminating cases.
+  - `get_generator_board` returns the ledger validators fold.
+- **Writes (`backroom:write`, actor recorded):**
+  - `set_generator_competition_settings` stores a whole-object revision with
+    `expectedRevision` and the confirmation `APPLY GENERATOR COMPETITION {MODE}`.
+  - `rotate_generator_probe_seed` needs the confirmation
+    `ROTATE GENERATOR PROBE SEED`. Every generator is re-probed on its next run.
+  - `rescore_generator_submission` makes an active generator due now.
+  - `reject_generator_submission` needs the confirmation
+    `REJECT GENERATOR SUBMISSION` and `expectedStatus`. It abandons an
+    in-flight run and drops the generator from the ledger at once.
+
+There is no enforcing mode: ledger entries stay `weight_eligible=false`.
+
 `https://backroom.dittobench.ai/mcp` is an OAuth-protected Streamable HTTP MCP
 server exposing the same operations as the console: screening quarantines and
 disputes, validator queue/slot/inference policy, the scoring lease TTL,

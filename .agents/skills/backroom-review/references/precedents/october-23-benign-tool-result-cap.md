@@ -2,8 +2,21 @@
 id: october-23-benign-tool-result-cap
 resolution: guidance
 tags: [policy-v13, i2, i5, reversal, tool-result, truncation, harry, orsentra, drpresident, lucas, miner-communication]
-holding: A fixed 6000-character tool-result cap with a truthful truncation marker is benign alone. All ten earlier cap-only grounds were withdrawn. Six exact artifacts returned to scored; four remain rejected only on separately recorded settings/calendar I5 grounds. A hypothetical correction beyond the cut is not an independent second factor.
+holding: A fixed 6000-character tool-result cap with a truthful truncation marker is benign alone. All ten earlier cap-only grounds were withdrawn. The subsequent settings/calendar-only I5 grounds are also withdrawn by the routed-guidance clarification; a live ban is not current precedent. A hypothetical correction beyond the cut is not an independent second factor.
 ---
+
+## Current policy and live reconciliation
+
+The [routed-guidance clarification](https://github.com/ditto-assistant/ditto-subnet/pull/3114)
+subsequently withdrew advisory settings/calendar instructions as a standalone
+I5 ground. This supersedes the four retained-ground statements below. The
+exact four court rows were still `banned` with their 17:00 UTC reasons when
+read at 22:24 UTC; their correction remains an operator action, not a
+completed restoration. Do not cite those stale dispositions as proof that
+the instructions violate current policy. A separate violation needs its own
+exact-artifact proof. See [routed guidance](october-23-routed-guidance.md).
+
+## Earlier October 23 disposition history
 
 Verified against the live exact-agent court records on 2026-10-23. The Harry
 reconsiderations reference [ditto-subnet#3081](https://github.com/ditto-assistant/ditto-subnet/issues/3081).
@@ -27,17 +40,17 @@ score failure. Their hypothetical long page with a correction beyond the cut
 does not revive the withdrawn ground. Orsentra's case-file currency rule and
 previously cleared app-preference guidance are not independent factors either.
 
-Still `banned` under new I5 resolutions recorded October 23 at 17:00 UTC:
+Recorded `banned` under I5 resolutions at 17:00 UTC, subsequently withdrawn
+as precedent by the routed-guidance clarification:
 
 - DrPresident v3 `50a2692d-9f57-465a-bb73-dc47b9e3e5e2`
 - DrPresident v4 `a4f58af9-7055-4437-92b8-b09ca70e9dde`
 - DrPresident v5 `b76af05f-6489-49af-83c0-fa05c7e5ed03`
 - lucas-v101 v1 `88113c69-6f8a-4797-96e6-698aff21cf2d`
 
-Those four resolutions expressly withdraw the cap ground. Their remaining
-grounds identify injected settings/calendar request recipes, independent of
-the [case-file currency safe harbor](october-23-case-file-currency.md).
-Use the current exact-agent reason, not the superseded cap reason.
+Those four resolutions expressly withdrew the cap ground. Their settings and
+calendar advisory-guidance grounds are now also withdrawn. Preserve both
+historical reasons while applying the current policy and exact-agent state.
 
 Apply this holding narrowly: the cap and truthful marker are permitted alone.
 Another finding must establish its own reachable current-policy violation on

@@ -1323,6 +1323,7 @@ describe('screening submission admin service', () => {
     const withPrivatePackage = {
       ...payload,
       private_package: {
+        program_status: 'retired',
         registration_status: 'registered_unverified',
         prerequisites: [
           { code: 'target_artifact_commitment', status: 'mechanically_verified' },

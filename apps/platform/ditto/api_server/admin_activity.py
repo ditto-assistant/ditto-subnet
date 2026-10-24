@@ -21,6 +21,7 @@ from ditto.api_models.confirmation_bundles import ConfirmationBundleSettings
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.copy_court_settings import CopyCourtSettings
 from ditto.api_models.efficiency_settings import EfficiencyBonusSettings
+from ditto.api_models.generator import GeneratorCompetitionSettings
 from ditto.api_models.inference_concurrency_settings import InferenceConcurrencySettings
 from ditto.api_models.queue_policy_settings import QueuePolicySettings
 from ditto.api_models.scoring_lease_settings import ScoringLeaseSettings
@@ -121,6 +122,12 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
     "scoring-lease-settings": (
         ScoringLeaseSettings,
         frozenset(("scoring_ticket_ttl_minutes",)),
+    ),
+    # The whole generator policy is operational, not private: no field names a
+    # wallet, account, or credential.
+    "generator-competition/settings": (
+        GeneratorCompetitionSettings,
+        frozenset(GeneratorCompetitionSettings.model_fields),
     ),
     "treasury-settings": (
         TreasurySettings,

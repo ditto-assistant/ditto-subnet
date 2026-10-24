@@ -406,6 +406,17 @@ describe('Backroom MCP tools', () => {
         'expand_benchmark_rollout_cohort',
         'get_backroom_access',
         'get_backroom_tool_help',
+        'get_generator_competition_settings',
+        'set_generator_competition_settings',
+        'list_generator_submissions',
+        'get_generator_submission',
+        'get_generator_run',
+        'get_generator_probe',
+        'rotate_generator_probe_seed',
+        'list_generator_promotion_candidates',
+        'get_generator_board',
+        'rescore_generator_submission',
+        'reject_generator_submission',
         'get_ath_review',
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
@@ -454,9 +465,6 @@ describe('Backroom MCP tools', () => {
         'get_v13_official_controls',
         'get_v13_official_control_approvals',
         'get_v13_official_control_artifact',
-        'stage_v13_official_control_image',
-        'verify_v13_official_control_image',
-        'record_v13_official_control_approval',
         'get_conversation_assessments',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
@@ -576,13 +584,11 @@ describe('Backroom MCP tools', () => {
         'search_submissions',
         'summarize_screening_failures',
         'read_screening_source_file',
-        'record_v13_benign_approval',
         'record_treasury_settings',
         'record_treasury_runtime',
         'get_treasury_runtime',
         'get_runtime_interface_report',
         'record_treasury_receipt',
-        'record_v13_replay_private_group',
         'search_screening_source',
         'rebuild_screened_image',
         'get_screening_artifact',
@@ -623,7 +629,6 @@ describe('Backroom MCP tools', () => {
         'set_conversation_settings',
         'authorize_conversation_retry',
         'unban_hotkey',
-        'register_v13_replay_private_package',
       ].sort(),
     )
     expect(response.tools.map((tool) => tool.name)).not.toContain(
@@ -746,10 +751,11 @@ describe('Backroom MCP tools', () => {
     // reconcile/ticket-set and the control-plane read) removes their release,
     // receipt and exact-run schemas: measured 196,554 bytes. Retain about
     // 0.5 KB headroom.
-    // The three whole-policy settings writes now list every field as required
-    // (#2979), so an omission cannot overwrite live policy with a default:
-    // measured 197,071. Keep about 0.5 KB of headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(197_550)
+    // Eleven generator-competition tools (seven reads, four guarded writes)
+    // publish compact uuid inputs and one-line summaries; the whole-object
+    // settings write carries its 15 bounded fields (~1.6 KB). On top of the
+    // retirement above, measured 203,881 bytes; keep about 0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(204_400)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -787,9 +793,10 @@ describe('Backroom MCP tools', () => {
       // The canary review-posture pin clause measured 31,854; the node
       // canary cap (#2447) also adds a short catalog note.
       // Six concise official-control summaries, with procedure text in help.
-      // Retiring the thirteen coding-track summaries (SN-186) measures 25,588;
-      // keep about 200 chars of headroom.
-      25_800,
+      // Retiring the thirteen coding-track summaries (SN-186) measures 25,588.
+      // The eleven generator-competition summaries bring it to 26,304; keep
+      // about 200 chars of headroom.
+      26_500,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

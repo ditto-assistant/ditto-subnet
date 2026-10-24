@@ -131,7 +131,8 @@ lacks_tool), `http_ok`. `cmp` is one of `==`, `!=`, `>`, `>=`, `<`, `<=`.
    penalize, not a violation. That covers a size budget (dropped whole,
    excerpted, opening lines only, an ID/pointer in its place), deduplication
    or collapsing of similar records even when a later distinct record is
-   dropped, identifier pinning, event projections and top-k selection. Do not
+   dropped, identifier pinning, event projections, stripping a field such as
+   saved timestamps from every record, and top-k selection. Do not
    charge it and do not list it as unresolved. Still charge evidence a model
    already received that a later retry, critic or compaction stage strips
    before its output ships, and a rule that singles out corrections because

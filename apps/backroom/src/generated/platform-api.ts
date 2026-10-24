@@ -1862,6 +1862,188 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Probe
+         * @description Probe epochs and how many submissions each has compared (never the seed).
+         */
+        get: operations["get_probe_api_v1_admin_generator_competition_probe_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/probe/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate Probe
+         * @description Retire the probe seed (for example after a suspected leak).
+         *
+         *     Copy detection only compares submissions probed in the same epoch, so every
+         *     active submission is re-probed on its next run.
+         */
+        post: operations["rotate_probe_api_v1_admin_generator_competition_probe_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/promotion-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Promotion Candidates
+         * @description Discriminating cases from scored runs, highest credit first.
+         */
+        get: operations["promotion_candidates_api_v1_admin_generator_competition_promotion_candidates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Run Detail */
+        get: operations["admin_run_detail_api_v1_admin_generator_competition_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings
+         * @description Current policy, append-only history, the default, and what is in force.
+         */
+        get: operations["get_settings_api_v1_admin_generator_competition_settings_get"];
+        put?: never;
+        /**
+         * Create Settings Revision
+         * @description Append one optimistic, confirmation-gated revision.
+         */
+        post: operations["create_settings_revision_api_v1_admin_generator_competition_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin List Submissions */
+        get: operations["admin_list_submissions_api_v1_admin_generator_competition_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Submission Detail */
+        get: operations["admin_submission_detail_api_v1_admin_generator_competition_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Submission
+         * @description Reject a generator by operator ruling (abuse, a copy the probe missed).
+         *
+         *     Its runs stop counting on the ledger at once, an in-flight run is abandoned,
+         *     and it is never leased again. The miner can still upload a new generator.
+         */
+        post: operations["reject_submission_api_v1_admin_generator_competition_submissions__submission_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/rescore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rescore Submission
+         * @description Make an active generator due now, so its next run starts on fresh seeds
+         *     against the current panel. An in-flight run is left to finish.
+         */
+        post: operations["rescore_submission_api_v1_admin_generator_competition_submissions__submission_id__rescore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/github-links/{link_id}": {
         parameters: {
             query?: never;
@@ -3392,26 +3574,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/screening-submissions/{agent_id}/attempts/{attempt_id}/private-package-registration": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Register V13 Private Package
-         * @description Persist exact digests only; this cannot verify cases or clear a hold.
-         */
-        post: operations["register_v13_private_package_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__private_package_registration_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/admin/screening-submissions/{agent_id}/attempts/{attempt_id}/verification-readiness": {
         parameters: {
             query?: never;
@@ -4306,23 +4468,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/v13-official-controls/images": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Stage Official Control Image */
-        post: operations["stage_official_control_image_api_v1_admin_v13_official_controls_images_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/admin/v13-official-controls/{control_id}/approvals": {
         parameters: {
             query?: never;
@@ -4333,8 +4478,7 @@ export interface paths {
         /** List Official Control Approvals */
         get: operations["list_official_control_approvals_api_v1_admin_v13_official_controls__control_id__approvals_get"];
         put?: never;
-        /** Approve Official Control */
-        post: operations["approve_official_control_api_v1_admin_v13_official_controls__control_id__approvals_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4355,43 +4499,6 @@ export interface paths {
         get: operations["get_official_control_artifact_api_v1_admin_v13_official_controls__control_id__artifact_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/v13-official-controls/{control_id}/verify": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Verify Official Control Image */
-        post: operations["verify_official_control_image_api_v1_admin_v13_official_controls__control_id__verify_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/v13-private-generation/groups": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record Generation Start
-         * @description Commit one target-specific, two-role event before any seed issuance.
-         */
-        post: operations["record_generation_start_api_v1_admin_v13_private_generation_groups_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4431,15 +4538,7 @@ export interface paths {
          */
         get: operations["get_group_package_api_v1_admin_v13_private_generation_groups__group_id__packages__role__get"];
         put?: never;
-        /**
-         * Register Group Package
-         * @description Record a digest-only package after a committed generation start.
-         *
-         *     This does not authenticate the protected package or make an admin-supplied
-         *     manifest a trusted matched control. A separate provisioner and verifier
-         *     must validate sealed bytes and independent benign-control provenance.
-         */
-        post: operations["register_group_package_api_v1_admin_v13_private_generation_groups__group_id__packages__role__post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4459,13 +4558,7 @@ export interface paths {
          */
         get: operations["list_known_benign_approvals_api_v1_admin_v13_private_generation_known_benign_approvals_get"];
         put?: never;
-        /**
-         * Record Known Benign Approval
-         * @description Audit an operator-claimed clean candidate; no semantic pass inferred.
-         *
-         *     X-Admin-Actor is an audit label, not proof of an independent approver.
-         */
-        post: operations["record_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4499,11 +4592,7 @@ export interface paths {
         /** Get Replay Generation Group */
         get: operations["get_replay_generation_group_api_v1_admin_v13_private_generation_replays__replay_id__group_get"];
         put?: never;
-        /**
-         * Record Replay Generation Start
-         * @description Commit replay image and clean control before protected seed generation.
-         */
-        post: operations["record_replay_generation_start_api_v1_admin_v13_private_generation_replays__replay_id__group_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4520,11 +4609,7 @@ export interface paths {
         /** Get Replay Group Package */
         get: operations["get_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__get"];
         put?: never;
-        /**
-         * Register Replay Group Package
-         * @description Record sealed package digests; registration alone is not verification.
-         */
-        post: operations["register_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5263,6 +5348,91 @@ export interface paths {
          * @description Operator write. Idempotent on (source, external_ref, kind).
          */
         post: operations["record_contribution_api_v1_feedback_track_contributions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator-scorer/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Results
+         * @description Record one scorer evaluation for the current lease.
+         */
+        post: operations["post_results_api_v1_generator_scorer_results_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator-scorer/work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lease Work
+         * @description Lease the most overdue generator run, or return ``{"work": null}``.
+         */
+        get: operations["lease_work_api_v1_generator_scorer_work_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Board
+         * @description The shadow generator ledger (each hotkey's latest scored run).
+         */
+        get: operations["board_api_v1_generator_board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Hotkey Submissions
+         * @description A hotkey's recent generators: lifecycle and aggregate outcome only.
+         */
+        get: operations["list_hotkey_submissions_api_v1_generator_submissions_get"];
+        put?: never;
+        /**
+         * Upload Submission
+         * @description Accept one signed generator source archive and make it the hotkey's
+         *     active generator.
+         */
+        post: operations["upload_submission_api_v1_generator_submissions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6970,6 +7140,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/scoring/generator-ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Generator Ledger
+         * @description The shadow generator-track ledger, behind the memory ledger's proof.
+         *
+         *     Platform is the generator competition's system of record, so unlike the
+         *     router relay this is a direct read: each hotkey's latest run scored within
+         *     the freshness window. Every entry is ``weight_eligible=False`` and the
+         *     validator registers the track in ``SHADOW``, so a served ledger contributes
+         *     zero emission. ``mode=off`` serves an empty ledger.
+         */
+        get: operations["generator_ledger_api_v1_scoring_generator_ledger_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scoring/router-ledger": {
         parameters: {
             query?: never;
@@ -7946,46 +8142,6 @@ export interface paths {
         get: operations["get_replay_inputs_api_v1_screener_verification_replays__replay_id__inputs_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/verification-replays/{replay_id}/private-inputs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Replay Private Inputs
-         * @description Short-lived exact image inputs for an active independent replay worker.
-         */
-        get: operations["get_replay_private_inputs_api_v1_screener_verification_replays__replay_id__private_inputs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/verification-replays/{replay_id}/private-receipt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Append Replay Private Receipt
-         * @description Authenticate one sealed execution claim; leave policy unverified.
-         */
-        post: operations["append_replay_private_receipt_api_v1_screener_verification_replays__replay_id__private_receipt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11623,6 +11779,143 @@ export interface components {
             /** Unmetered */
             unmetered: boolean;
         };
+        /** AdminGeneratorProbeResponse */
+        AdminGeneratorProbeResponse: {
+            current: components["schemas"]["GeneratorProbeEpochView"] | null;
+            /** History */
+            history: components["schemas"]["GeneratorProbeEpochView"][];
+        };
+        /** AdminGeneratorProbeRotateRequest */
+        AdminGeneratorProbeRotateRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminGeneratorPromotionCandidatesResponse */
+        AdminGeneratorPromotionCandidatesResponse: {
+            /** Candidates */
+            candidates: components["schemas"]["GeneratorPromotionCandidate"][];
+        };
+        /**
+         * AdminGeneratorRunDetail
+         * @description Operator view of one run. Seeds are revealed once the run finished.
+         */
+        AdminGeneratorRunDetail: {
+            /** Cases Per Seed */
+            cases_per_seed: number;
+            /** Evaluation */
+            evaluation: {
+                [key: string]: unknown;
+            } | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Panel */
+            panel: components["schemas"]["GeneratorPanelSlot"][];
+            /** Probe Epoch */
+            probe_epoch: number;
+            /** Score Summary */
+            score_summary: {
+                [key: string]: unknown;
+            } | null;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /** Seeds */
+            seeds: string[] | null;
+            /** Settings Revision */
+            settings_revision: number;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            summary: components["schemas"]["GeneratorRunSummary"];
+            /** Verdicts */
+            verdicts: components["schemas"]["GeneratorCaseVerdictView"][];
+        };
+        /** AdminGeneratorSettingsRequest */
+        AdminGeneratorSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["GeneratorCompetitionSettings"];
+        };
+        /** AdminGeneratorSettingsResponse */
+        AdminGeneratorSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["GeneratorSettingsRevision"][];
+            default: components["schemas"]["GeneratorCompetitionSettings"];
+            effective: components["schemas"]["EffectiveGeneratorSettings"];
+            /** History */
+            history: components["schemas"]["GeneratorSettingsRevision"][];
+        };
+        /**
+         * AdminGeneratorSubmissionActionRequest
+         * @description An audited operator action on one submission.
+         *
+         *     ``expected_status`` guards against acting on a submission whose state moved
+         *     since the operator read it.
+         */
+        AdminGeneratorSubmissionActionRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation?: string | null;
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "active" | "superseded" | "rejected";
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * AdminGeneratorSubmissionDetail
+         * @description Operator view of one submission and its runs (never the source).
+         */
+        AdminGeneratorSubmissionDetail: {
+            /** Attempts */
+            attempts: number;
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Lease Run Id */
+            lease_run_id: string | null;
+            /** Owner Key */
+            owner_key: string;
+            /** Runs */
+            runs: components["schemas"]["GeneratorRunSummary"][];
+            summary: components["schemas"]["GeneratorSubmissionSummary"];
+        };
+        /** AdminGeneratorSubmissionListResponse */
+        AdminGeneratorSubmissionListResponse: {
+            /** Counts By Status */
+            counts_by_status: {
+                [key: string]: number;
+            };
+            /** Submissions */
+            submissions: components["schemas"]["GeneratorSubmissionSummary"][];
+        };
         /** AdminHotkeyBanAuditEntry */
         AdminHotkeyBanAuditEntry: {
             /**
@@ -14446,7 +14739,7 @@ export interface components {
         };
         /**
          * AdminV13PrivatePackageReadiness
-         * @description Prerequisite visibility only: no V13 policy pass or CLEAR status.
+         * @description Historical inventory for a retired program; no activation or CLEAR path.
          */
         AdminV13PrivatePackageReadiness: {
             /**
@@ -14455,45 +14748,22 @@ export interface components {
              * @constant
              */
             clear_authorized: false;
-            /** Prerequisites */
+            /**
+             * Prerequisites
+             * @description Historical observations, not an activation checklist
+             */
             prerequisites: components["schemas"]["AdminV13PrivatePrerequisite"][];
+            /**
+             * Program Status
+             * @default retired
+             * @constant
+             */
+            program_status: "retired";
             /**
              * Registration Status
              * @enum {string}
              */
             registration_status: "not_registered" | "registered_unverified";
-        };
-        /**
-         * AdminV13PrivatePackageRegisterRequest
-         * @description Operator assertion of sealed digests; never private case bytes.
-         */
-        AdminV13PrivatePackageRegisterRequest: {
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Clean Agent Id
-             * Format: uuid
-             */
-            clean_agent_id: string;
-            /** Clean Artifact Sha256 */
-            clean_artifact_sha256: string;
-            /**
-             * Clean Attempt Id
-             * Format: uuid
-             */
-            clean_attempt_id: string;
-            /** Clean Image Sha256 */
-            clean_image_sha256: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /** Manifest Sha256 */
-            manifest_sha256: string;
-            /** Pair Inventory Sha256 */
-            pair_inventory_sha256: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /** Runner Hotkey */
-            runner_hotkey: string;
         };
         /** AdminV13PrivatePrerequisite */
         AdminV13PrivatePrerequisite: {
@@ -23134,6 +23404,24 @@ export interface components {
              */
             source: "revision" | "default";
         };
+        /** EffectiveGeneratorSettings */
+        EffectiveGeneratorSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["GeneratorCompetitionSettings"];
+            /**
+             * Settings Valid
+             * @default true
+             */
+            settings_valid: boolean;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
+        };
         /**
          * EffectiveInferenceConcurrencySettings
          * @description What the admission path is enforcing right now, and where it came from.
@@ -23856,6 +24144,571 @@ export interface components {
             source_fixture_v1: boolean;
             /** Version */
             version?: string | null;
+        };
+        /**
+         * GeneratorBuildResult
+         * @description Mirror of ``genrun.BuildOutput``.
+         */
+        GeneratorBuildResult: {
+            /** Binary Sha256 */
+            binary_sha256?: string | null;
+            /**
+             * Duration Ms
+             * @default 0
+             */
+            duration_ms: number;
+            /** Error */
+            error?: string | null;
+            /**
+             * Ok
+             * @default false
+             */
+            ok: boolean;
+        };
+        /** GeneratorCaseStatusCounts */
+        GeneratorCaseStatusCounts: {
+            /**
+             * Discriminating
+             * @default 0
+             */
+            discriminating: number;
+            /**
+             * Duplicate
+             * @default 0
+             */
+            duplicate: number;
+            /**
+             * Trivial
+             * @default 0
+             */
+            trivial: number;
+            /**
+             * Unsolved
+             * @default 0
+             */
+            unsolved: number;
+        };
+        /** GeneratorCaseVerdictView */
+        GeneratorCaseVerdictView: {
+            /** Case Id */
+            case_id: string;
+            /** Champion Failed */
+            champion_failed: boolean;
+            /** Credit */
+            credit: number;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Mean Score */
+            mean_score: number;
+            /** Panel Size */
+            panel_size: number;
+            /** Position */
+            position: number;
+            /** Seed Index */
+            seed_index: number;
+            /** Solver Owners */
+            solver_owners: number;
+            /** Solvers */
+            solvers: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "discriminating" | "trivial" | "unsolved" | "duplicate";
+        };
+        /**
+         * GeneratorCompetitionSettings
+         * @description The complete generator competition policy (one revision = whole object).
+         *
+         *     Scoring fields mirror ``challenge.ScoreParams`` in the Go contract and are
+         *     bounded identically; ``cases_per_seed`` is both the exact case count every
+         *     pack must contain and the score's ``target_cases``.
+         */
+        GeneratorCompetitionSettings: {
+            /**
+             * Cases Per Seed
+             * @default 16
+             */
+            cases_per_seed: number;
+            /**
+             * Champion Bonus
+             * @default 0.5
+             */
+            champion_bonus: number;
+            /**
+             * Copy Overlap Threshold
+             * @default 0.5
+             */
+            copy_overlap_threshold: number;
+            /**
+             * Lease Ttl Seconds
+             * @default 7200
+             */
+            lease_ttl_seconds: number;
+            /**
+             * Max Attempts
+             * @default 6
+             */
+            max_attempts: number;
+            /**
+             * Min Panel
+             * @default 3
+             */
+            min_panel: number;
+            /**
+             * Min Solver Owners
+             * @default 2
+             */
+            min_solver_owners: number;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /**
+             * Panel Size
+             * @default 5
+             */
+            panel_size: number;
+            /**
+             * Rescore Interval Hours
+             * @default 24
+             */
+            rescore_interval_hours: number;
+            /**
+             * Retry Backoff Seconds
+             * @default 3600
+             */
+            retry_backoff_seconds: number;
+            /**
+             * Seeds Per Run
+             * @default 2
+             */
+            seeds_per_run: number;
+            /**
+             * Solve Threshold
+             * @default 0.5
+             */
+            solve_threshold: number;
+            /**
+             * Upload Cooldown Seconds
+             * @default 3600
+             */
+            upload_cooldown_seconds: number;
+            /**
+             * Window Days
+             * @default 7
+             */
+            window_days: number;
+        };
+        /** GeneratorLedgerEntry */
+        GeneratorLedgerEntry: {
+            /**
+             * Discriminating Cases
+             * @default 0
+             */
+            discriminating_cases: number;
+            /**
+             * First Seen
+             * Format: date-time
+             */
+            first_seen: string;
+            /**
+             * Generator Contract Version
+             * @default 1
+             * @constant
+             */
+            generator_contract_version: 1;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number;
+            /**
+             * Scored At
+             * Format: date-time
+             */
+            scored_at: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /**
+             * Weight Eligible
+             * @description Whether this result may contribute emissions. Always False while the competition is in shadow; the validator's track state is the authority and this is a defensive echo.
+             * @default false
+             */
+            weight_eligible: boolean;
+        };
+        /** GeneratorLedgerResponse */
+        GeneratorLedgerResponse: {
+            /** Count */
+            count: number;
+            /** Entries */
+            entries?: components["schemas"]["GeneratorLedgerEntry"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at?: string;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /**
+             * Window Days
+             * @default 0
+             */
+            window_days: number;
+        };
+        /** GeneratorPanelSlot */
+        GeneratorPanelSlot: {
+            /** Agent Id */
+            agent_id: string;
+            /**
+             * Champion
+             * @default false
+             */
+            champion: boolean;
+            /** Owner Key */
+            owner_key: string;
+        };
+        /**
+         * GeneratorProbeEpochView
+         * @description A probe epoch's public facts; the seed itself is never served.
+         */
+        GeneratorProbeEpochView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Epoch */
+            epoch: number;
+            /** Probed Submissions */
+            probed_submissions: number;
+            /** Reason */
+            reason: string;
+            /** Retired At */
+            retired_at: string | null;
+        };
+        /** GeneratorPromotionCandidate */
+        GeneratorPromotionCandidate: {
+            /** Case Id */
+            case_id: string;
+            /** Champion Failed */
+            champion_failed: boolean;
+            /** Credit */
+            credit: number;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Mean Score */
+            mean_score: number;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Scored At
+             * Format: date-time
+             */
+            scored_at: string;
+            /** Seed Index */
+            seed_index: number;
+            /** Solver Owners */
+            solver_owners: number;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** GeneratorResultRequest */
+        GeneratorResultRequest: {
+            build: components["schemas"]["GeneratorBuildResult"];
+            /** Deterministic */
+            deterministic?: boolean | null;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            probe?: components["schemas"]["GeneratorSeedOutput"] | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Sandbox
+             * @default
+             */
+            sandbox: string;
+            /** Scorer Version */
+            scorer_version: string;
+            /** Seeds */
+            seeds?: components["schemas"]["GeneratorSeedResult"][] | null;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** GeneratorResultResponse */
+        GeneratorResultResponse: {
+            /** Outcome */
+            outcome: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "leased" | "scored" | "invalid" | "insufficient_panel" | "copy" | "abandoned";
+            /**
+             * Submission Status
+             * @enum {string}
+             */
+            submission_status: "active" | "superseded" | "rejected";
+        };
+        /**
+         * GeneratorRunSummary
+         * @description Public-safe view of one run: lifecycle and aggregate outcome.
+         *
+         *     Never includes seeds, case content, case ids, or panel agent identities.
+         */
+        GeneratorRunSummary: {
+            /** Attempt */
+            attempt: number;
+            case_counts: components["schemas"]["GeneratorCaseStatusCounts"] | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Leased At
+             * Format: date-time
+             */
+            leased_at: string;
+            /** Outcome */
+            outcome: string | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "leased" | "scored" | "invalid" | "insufficient_panel" | "copy" | "abandoned";
+        };
+        /**
+         * GeneratorSeedOutput
+         * @description Mirror of ``genrun.SeedOutput`` (the probe and each scored seed).
+         */
+        GeneratorSeedOutput: {
+            /**
+             * Duration Ms
+             * @default 0
+             */
+            duration_ms: number;
+            /** Error */
+            error?: string | null;
+            /** Pack Sha256 */
+            pack_sha256?: string | null;
+            /** Seed */
+            seed: string;
+            validation?: components["schemas"]["ValidationReport"];
+        };
+        /** GeneratorSeedResult */
+        GeneratorSeedResult: {
+            /**
+             * Duration Ms
+             * @default 0
+             */
+            duration_ms: number;
+            /** Error */
+            error?: string | null;
+            /** Pack Sha256 */
+            pack_sha256?: string | null;
+            /** Panel */
+            panel?: components["schemas"]["PanelMemberResult"][] | null;
+            /** Seed */
+            seed: string;
+            validation?: components["schemas"]["ValidationReport"];
+        };
+        /** GeneratorSettingsRevision */
+        GeneratorSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["GeneratorCompetitionSettings"];
+            /**
+             * Settings Valid
+             * @default true
+             */
+            settings_valid: boolean;
+        };
+        /** GeneratorSubmissionListResponse */
+        GeneratorSubmissionListResponse: {
+            /** Submissions */
+            submissions: components["schemas"]["GeneratorSubmissionSummary"][];
+        };
+        /**
+         * GeneratorSubmissionSummary
+         * @description Public-safe view of one submission. Never includes source.
+         */
+        GeneratorSubmissionSummary: {
+            /** File Count */
+            file_count: number;
+            /** Go Version */
+            go_version: string;
+            latest_run: components["schemas"]["GeneratorRunSummary"] | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Module */
+            module: string;
+            /** Next Run At */
+            next_run_at: string | null;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "superseded" | "rejected";
+            /** Status Reason */
+            status_reason: string | null;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+            /** Tree Sha256 */
+            tree_sha256: string;
+        };
+        /**
+         * GeneratorSubmissionUploadRequest
+         * @description A signed generator source upload (a gzip-compressed tar).
+         */
+        GeneratorSubmissionUploadRequest: {
+            /** Hotkey */
+            hotkey: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+        };
+        /** GeneratorSubmissionUploadResponse */
+        GeneratorSubmissionUploadResponse: {
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "superseded" | "rejected";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Superseded */
+            superseded?: string[];
+            /** Tree Sha256 */
+            tree_sha256: string;
+        };
+        /** GeneratorWorkItem */
+        GeneratorWorkItem: {
+            /** Cases Per Seed */
+            cases_per_seed: number;
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Panel */
+            panel: components["schemas"]["GeneratorPanelSlot"][];
+            /** Probe Seed */
+            probe_seed: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Seeds */
+            seeds: string[];
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** GeneratorWorkResponse */
+        GeneratorWorkResponse: {
+            work?: components["schemas"]["GeneratorWorkItem"] | null;
         };
         /** GithubLinkAttemptStatus */
         GithubLinkAttemptStatus: {
@@ -27169,19 +28022,6 @@ export interface components {
              */
             schema_sha256: string;
         };
-        /** OfficialControlApprovalRequest */
-        OfficialControlApprovalRequest: {
-            /** Image Id */
-            image_id: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /** Reason */
-            reason: string;
-            /** Review Evidence Sha256 */
-            review_evidence_sha256: string;
-        };
         /** OfficialControlApprovalView */
         OfficialControlApprovalView: {
             /** Actor */
@@ -27249,47 +28089,6 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
-        };
-        /** OfficialControlImageRequest */
-        OfficialControlImageRequest: {
-            /**
-             * Fixture Id
-             * Format: uuid
-             */
-            fixture_id: string;
-            /** Image Id */
-            image_id: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /**
-             * Request Id
-             * Format: uuid
-             */
-            request_id: string;
-            /** Size Bytes */
-            size_bytes: number;
-        };
-        /** OfficialControlImageUpload */
-        OfficialControlImageUpload: {
-            control: components["schemas"]["OfficialControlImageView"];
-            /**
-             * Expires At
-             * Format: date-time
-             */
-            expires_at: string;
-            /** Required Headers */
-            required_headers: {
-                [key: string]: string;
-            };
-            /** Upload Url */
-            upload_url: string;
-        };
-        /** OfficialControlImageVerifyRequest */
-        OfficialControlImageVerifyRequest: {
-            /** Image Id */
-            image_id: string;
-            /** Image Sha256 */
-            image_sha256: string;
         };
         /** OfficialControlImageView */
         OfficialControlImageView: {
@@ -27671,6 +28470,38 @@ export interface components {
              */
             scope: "plagiarism-screening-only";
         };
+        /** PanelCaseResult */
+        PanelCaseResult: {
+            /** Case Id */
+            case_id: string;
+            /**
+             * Fault
+             * @default false
+             */
+            fault: boolean;
+            /**
+             * Score
+             * @default 0
+             */
+            score: number;
+        };
+        /** PanelMemberResult */
+        PanelMemberResult: {
+            /** Agent Id */
+            agent_id: string;
+            /**
+             * Champion
+             * @default false
+             */
+            champion: boolean;
+            /**
+             * Owner Key
+             * @default
+             */
+            owner_key: string;
+            /** Results */
+            results?: components["schemas"]["PanelCaseResult"][] | null;
+        };
         /** PendingWeightObservation */
         PendingWeightObservation: {
             /** Commit Block */
@@ -27785,35 +28616,6 @@ export interface components {
             signature: string;
             /** Validator Hotkey */
             validator_hotkey: string;
-        };
-        /**
-         * PrivateExecutionResult
-         * @description Report-only paired outcomes; no materiality decision or policy verdict.
-         */
-        PrivateExecutionResult: {
-            /** Aggregates */
-            aggregates: components["schemas"]["PrivatePairCounts"][];
-            summary: components["schemas"]["V13PrivateRunSummary"];
-        };
-        /**
-         * PrivatePairCounts
-         * @description Sanitized aggregate; no prompts, answers, case IDs, or hidden seeds.
-         */
-        PrivatePairCounts: {
-            /** Control Correct */
-            control_correct: number;
-            /** Control Only Correct */
-            control_only_correct: number;
-            /** Pairs */
-            pairs: number;
-            /** Seed Commitment */
-            seed_commitment: string;
-            /** Transformation Class */
-            transformation_class: string;
-            /** Variant Correct */
-            variant_correct: number;
-            /** Variant Only Correct */
-            variant_only_correct: number;
         };
         /** ProbeBatteryLead */
         ProbeBatteryLead: {
@@ -39152,39 +39954,6 @@ export interface components {
             /** Target Receipt Sha256 */
             target_receipt_sha256: string;
         };
-        /** V13GenerationStartRequest */
-        V13GenerationStartRequest: {
-            /**
-             * Approval Id
-             * Format: uuid
-             */
-            approval_id: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /**
-             * Target Agent Id
-             * Format: uuid
-             */
-            target_agent_id: string;
-            /** Target Artifact Sha256 */
-            target_artifact_sha256: string;
-            /**
-             * Target Attempt Id
-             * Format: uuid
-             */
-            target_attempt_id: string;
-            /** Target Image Sha256 */
-            target_image_sha256: string;
-        };
-        /** V13GroupPackageRegisterRequest */
-        V13GroupPackageRegisterRequest: {
-            /** Generation Receipt Sha256 */
-            generation_receipt_sha256: string;
-            /** Manifest Sha256 */
-            manifest_sha256: string;
-            /** Pair Inventory Sha256 */
-            pair_inventory_sha256: string;
-        };
         /** V13GroupPackageView */
         V13GroupPackageView: {
             /**
@@ -39233,29 +40002,6 @@ export interface components {
              */
             status: "recorded_unverified";
         };
-        /** V13KnownBenignApprovalRequest */
-        V13KnownBenignApprovalRequest: {
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /** Reason */
-            reason: string;
-            /** Review Evidence Sha256 */
-            review_evidence_sha256: string;
-        };
         /** V13KnownBenignApprovalView */
         V13KnownBenignApprovalView: {
             /** Actor */
@@ -39299,68 +40045,6 @@ export interface components {
              */
             status: "recorded_unverified";
         };
-        /**
-         * V13MatchedCleanControlCommitment
-         * @description Digest-only same-case commitment, not an execution or policy result.
-         */
-        V13MatchedCleanControlCommitment: {
-            /**
-             * Control Agent Id
-             * Format: uuid
-             */
-            control_agent_id: string;
-            /**
-             * Control Approval Id
-             * Format: uuid
-             */
-            control_approval_id: string;
-            /** Control Approval Receipt Sha256 */
-            control_approval_receipt_sha256: string;
-            /** Control Artifact Sha256 */
-            control_artifact_sha256: string;
-            /**
-             * Control Attempt Id
-             * Format: uuid
-             */
-            control_attempt_id: string;
-            /** Control Generation Receipt Sha256 */
-            control_generation_receipt_sha256: string;
-            /** Control Image Sha256 */
-            control_image_sha256: string;
-            /** Control Manifest Sha256 */
-            control_manifest_sha256: string;
-            /**
-             * Group Id
-             * Format: uuid
-             */
-            group_id: string;
-            /** Pair Count */
-            pair_count: number;
-            /** Pair Inventory Sha256 */
-            pair_inventory_sha256: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /** Replay Id */
-            replay_id?: string | null;
-            /**
-             * Target Agent Id
-             * Format: uuid
-             */
-            target_agent_id: string;
-            /** Target Artifact Sha256 */
-            target_artifact_sha256: string;
-            /**
-             * Target Attempt Id
-             * Format: uuid
-             */
-            target_attempt_id: string;
-            /** Target Generation Receipt Sha256 */
-            target_generation_receipt_sha256: string;
-            /** Target Image Sha256 */
-            target_image_sha256: string;
-            /** Target Manifest Sha256 */
-            target_manifest_sha256: string;
-        };
         /** V13PrivateClassSignal */
         V13PrivateClassSignal: {
             /** Clean Degradation Bps */
@@ -39383,41 +40067,6 @@ export interface components {
             target_degradation_bps: number;
             /** Transformation Class */
             transformation_class: string;
-        };
-        /**
-         * V13PrivateRunSummary
-         * @description Sanitized runner output; this alone is never a V13 policy decision.
-         */
-        V13PrivateRunSummary: {
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-            /** Completed Pairs */
-            completed_pairs: number;
-            /** Evidence Sha256 */
-            evidence_sha256: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /** Manifest Sha256 */
-            manifest_sha256: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /** Runner Hotkey */
-            runner_hotkey: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "completed" | "failed" | "inconclusive";
         };
         /** V13PrivateStatisticalReport */
         V13PrivateStatisticalReport: {
@@ -39627,31 +40276,6 @@ export interface components {
              * @enum {string}
              */
             status: "passed" | "failed" | "inconclusive";
-        };
-        /**
-         * V13ReplayPrivateReceipt
-         * @description Runner-signed aggregate claim bound to both exact images and sealed roles.
-         */
-        V13ReplayPrivateReceipt: {
-            binding: components["schemas"]["V13ReplayBinding"];
-            known_benign: components["schemas"]["PrivateExecutionResult"];
-            matched: components["schemas"]["V13MatchedCleanControlCommitment"];
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-            /**
-             * Revision
-             * @default v13-replay-private-receipt-v1
-             * @constant
-             */
-            revision: "v13-replay-private-receipt-v1";
-            /** Runner Hotkey */
-            runner_hotkey: string;
-            /** Signature */
-            signature: string;
-            target: components["schemas"]["PrivateExecutionResult"];
         };
         /** V13ReportOnlyCurrentPacket */
         V13ReportOnlyCurrentPacket: {
@@ -40405,6 +41029,13 @@ export interface components {
             /** Manifest Sha256 */
             manifest_sha256: string;
         };
+        /** ValidationCaseRef */
+        ValidationCaseRef: {
+            /** Case Id */
+            case_id: string;
+            /** Fingerprint */
+            fingerprint: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -40417,6 +41048,42 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** ValidationIssue */
+        ValidationIssue: {
+            /** Case Id */
+            case_id?: string | null;
+            /** Message */
+            message: string;
+            /** Rule */
+            rule: string;
+        };
+        /**
+         * ValidationReport
+         * @description Mirror of ``challenge.Report``.
+         */
+        ValidationReport: {
+            /**
+             * Case Count
+             * @default 0
+             */
+            case_count: number;
+            /** Cases */
+            cases?: components["schemas"]["ValidationCaseRef"][] | null;
+            /** Issues */
+            issues?: components["schemas"]["ValidationIssue"][] | null;
+            /** Pack Sha256 */
+            pack_sha256?: string | null;
+            /**
+             * Pair Count
+             * @default 0
+             */
+            pair_count: number;
+            /**
+             * Valid
+             * @default false
+             */
+            valid: boolean;
         };
         /**
          * ValidatorCapabilities
@@ -41109,79 +41776,6 @@ export interface components {
             /** Miner Hotkey */
             miner_hotkey: string;
             replay: components["schemas"]["VerificationReplayState"];
-            /**
-             * Urls Expire At
-             * Format: date-time
-             */
-            urls_expire_at: string;
-        };
-        /** VerificationReplayPrivateImageInput */
-        VerificationReplayPrivateImageInput: {
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-            /**
-             * Committed At
-             * Format: date-time
-             */
-            committed_at: string;
-            /** Image Id */
-            image_id: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "target" | "known_benign";
-            /** Size Bytes */
-            size_bytes: number;
-            /** Url */
-            url: string;
-            /**
-             * Verified At
-             * Format: date-time
-             */
-            verified_at: string;
-        };
-        /** VerificationReplayPrivateInputs */
-        VerificationReplayPrivateInputs: {
-            approval: components["schemas"]["V13KnownBenignApprovalView"];
-            control_image: components["schemas"]["VerificationReplayPrivateImageInput"];
-            control_package: components["schemas"]["V13ReplayGroupPackageView"];
-            group: components["schemas"]["V13ReplayGenerationGroupView"];
-            /**
-             * Lease Deadline
-             * Format: date-time
-             */
-            lease_deadline: string;
-            /**
-             * Lease Started At
-             * Format: date-time
-             */
-            lease_started_at: string;
-            /**
-             * Policy Verification Complete
-             * @default false
-             * @constant
-             */
-            policy_verification_complete: false;
-            /**
-             * Replay Id
-             * Format: uuid
-             */
-            replay_id: string;
-            target_image: components["schemas"]["VerificationReplayPrivateImageInput"];
-            target_package: components["schemas"]["V13ReplayGroupPackageView"];
             /**
              * Urls Expire At
              * Format: date-time
@@ -46047,6 +46641,348 @@ export interface operations {
             };
         };
     };
+    get_probe_api_v1_admin_generator_competition_probe_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorProbeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_probe_api_v1_admin_generator_competition_probe_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorProbeRotateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorProbeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promotion_candidates_api_v1_admin_generator_competition_promotion_candidates_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorPromotionCandidatesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_run_detail_api_v1_admin_generator_competition_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorRunDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_generator_competition_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_generator_competition_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_submissions_api_v1_admin_generator_competition_submissions_get: {
+        parameters: {
+            query?: {
+                hotkey?: string | null;
+                status?: ("active" | "superseded" | "rejected") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSubmissionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_submission_detail_api_v1_admin_generator_competition_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_submission_api_v1_admin_generator_competition_submissions__submission_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorSubmissionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rescore_submission_api_v1_admin_generator_competition_submissions__submission_id__rescore_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorSubmissionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     github_revocation_preflight_api_v1_admin_github_links__link_id__get: {
         parameters: {
             query?: never;
@@ -48825,43 +49761,6 @@ export interface operations {
             };
         };
     };
-    register_v13_private_package_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__private_package_registration_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-                attempt_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AdminV13PrivatePackageRegisterRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_screening_verification_readiness_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__verification_readiness_get: {
         parameters: {
             query?: never;
@@ -50785,41 +51684,6 @@ export interface operations {
             };
         };
     };
-    stage_official_control_image_api_v1_admin_v13_official_controls_images_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfficialControlImageRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfficialControlImageUpload"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_official_control_approvals_api_v1_admin_v13_official_controls__control_id__approvals_get: {
         parameters: {
             query?: never;
@@ -50853,43 +51717,6 @@ export interface operations {
             };
         };
     };
-    approve_official_control_api_v1_admin_v13_official_controls__control_id__approvals_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                control_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfficialControlApprovalRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfficialControlApprovalView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_official_control_artifact_api_v1_admin_v13_official_controls__control_id__artifact_get: {
         parameters: {
             query?: never;
@@ -50910,79 +51737,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OfficialControlImageArtifact"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    verify_official_control_image_api_v1_admin_v13_official_controls__control_id__verify_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                control_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfficialControlImageVerifyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfficialControlImageView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_generation_start_api_v1_admin_v13_private_generation_groups_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13GenerationStartRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["V13GenerationGroupView"];
                 };
             };
             /** @description Validation Error */
@@ -51063,45 +51817,6 @@ export interface operations {
             };
         };
     };
-    register_group_package_api_v1_admin_v13_private_generation_groups__group_id__packages__role__post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                group_id: string;
-                role: "target" | "known_benign";
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13GroupPackageRegisterRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["V13GroupPackageView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_known_benign_approvals_api_v1_admin_v13_private_generation_known_benign_approvals_get: {
         parameters: {
             query?: {
@@ -51123,42 +51838,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["V13KnownBenignApprovalView"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13KnownBenignApprovalRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["V13KnownBenignApprovalView"];
                 };
             };
             /** @description Validation Error */
@@ -51238,44 +51917,6 @@ export interface operations {
             };
         };
     };
-    record_replay_generation_start_api_v1_admin_v13_private_generation_replays__replay_id__group_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                replay_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13GenerationStartRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["V13ReplayGenerationGroupView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__get: {
         parameters: {
             query?: never;
@@ -51289,45 +51930,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["V13ReplayGroupPackageView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    register_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                replay_id: string;
-                role: "target" | "known_benign";
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13GroupPackageRegisterRequest"];
-            };
-        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -52804,6 +53406,157 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeedbackTrackContributionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_results_api_v1_generator_scorer_results_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorResultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorResultResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lease_work_api_v1_generator_scorer_work_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorWorkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_api_v1_generator_board_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorLedgerResponse"];
+                };
+            };
+        };
+    };
+    list_hotkey_submissions_api_v1_generator_submissions_get: {
+        parameters: {
+            query: {
+                hotkey: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorSubmissionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_submission_api_v1_generator_submissions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorSubmissionUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorSubmissionUploadResponse"];
                 };
             };
             /** @description Validation Error */
@@ -55574,6 +56327,61 @@ export interface operations {
             };
         };
     };
+    generator_ledger_api_v1_scoring_generator_ledger_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+                "x-validator-ledger-nonce"?: string | null;
+                "x-validator-ledger-requested-at"?: string | null;
+                "x-validator-ledger-signature"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorLedgerResponse"];
+                };
+            };
+            /** @description Missing/invalid validator auth. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale or replayed ledger request proof. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Chain unavailable, or nonce store unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     router_ledger_api_v1_scoring_router_ledger_get: {
         parameters: {
             query?: never;
@@ -57491,78 +58299,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationReplayInputs"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_replay_private_inputs_api_v1_screener_verification_replays__replay_id__private_inputs_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                replay_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VerificationReplayPrivateInputs"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    append_replay_private_receipt_api_v1_screener_verification_replays__replay_id__private_receipt_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                replay_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13ReplayPrivateReceipt"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VerificationReplayPrivateReceiptState"];
                 };
             };
             /** @description Validation Error */

@@ -157,7 +157,6 @@ from ditto_screening_protocol.mechanical_verification import (
     MECHANICAL_PROFILE_SHA256,
     mechanical_evidence_sha256,
 )
-from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE_SHA256
 
 # Every use of SCREENING_POLICY_VERSION in this module means "the version the
 # platform REQUIRES," which — with no scheduled activation written — is the
@@ -9257,6 +9256,8 @@ class TestQuarantineAdmin:
         assert len(body["checks"]) == 20
         assert all(check["record_status"] == "not_recorded" for check in body["checks"])
         assert body["private_metamorphic_applicability"] == "not_recorded"
+        assert body["private_package"]["program_status"] == "retired"
+        assert body["private_package"]["clear_authorized"] is False
         assert body["receipt_count"] == 0
         assert body["receipts"] == []
 
@@ -9326,206 +9327,6 @@ class TestQuarantineAdmin:
             path, headers={"Authorization": headers["Authorization"]}
         )
         assert no_actor.status_code == 422
-
-    async def test_private_package_registration_is_bound_and_never_clears(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        app.state.config = replace(
-            app.state.config,
-            admin_api_token="test-admin-token-at-least-32-characters",
-        )
-        target_id = await _seed_agent(
-            session_maker, status=AgentStatus.QUARANTINED, name="held-target"
-        )
-        clean_id = await _seed_agent(
-            session_maker, status=AgentStatus.SCORED, name="clean-candidate"
-        )
-        target_attempt_id, clean_attempt_id = uuid4(), uuid4()
-        now = datetime.now(UTC)
-        async with session_maker() as session, session.begin():
-            for agent_id, attempt_id, status, image_sha in (
-                (target_id, target_attempt_id, "quarantined", "a" * 64),
-                (clean_id, clean_attempt_id, "passed", "b" * 64),
-            ):
-                session.add(
-                    ScreeningAttempt(
-                        attempt_id=attempt_id,
-                        agent_id=agent_id,
-                        artifact_sha256=_SHA256,
-                        screener_hotkey=_SCREENER_HOTKEY,
-                        policy_version=13,
-                        status=status,
-                        started_at=now - timedelta(minutes=2),
-                        deadline=now + timedelta(minutes=8),
-                        finished_at=now,
-                    )
-                )
-                await session.flush()
-                session.add(
-                    ScreenedImageUpload(
-                        image_upload_id=uuid4(),
-                        agent_id=agent_id,
-                        attempt_id=attempt_id,
-                        screener_hotkey=_SCREENER_HOTKEY,
-                        storage_upload_id=f"test-{attempt_id}",
-                        sha256=image_sha,
-                        size_bytes=123,
-                        image_id=f"sha256:{image_sha}",
-                        image_ref=f"ditto-screen/{agent_id}:test",
-                        status="verified",
-                        expires_at=now + timedelta(minutes=8),
-                        verified_at=now,
-                    )
-                )
-        _install_db(app, session_maker)
-        headers = {
-            "Authorization": "Bearer test-admin-token-at-least-32-characters",
-            "X-Admin-Actor": "backroom:private-verifier",
-        }
-        base = (
-            f"/api/v1/admin/screening-submissions/{target_id}/attempts/"
-            f"{target_attempt_id}"
-        )
-        body = {
-            "artifact_sha256": _SHA256,
-            "image_sha256": "a" * 64,
-            "profile_sha256": V13_PRIVATE_PROFILE_SHA256,
-            "manifest_sha256": "c" * 64,
-            "pair_inventory_sha256": "d" * 64,
-            "clean_agent_id": str(clean_id),
-            "clean_attempt_id": str(clean_attempt_id),
-            "clean_artifact_sha256": _SHA256,
-            "clean_image_sha256": "b" * 64,
-            "runner_hotkey": "5TrustedVerifier",
-        }
-        registration_path = base + "/private-package-registration"
-        readiness_path = base + "/verification-readiness"
-        unregistered_readiness = await client.get(readiness_path, headers=headers)
-        assert unregistered_readiness.status_code == 200
-        assert unregistered_readiness.json()["verified_image_sha256s"] == ["a" * 64]
-        assert unregistered_readiness.json()["verified_image_count"] == 1
-        assert unregistered_readiness.json()["verified_images_truncated"] is False
-        assert (
-            unregistered_readiness.json()["private_package"]["registration_status"]
-            == "not_registered"
-        )
-        assert (
-            next(
-                item["status"]
-                for item in unregistered_readiness.json()["private_package"][
-                    "prerequisites"
-                ]
-                if item["code"] == "target_verified_image"
-            )
-            == "not_observed"
-        )
-        missing_actor = await client.post(
-            registration_path,
-            headers={"Authorization": headers["Authorization"]},
-            json=body,
-        )
-        assert missing_actor.status_code == 422
-        stale_image = await client.post(
-            registration_path,
-            headers=headers,
-            json={**body, "image_sha256": "e" * 64},
-        )
-        assert stale_image.status_code == 409
-        stale_artifact = await client.post(
-            registration_path,
-            headers=headers,
-            json={**body, "artifact_sha256": "e" * 64},
-        )
-        assert stale_artifact.status_code == 409
-        stale_attempt = await client.post(
-            registration_path.replace(str(target_attempt_id), str(uuid4())),
-            headers=headers,
-            json=body,
-        )
-        assert stale_attempt.status_code == 404
-        registered = await client.post(registration_path, headers=headers, json=body)
-        assert registered.status_code == 204, registered.text
-        repeat = await client.post(registration_path, headers=headers, json=body)
-        assert repeat.status_code == 204, repeat.text
-        conflict = await client.post(
-            registration_path,
-            headers=headers,
-            json={**body, "manifest_sha256": "e" * 64},
-        )
-        assert conflict.status_code == 409
-        readiness = await client.get(readiness_path, headers=headers)
-        assert readiness.status_code == 200, readiness.text
-        private = readiness.json()["private_package"]
-        assert private["registration_status"] == "registered_unverified"
-        assert private["clear_authorized"] is False
-        prerequisites = {
-            item["code"]: item["status"] for item in private["prerequisites"]
-        }
-        assert prerequisites["target_artifact_commitment"] == "mechanically_verified"
-        assert prerequisites["target_verified_image"] == "mechanically_verified"
-        assert prerequisites["sealed_manifest_registration"] == "recorded_unverified"
-        assert prerequisites["clean_image_candidate"] == "recorded_unverified"
-        assert prerequisites["runner_hotkey_registration"] == "recorded_unverified"
-        assert prerequisites["trusted_runner_key"] == "not_observed"
-        assert prerequisites["known_benign_control_provenance"] == "not_observed"
-        assert prerequisites["protected_blueprint_bank"] == "not_observed"
-        assert prerequisites["fresh_isolated_paired_execution"] == "not_observed"
-        assert prerequisites["all_19_checks_verified"] == "not_observed"
-        async with session_maker() as session:
-            target = await session.get(Agent, target_id)
-            assert target is not None
-            assert target.status == AgentStatus.QUARANTINED
-        async with session_maker() as session, session.begin():
-            clean = await session.get(Agent, clean_id)
-            assert clean is not None
-            clean.status = AgentStatus.QUARANTINED
-        stale_clean_readiness = await client.get(readiness_path, headers=headers)
-        assert stale_clean_readiness.status_code == 200
-        stale_prerequisites = {
-            item["code"]: item["status"]
-            for item in stale_clean_readiness.json()["private_package"]["prerequisites"]
-        }
-        assert stale_prerequisites["clean_image_candidate"] == "not_observed"
-        assert (
-            stale_clean_readiness.json()["private_package"]["clear_authorized"] is False
-        )
-        legacy_id = await _seed_agent(
-            session_maker, status=AgentStatus.QUARANTINED, name="legacy-held"
-        )
-        legacy_attempt_id = uuid4()
-        async with session_maker() as session, session.begin():
-            session.add(
-                ScreeningAttempt(
-                    attempt_id=legacy_attempt_id,
-                    agent_id=legacy_id,
-                    artifact_sha256=None,
-                    screener_hotkey=_SCREENER_HOTKEY,
-                    policy_version=13,
-                    status="quarantined",
-                    started_at=now - timedelta(minutes=2),
-                    deadline=now + timedelta(minutes=8),
-                    finished_at=now,
-                )
-            )
-        legacy_path = (
-            f"/api/v1/admin/screening-submissions/{legacy_id}/attempts/"
-            f"{legacy_attempt_id}"
-        )
-        legacy = await client.get(
-            legacy_path + "/verification-readiness", headers=headers
-        )
-        assert legacy.status_code == 200
-        assert (
-            legacy.json()["private_package"]["registration_status"] == "not_registered"
-        )
-        assert legacy.json()["private_package"]["clear_authorized"] is False
-        legacy_registration = await client.post(
-            legacy_path + "/private-package-registration", headers=headers, json=body
-        )
-        assert legacy_registration.status_code == 409
 
     async def test_review_deadline_requires_exact_bound_window(
         self,

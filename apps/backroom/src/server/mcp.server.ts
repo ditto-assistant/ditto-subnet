@@ -13,20 +13,15 @@ import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.s
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
-  officialControlsInputSchema, officialControlLookupSchema, officialControlStageSchema,
-  officialControlVerifySchema, officialControlApprovalSchema,
+  officialControlsInputSchema, officialControlLookupSchema,
 } from '../lib/v13-official-control.schemas'
 import {
-  fetchOfficialV13Controls, fetchOfficialV13ControlApprovals, fetchOfficialV13ControlArtifact, stageOfficialV13ControlImage,
-  verifyOfficialV13ControlImage, recordOfficialV13ControlApproval,
+  fetchOfficialV13Controls, fetchOfficialV13ControlApprovals, fetchOfficialV13ControlArtifact,
 } from './v13-official-control.service'
 import {
   listV13BenignApprovalsInputSchema,
   v13BenignApprovalLookupInputSchema,
-  v13BenignApprovalWriteInputSchema,
   v13ReplayPrivateLookupInputSchema,
-  v13ReplayGroupWriteInputSchema,
-  v13ReplayPackageWriteInputSchema,
 } from '../lib/v13-private.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import { bountyBoardInputSchema, bountyCatalogInputs, bountyQueueInputSchema } from '../lib/bounty.schemas'
@@ -52,6 +47,29 @@ import {
   setBountyClaimsPaused,
   setBountyPayoutPolicy,
 } from './bounty.service'
+import {
+  fetchGeneratorBoard,
+  fetchGeneratorProbe,
+  fetchGeneratorPromotionCandidates,
+  fetchGeneratorRun,
+  fetchGeneratorSettings,
+  fetchGeneratorSubmission,
+  listGeneratorSubmissions,
+  rejectGenerator,
+  rescoreGenerator,
+  rotateGeneratorProbe,
+  setGeneratorSettings,
+} from './generator-competition.service'
+import {
+  generatorPromotionInputSchema,
+  generatorRunIdInputSchema,
+  generatorSubmissionIdInputSchema,
+  listGeneratorSubmissionsInputSchema,
+  rejectGeneratorInputSchema,
+  rescoreGeneratorInputSchema,
+  rotateGeneratorProbeInputSchema,
+  setGeneratorSettingsInputSchema,
+} from '../lib/generator-competition.schemas'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 import { observerGrant } from './treasury-observer-access.server'
@@ -223,10 +241,7 @@ import {
   fetchV13GenerationGroup,
   listV13BenignApprovals,
   fetchV13BenignApproval,
-  recordV13BenignApproval,
   fetchV13ReplayPrivateGroup,
-  recordV13ReplayPrivateGroup,
-  registerV13ReplayPrivatePackage,
   fetchV13ReplayPrivateReceipt,
   fetchV13ReplayPrivateStatistics,
   fetchScreeningReviewDeadline,
@@ -418,16 +433,14 @@ export type BackroomEnv = {
 }
 
 export const WRITE_TOOL_NAMES = new Set([
+  'set_generator_competition_settings',
+  'rotate_generator_probe_seed',
+  'rescore_generator_submission',
+  'reject_generator_submission',
   'advance_scored_policy_rescreen',
   'record_treasury_settings',
   'record_treasury_runtime',
   'record_treasury_receipt',
-  'record_v13_benign_approval',
-  'stage_v13_official_control_image',
-  'verify_v13_official_control_image',
-  'record_v13_official_control_approval',
-  'record_v13_replay_private_group',
-  'register_v13_replay_private_package',
   'schedule_l2_report_canary',
   'register_canonical_starter_fixture',
   'review_canonical_starter_fixture',
@@ -809,12 +822,6 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read immutable official-image review claims; not certification.',
   get_v13_official_control_artifact:
     'Download sealed candidate image for independent review; no verdict.',
-  stage_v13_official_control_image:
-    'Registrar stages an exact official image for review; no miner row.',
-  verify_v13_official_control_image:
-    'Hash and seal official image bytes; no execution or verdict authority.',
-  record_v13_official_control_approval:
-    'Authenticated fixture reviewer records exact-image evidence; one account may perform all steps.',
   register_canonical_starter_fixture:
     'Stage exact released starter: operator fixture, no miner submission.',
   review_canonical_starter_fixture:
@@ -873,6 +880,17 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   set_cla_policy: 'Set CLA mode with revision and confirmation. Write; see help.',
   publish_cla_version: 'Publish approved pinned CLA; no activation. Write; see help.',
   get_bounty_board: 'List build bounties: terms, slots, pause, awards.',
+  get_generator_competition_settings: 'Read generator competition policy, mode and optional history.',
+  set_generator_competition_settings: 'Write complete generator policy with CAS and APPLY GENERATOR COMPETITION {MODE}.',
+  list_generator_submissions: 'Page generator submissions with latest run; filter hotkey/status.',
+  get_generator_submission: 'Read one generator submission, lease and every run (never source).',
+  get_generator_run: 'Read one run: evaluation, panel, per-case verdicts; seeds once finished.',
+  get_generator_probe: 'Read probe epochs and probed counts; the probe seed is never served.',
+  rotate_generator_probe_seed: 'Retire the probe seed; every generator is re-probed on its next run.',
+  list_generator_promotion_candidates: 'Discriminating generator cases, highest credit first.',
+  get_generator_board: 'Read the shadow generator ledger (weight_eligible=false).',
+  rescore_generator_submission: 'Make an active generator due now on fresh seeds.',
+  reject_generator_submission: 'Reject a generator by ruling; abandons its live run, drops it from the ledger.',
   get_bounty: 'Operator view of one bounty: claims, appeals, full private audit.',
   get_bounty_claim: 'Read one bounty claim: submissions, obligations, facts.',
   get_bounty_queue: 'Review queue (overdue first), settlement queue with approvers, or pending appeals.',
@@ -1574,7 +1592,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening verification readiness',
       description:
-        'Read exact V13 receipts, retained source-review finding/digest and private prerequisites. Source observation binding checks and a stored clearance_certified assertion are not accepted source admission or health proof. Missing records do not prove review never ran. A private challenge is not universally required for source admission. mechanically_verified covers only archive/image identity. Never authorizes CLEAR. Artifact scope.',
+        'Read exact V13 receipts, retained source-review finding/digest and historical private metadata. Private-audit activation is retired. Source observation binding checks and a stored clearance_certified assertion are not accepted source admission or health proof. Missing records do not prove review never ran. A private challenge is not universally required for source admission. mechanically_verified covers only archive/image identity. Never authorizes CLEAR. Artifact scope.',
       inputSchema: screeningFailureDiagnosticInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1619,17 +1637,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
-    'record_v13_benign_approval',
-    {
-      title: 'Record V13 known benign approval',
-      description: 'Append an exact control artifact and image approval with review evidence digest. Records provenance only; it cannot clear or reject an agent.',
-      inputSchema: v13BenignApprovalWriteInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => recordV13BenignApproval(props.session.email, input)),
-  )
-
-  registerTool(
     'get_v13_replay_private_group',
     {
       title: 'Get V13 replay private group',
@@ -1638,28 +1645,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchV13ReplayPrivateGroup(input)),
-  )
-
-  registerTool(
-    'record_v13_replay_private_group',
-    {
-      title: 'Record V13 replay private group',
-      description: 'Append replay-bound target and known benign commitments before private generation. No case generation or terminal decision is performed.',
-      inputSchema: v13ReplayGroupWriteInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => recordV13ReplayPrivateGroup(props.session.email, input)),
-  )
-
-  registerTool(
-    'register_v13_replay_private_package',
-    {
-      title: 'Register V13 replay private package',
-      description: 'Append a role-specific sealed package digest for one replay. Registration is recorded unverified and does not clear a hold.',
-      inputSchema: v13ReplayPackageWriteInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => registerV13ReplayPrivatePackage(props.session.email, input)),
   )
 
   registerTool(
@@ -1683,7 +1668,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) => result(await fetchV13ReplayPrivateStatistics(input)),
   )
-
 
   registerTool('get_github_link_revocation_preflight', {
     title: 'Inspect GitHub link',
@@ -1734,6 +1718,73 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     // The service still parses effectiveAt strictly; the catalog needs only its format.
     inputSchema: claPublishInputSchema.extend({ effectiveAt: z.string().meta({ format: 'date-time' }) }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => publishClaVersion(props.session.email, input)))
+
+  registerTool('get_generator_competition_settings', {
+    title: 'Get generator competition settings',
+    description: 'Read the shadow DittoBench generator competition policy: mode (off refuses uploads and leases nothing; shadow runs the lane at zero emission), panel_size/min_panel/min_solver_owners/solve_threshold/champion_bonus (the discrimination score), seeds_per_run and cases_per_seed (each run generates that many packs of exactly that many cases on fresh secret seeds), rescore_interval_hours, window_days (the ledger counts each hotkey\'s latest run scored inside it), copy_overlap_threshold (share of probe fingerprints that marks a behavioral copy), upload cooldown, lease TTL, max_attempts and retry backoff. Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
+    inputSchema: MCP_SETTINGS_HISTORY_INPUT, annotations: toolAnnotations('read'),
+  }, async ({ historyLimit, historyOffset }) =>
+    result(compacted(pageRevisionHistory(await fetchGeneratorSettings(), historyLimit, historyOffset), REVISION_LISTS)))
+
+  registerTool('set_generator_competition_settings', {
+    title: 'Set generator competition settings',
+    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel or min_panel > panel_size. Returns the revision this write created. There is no enforcing mode: every ledger entry stays weight_eligible=false and the validator track stays SHADOW. Requires backroom:write.',
+    inputSchema: setGeneratorSettingsInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => setGeneratorSettings(input, props.session.email)))
+
+  registerTool('list_generator_submissions', {
+    title: 'List generator submissions',
+    description: 'Newest-first generator submissions with identity (source and tree SHA-256, Go module and version, file count, size), status (active is the hotkey\'s one leased generator; superseded by a newer upload; rejected with status_reason naming build_failed, generation_failed, invalid_pack, invalid_probe, nondeterministic, behavioral_copy or an operator ruling), next_run_at, and the latest non-abandoned run with case status counts. counts_by_status covers every submission. Filter by hotkey or status. Source is never returned. Requires backroom:read.',
+    inputSchema: listGeneratorSubmissionsInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listGeneratorSubmissions(input)))
+
+  registerTool('get_generator_submission', {
+    title: 'Get generator submission',
+    description: 'One generator submission: its summary, owner key, consecutive lease attempts, the in-flight run and its lease expiry, and every run newest first (abandoned runs are expired leases whose seeds were retired). Use get_generator_run for a run\'s evaluation and verdicts. Source is never returned. Requires backroom:read.',
+    inputSchema: generatorSubmissionIdInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGeneratorSubmission(input)))
+
+  registerTool('get_generator_run', {
+    title: 'Get generator run',
+    description: 'One generator run: status and outcome, the panel snapshot it was judged against (agent ids, owner keys, champion), the settings revision, scorer version, the stored evaluation (sandbox, build result and binary SHA-256, per-seed pack SHA-256, validation summary with up to 50 issues, generation errors, durations, determinism, and the probe result without its seed), the score summary (per-seed score, credit and status counts, or copy_of/overlap for a behavioral copy), and per-case verdicts by seed. seeds is null while the run is leased (they are live secrets) and the exact seeds once it finished, so an operator can regenerate the packs with `challenge rehearse`. Requires backroom:read.',
+    inputSchema: generatorRunIdInputSchema.extend({ runId: sourceAgentId() }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGeneratorRun(input)))
+
+  registerTool('get_generator_probe', {
+    title: 'Get generator probe epochs',
+    description: 'Probe epochs newest first. Every run also generates a pack on the current epoch\'s secret probe seed; a new submission reproducing at least copy_overlap_threshold of an earlier other-owner submission\'s probe fingerprints in the same epoch is rejected as a behavioral copy. Each epoch reports its reason, actor, creation and retirement, and how many submissions it has probed. The seed itself is never served. Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchGeneratorProbe()))
+
+  registerTool('rotate_generator_probe_seed', {
+    title: 'Rotate generator probe seed',
+    description: 'Retire the current probe epoch and start one with a fresh secret seed, for example after a suspected leak. Copy detection compares submissions probed in the same epoch only, so every active generator is re-probed on its next run and earlier epochs stop catching copies. Needs a reason and the confirmation ROTATE GENERATOR PROBE SEED. Requires backroom:write.',
+    inputSchema: rotateGeneratorProbeInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rotateGeneratorProbe(input, props.session.email)))
+
+  registerTool('list_generator_promotion_candidates', {
+    title: 'List generator promotion candidates',
+    description: 'Discriminating cases from scored runs of non-rejected generators, highest credit first: run, submission, hotkey, seed index, case id, fingerprint, mean panel score, solver owners and whether the champion failed. Promotion into a private benchmark pool is an operator decision; regenerate a case\'s pack from the run\'s seeds (get_generator_run) to read it. Requires backroom:read.',
+    inputSchema: generatorPromotionInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGeneratorPromotionCandidates(input)))
+
+  registerTool('get_generator_board', {
+    title: 'Get generator board',
+    description: 'The shadow generator ledger validators fold: each hotkey\'s latest run scored inside window_days, best score first, with submission and run ids and discriminating case counts. Every entry is weight_eligible=false and mode=off serves an empty ledger. Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchGeneratorBoard()))
+
+  registerTool('rescore_generator_submission', {
+    title: 'Rescore generator submission',
+    description: 'Make an active generator due now, so the next scorer lease runs it on fresh secret seeds against the current panel instead of waiting for rescore_interval_hours. An in-flight run is left to finish. Refused unless the submission is active. Needs a reason. Requires backroom:write.',
+    inputSchema: rescoreGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => rescoreGenerator(input, props.session.email)))
+
+  registerTool('reject_generator_submission', {
+    title: 'Reject generator submission',
+    description: 'Reject one generator by operator ruling, for example a copy the probe missed or abuse. Its runs stop counting on the ledger at once, an in-flight run is abandoned (its result will be refused), and it is never leased again; the miner can still upload a new generator. expectedStatus must match the current status, and the confirmation is REJECT GENERATOR SUBMISSION. The reason is stored as the miner-visible status_reason. Requires backroom:write.',
+    inputSchema: rejectGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rejectGenerator(input, props.session.email)))
 
   registerTool('get_bounty_board', {
     title: 'List build bounties',
@@ -2724,24 +2775,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Read append-only authenticated operator attestations for a controlId. Each binds the official fixture, exact image, profile and review evidence. recorded_unverified is not a semantic pass or terminal authorization. Requires backroom:read.',
     inputSchema: officialControlLookupSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchOfficialV13ControlApprovals(input)))
-
-  registerTool('stage_v13_official_control_image', {
-    title: 'Stage official V13 control image',
-    description: 'The signed-in fixture registrar pins requestId, fixtureId, image tar SHA, config image ID and byte size. May stage before independent source review so the operator can inspect sealed image bytes first; one account may register and record review evidence. Once reviewed, the source fixture image ID must match. Returns a short-lived constrained PUT and headers. Creates no miner or attempt and cannot clear anything. Same exact requestId may remint an unverified upload; conflicts refuse. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlStageSchema.extend({ requestId: officialControlCatalogId(), fixtureId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => stageOfficialV13ControlImage(input, props.session.email)))
-
-  registerTool('verify_v13_official_control_image', {
-    title: 'Verify official V13 control archive',
-    description: 'The registrar hashes the staged tar, copies it to a distinct protected key and hashes again before pinning immutable archive identity. Claimed Docker image ID remains unverified until the private runner loads it. No source, semantic or admission pass. May take up to three minutes; reread after ambiguous delivery before retrying. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlVerifySchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => verifyOfficialV13ControlImage(input, props.session.email)))
-
-  registerTool('record_v13_official_control_approval', {
-    title: 'Record official control approval',
-    description: 'The authenticated fixture reviewer records the exact verified archive, image ID, profile and evidence digest; this may be the same account that registered and built it. Independent agent review evidence is not a second human identity or an automated semantic pass. The append-only recorded_unverified receipt must predate private generation and does not establish semantic benignness, execution or a policy verdict. No miner or attempt is fabricated. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlApprovalSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => recordOfficialV13ControlApproval(input, props.session.email)))
 
   registerTool('get_v13_official_control_artifact', {
     title: 'Download official V13 control candidate',

@@ -12,12 +12,14 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from fastapi import FastAPI
-from sqlalchemy import select
+from fastapi import FastAPI, HTTPException
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.admin_ath_rulings import (
@@ -26,8 +28,12 @@ from ditto.api_models.admin_ath_rulings import (
     AdminAthRuling,
     AdminAthRulingsDocument,
 )
+from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+from ditto.api_models.emission_eligibility import EmissionEligibilitySettings
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.emission_eligibility import ResolvedEligibilityPolicy
 from ditto.api_server.endpoints import admin_ath_rulings as rulings_mod
+from ditto.api_server.endpoints import scoring as scoring_mod
 from ditto.api_server.endpoints.admin_ath_rulings import actor_slug, rulings_digest
 from ditto.api_server.storage.errors import ObjectNotFoundError
 from ditto.db.models import (
@@ -36,13 +42,16 @@ from ditto.db.models import (
     AthReview,
     AthReviewAction,
     BenchmarkRollout,
+    ContinualRetestSettingsRevision,
     EvaluationPayment,
+    LedgerEpochSnapshot,
     Score,
     TicketStatus,
     ValidatorHeartbeat,
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
+from ditto.db.queries.scores import list_eligible_ledger
 
 pytestmark = pytest.mark.asyncio
 
@@ -1020,6 +1029,469 @@ async def test_board_matches_the_public_crown_under_the_ceiling_band_clamp(
         preview.json()["board"]["champion_agent_id"]
         == public["emissions"]["champion_agent_id"]
     )
+
+
+async def _pin_for_court(
+    maker: async_sessionmaker[AsyncSession],
+    champion_id: UUID,
+    *,
+    epoch: int = 1,
+    legacy: bool = False,
+) -> None:
+    async with maker() as session, session.begin():
+        rows = await list_eligible_ledger(session, dedupe_owners=False)
+        root = next(r.emission_owner_root for r in rows if r.agent_id == champion_id)
+        session.add(
+            LedgerEpochSnapshot(
+                snapshot_id=uuid4(),
+                netuid=118,
+                epoch_index=epoch,
+                last_epoch_block=epoch * 360,
+                pinned_block=epoch * 360 + 2,
+                pinned_block_hash="0x" + "ab" * 32,
+                pinned_at=datetime.now(UTC),
+                bench_version=MIN_SCOREABLE_BENCH_VERSION,
+                entries=[],
+                context={},
+                champion_agent_id=champion_id,
+                champion_owner_root=None if legacy else root,
+                # Deliberately different: the next fold must anchor on champion.
+                incumbent_agent_id=None,
+                ledger_digest=f"{epoch:064x}",
+            )
+        )
+
+
+async def _execute_court(
+    client: httpx.AsyncClient, preview: dict, rulings: list[dict]
+) -> dict:
+    response = await client.post(
+        _EXECUTE,
+        json={
+            "preview_token": preview["preview_token"],
+            "confirmation": ATH_RULINGS_CONFIRMATION,
+            "rulings": rulings,
+        },
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def _court_incumbency(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession], *, enabled: bool = True
+) -> None:
+    app.state.session_maker = maker
+    async with maker() as session, session.begin():
+        session.add(
+            ContinualRetestSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=ContinualRetestSettings(
+                    crown_incumbent_mode="fleet_ready" if enabled else "disabled",
+                    statistical_band_mode="fleet_ready",
+                ).model_dump(mode="json"),
+                checksum="ab" * 32,
+                reason="court public parity regression",
+                actor=_ACTOR,
+            )
+        )
+        session.add(
+            _heartbeat(_SS58_VALIDATOR, protocol_version=29, now=datetime.now(UTC))
+        )
+    app.state.continual_retest_settings.invalidate()
+
+
+@pytest.mark.parametrize(
+    "legacy,enabled", [(False, True), (True, True), (False, False)]
+)
+async def test_court_follows_pinned_champion_and_refuses_pin_rotation(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    legacy: bool,
+    enabled: bool,
+) -> None:
+    await _activate(maker)
+    early = await _seed_scored(maker, hotkey=_SS58_A, composite=0.80, created_at=_T0)
+    pinned = await _seed_scored(
+        maker, hotkey=_SS58_B, composite=0.802, created_at=_T0 + timedelta(hours=1)
+    )
+    _install(app, maker)
+    await _court_incumbency(app, maker, enabled=enabled)
+    await _pin_for_court(maker, pinned[0], legacy=legacy)
+    public = (await client.get(_LEADERBOARD)).json()["emissions"]
+    rulings = [_ruling("reject", early[0], early[1])]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["board"]["champion_agent_id"] == public["champion_agent_id"]
+    assert public["champion_agent_id"] == str(pinned[0] if enabled else early[0])
+    await _pin_for_court(maker, pinned[0], epoch=2, legacy=legacy)
+    result = await _execute_court(client, preview.json(), rulings)
+    assert result["items"][0]["status"] == "failed"
+    assert (await _status(maker, early[0])) == AgentStatus.SCORED.value
+
+
+async def test_court_removal_promotes_a_coldkey_sibling_before_projecting(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _activate(maker)
+    predecessor = await _seed_scored(
+        maker, hotkey=_SS58_A, composite=0.80, created_at=_T0
+    )
+    successor = await _seed_scored(
+        maker, hotkey=_SS58_B, composite=0.802, created_at=_T0 + timedelta(hours=1)
+    )
+    rival = await _seed_scored(
+        maker,
+        hotkey=_SS58_VALIDATOR,
+        composite=0.799,
+        created_at=_T0 + timedelta(hours=2),
+    )
+    async with maker() as session, session.begin():
+        for index, (identity, hotkey) in enumerate(
+            [(predecessor, _SS58_A), (successor, _SS58_B)]
+        ):
+            session.add(
+                EvaluationPayment(
+                    block_hash=f"0x{index + 1:064x}",
+                    extrinsic_index=0,
+                    agent_id=identity[0],
+                    miner_hotkey=hotkey,
+                    miner_coldkey="shared-court-owner",
+                    amount_rao=1,
+                    dest_address="5Treasury",
+                    timestamp=_T0,
+                )
+            )
+    _install(app, maker)
+    await _court_incumbency(app, maker)
+    await _pin_for_court(maker, successor[0])
+    rulings = [
+        _ruling("reject", successor[0], successor[1]),
+        _ruling("reject", predecessor[0], predecessor[1]),
+    ]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    assert [i["would_change_crown"] for i in preview.json()["items"]] == [True, True]
+    result = await _execute_court(client, preview.json(), rulings)
+    assert [i["status"] for i in result["items"]] == ["applied", "applied"]
+    public = (await client.get(_LEADERBOARD)).json()["emissions"]
+    assert (
+        result["board_after"]["champion_agent_id"]
+        == public["champion_agent_id"]
+        == str(rival[0])
+    )
+
+
+@pytest.mark.parametrize(
+    "previous", [AgentStatus.SCORED, AgentStatus.LIVE, AgentStatus.EVALUATING]
+)
+async def test_court_restore_matches_real_status_and_original_pin_anchor(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    previous: AgentStatus,
+) -> None:
+    await _activate(maker)
+    held = await _seed_held(maker, hotkey=_SS58_B, composite=0.802, created_at=_T0)
+    rival = await _seed_scored(
+        maker, hotkey=_SS58_A, composite=0.80, created_at=_T0 + timedelta(hours=1)
+    )
+    async with maker() as session, session.begin():
+        review = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == held[0])
+        )
+        assert review is not None
+        review.original_evidence = {
+            **review.original_evidence,
+            "previous_status": previous.value,
+        }
+    _install(app, maker)
+    await _court_incumbency(app, maker)
+    # A held exact legacy anchor must recover when cleared, never the rival
+    # that provisionally won while it was absent.
+    await _pin_for_court(maker, rival[0], legacy=True)
+    async with maker() as session, session.begin():
+        pin = await session.scalar(select(LedgerEpochSnapshot))
+        assert pin is not None
+        pin.champion_agent_id = held[0]
+    rulings = [_ruling("clear", held[0], held[1])]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["items"][0]["would_change_crown"] is (
+        previous == AgentStatus.SCORED
+    )
+    result = await _execute_court(client, preview.json(), rulings)
+    assert result["items"][0]["status"] == "applied"
+    assert await _status(maker, held[0]) == previous.value
+    public = (await client.get(_LEADERBOARD)).json()["emissions"]
+    assert result["board_after"]["champion_agent_id"] == public["champion_agent_id"]
+
+
+async def test_court_diagnostic_does_not_materialize_or_rollback(
+    app: FastAPI,
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _activate(maker)
+    member = await _seed_scored(maker, hotkey=_SS58_A, composite=0.80, created_at=_T0)
+    _install(app, maker)
+    app.state.session_maker = maker
+    now = datetime.now(UTC)
+    async with maker() as session:
+        context = await scoring_mod.resolve_ledger_context(app.state, session, now=now)
+        context = replace(
+            context,
+            policy=replace(
+                context.policy,
+                efficiency=replace(
+                    context.policy.efficiency, enabled=True, fold_enabled=False
+                ),
+                reward_eligibility=ResolvedEligibilityPolicy(
+                    settings=EmissionEligibilitySettings(enforcement="shadow")
+                ),
+            ),
+        )
+
+        async def forbidden(*_args: object, **_kwargs: object) -> None:
+            pytest.fail("diagnostic invoked an authority write or caller rollback")
+
+        monkeypatch.setattr(scoring_mod, "ensure_current_efficiency_state", forbidden)
+        monkeypatch.setattr(scoring_mod, "_record_eligibility_rehearsal", forbidden)
+        monkeypatch.setattr(session, "rollback", forbidden)
+        statements: list[str] = []
+
+        def inspect_sql(_conn, _cursor, statement, _parameters, _context, _many):
+            statements.append(statement)
+            assert (
+                not statement.lstrip()
+                .upper()
+                .startswith(("INSERT", "UPDATE", "DELETE", "TRUNCATE"))
+            )
+
+        engine = session.bind
+        assert engine is not None
+        event.listen(engine.sync_engine, "before_cursor_execute", inspect_sql)
+        try:
+            snapshot = await scoring_mod.materialize_ledger_snapshot(
+                app.state,
+                session,
+                context=context,
+                now=now,
+                requesting_validator_hotkey=None,
+                diagnostic_read_only=True,
+            )
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", inspect_sql)
+        assert [entry.agent_id for entry in snapshot.entries] == [member[0]]
+        assert statements and session.in_transaction()
+        folding = replace(
+            context,
+            policy=replace(
+                context.policy,
+                efficiency=replace(context.policy.efficiency, fold_enabled=True),
+            ),
+        )
+        with pytest.raises(HTTPException, match="efficiency assignments"):
+            await scoring_mod.materialize_ledger_snapshot(
+                app.state,
+                session,
+                context=folding,
+                now=now,
+                requesting_validator_hotkey=None,
+                diagnostic_read_only=True,
+            )
+        enforcing = replace(
+            context,
+            reward_eligibility_fleet_ready=True,
+            policy=replace(
+                context.policy,
+                reward_eligibility=ResolvedEligibilityPolicy(
+                    settings=EmissionEligibilitySettings(enforcement="enforce"),
+                ),
+            ),
+        )
+        with pytest.raises(HTTPException, match="restoration unsupported"):
+            await scoring_mod.materialize_ledger_snapshot(
+                app.state,
+                session,
+                context=enforcing,
+                now=now,
+                requesting_validator_hotkey=None,
+                diagnostic_read_only=True,
+                diagnostic_scored_agent_ids=frozenset({member[0]}),
+            )
+        # Dirty caller state must fail before any autoflush can escape.
+        session.add(
+            Agent(
+                agent_id=uuid4(),
+                miner_hotkey="dirty",
+                sha256="ab" * 32,
+                status=AgentStatus.EVALUATING,
+            )
+        )
+        with pytest.raises(ValueError, match="clean read-only session"):
+            await scoring_mod.materialize_ledger_snapshot(
+                app.state,
+                session,
+                context=context,
+                now=now,
+                requesting_validator_hotkey=None,
+                diagnostic_read_only=True,
+            )
+
+
+async def test_court_rechecks_context_after_a_ruling_lands(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _activate(maker)
+    champion = await _seed_scored(maker, hotkey=_SS58_A, composite=0.90, created_at=_T0)
+    runner = await _seed_scored(
+        maker, hotkey=_SS58_B, composite=0.80, created_at=_T0 + timedelta(hours=1)
+    )
+    _install(app, maker)
+    await _court_incumbency(app, maker)
+    await _pin_for_court(maker, champion[0])
+    rulings = [
+        _ruling("reject", champion[0], champion[1]),
+        _ruling("reject", runner[0], runner[1]),
+    ]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    original = rulings_mod._apply_step
+    rotated = False
+
+    async def rotate(*args, **kwargs):
+        nonlocal rotated
+        await original(*args, **kwargs)
+        if not rotated:
+            rotated = True
+            await _pin_for_court(maker, runner[0], epoch=2)
+
+    monkeypatch.setattr(rulings_mod, "_apply_step", rotate)
+    result = await _execute_court(client, preview.json(), rulings)
+    assert [item["status"] for item in result["items"]] == ["applied", "failed"]
+    assert await _status(maker, champion[0]) == AgentStatus.BANNED.value
+    assert await _status(maker, runner[0]) == AgentStatus.SCORED.value
+
+
+@pytest.mark.parametrize("score_count", [1, 2])
+async def test_court_does_not_crown_a_full_case_run_below_validator_quorum(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    score_count: int,
+) -> None:
+    await _activate(maker)
+    finalized = await _seed_scored(
+        maker, hotkey=_SS58_A, composite=0.80, created_at=_T0
+    )
+    partial = await _seed_scored(
+        maker, hotkey=_SS58_B, composite=0.99, created_at=_T0, score_count=score_count
+    )
+    _install(app, maker)
+    public = (await client.get(_LEADERBOARD)).json()["emissions"]
+    preview = await client.post(
+        _PREVIEW,
+        headers=_HEADERS,
+        json={
+            "rulings": [
+                _ruling("reject", partial[0], partial[1], score_count=score_count)
+            ]
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    assert (
+        preview.json()["board"]["champion_agent_id"]
+        == public["champion_agent_id"]
+        == str(finalized[0])
+    )
+    assert preview.json()["items"][0]["would_change_crown"] is False
+
+
+async def test_court_binds_the_successor_even_when_the_change_boolean_matches(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _activate(maker)
+    champion = await _seed_scored(maker, hotkey=_SS58_A, composite=0.90, created_at=_T0)
+    await _seed_scored(
+        maker, hotkey=_SS58_B, composite=0.80, created_at=_T0 + timedelta(hours=1)
+    )
+    third = await _seed_scored(
+        maker,
+        hotkey=_SS58_VALIDATOR,
+        composite=0.79,
+        created_at=_T0 + timedelta(hours=2),
+    )
+    _install(app, maker)
+    rulings = [_ruling("reject", champion[0], champion[1])]
+    preview = await client.post(_PREVIEW, headers=_HEADERS, json={"rulings": rulings})
+    assert preview.json()["items"][0]["would_change_crown"] is True
+    async with maker() as session, session.begin():
+        for score in await session.scalars(
+            select(Score).where(Score.agent_id == third[0])
+        ):
+            score.composite = 0.85
+    result = await _execute_court(client, preview.json(), rulings)
+    assert result["items"][0]["would_change_crown"] is True
+    assert result["items"][0]["status"] == "failed"
+    assert await _status(maker, champion[0]) == AgentStatus.SCORED.value
+
+
+async def test_court_registration_precedes_coldkey_owner_collapse(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _activate(maker)
+    registered = await _seed_scored(
+        maker, hotkey=_SS58_A, composite=0.80, created_at=_T0
+    )
+    deregistered = await _seed_scored(
+        maker, hotkey=_SS58_B, composite=0.90, created_at=_T0 + timedelta(hours=1)
+    )
+    async with maker() as session, session.begin():
+        for index, (identity, hotkey) in enumerate(
+            [(registered, _SS58_A), (deregistered, _SS58_B)]
+        ):
+            session.add(
+                EvaluationPayment(
+                    block_hash=f"0x{index + 1:064x}",
+                    extrinsic_index=0,
+                    agent_id=identity[0],
+                    miner_hotkey=hotkey,
+                    miner_coldkey="shared-registration-owner",
+                    amount_rao=1,
+                    dest_address="5Treasury",
+                    timestamp=_T0,
+                )
+            )
+    _install(app, maker)
+    app.state.chain = SimpleNamespace(
+        get_recent_neurons=AsyncMock(
+            return_value=[SimpleNamespace(hotkey=_SS58_A, uid=1)]
+        )
+    )
+    public = (await client.get(_LEADERBOARD)).json()["emissions"]
+    preview = await client.post(
+        _PREVIEW,
+        headers=_HEADERS,
+        json={"rulings": [_ruling("reject", deregistered[0], deregistered[1])]},
+    )
+    assert preview.status_code == 200, preview.text
+    assert (
+        preview.json()["board"]["champion_agent_id"]
+        == public["champion_agent_id"]
+        == str(registered[0])
+    )
+    assert preview.json()["items"][0]["would_change_crown"] is False
 
 
 async def test_preview_mirrors_the_resolve_guards_on_a_drifted_hold(

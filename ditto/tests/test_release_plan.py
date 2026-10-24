@@ -144,8 +144,18 @@ def test_datagen_change_rebuilds_scorer_and_validator_stack(
     ) == {
         "dittobench_datagen",
         "dittobench_api",
+        # The generator kit builds against the datagen challenge contract.
+        "dittobench_generator_starter_kit",
         "validator_stack",
     }
+
+
+def test_generator_starter_kit_change_is_shadow_only(components, ignored_paths) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        "miners/dittobench-generator-starter-kit/families/families.go",
+    ) == {"dittobench_generator_starter_kit"}
 
 
 def test_coding_datagen_change_is_shadow_only(components, ignored_paths) -> None:

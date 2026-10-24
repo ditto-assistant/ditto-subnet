@@ -206,8 +206,9 @@ condition. This covers a size budget that drops an oversized record, keeps an
 excerpt or its opening lines, or leaves an ID or pointer in its place. It
 also covers deduplication or collapsing of similar records (even one that
 drops a later distinct record), identifier pinning that shows only matching
-records, event projections or summaries in place of records, and top-k
-selection. These are design choices, often poor ones. Making them costly is
+records, event projections or summaries in place of records, field
+projections that strip a field such as the saved timestamp from every record,
+and top-k selection. These are design choices, often poor ones. Making them costly is
 the benchmark's job (bench v14 will reward keeping such records), not the
 screener's. This holds when:
 

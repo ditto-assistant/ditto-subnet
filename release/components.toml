@@ -113,6 +113,7 @@ paths = [
   "ditto/api_models/confirmation_progress.py",
   "ditto/api_models/inference.py",
   "ditto/api_models/private_dataset.py",
+  "ditto/api_models/generator_ledger.py",
   "ditto/api_models/router_ledger.py",
   "ditto/api_models/router_harness.py",
   "ditto/api_models/stack_health.py",
@@ -196,6 +197,13 @@ paths = [
   ".github/workflows/coding-starter-kit-ci.yml",
   "scripts/test-coding-starter-practice-e2e.sh",
   "packages/dittobench-coding-contract/**",
+]
+
+[components.dittobench_generator_starter_kit]
+description = "Shadow-only generator-competition reference challenge-pack generator"
+depends_on = ["dittobench_datagen"]
+paths = [
+  "miners/dittobench-generator-starter-kit/**",
 ]
 
 [components.dittobench_router_starter_kit]

@@ -41,7 +41,7 @@ import logging
 import re
 import secrets
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID, uuid4
@@ -73,7 +73,6 @@ from ditto.api_models.admin_copy_review import (
     AdminCopyReviewOpenRequest,
     AdminCopyReviewResolveRequest,
 )
-from ditto.api_server.continual_retest_settings import tie_weighting_is_active
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_copy_review import (
     attest_review,
@@ -84,17 +83,17 @@ from ditto.api_server.endpoints.admin_quarantine import (
     BATCH_PREVIEW_TTL,
     require_admin,
 )
-from ditto.api_server.endpoints.public import _VALIDATOR_STALE_WINDOW
 from ditto.api_server.endpoints.scoring import (
-    _DETHRONE_BAND_CLAMP_PROTOCOL,
-    _TIE_WEIGHTING_PROTOCOL,
+    _LedgerContext,
+    materialize_ledger_snapshot,
+    resolve_ledger_context,
 )
-from ditto.api_server.endpoints.validator import _current_koth_entries
 from ditto.api_server.hippius import HippiusClient, normalize_object_key
 from ditto.api_server.koth import (
     KothEntry,
     KothProjection,
     _ranked_entries,
+    koth_entries_from_ledger,
     project_koth,
 )
 from ditto.api_server.storage.errors import (
@@ -102,9 +101,7 @@ from ditto.api_server.storage.errors import (
     ObjectNotFoundError,
 )
 from ditto.db.models import Agent, AgentStatus, AthReview, AthReviewAction, Score
-from ditto.db.queries.benchmark_rollout import active_bench_version
-from ditto.db.queries.heartbeats import live_validator_fleet_supports_protocol
-from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
+from ditto.db.queries.ledger_epochs import latest_pin
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -112,7 +109,7 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 ActorDep = Annotated[str | None, Header(alias="X-Admin-Actor", max_length=320)]
 
-_TOKEN_VERSION = 1
+_TOKEN_VERSION = 2
 _ACTOR_SLUG_UNSAFE = re.compile(r"[^a-z0-9._-]+")
 _FINGERPRINT_TOP_N = 5
 
@@ -210,11 +207,10 @@ def _validate_document(raw: object) -> AdminAthRulingsDocument:
 class BoardSnapshot:
     """One read (or one simulated step) of the folded board and its crown.
 
-    ``entries`` are the validator-equivalent KOTH fold rows; ``distinct_hotkeys``
-    and ``ceiling_band_clamp`` are the fleet-gated flags the public leaderboard
-    projected them under. :meth:`without` and :meth:`with_estimate` re-project
-    the same entries under the same flags so a batch can be walked item by
-    item without touching Postgres.
+    Entries and all fleet gates come from the canonical ledger builder. A
+    simulated step rebuilds that ledger under hypothetical membership, without
+    writes, so hidden owner generations and confirmation-wave changes count.
+    The original pin owner/exact-agent anchor survives every simulated step.
     """
 
     bench_version: int
@@ -222,6 +218,15 @@ class BoardSnapshot:
     entries: tuple[KothEntry, ...]
     distinct_hotkeys: bool
     ceiling_band_clamp: bool
+    statistical_band_cap: bool
+    incumbent_agent_id: UUID | None
+    ledger_context: _LedgerContext
+    app_state: Any
+    anchor_owner_root: str | None
+    anchor_agent_id: UUID | None
+    pin_context: str
+    excluded_agent_ids: frozenset[UUID]
+    restored_agent_ids: frozenset[UUID]
     projection: KothProjection | None
     ranked_agent_ids: tuple[UUID, ...]
 
@@ -234,6 +239,15 @@ class BoardSnapshot:
         entries: Sequence[KothEntry],
         distinct_hotkeys: bool,
         ceiling_band_clamp: bool,
+        statistical_band_cap: bool,
+        incumbent_agent_id: UUID | None,
+        ledger_context: _LedgerContext,
+        app_state: Any,
+        anchor_owner_root: str | None,
+        anchor_agent_id: UUID | None,
+        pin_context: str,
+        excluded_agent_ids: frozenset[UUID],
+        restored_agent_ids: frozenset[UUID],
     ) -> BoardSnapshot:
         scored = tuple(entry for entry in entries if entry.composite > 0.0)
         return cls(
@@ -242,43 +256,44 @@ class BoardSnapshot:
             entries=scored,
             distinct_hotkeys=distinct_hotkeys,
             ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
+            incumbent_agent_id=incumbent_agent_id,
+            ledger_context=ledger_context,
+            app_state=app_state,
+            anchor_owner_root=anchor_owner_root,
+            anchor_agent_id=anchor_agent_id,
+            pin_context=pin_context,
+            excluded_agent_ids=excluded_agent_ids,
+            restored_agent_ids=restored_agent_ids,
             projection=project_koth(
                 scored,
                 distinct_hotkeys=distinct_hotkeys,
                 ceiling_band_clamp=ceiling_band_clamp,
+                statistical_band_cap=statistical_band_cap,
+                incumbent_agent_id=incumbent_agent_id,
             ),
             ranked_agent_ids=tuple(
                 entry.agent_id for entry in (_ranked_entries(scored) if scored else [])
             ),
         )
 
-    def _with_entries(self, entries: Sequence[KothEntry]) -> BoardSnapshot:
-        return BoardSnapshot.build(
-            bench_version=self.bench_version,
-            read_at=self.read_at,
-            entries=entries,
-            distinct_hotkeys=self.distinct_hotkeys,
-            ceiling_band_clamp=self.ceiling_band_clamp,
+    @property
+    def context_fingerprint(self) -> str:
+        payload = json.dumps(
+            {"ledger": asdict(self.ledger_context), "pin": self.pin_context},
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
         )
+        return hashlib.sha256(payload.encode()).hexdigest()
 
-    def without(self, agent_id: UUID) -> BoardSnapshot:
-        """The board once ``agent_id`` leaves the eligible ledger (open/reject)."""
-        return self._with_entries(
-            [entry for entry in self.entries if entry.agent_id != agent_id]
-        )
-
-    def with_estimate(self, entry: KothEntry) -> BoardSnapshot:
-        """The board once a cleared agent re-enters at ``entry`` (an estimate).
-
-        The ledger keeps one representative per owner; a hotkey already on the
-        board keeps its row unless the returning agent scores higher.
-        """
-        siblings = [e for e in self.entries if e.miner_hotkey == entry.miner_hotkey]
-        if any(sibling.composite >= entry.composite for sibling in siblings):
-            return self
-        return self._with_entries(
-            [*(e for e in self.entries if e.miner_hotkey != entry.miner_hotkey), entry]
-        )
+    @property
+    def crown_guard(self) -> list[str | None]:
+        return [
+            str(self.champion_agent_id) if self.champion_agent_id else None,
+            str(self.raw_leader_agent_id) if self.raw_leader_agent_id else None,
+            self.context_fingerprint,
+        ]
 
     @property
     def champion_agent_id(self) -> UUID | None:
@@ -327,54 +342,96 @@ class BoardSnapshot:
 async def read_board_snapshot(
     session: AsyncSession, request: Request, *, now: datetime | None = None
 ) -> BoardSnapshot:
-    """Project the crown exactly as the public leaderboard and the ledger do.
-
-    Entries come from :func:`_current_koth_entries` -- the eligible ledger with
-    stderr, quorum, completed-wave confirmation and efficiency inputs, owner
-    reduced -- and are folded under the two flags the public ``emissions``
-    block derives from fleet readiness: ``distinct_hotkeys`` (tie weighting,
-    protocol 20 plus the operator switch) and ``ceiling_band_clamp`` (protocol
-    24, no switch). The clamp is what has flipped the live crown, so a bare
-    ``project_koth(entries)`` here would disagree with the board the operator
-    is reading. Held agents are outside the eligible ledger; a clear's effect
-    is estimated in :func:`_crown_effect`.
-    """
+    """Read the next-pin fold without producing a pin or materializing state."""
     read_at = now or datetime.now(UTC)
-    active = await active_bench_version(session)
     state = request.app.state
-    session_maker = getattr(state, "session_maker", None)
-    continual_settings = await state.continual_retest_settings.resolve(session_maker)
-    efficiency_config = await state.efficiency_settings.resolve(session_maker)
-    tie_weighting_fleet_ready = await live_validator_fleet_supports_protocol(
+    context = await resolve_ledger_context(state, session, now=read_at)
+    pin = (
+        await latest_pin(session, netuid=state.config.chain.netuid)
+        if context.policy.continual_retest.ledger_pin_mode == "epoch"
+        else None
+    )
+    # Copy scalars: a caller rollback may expire the ORM object. The original
+    # champion owner stays the anchor throughout the simulated batch, even if
+    # that family temporarily has no payable generation.
+    return await _project_board(
         session,
-        minimum_protocol=_TIE_WEIGHTING_PROTOCOL,
-        bench_version=active,
-        now=read_at,
-        freshness=_VALIDATOR_STALE_WINDOW,
-    )
-    tie_weighting_active = tie_weighting_is_active(
-        continual_settings, fleet_protocol_ready=tie_weighting_fleet_ready
-    )
-    ceiling_band_clamp = await live_validator_fleet_supports_protocol(
-        session,
-        minimum_protocol=_DETHRONE_BAND_CLAMP_PROTOCOL,
-        bench_version=active,
-        now=read_at,
-        freshness=_VALIDATOR_STALE_WINDOW,
-    )
-    fold = await _current_koth_entries(
-        session,
-        canonical_version=active,
-        wave_membership=continual_settings.wave_membership,
-        efficiency_config=efficiency_config,
-        now=read_at,
-    )
-    return BoardSnapshot.build(
-        bench_version=active,
+        app_state=state,
+        ledger_context=context,
         read_at=read_at,
-        entries=fold.folded_entries,
-        distinct_hotkeys=tie_weighting_active,
-        ceiling_band_clamp=ceiling_band_clamp,
+        anchor_owner_root=pin.champion_owner_root if pin else None,
+        anchor_agent_id=pin.champion_agent_id if pin else None,
+        pin_context=(
+            f"{pin.epoch_index}:{pin.ledger_digest}:{pin.champion_owner_root}:{pin.champion_agent_id}"
+            if pin
+            else "none"
+        ),
+        excluded_agent_ids=frozenset(),
+        restored_agent_ids=frozenset(),
+    )
+
+
+async def _project_board(
+    session: AsyncSession,
+    *,
+    app_state: Any,
+    ledger_context: _LedgerContext,
+    read_at: datetime,
+    anchor_owner_root: str | None,
+    anchor_agent_id: UUID | None,
+    pin_context: str,
+    excluded_agent_ids: frozenset[UUID],
+    restored_agent_ids: frozenset[UUID],
+) -> BoardSnapshot:
+    snapshot = await materialize_ledger_snapshot(
+        app_state,
+        session,
+        context=ledger_context,
+        now=read_at,
+        requesting_validator_hotkey=None,
+        diagnostic_read_only=True,
+        diagnostic_scored_agent_ids=restored_agent_ids,
+        diagnostic_excluded_agent_ids=excluded_agent_ids,
+    )
+    owner_roots = snapshot.owner_roots or {}
+    incumbent = None
+    provisional = None
+    if snapshot.crown_mode == "incumbent":
+
+        def matches(entry: Any) -> bool:
+            return (
+                owner_roots.get(entry.agent_id) == anchor_owner_root
+                if anchor_owner_root is not None
+                else anchor_agent_id is not None and entry.agent_id == anchor_agent_id
+            )
+
+        incumbent = next((e.agent_id for e in snapshot.entries if matches(e)), None)
+        if (
+            incumbent is None
+            and snapshot.reward_eligibility_mode == "enforce"
+            and anchor_owner_root is not None
+        ):
+            provisional = next(
+                (e for e in snapshot.withheld_entries or () if matches(e)), None
+            )
+            incumbent = provisional.agent_id if provisional else None
+    return BoardSnapshot.build(
+        bench_version=snapshot.active_bench_version,
+        read_at=read_at,
+        entries=koth_entries_from_ledger(
+            [*snapshot.entries, provisional] if provisional else snapshot.entries
+        ),
+        distinct_hotkeys=snapshot.tie_weighting_mode == "pool",
+        ceiling_band_clamp=snapshot.dethrone_band_mode == "headroom_capped",
+        statistical_band_cap=snapshot.statistical_band_mode == "capped",
+        incumbent_agent_id=incumbent,
+        ledger_context=ledger_context,
+        app_state=app_state,
+        anchor_owner_root=anchor_owner_root,
+        anchor_agent_id=anchor_agent_id,
+        pin_context=pin_context,
+        excluded_agent_ids=excluded_agent_ids,
+        restored_agent_ids=restored_agent_ids,
     )
 
 
@@ -395,47 +452,34 @@ async def _crown_effect(
     agent: Agent,
     action: str,
 ) -> tuple[bool, BoardSnapshot]:
-    """``(would_change_crown, board after this ruling)`` for one ready item.
-
-    An ``attest`` leaves the agent exactly where it is on the board, so it never
-    moves the crown. Holding or rejecting removes the agent from the fold; it
-    moves the crown when the agent is the champion or the raw leader. Clearing
-    a held agent is estimated:
-    the held agent re-enters at its canonical quorum median (the median-score
-    rule the anti-copy gate uses) anchored at its upload time, and moves the
-    crown when that re-projected board makes it champion or raw leader.
-    """
+    """Rebuild hypothetical membership before owner collapse and wave folding."""
     if action == "attest":
         return False, board
-    if action in {"open", "reject"}:
-        return board.touches_crown(agent.agent_id), board.without(agent.agent_id)
-    composites = list(
-        (
-            await session.execute(
-                select(Score.composite, Score.validator_hotkey).where(
-                    Score.agent_id == agent.agent_id,
-                    Score.bench_version == board.bench_version,
-                    Score.n >= MIN_ELIGIBLE_CASES,
-                    Score.composite > 0.0,
-                )
-            )
-        ).all()
+    removing = action in {"open", "reject"}
+    after = await _project_board(
+        session,
+        app_state=board.app_state,
+        ledger_context=board.ledger_context,
+        read_at=board.read_at,
+        anchor_owner_root=board.anchor_owner_root,
+        anchor_agent_id=board.anchor_agent_id,
+        pin_context=board.pin_context,
+        excluded_agent_ids=(
+            board.excluded_agent_ids | {agent.agent_id}
+            if removing
+            else board.excluded_agent_ids - {agent.agent_id}
+        ),
+        restored_agent_ids=(
+            board.restored_agent_ids - {agent.agent_id}
+            if removing
+            else board.restored_agent_ids | {agent.agent_id}
+        ),
     )
-    if not composites:
-        return False, board
-    ordered = sorted(composites, key=lambda row: (row[0], row[1]))
-    canonical = float(ordered[(len(ordered) - 1) // 2][0])
-    after = board.with_estimate(
-        KothEntry(
-            miner_hotkey=agent.miner_hotkey,
-            agent_id=agent.agent_id,
-            composite=canonical,
-            first_seen=agent.created_at,
-            raw_rank=0,
-            bench_version=board.bench_version,
-        )
+    return (
+        (board.champion_agent_id, board.raw_leader_agent_id)
+        != (after.champion_agent_id, after.raw_leader_agent_id),
+        after,
     )
-    return after.touches_crown(agent.agent_id), after
 
 
 # --- preview token ---------------------------------------------------------
@@ -676,12 +720,41 @@ async def _preview_ruling(
                 ),
                 message="neither open nor resolve would be accepted",
             )
-    base["would_change_crown"], after = await _crown_effect(
-        session,
-        board=board,
-        agent=agent,
-        action="attest" if steps == ["attest"] else ruling.action,
-    )
+    projected_action = "attest" if steps == ["attest"] else ruling.action
+    if ruling.action == "clear" and review is not None and steps != ["attest"]:
+        latest_reopen = await session.scalar(
+            select(AthReviewAction)
+            .where(
+                AthReviewAction.review_id == review.review_id,
+                AthReviewAction.action == "reopen",
+            )
+            .order_by(
+                AthReviewAction.created_at.desc(), AthReviewAction.action_id.desc()
+            )
+            .limit(1)
+        )
+        previous_status = (
+            latest_reopen.evidence.get("previous_status")
+            if latest_reopen is not None
+            else review.original_evidence.get("previous_status")
+        )
+        if previous_status in {AgentStatus.LIVE.value, AgentStatus.EVALUATING.value}:
+            # These statuses remain outside list_eligible_ledger after clear.
+            projected_action = "open"
+    try:
+        base["would_change_crown"], after = await _crown_effect(
+            session, board=board, agent=agent, action=projected_action
+        )
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        return _blocked(
+            **base,
+            ok=False,
+            disposition="conflict",
+            conflict_reason=str(exc.detail),
+            message="crown projection unavailable; no ruling will be applied",
+        )
     return (
         AdminAthRulingPreviewItem(
             **base,
@@ -702,6 +775,7 @@ def _preview_payload(
     digest: str,
     board: BoardSnapshot,
     items: list[AdminAthRulingPreviewItem],
+    projections: list[list[str | None]],
 ) -> dict[str, Any]:
     return {
         "v": _TOKEN_VERSION,
@@ -711,6 +785,8 @@ def _preview_payload(
         # asked for it again, and the audit annotation must still carry it.
         "source": source,
         "digest": digest,
+        "crown_context": board.context_fingerprint,
+        "projections": projections,
         "champion": str(board.champion_agent_id) if board.champion_agent_id else None,
         "raw_leader": (
             str(board.raw_leader_agent_id) if board.raw_leader_agent_id else None
@@ -794,11 +870,13 @@ async def preview_ath_rulings_batch(
     # reject leaves behind.
     items: list[AdminAthRulingPreviewItem] = []
     simulated = board
+    projections: list[list[str | None]] = []
     for index, ruling in enumerate(document.rulings):
         item, simulated = await _preview_ruling(
             session, index=index, ruling=ruling, board=simulated
         )
         items.append(item)
+        projections.append(simulated.crown_guard)
     # A read-only preview must not leave the implicit transaction open.
     await session.rollback()
     issued_at = int(datetime.now(UTC).timestamp())
@@ -813,6 +891,7 @@ async def preview_ath_rulings_batch(
             digest=digest,
             board=board,
             items=items,
+            projections=projections,
         ),
         issued_at,
     )
@@ -1000,19 +1079,23 @@ async def execute_ath_rulings_batch(
     board_before = await read_board_snapshot(session, request)
     await session.rollback()
     crown_moved = (
-        (
-            str(board_before.champion_agent_id)
-            if board_before.champion_agent_id
-            else None
+        (board_before.context_fingerprint != token.get("crown_context"))
+        or (
+            (
+                str(board_before.champion_agent_id)
+                if board_before.champion_agent_id
+                else None
+            )
+            != previewed_champion
         )
-        != previewed_champion
-    ) or (
-        (
-            str(board_before.raw_leader_agent_id)
-            if board_before.raw_leader_agent_id
-            else None
+        or (
+            (
+                str(board_before.raw_leader_agent_id)
+                if board_before.raw_leader_agent_id
+                else None
+            )
+            != previewed_leader
         )
-        != previewed_leader
     )
     results: list[AdminAthRulingExecuteItem] = []
     # The board each item is judged against: the pre-batch read, then a fresh
@@ -1064,8 +1147,15 @@ async def execute_ath_rulings_batch(
             continue
         flagged_now = preview.would_change_crown
         flagged_then = str(ruling.agent_id) in previewed_crown
-        if flagged_now != flagged_then or (
-            crown_moved and (flagged_now or flagged_then)
+        projected_guards = token.get("projections") or []
+        if (
+            (
+                board_now.context_fingerprint != token.get("crown_context")
+                or index >= len(projected_guards)
+                or _projected.crown_guard != projected_guards[index]
+            )
+            or flagged_now != flagged_then
+            or (crown_moved and (flagged_now or flagged_then))
         ):
             results.append(
                 AdminAthRulingExecuteItem(
