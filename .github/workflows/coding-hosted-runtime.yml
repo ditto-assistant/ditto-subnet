@@ -19,7 +19,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
       - name: Check the dormant installer playbook
         working-directory: infra/ansible
         run: uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i localhost, playbooks/gcp-coding-hosted-runtime.yml
@@ -32,7 +32,7 @@ jobs:
         run: >-
           python3 infra/scripts/build-coding-hosted-runtime.py
           --revision "$REQUESTED_SHA" --output "$RUNNER_TEMP/native-runtime-artifact"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-coding-runtime-${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/native-runtime-artifact/
