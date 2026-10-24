@@ -213,9 +213,12 @@ def test_accepts_a_quoted_module_path() -> None:
 
 
 def test_the_root_entry_does_not_extend_the_file_limit() -> None:
-    entries = [("go.mod", GOMOD, tarfile.REGTYPE)] + [
+    entries: list[tuple[str, bytes | None, bytes]] = [
+        ("go.mod", GOMOD, tarfile.REGTYPE)
+    ]
+    entries.extend(
         (f"f{i}.go", b"package main\n", tarfile.REGTYPE)
         for i in range(1, MAX_SOURCE_FILES + 1)
-    ]
+    )
     with pytest.raises(ArchiveRejected, match="more than"):
         inspect_archive(_archive(entries))

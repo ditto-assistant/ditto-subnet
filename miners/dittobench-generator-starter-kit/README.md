@@ -20,8 +20,8 @@ The full design is in
    and writes a **challenge pack** to stdout. A pack is a memory haystack
    (conversation pairs across seeding waves) plus questions with deterministic
    gold answers. You upload the module source, and Platform keeps it private.
-2. **The scorer runs it, offline.** The scorer builds your module with a pinned
-   Go toolchain and runs it with:
+2. **The scorer qualifies it, offline.** The scorer builds your module with a
+   pinned Go toolchain and runs it with:
    - no network and no model
    - 1 CPU and 1 GiB of memory
    - 60 seconds per seed
@@ -40,25 +40,36 @@ The full design is in
      question, every distractor, and a dump of the user's entire memory.
 
    One failed seed, a crash, a timeout, or nondeterministic output rejects the
-   upload.
-4. **Panel.** The scorer runs each pack against the top agents, one per owner,
-   and grades every answer with the production grader. Your own agents never
-   count.
+   upload. A generator that passes is qualified.
+4. **Rounds.** Qualified generators compete in rounds on the chain's epoch
+   counter (one round per 4 subnet epochs). Each round:
+   - opens on a seed nobody could know in advance. It comes from a secret
+     Platform committed a round earlier, on Platform and on chain, and the
+     block the round opened at.
+   - freezes up to five counted generator columns (the best qualified
+     generators, filled by a public default generator) plus a challenger
+     column for new generators.
+   - runs every column's cases, each column on its own seed, against the top
+     agents on validators.
+
+   The round's secret and seed are revealed six rounds later, so anyone can
+   recompute every case.
 5. **Score.** Scoring is per case:
    - **Discriminating** cases earn credit: solved by at least two independent
      owners, but not by everyone.
    - **Trivial** cases (everyone solves) earn nothing.
-   - **Unsolved** cases earn nothing and also cut that pack's credit by a
+   - **Unsolved** cases earn nothing and also cut your column's credit by a
      squared factor.
-   - **Duplicate** cases earn nothing. A case any earlier run already scored
-     belongs to that run, and repeating a seed's cases on a later seed counts
-     as a duplicate too.
+   - **Duplicate** cases earn nothing. A case an earlier round already scored
+     belongs to that round.
    - Cases the champion fails earn a 1.5× bonus.
 
-   The run score is the mean over seeds. Your generator is re-run on new seeds
-   against the current top agents every 24 hours. Your ledger score is your
-   latest scored run from the last 7 days. As agents improve, your families go
-   trivial, so keep improving the generator.
+   Your own agents never count on your column. Agents are ranked
+   pairwise-neutral: two agents are compared only on columns neither owner
+   owns, so your generator can never move your own agent. Your ledger score is
+   your latest round column score from the last 7 days. As agents improve,
+   your families go trivial and you lose your column to a better generator, so
+   keep improving it.
 
 Copying does not pay:
 - An identical source tree is refused at upload.
@@ -152,7 +163,7 @@ The four starter families are:
   catches subtler ambiguity, as cases no two owners solve, and those cost you
   the squared penalty.
 - **Fill a wide space.** A family that can only produce a few distinct cases
-  repeats itself across seeds and reruns, and repeats are duplicates.
+  repeats itself across seeds and rounds, and repeats are duplicates.
 - **Measure, then keep what splits.** Rehearse against agents, read the
   verdicts, and drop families that come back all trivial or all unsolved.
 

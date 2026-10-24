@@ -417,6 +417,17 @@ describe('Backroom MCP tools', () => {
         'get_generator_board',
         'rescore_generator_submission',
         'reject_generator_submission',
+        'list_generator_rounds',
+        'get_generator_round',
+        'preview_generator_round',
+        'get_generator_round_loop',
+        'tick_generator_rounds',
+        'get_generator_round_dataset',
+        'void_generator_round',
+        'close_generator_round',
+        'republish_generator_round_commitment',
+        'release_generator_round_lease',
+        'register_default_generator',
         'get_ath_review',
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
@@ -755,7 +766,11 @@ describe('Backroom MCP tools', () => {
     // publish compact uuid inputs and one-line summaries; the whole-object
     // settings write carries its 15 bounded fields (~1.6 KB). On top of the
     // retirement above, measured 203,881 bytes; keep about 0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(204_400)
+    // Eleven generator-round tools (five reads, six guarded writes; the
+    // round dataset download is artifact-scoped) publish compact string
+    // inputs and one-line summaries with procedures in tool help. Measured
+    // 210,748 bytes; keep about 0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(211_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -794,9 +809,10 @@ describe('Backroom MCP tools', () => {
       // canary cap (#2447) also adds a short catalog note.
       // Six concise official-control summaries, with procedure text in help.
       // Retiring the thirteen coding-track summaries (SN-186) measures 25,588.
-      // The eleven generator-competition summaries bring it to 26,304; keep
-      // about 200 chars of headroom.
-      26_500,
+      // The eleven generator-competition summaries bring it to 26,304, and
+      // the eleven generator-round summaries to 27,023; keep about 200 chars
+      // of headroom.
+      27_200,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -6836,6 +6852,51 @@ describe('Backroom MCP tools', () => {
     expect(body.board_after.raw_leader_agent_id).toBe(board.champion_agent_id)
     expect(body.items.map((item) => item.status)).toEqual(['applied', 'failed'])
 
+    await client.close()
+    await server.close()
+  })
+
+  it('retains committed court outcomes when the final board read fails without replay or raw detail', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const batchId = '0b3c5d7e-9f01-4a23-8b45-c67d89e0f123'
+    const agentId = 'c25489aa-faf0-46fc-8b06-8e2240a5ac01'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ detail: {
+      message: 'do-not-reflect-private-error',
+      private_secret: 'never-expose-this',
+      batch_id: batchId,
+      items: [{
+        index: 0, action: 'clear', agent_id: agentId, status: 'applied',
+        would_change_crown: true, steps_applied: ['open', 'clear'], annotated: true,
+        agent_status: 'scored', message: 'private audit context',
+      }, {
+        index: 1, action: 'reject', agent_id: 'db9b919d-241b-4131-a2cc-f426b4356950',
+        status: 'failed', would_change_crown: null, steps_applied: [],
+        write_outcome_unknown: true, annotated: false, message: 'private error',
+      }],
+      applied_count: 1, already_applied_count: 0, failed_count: 1,
+    } }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const execute = await client.callTool({
+      name: 'execute_ath_rulings_batch',
+      arguments: {
+        previewToken: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`,
+        confirmation: 'APPLY ATH RULINGS BATCH',
+      },
+    })
+    expect(execute.isError).toBe(true)
+    const text = readTextResult(execute)
+    expect(text).toContain('inspect all item outcomes before any retry')
+    expect(text).toContain(batchId)
+    expect(text).toContain(agentId)
+    expect(text).toContain('"status":"applied"')
+    expect(text).toContain('"steps_applied":["open","clear"]')
+    expect(text).toContain('"applied_count":1')
+    expect(text).toContain('"write_outcome_unknown":true')
+    expect(text).toContain('"would_change_crown":null')
+    expect(text).not.toContain('private')
+    expect(text).not.toContain('never-expose-this')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     await client.close()
     await server.close()
   })

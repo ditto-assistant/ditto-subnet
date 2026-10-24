@@ -73,6 +73,7 @@ def probe_battery_observation(
             "probe_count": row.probe_count,
             "leads": [dict(lead) for lead in row.leads],
             "battery_ms": row.battery_ms,
+            "review": dict(row.review) if row.review is not None else None,
             "created_at": row.created_at,
         }
     )

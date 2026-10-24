@@ -315,6 +315,50 @@ class ProbeBatteryLead(BaseModel):
     invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
 
 
+class ProbeReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
+    verified: bool
+    citations: tuple[Annotated[str, Field(max_length=170)], ...] = ()
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeReviewFinding:
+        if len(self.citations) > 4:
+            raise ValueError("probe review finding has too many citations")
+        return self
+
+
+class ProbeReviewSummary(BaseModel):
+    """Bounded report-only reviewer agent result: no claims or transcripts."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    status: Literal[
+        "complete",
+        "no_verdict",
+        "budget_exhausted",
+        "untracked_spend",
+        "skipped",
+        "timeout",
+        "error",
+    ]
+    verified: bool = False
+    invariants: tuple[Annotated[str, Field(pattern=r"^I[1-8]$")], ...] = ()
+    findings: tuple[ProbeReviewFinding, ...] = ()
+    requests: Annotated[int, Field(ge=0, le=1000)] = 0
+    prompt_tokens: Annotated[int, Field(ge=0, le=50_000_000)] = 0
+    completion_tokens: Annotated[int, Field(ge=0, le=5_000_000)] = 0
+    cost_usd: Annotated[float, Field(ge=0, le=50, allow_inf_nan=False)] = 0.0
+    review_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeReviewSummary:
+        if len(self.findings) > 4 or len(self.invariants) > 8:
+            raise ValueError("probe review summary is too large")
+        return self
+
+
 class ProbeBatteryObservationRequest(BaseModel):
     """Bounded zero-token probe battery leads for an active attempt.
 
@@ -336,6 +380,7 @@ class ProbeBatteryObservationRequest(BaseModel):
     probe_count: Annotated[int, Field(ge=0, le=512)] = 0
     leads: tuple[ProbeBatteryLead, ...] = ()
     battery_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+    review: ProbeReviewSummary | None = None
 
     @model_validator(mode="after")
     def validate_bounds(self) -> ProbeBatteryObservationRequest:
@@ -355,6 +400,8 @@ __all__ = [
     "ShadowReviewObservationResponse",
     "ProbeBatteryLead",
     "ProbeBatteryObservationRequest",
+    "ProbeReviewFinding",
+    "ProbeReviewSummary",
     "ScreenerProgress",
     "ScreenerProgressStage",
     "ScreenerRuntimeState",

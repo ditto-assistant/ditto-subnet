@@ -66,6 +66,18 @@ describe('platformAdminRequest', () => {
     )
   })
 
+  it.each([
+    ['/api/v1/admin/ath-rulings/batch-execute', 'POST', 503, { batch_id: 'invalid' }],
+    ['/api/v1/admin/other', 'POST', 503, { secret: 'never-reflect-this' }],
+    ['/api/v1/admin/ath-rulings/batch-execute', 'GET', 503, { secret: 'never-reflect-this' }],
+  ])('does not reflect arbitrary object detail from %s %s', async (path, method, status, detail) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ detail }, { status }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(platformAdminRequest(path, { method })).rejects.toThrow('Ditto API request failed (503)')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('refuses to retry a write, however transient the failure looks', async () => {
     // A retried rollout POST is a second attempt to start, supersede, or
     // activate a benchmark. The confirmation phrases exist to make exactly

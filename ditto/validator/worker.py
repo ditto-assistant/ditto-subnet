@@ -40,14 +40,24 @@ from ditto.api_models.confirmation_progress import (
     ConfirmationProgressStage,
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
+from ditto.api_models.generator_round_validator import (
+    GeneratorRoundCaseResult,
+    GeneratorRoundJobResponse,
+)
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import HostSpecs
+from ditto.api_models.validator import (
+    BenchmarkRuntimeSettings as BenchmarkRuntimeSettingsModel,
+)
 from ditto.api_models.validator import (
     ConfirmationDatasetPin,
     ValidatorHeartbeatRequest,
     ValidatorHeartbeatResponse,
     ValidatorRuntimeState,
+)
+from ditto.api_models.validator import (
+    JobResponse as JobResponseModel,
 )
 from ditto.api_models.validator_capabilities import (
     ScorerBenchmarkCapability,
@@ -761,24 +771,24 @@ class PlatformRouterLedgerSource:
 
 
 class PlatformGeneratorLedgerSource:
-    """Best-effort read of the shadow generator ledger Platform publishes.
+    """Read of the generator ledger Platform publishes.
 
-    Fail-closed like :class:`PlatformRouterLedgerSource`: any error folds an
-    empty ledger (zero generator emission) for the epoch.
+    Returns ``None`` when the read fails. The worker decides what that means:
+    while the track pays nothing it folds an empty ledger, but once generator
+    weights are eligible a failed read skips the epoch's weight submission, so
+    this validator never sets a vector that differs from validators whose read
+    succeeded.
     """
 
     def __init__(self, read: Callable[[], Awaitable[GeneratorLedgerResponse]]) -> None:
         self._read = read
 
-    async def fetch(self) -> GeneratorLedgerResponse:
+    async def fetch(self) -> GeneratorLedgerResponse | None:
         try:
             return await self._read()
         except Exception:
-            logger.warning(
-                "generator ledger read failed; folding an empty ledger this epoch",
-                exc_info=True,
-            )
-            return GeneratorLedgerResponse(count=0)
+            logger.warning("generator ledger read failed this epoch", exc_info=True)
+            return None
 
 
 class ValidatorWorker:
@@ -869,6 +879,7 @@ class ValidatorWorker:
         )
         self._confirmation_progress: dict[str, ConfirmationProgress] = {}
         self._healthy_slots = set(self._slots)
+        self._scorer_runs_generator_rounds = False
         # Re-zeroed at the top of every sweep; seeded here so a hand-back from
         # outside a sweep (a drain, or a test driving the method directly)
         # cannot raise AttributeError on a pure telemetry counter.
@@ -1230,6 +1241,16 @@ class ValidatorWorker:
                                         retest_work_claimed = retest_claimed
                                         retest_dispatching = False
                                         lease_state_changed.set()
+                                if not retest_claimed:
+                                    # Generator rounds are the lowest-priority
+                                    # lane: only idle capacity left after both
+                                    # canonical work and continual retests.
+                                    retest_claimed = (
+                                        await self._run_generator_round_lane(
+                                            stop_requested=stop_requested,
+                                            drain_requested=drain_requested,
+                                        )
+                                    )
                                 if retest_claimed:
                                     # The dispatcher itself becomes free only
                                     # after its retest work settles. Ask for
@@ -1658,6 +1679,12 @@ class ValidatorWorker:
             if primary:
                 state = "running_benchmark"
             stack = bind_observed_scorer_identity(stack, scorer_benchmarks)
+            # The generator-round lane asks for work only once the scorer has
+            # been observed serving the round mode.
+            self._scorer_runs_generator_rounds = bool(
+                scorer_benchmarks.status == "fresh_verified"
+                and scorer_benchmarks.generator_rounds
+            )
             capabilities = capabilities.model_copy(
                 update={
                     "scorer_benchmarks": scorer_benchmarks,
@@ -2353,6 +2380,15 @@ class ValidatorWorker:
             if self._generator_ledger_source is not None
             else GeneratorLedgerResponse(count=0)
         )
+        if generator_ledger is None:
+            if self._config.generator_weight_eligible:
+                logger.warning(
+                    "generator ledger unavailable while generator weights are "
+                    "eligible; weights unchanged this epoch"
+                )
+                return _WeightOutcome(leaderboard=leaderboard)
+            # Shadow: the track pays nothing, so an empty ledger changes no weight.
+            generator_ledger = GeneratorLedgerResponse(count=0)
         fold_inputs = TrackFoldInputs(
             memory_entries=registered_entries,
             memory_params=MemoryFoldParams(
@@ -3248,6 +3284,173 @@ class ValidatorWorker:
             if slot_token is not None:
                 _CURRENT_SLOT.reset(slot_token)
         return ticket_claimed
+
+    async def _run_generator_round_lane(
+        self,
+        *,
+        stop_requested: asyncio.Event | None = None,
+        drain_requested: asyncio.Event | None = None,
+    ) -> bool:
+        """Run at most one generator-round panel run on a free healthy slot.
+
+        A generator round needs every panel agent run on its round dataset;
+        Platform routes the next agent (and its own ticket row, purpose
+        ``generator_round``) to a slot this host offers. Results go only to
+        the round matrix: nothing here signs an agent score, and a failure is
+        handed back on the round's own endpoint, never ``/job/fail``, so the
+        agent is never charged an attempt. Returns whether a lease was taken.
+        """
+        if not self._scorer_runs_generator_rounds or self._new_work_blocked(
+            stop_requested, drain_requested
+        ):
+            return False
+        busy = {
+            slot_id for slot_id, slot in self._slots.items() if slot.active_agent_id
+        }
+        free = sorted(slot for slot in self._healthy_slots if slot not in busy)
+        if not free:
+            return False
+        try:
+            job = await self._platform.request_generator_round_job(slot_id=free[0])
+        except PlatformError as exc:
+            logger.warning("generator round job request failed: %s", exc)
+            return False
+        if job is None:
+            return False
+        requested = free[0]
+        # Only the slot this request offered, still healthy and idle, may run
+        # the lease; any other slot could already be running work.
+        if (
+            job.slot_id != requested
+            or job.slot_id not in self._healthy_slots
+            or self._slots[job.slot_id].active_agent_id
+            or job.bench_version != 13
+        ):
+            await self._platform.fail_generator_round_job(
+                job, reason="infrastructure", detail="round_job_not_executable"
+            )
+            return True
+        lease = JobResponseModel(
+            agent_id=job.agent_id,
+            slot_id=job.slot_id,
+            miner_hotkey=job.miner_hotkey,
+            sha256=job.sha256,
+            deadline=job.deadline,
+            seed=job.seed,
+            dataset_sha256=job.dataset_sha256,
+            run_size=job.run_size,
+            bench_version=13,
+            minimum_screening_policy_version=job.minimum_screening_policy_version,
+            requires_screened_image=job.requires_screened_image,
+            inference=job.inference,
+            benchmark_runtime=(
+                BenchmarkRuntimeSettingsModel.model_validate(job.benchmark_runtime)
+                if job.benchmark_runtime is not None
+                else None
+            ),
+        )
+        slot_token = _CURRENT_SLOT.set(job.slot_id)
+        slot = self._slot_state()
+        slot.revoked.clear()
+        try:
+            await self._begin_active_ticket(job.agent_id, job.deadline, 13)
+            run_id, per_case = await self._run_within_lease(
+                lambda: self._execute_generator_round(job, lease),
+                job=lease,
+                slot=slot,
+            )
+            results = [
+                GeneratorRoundCaseResult(
+                    case_id=str(case.get("case_id", "")),
+                    score=float(case.get("score") or 0.0),
+                    fault=case.get("category") == "generator_round_fault",
+                )
+                for case in per_case
+            ]
+            accepted = await self._platform.submit_generator_round_score(
+                job, run_id=run_id, results=results
+            )
+            logger.info(
+                "generator round %s agent %s submitted (%d cases, accepted=%s)",
+                job.round_index,
+                job.agent_id,
+                len(results),
+                accepted.accepted,
+            )
+        except LeaseRevokedError as exc:
+            logger.warning(
+                "generator round lease for agent %s was revoked: %s", job.agent_id, exc
+            )
+        except (ValidatorInfrastructureError, PlatformInfrastructureError) as exc:
+            logger.warning(
+                "generator round infrastructure failed agent=%s: %s", job.agent_id, exc
+            )
+            await self._platform.fail_generator_round_job(
+                job, reason="infrastructure", detail=failure_detail(exc)
+            )
+            self._healthy_slots.discard(job.slot_id)
+        except (
+            LeaseDeadlineError,
+            SandboxOomError,
+            PlatformError,
+            DittobenchError,
+            ValueError,
+        ) as exc:
+            logger.warning("generator round run failed agent=%s: %s", job.agent_id, exc)
+            await self._platform.fail_generator_round_job(
+                job, reason="scoring_error", detail=failure_detail(exc)
+            )
+        finally:
+            self._clear_active_ticket()
+            await self._report_heartbeat("polling")
+            _CURRENT_SLOT.reset(slot_token)
+        return True
+
+    async def _execute_generator_round(
+        self, job: GeneratorRoundJobResponse, lease: JobResponse
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Fetch the artifact and round dataset, then run them in the scorer."""
+        artifact = await self._platform.get_artifact(job.agent_id)
+        if (
+            artifact.sha256.lower() != job.sha256.lower()
+            or artifact.bench_version != 13
+        ):
+            raise PlatformError(
+                f"generator round artifact identity mismatch for agent {job.agent_id}"
+            )
+        if artifact.screened_image_url is None:
+            raise PlatformError(
+                f"generator round agent {job.agent_id} has no verified screened image"
+            )
+        dataset = await self._platform.get_private_dataset(
+            job.agent_id, dataset_sha256=job.dataset_sha256, deadline=job.deadline
+        )
+        broker = await self._activate_ticket_inference(lease)
+        try:
+            return await self._dittobench.run_generator_round(
+                tarball_url=artifact.download_url,
+                tarball_sha256=artifact.sha256,
+                dataset_bytes=dataset,
+                dataset_sha256=job.dataset_sha256,
+                seed=job.seed,
+                screened_image_url=artifact.screened_image_url,
+                screened_image_sha256=artifact.screened_image_sha256,
+                screened_image_size_bytes=artifact.screened_image_size_bytes,
+                screened_image_id=artifact.screened_image_id,
+                screened_image_ref=artifact.screened_image_ref,
+                inference_session_id=broker.session_id if broker else None,
+                inference_grant_id=(
+                    job.inference.grant_id if broker and job.inference else None
+                ),
+                inference_agent_id=job.agent_id if broker else None,
+                inference_slot_id=job.slot_id if broker else None,
+                inference_ticket_deadline=job.deadline if broker else None,
+                ticket_deadline=job.deadline,
+                benchmark_runtime=lease.benchmark_runtime,
+            )
+        finally:
+            if broker is not None:
+                await self._dittobench.cancel_inference_session(broker.session_id)
 
     async def _evaluate_confirmation_lease(
         self, job: JobResponse

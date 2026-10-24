@@ -30,6 +30,11 @@ from ditto.api_models.generator import (
     source_signature_payload,
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
+from ditto.api_models.generator_rounds import (
+    GeneratorRoundDetail,
+    GeneratorRoundListResponse,
+    GeneratorRoundSchedule,
+)
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.generator_competition import (
     UploadRejected,
@@ -37,6 +42,13 @@ from ditto.api_server.generator_competition import (
     inspect_upload,
     load_settings,
     submission_summary,
+)
+from ditto.api_server.generator_rounds import (
+    column_views,
+    get_round,
+    list_rounds,
+    round_summary,
+    standing_views,
 )
 from ditto.chain.errors import ChainError
 from ditto.db.queries.bans import is_hotkey_banned
@@ -238,3 +250,54 @@ async def board(session: SessionDep, response: Response) -> GeneratorLedgerRespo
     response.headers["Cache-Control"] = "public, max-age=30"
     resolved = await load_settings(session)
     return await build_ledger(session, resolved=resolved, now=datetime.now(UTC))
+
+
+@router.get("/rounds", response_model=GeneratorRoundListResponse)
+async def public_rounds(
+    request: Request,
+    session: SessionDep,
+    response: Response,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> GeneratorRoundListResponse:
+    """Recent rounds: commitments, chain anchors, and status.
+
+    A round's secret, seed, and dataset digest appear only after its privacy
+    window, so anyone can then check the secret against the commitment
+    published before the round opened and recompute every case.
+    """
+    response.headers["Cache-Control"] = "public, max-age=30"
+    resolved = await load_settings(session)
+    loop = getattr(request.app.state, "generator_round_loop", None)
+    schedule = (
+        loop.schedule
+        if loop is not None and loop.schedule is not None
+        else GeneratorRoundSchedule(
+            mode=resolved.settings.mode,
+            epochs_per_round=resolved.settings.epochs_per_round,
+        )
+    )
+    return GeneratorRoundListResponse(
+        schedule=schedule.model_copy(update={"last_error": None}),
+        rounds=[
+            await round_summary(session, row)
+            for row in await list_rounds(session, limit=limit, offset=offset)
+        ],
+    )
+
+
+@router.get("/rounds/{round_index}", response_model=GeneratorRoundDetail)
+async def public_round(
+    round_index: int, session: SessionDep, response: Response
+) -> GeneratorRoundDetail:
+    """One round: columns and their scores, and agent standings once scored."""
+    response.headers["Cache-Control"] = "public, max-age=30"
+    row = await get_round(session, round_index)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown round")
+    scored = row.status == "scored"
+    return GeneratorRoundDetail(
+        summary=await round_summary(session, row),
+        columns=column_views(row) if row.status != "committed" else [],
+        standings=standing_views(row) if scored else [],
+    )

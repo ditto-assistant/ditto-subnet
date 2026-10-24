@@ -341,6 +341,9 @@ const screenerReviewSettingsBaseSchema = z.object({
   fanout_shadow_reserved_targon_slots: z.number().int().min(1).max(4).default(1),
   probe_battery_mode: z.enum(['off', 'shadow']).default('off'),
   probe_battery_timeout_seconds: z.number().int().min(30).max(600).default(120),
+  probe_review_mode: z.enum(['off', 'shadow']).default('off'),
+  probe_review_timeout_seconds: z.number().int().min(120).max(900).default(420),
+  probe_review_max_cost_usd: z.number().positive().max(5).default(1),
   max_input_tokens: z.number().int().min(1).max(5_000_000),
   max_output_tokens: z.number().int().min(1).max(1_000_000),
   max_completion_tokens: z.number().int().min(1).max(128_000),
@@ -373,6 +376,13 @@ const checkScreenerReviewSettings = (
       code: 'custom',
       message: 'Adjudicator completion budget cannot exceed output budget',
       path: ['adjudicator_max_completion_tokens'],
+    })
+  }
+  if (value.probe_review_mode === 'shadow' && value.probe_battery_mode !== 'shadow') {
+    context.addIssue({
+      code: 'custom',
+      message: 'The probe reviewer requires the probe battery',
+      path: ['probe_review_mode'],
     })
   }
   if (
@@ -471,6 +481,28 @@ export const probeBatteryObservationSchema = z.object({
   probe_count: z.number().int().nonnegative(),
   leads: z.array(z.object({ item_id: z.string(), invariant: z.string() })),
   battery_ms: z.number().int().nonnegative(),
+  review: z
+    .object({
+      status: z.string(),
+      verified: z.boolean().default(false),
+      invariants: z.array(z.string()).default([]),
+      findings: z
+        .array(
+          z.object({
+            invariant: z.string(),
+            verified: z.boolean(),
+            citations: z.array(z.string()).default([]),
+          }),
+        )
+        .default([]),
+      requests: z.number().int().nonnegative().default(0),
+      prompt_tokens: z.number().int().nonnegative().default(0),
+      completion_tokens: z.number().int().nonnegative().default(0),
+      cost_usd: z.number().nonnegative().default(0),
+      review_ms: z.number().int().nonnegative().default(0),
+    })
+    .nullish()
+    .default(null),
   created_at: z.string(),
 })
 
@@ -7846,13 +7878,36 @@ export const athRulingExecuteItemSchema = z.object({
   agent_id: z.string().uuid(),
   status: z.enum(['applied', 'already_applied', 'failed']),
   agent_status: z.string().nullable().default(null),
-  would_change_crown: z.boolean(),
+  would_change_crown: z.boolean().nullable(),
+  write_outcome_unknown: z.boolean().default(false),
   steps_applied: z.array(athRulingStepSchema).default([]),
   // False on an applied row: the ruling landed, only the audit annotation
   // failed. Never re-run it.
   annotated: z.boolean().default(false),
   message: z.string(),
 } satisfies PlatformResponseShape<GeneratedAthRulingExecuteItem>)
+
+// Only bounded execution metadata crosses an error boundary. Server messages,
+// reasons and unrelated detail fields must never be reflected into MCP errors.
+export const athRulingsReadbackFailureSchema = z.object({
+  batch_id: z.string().uuid(),
+  items: z.array(athRulingExecuteItemSchema.pick({
+    index: true,
+    action: true,
+    agent_id: true,
+    status: true,
+    would_change_crown: true,
+    write_outcome_unknown: true,
+    steps_applied: true,
+    annotated: true,
+  }).extend({
+    index: z.number().int().min(0).max(ATH_RULINGS_MAX_ITEMS - 1),
+    steps_applied: z.array(athRulingStepSchema).max(4),
+  })).max(ATH_RULINGS_MAX_ITEMS),
+  applied_count: z.number().int().min(0).max(ATH_RULINGS_MAX_ITEMS),
+  already_applied_count: z.number().int().min(0).max(ATH_RULINGS_MAX_ITEMS),
+  failed_count: z.number().int().min(0).max(ATH_RULINGS_MAX_ITEMS),
+})
 
 export const athRulingsExecuteResponseSchema = z.object({
   batch_id: z.string().uuid(),

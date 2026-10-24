@@ -74,6 +74,9 @@ from ditto.api_server.endpoints.admin_emission_eligibility import (
 from ditto.api_server.endpoints.admin_generator_competition import (
     router as admin_generator_competition_router,
 )
+from ditto.api_server.endpoints.admin_generator_rounds import (
+    router as admin_generator_rounds_router,
+)
 from ditto.api_server.endpoints.admin_hotkey_bans import (
     router as admin_hotkey_bans_router,
 )
@@ -258,6 +261,7 @@ __all__ = [
     "admin_inference_concurrency_settings_router",
     "admin_inference_observability_router",
     "admin_generator_competition_router",
+    "admin_generator_rounds_router",
     "admin_scoring_lease_settings_router",
     "generator_router",
     "generator_scorer_router",

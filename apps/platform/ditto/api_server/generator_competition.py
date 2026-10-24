@@ -10,14 +10,13 @@ here so they are testable without HTTP:
 * :func:`inspect_upload` is Platform's upload check: the archive rules of the
   Go contract (:mod:`ditto.generator_archive`), so the queue only holds source
   the scorer can build.
-* :func:`lease_next` picks the most overdue active generator, draws fresh
-  secret seeds, and snapshots the top ``panel_size`` owners from the same
-  ledger validators fold, so every run is judged against the agents actually
-  winning, on seeds nobody saw in advance.
-* :func:`record_result` applies a scorer evaluation: rejected (the generator
-  failed to build, crashed, emitted an invalid pack, drifted between identical
-  runs, or reproduced another owner's generator on the probe seed), re-queued
-  for a fuller panel, or scored with per-case verdicts and rescheduled.
+* :func:`lease_next` picks the most overdue unqualified generator and draws
+  fresh secret seeds nobody saw in advance.
+* :func:`record_result` applies a scorer qualification run: rejected (the
+  generator failed to build, crashed, emitted an invalid pack, drifted between
+  identical runs, or reproduced another owner's generator on the probe seed)
+  or qualified for round columns. Rounds, where generators are actually
+  scored against agents, live in :mod:`ditto.api_server.generator_rounds`.
 """
 
 from __future__ import annotations
@@ -43,39 +42,23 @@ from ditto.api_models.generator import (
     GeneratorSeedOutput,
     GeneratorSubmissionSummary,
 )
-from ditto.api_models.generator_ledger import (
-    GeneratorLedgerEntry,
-    GeneratorLedgerResponse,
-)
-from ditto.db.models import (
-    GeneratorCaseVerdict,
-    GeneratorCompetitionSettingsRevision,
-)
+from ditto.api_models.generator_ledger import GeneratorLedgerResponse
+from ditto.db.models import GeneratorCompetitionSettingsRevision
 from ditto.db.queries.generator import (
     abandon_run,
-    claimed_fingerprints,
     clear_lease,
     current_probe_epoch,
     earlier_probe_results,
     finish_run,
     latest_generator_settings_revision,
-    latest_scored_runs,
     lock_next_runnable_submission,
+    lock_probe_epoch_if_current,
     new_seeds,
     start_run,
     upsert_probe_result,
 )
 from ditto.db.queries.scores import emission_owner, list_eligible_ledger
 from ditto.generator_archive import ArchiveInfo, ArchiveRejected, inspect_archive
-from ditto.generator_scoring import (
-    PACK_INSUFFICIENT_PANEL,
-    CaseRef,
-    CaseResult,
-    PanelMember,
-    ScoreParams,
-    SeedPanel,
-    score_run,
-)
 from ditto.score_order import rank_submissions
 
 if TYPE_CHECKING:
@@ -87,8 +70,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SETTINGS = GeneratorCompetitionSettings()
 
-# Serializes result recording so two runs scored at once cannot both claim the
-# same new case fingerprint or both pass the copy check against each other.
+# Serializes result recording so two qualification runs recorded at once
+# cannot both pass the copy check against each other.
 _SCORING_LOCK_KEY = int.from_bytes(
     hashlib.sha256(b"generator-competition-scoring").digest()[:8], "big", signed=True
 )
@@ -226,14 +209,11 @@ class Lease:
 async def lease_next(
     session: AsyncSession, *, resolved: ResolvedSettings, now: datetime
 ) -> Lease | None:
-    """Lease the most overdue active submission on fresh seeds (caller commits).
-
-    Returns ``None`` when nothing is runnable or the panel is too small to
-    judge anything: a scorer never spends CPU on a run that can only come back
-    ``insufficient_panel``.
-    """
+    """Lease the most overdue unqualified submission on fresh seeds (caller
+    commits). Returns ``None`` when nothing needs qualifying."""
     settings = resolved.settings
-    panel: list[dict[str, Any]] | None = None
+    if settings.mode == "off":
+        return None
     for _ in range(_MAX_LEASE_SCAN):
         row = await lock_next_runnable_submission(session, now=now)
         if row is None:
@@ -249,10 +229,6 @@ async def lease_next(
             row.status_reason = "lease attempts exhausted; backing off"
             await session.flush()
             continue
-        if panel is None:
-            panel = await select_panel(session, size=settings.panel_size)
-        if len(panel) < settings.min_panel:
-            return None
         probe = await current_probe_epoch(session)
         assert probe is not None
         run = await start_run(
@@ -263,7 +239,7 @@ async def lease_next(
             seeds=new_seeds(settings.seeds_per_run),
             probe_epoch=probe.epoch,
             cases_per_seed=settings.cases_per_seed,
-            panel=panel,
+            panel=[],
             settings_revision=resolved.revision,
         )
         return Lease(submission=row, run=run, probe_seed=probe.seed)
@@ -382,22 +358,28 @@ async def record_result(
         _reject(row, f"{outcome}: {detail}", now=now)
         return RecordedResult("invalid", outcome, None, row.status)
 
-    refs_by_seed: list[list[CaseRef]] = []
     for seed in seeds:
-        refs = [CaseRef(c.case_id, c.fingerprint) for c in seed.validation.cases or ()]
+        refs = seed.validation.cases or ()
         if len(refs) != run.cases_per_seed or len({r.case_id for r in refs}) != len(
             refs
         ):
             raise ResultRejected(
                 "validation case refs do not match the run's case count"
             )
-        refs_by_seed.append(refs)
     assert payload.probe is not None
     probe_fingerprints = sorted(
         {c.fingerprint for c in payload.probe.validation.cases or ()}
     )
     if not probe_fingerprints:
         raise ResultRejected("valid probe carries no case refs")
+
+    if not await lock_probe_epoch_if_current(session, run.probe_epoch):
+        # The probe rotated while this run was leased. Its probe answers a seed
+        # no current submission is compared on, so it cannot qualify; the
+        # submission is re-run promptly on the new probe.
+        finish_run(run, status="abandoned", outcome="probe_rotated", now=now)
+        row.next_run_at = now
+        return RecordedResult("abandoned", "probe_rotated", None, row.status)
 
     await session.execute(
         text("SELECT pg_advisory_xact_lock(:key)"), {"key": _SCORING_LOCK_KEY}
@@ -421,6 +403,7 @@ async def record_result(
         if overlap >= settings.copy_overlap_threshold:
             run.score_summary = {
                 "copy_of": str(earlier.submission_id),
+                "copy_of_public_default": earlier.public_default,
                 "overlap": overlap,
                 "probe_epoch": run.probe_epoch,
             }
@@ -433,120 +416,25 @@ async def record_result(
             )
             return RecordedResult("copy", "behavioral_copy", None, row.status)
 
-    snapshot = {slot["agent_id"]: slot for slot in run.panel or ()}
-    seed_panels: list[SeedPanel] = []
-    stored_panels: list[list[dict[str, Any]]] = []
-    for seed, refs in zip(seeds, refs_by_seed, strict=True):
-        members: list[PanelMember] = []
-        for member in seed.panel or ():
-            slot = snapshot.get(member.agent_id)
-            if slot is None:
-                # Only agents Platform leased the run against may count, under
-                # the owner key and champion flag Platform assigned.
-                logger.warning(
-                    "generator run %s: ignoring result for non-panel agent %s",
-                    run.run_id,
-                    member.agent_id,
-                )
-                continue
-            members.append(
-                PanelMember(
-                    agent_id=member.agent_id,
-                    owner_key=str(slot["owner_key"]),
-                    champion=bool(slot.get("champion", False)),
-                    results=tuple(
-                        CaseResult(r.case_id, r.score, r.fault)
-                        for r in member.results or ()
-                    ),
-                )
-            )
-        seed_panels.append(SeedPanel(seed=seed.seed, cases=refs, panel=members))
-        stored_panels.append(
-            [
-                {
-                    "agent_id": m.agent_id,
-                    "owner_key": m.owner_key,
-                    "champion": m.champion,
-                    "results": [r.__dict__ for r in m.results],
-                }
-                for m in members
-            ]
-        )
-    run.panel_results = stored_panels
-
-    claimed = await claimed_fingerprints(
-        session,
-        fingerprints=[r.fingerprint for refs in refs_by_seed for r in refs],
-        exclude_run_id=run.run_id,
-    )
-    scored = score_run(
-        seed_panels,
-        ScoreParams.from_mapping(settings.score_params()),
-        generator_owner_key=row.owner_key,
-        claimed_fingerprints=claimed,
-    )
-    rescore_at = now + timedelta(hours=settings.rescore_interval_hours)
-
-    if scored.status == PACK_INSUFFICIENT_PANEL:
-        run.score_summary = {"panel": [len(p.panel) for p in seed_panels]}
-        finish_run(
-            run, status="insufficient_panel", outcome="insufficient_panel", now=now
-        )
-        if row.status == "active":
-            row.next_run_at = now + timedelta(seconds=settings.retry_backoff_seconds)
-        return RecordedResult(
-            "insufficient_panel", "insufficient_panel", None, row.status
-        )
-
-    for seed_index, pack in enumerate(scored.seeds):
-        for position, verdict in enumerate(pack.cases):
-            session.add(
-                GeneratorCaseVerdict(
-                    run_id=run.run_id,
-                    seed_index=seed_index,
-                    case_id=verdict.case_id,
-                    position=position,
-                    fingerprint=verdict.fingerprint,
-                    status=verdict.status,
-                    panel_size=verdict.panel_size,
-                    solvers=verdict.solvers,
-                    solver_owners=verdict.solver_owners,
-                    mean_score=verdict.mean_score,
-                    champion_failed=verdict.champion_failed,
-                    credit=verdict.credit,
-                )
-            )
     run.score_summary = {
-        "seeds": [
-            {
-                "score": pack.score,
-                "raw_credit": pack.raw_credit,
-                "discriminating": pack.discriminating,
-                "trivial": pack.trivial,
-                "unsolved": pack.unsolved,
-                "duplicate": pack.duplicate,
-                "unsolved_rate": pack.unsolved_rate,
-            }
-            for pack in scored.seeds
-        ],
-        "discriminating": sum(pack.discriminating for pack in scored.seeds),
-        "panel": len(snapshot),
-        "params": settings.score_params(),
+        "cases_per_seed": run.cases_per_seed,
+        "seeds": len(seeds),
+        "probe_epoch": run.probe_epoch,
+        "probe_cases": len(probe_fingerprints),
     }
-    finish_run(run, status="scored", outcome="scored", now=now, score=scored.score)
+    finish_run(run, status="qualified", outcome="qualified", now=now)
     if row.status == "active":
-        # An operator rescore requested while this run was in flight set
-        # next_run_at after the lease began; keep it rather than pushing the
-        # requested run out to the normal interval.
-        requested = row.next_run_at
-        if requested is not None and requested.replace(
-            tzinfo=requested.tzinfo or UTC
-        ) > run.leased_at.replace(tzinfo=run.leased_at.tzinfo or UTC):
-            row.next_run_at = min(requested, rescore_at)
-        else:
-            row.next_run_at = rescore_at
         row.status_reason = None
-    return RecordedResult("scored", "scored", scored.score, row.status)
+        # An operator re-qualification requested while this run was leased set
+        # next_run_at after the lease began. That request stands: the run is
+        # recorded, but the generator stays unqualified until the new run.
+        requested = row.next_run_at
+        leased = run.leased_at
+        if requested is None or requested.replace(
+            tzinfo=requested.tzinfo or UTC
+        ) <= leased.replace(tzinfo=leased.tzinfo or UTC):
+            row.qualified_at = now
+    return RecordedResult("qualified", "qualified", None, row.status)
 
 
 def run_summary(
@@ -582,47 +470,24 @@ def submission_summary(
         size_bytes=row.size_bytes,
         status=row.status,  # type: ignore[arg-type]
         status_reason=row.status_reason,
-        next_run_at=row.next_run_at if row.status == "active" else None,
+        next_run_at=(
+            row.next_run_at
+            if row.status == "active" and row.qualified_at is None
+            else None
+        ),
         submitted_at=row.submitted_at,
         latest_run=run_summary(latest, counts),
+        qualified_at=row.qualified_at,
+        public_default=row.public_default,
+        round_score=row.round_score,
+        round_scored_index=row.round_scored_index,
     )
 
 
 async def build_ledger(
     session: AsyncSession, *, resolved: ResolvedSettings, now: datetime
 ) -> GeneratorLedgerResponse:
-    """Each hotkey's latest run scored within the freshness window.
+    """The generator ledger: each hotkey's latest round column score."""
+    from ditto.api_server.generator_rounds import build_round_ledger
 
-    Shadow only: every entry is ``weight_eligible=False``. ``mode=off`` serves
-    an empty ledger, which folds to zero generator emission.
-    """
-    settings = resolved.settings
-    if settings.mode == "off":
-        return GeneratorLedgerResponse(
-            count=0, mode="off", window_days=settings.window_days
-        )
-    rows = await latest_scored_runs(
-        session, since=now - timedelta(days=settings.window_days)
-    )
-    entries = [
-        GeneratorLedgerEntry(
-            miner_hotkey=sub.miner_hotkey,
-            submission_id=sub.submission_id,
-            run_id=run.run_id,
-            weight_eligible=False,
-            score=float(run.score or 0.0),
-            discriminating_cases=int(
-                (run.score_summary or {}).get("discriminating", 0)
-            ),
-            first_seen=sub.submitted_at,
-            scored_at=run.finished_at or run.leased_at,
-        )
-        for run, sub in rows
-    ]
-    return GeneratorLedgerResponse(
-        entries=entries,
-        count=len(entries),
-        window_days=settings.window_days,
-        mode=settings.mode,
-        generated_at=now,
-    )
+    return await build_round_ledger(session, resolved=resolved, now=now)

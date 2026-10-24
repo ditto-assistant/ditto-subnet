@@ -467,8 +467,25 @@ def diff(session: Session, probe_a: str, probe_b: str) -> dict[str, Any]:
 # -- source localization -------------------------------------------------------
 
 
+def triage(archive: Path) -> dict[str, Any]:
+    """Zero-token static triage: the shadow semantic-discovery location hints."""
+    from ditto_screener.fanout_discovery import semantic_discovery
+
+    try:
+        return semantic_discovery(str(archive), max_hints=12)
+    except Exception as error:  # noqa: BLE001 - triage is advisory
+        return {"error": type(error).__name__, "leads": []}
+
+
 def extract_source(archive: Path, dest: Path) -> int:
+    """Copy regular archive files under ``dest``; never links or escapes.
+
+    Members are submission-controlled: only regular files are written (no
+    symlinks, hard links or devices), absolute and ``..`` names are skipped,
+    and every resolved target must stay inside ``dest``.
+    """
     dest.mkdir(parents=True, exist_ok=True)
+    root = dest.resolve()
     count = 0
     total = 0
     with tarfile.open(archive, "r:gz") as tar:
@@ -488,7 +505,14 @@ def extract_source(archive: Path, dest: Path) -> int:
             if name.startswith("/") or ".." in Path(name).parts:
                 continue
             target = dest / name
-            target.parent.mkdir(parents=True, exist_ok=True)
+            if root not in target.resolve().parents:
+                continue
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+            except (FileExistsError, NotADirectoryError):
+                continue  # a file and a directory share a path: keep the first
+            if target.is_dir():
+                continue
             handle = tar.extractfile(member)
             if handle is not None:
                 target.write_bytes(handle.read())

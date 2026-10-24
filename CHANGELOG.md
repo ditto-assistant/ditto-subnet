@@ -2,6 +2,155 @@
 
 <!-- version list -->
 
+## v0.383.0 (2026-10-24)
+
+### Bug Fixes
+
+- **ci**: Format the confirmation taxonomy test and refresh the Backroom catalog budget
+  ([#3127](https://github.com/ditto-assistant/ditto-subnet/pull/3127),
+  [`dcb1559`](https://github.com/ditto-assistant/ditto-subnet/commit/dcb155982cab3ae2b92a40ed9b87e21e07ec8081))
+
+- **ci**: Narrow the confirmation decline before unpacking in the taxonomy test
+  ([#3132](https://github.com/ditto-assistant/ditto-subnet/pull/3132),
+  [`8edb35a`](https://github.com/ditto-assistant/ditto-subnet/commit/8edb35a6a6c5e5c933ed840a55095ebc490d0917))
+
+- **platform**: Hold inconclusive screenings for operator review
+  ([#3115](https://github.com/ditto-assistant/ditto-subnet/pull/3115),
+  [`894867c`](https://github.com/ditto-assistant/ditto-subnet/commit/894867cb712cb472b9af2dd8543494c2f184f7ba))
+
+- **platform**: Keep memory progress on the latest four competitions
+  ([#3103](https://github.com/ditto-assistant/ditto-subnet/pull/3103),
+  [`a0ea373`](https://github.com/ditto-assistant/ditto-subnet/commit/a0ea3732fc9a2bf4d7d292f6ee6c4af64d7225ca))
+
+- **platform**: Project court crowns from the canonical ledger
+  ([#3122](https://github.com/ditto-assistant/ditto-subnet/pull/3122),
+  [`87925c5`](https://github.com/ditto-assistant/ditto-subnet/commit/87925c5ea627cfc13b5649a043a63296dc963c8c))
+
+- **platform**: Regenerate the relay schema for generator tables and type the archive test
+  ([#3135](https://github.com/ditto-assistant/ditto-subnet/pull/3135),
+  [`94fe7a4`](https://github.com/ditto-assistant/ditto-subnet/commit/94fe7a4590fa9b611115ec0da2352b9b4ba45055))
+
+- **platform**: Restore receipt-free provider recovery, gate confirmation retry
+  ([#3063](https://github.com/ditto-assistant/ditto-subnet/pull/3063),
+  [`51eaa1f`](https://github.com/ditto-assistant/ditto-subnet/commit/51eaa1f1c60920e603d8a0960ee0a420063fa0ea))
+
+- **screener**: Fall back to another L3 model when a provider keeps faulting
+  ([#3106](https://github.com/ditto-assistant/ditto-subnet/pull/3106),
+  [`75515cb`](https://github.com/ditto-assistant/ditto-subnet/commit/75515cbde942c84632f813ce8f85fb620323903a))
+
+- **screener**: Probe-review verdicts accept word comparators and reject unusable predicates
+  ([#3121](https://github.com/ditto-assistant/ditto-subnet/pull/3121),
+  [`42711c6`](https://github.com/ditto-assistant/ditto-subnet/commit/42711c675121c2bb47dbdb20a57ada83ab1bb668))
+
+- **screener**: Stop treating routed instruction guidance as I5 on its own
+  ([#3114](https://github.com/ditto-assistant/ditto-subnet/pull/3114),
+  [`e8b7a2a`](https://github.com/ditto-assistant/ditto-subnet/commit/e8b7a2ad36a057034a5440ab94d7cb7b74012dba))
+
+- **screener**: Treat retrieval record selection as benchmark quality, not a W3 finding
+  ([#3118](https://github.com/ditto-assistant/ditto-subnet/pull/3118),
+  [`15ac309`](https://github.com/ditto-assistant/ditto-subnet/commit/15ac309d3bc5746ff625ac059d7749293341f8f3))
+
+- **screener**: Treat stripping a field such as saved timestamps as record selection
+  ([#3130](https://github.com/ditto-assistant/ditto-subnet/pull/3130),
+  [`bad2a4f`](https://github.com/ditto-assistant/ditto-subnet/commit/bad2a4f048d87f4ed0383489e71de3552970e596))
+
+- **security**: Distrust compromised eMudhra intermediates in every trust store
+  ([#3116](https://github.com/ditto-assistant/ditto-subnet/pull/3116),
+  [`6f96755`](https://github.com/ditto-assistant/ditto-subnet/commit/6f96755ef9b2937d60d0c160d8b6aef0606b2105))
+
+- **starter**: Pin complete model tool-call execution
+  ([#3061](https://github.com/ditto-assistant/ditto-subnet/pull/3061),
+  [`ee02419`](https://github.com/ditto-assistant/ditto-subnet/commit/ee0241912292ad2820bbed9ee64d67649db863d1))
+
+- **starter**: Synchronize release locks and staged provenance
+  ([#3110](https://github.com/ditto-assistant/ditto-subnet/pull/3110),
+  [`7b8dbc7`](https://github.com/ditto-assistant/ditto-subnet/commit/7b8dbc74cdb2d77f36488c0ef45c5cd1cc2051f9))
+
+### Chores
+
+- **screening**: Retire private-audit activation scaffolding
+  ([#3125](https://github.com/ditto-assistant/ditto-subnet/pull/3125),
+  [`4fdcc55`](https://github.com/ditto-assistant/ditto-subnet/commit/4fdcc55e398ac31f89f3fc9dcbb08c61dcd85fdb))
+
+- **tests**: Format node runtime admission regression
+  ([#3104](https://github.com/ditto-assistant/ditto-subnet/pull/3104),
+  [`603e3f6`](https://github.com/ditto-assistant/ditto-subnet/commit/603e3f67c3eebafb832ce1380b1e49bc75ceef9b))
+
+- **tests**: Start court deadline after fixture setup
+  ([#3113](https://github.com/ditto-assistant/ditto-subnet/pull/3113),
+  [`a09c1c4`](https://github.com/ditto-assistant/ditto-subnet/commit/a09c1c4ab17a2d0b778d05df46a0a9c542a491cc))
+
+### Documentation
+
+- **review**: Preserve scoped aceron diagnostics assurance
+  ([#3062](https://github.com/ditto-assistant/ditto-subnet/pull/3062),
+  [`0e54cd9`](https://github.com/ditto-assistant/ditto-subnet/commit/0e54cd920d768b28be4863cd50aaa9b86ee5c02b))
+
+- **review**: Reconcile currency and result-cap reversals
+  ([#3108](https://github.com/ditto-assistant/ditto-subnet/pull/3108),
+  [`1a5bdbc`](https://github.com/ditto-assistant/ditto-subnet/commit/1a5bdbc78664a831219b7a37fc9b63e76ac200fc))
+
+- **review**: Withdraw routed-guidance-only precedent
+  ([#3120](https://github.com/ditto-assistant/ditto-subnet/pull/3120),
+  [`1fbb10e`](https://github.com/ditto-assistant/ditto-subnet/commit/1fbb10ee238be6af5275515d13dfb3142d0ea5ba))
+
+### Features
+
+- **backroom**: Add generator competition MCP tools
+  ([#3102](https://github.com/ditto-assistant/ditto-subnet/pull/3102),
+  [`9ce7ce3`](https://github.com/ditto-assistant/ditto-subnet/commit/9ce7ce3e91ddf9ad778e97f1b6cfbdedf6b52758))
+
+- **backroom**: Expose exact-artifact source handoffs
+  ([#3107](https://github.com/ditto-assistant/ditto-subnet/pull/3107),
+  [`ab51701`](https://github.com/ditto-assistant/ditto-subnet/commit/ab51701a27362a380e60b150481a805083f4a90d))
+
+- **backroom**: Expose retained source-review evidence
+  ([#3111](https://github.com/ditto-assistant/ditto-subnet/pull/3111),
+  [`46bc3e6`](https://github.com/ditto-assistant/ditto-subnet/commit/46bc3e6a3613505ce0fd29e666cda434f4c48823))
+
+- **backroom**: Retire the coding competition tools and UI
+  ([#3129](https://github.com/ditto-assistant/ditto-subnet/pull/3129),
+  [`15537c9`](https://github.com/ditto-assistant/ditto-subnet/commit/15537c9dedd5a2fd260640878e3c6b1e146a1e25))
+
+- **datagen**: Add the generator competition contract and sandbox
+  ([#3094](https://github.com/ditto-assistant/ditto-subnet/pull/3094),
+  [`e2e5e5b`](https://github.com/ditto-assistant/ditto-subnet/commit/e2e5e5b8ec6fabe3ddf81b644d4966a2ecf48d0d))
+
+- **dittobench-api**: Evaluate generator submissions in the scorer sandbox
+  ([#3095](https://github.com/ditto-assistant/ditto-subnet/pull/3095),
+  [`6dd94b1`](https://github.com/ditto-assistant/ditto-subnet/commit/6dd94b1196ed249c72a232debb619772f44a6206))
+
+- **miner**: Add the generator track, CLI, and starter kit
+  ([#3097](https://github.com/ditto-assistant/ditto-subnet/pull/3097),
+  [`32fb437`](https://github.com/ditto-assistant/ditto-subnet/commit/32fb437398e771683960b44d1c102f656e368842))
+
+- **platform**: Add the shadow generator competition lane
+  ([#3096](https://github.com/ditto-assistant/ditto-subnet/pull/3096),
+  [`134b222`](https://github.com/ditto-assistant/ditto-subnet/commit/134b222faf04fb930b5ae75f9cc3c561c758df6d))
+
+- **platform**: Run the generator competition as chain-epoch agent x generator rounds
+  ([#3112](https://github.com/ditto-assistant/ditto-subnet/pull/3112),
+  [`add9be8`](https://github.com/ditto-assistant/ditto-subnet/commit/add9be865a1ce2174f0b3828ec52c03ff4d36637))
+
+- **protocol**: Bind private runs to official control subjects
+  ([#3059](https://github.com/ditto-assistant/ditto-subnet/pull/3059),
+  [`c1d90ed`](https://github.com/ditto-assistant/ditto-subnet/commit/c1d90ed1561de9c54e57b86ef8c31116c0c11dbf))
+
+- **screener**: Probe-driven reviewer shadow prototype (report-only)
+  ([#3007](https://github.com/ditto-assistant/ditto-subnet/pull/3007),
+  [`39685e8`](https://github.com/ditto-assistant/ditto-subnet/commit/39685e88d6d66a986789fd58597f50c76a003182))
+
+- **screener**: Report-only probe battery in the screening gate
+  ([#3126](https://github.com/ditto-assistant/ditto-subnet/pull/3126),
+  [`4a430fa`](https://github.com/ditto-assistant/ditto-subnet/commit/4a430faf02d03f5663efb0e22e34c8895c88381d))
+
+### Testing
+
+- **screener**: Widen the adjudicator deadline test window for slow runners
+  ([#3117](https://github.com/ditto-assistant/ditto-subnet/pull/3117),
+  [`4370f13`](https://github.com/ditto-assistant/ditto-subnet/commit/4370f13d2b18a0e16d17432ff2cbe0c63fc2e1ae))
+
+
 ## v0.382.3 (2026-10-23)
 
 ### Bug Fixes

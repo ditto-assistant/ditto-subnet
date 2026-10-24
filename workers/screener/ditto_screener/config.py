@@ -232,6 +232,12 @@ class ScreenerConfig:
     """L4-only output cap; None inherits the existing L2 completion cap."""
     l2_max_completion_request_seconds: float | None = None
     """Per-turn L2/L3 wall-clock cap; None derives it from the completion budget."""
+    probe_review_key_file: str | None = None
+    """Node-local Router key for the report-only probe reviewer; None disables it."""
+    probe_review_base_url: str = "https://router.heyditto.ai/v1"
+    """OpenAI-compatible gateway the probe reviewer calls with that key."""
+    probe_review_model: str = "anthropic/claude-sonnet-5.5"
+    """Model the probe reviewer requests."""
 
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured."""
@@ -502,6 +508,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         ),
         l2_max_completion_request_seconds=_parse_optional_float(
             "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS"
+        ),
+        probe_review_key_file=os.environ.get("SCREENER_PROBE_REVIEW_KEY_FILE") or None,
+        probe_review_base_url=os.environ.get(
+            "SCREENER_PROBE_REVIEW_BASE_URL", "https://router.heyditto.ai/v1"
+        ),
+        probe_review_model=os.environ.get(
+            "SCREENER_PROBE_REVIEW_MODEL", "anthropic/claude-sonnet-5.5"
         ),
     )
     if not config.signing_source_present():

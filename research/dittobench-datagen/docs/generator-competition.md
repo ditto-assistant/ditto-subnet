@@ -20,8 +20,9 @@ Goals:
   **discriminating** (some strong agents solve them and others do not) on seeds
   nobody sees in advance.
 - Keep evaluation cheap: generation is CPU-only, with no model, so running a
-  generator costs seconds of CPU. The only expensive part of a run is the agent
-  panel, which the agent competition already pays for.
+  generator costs seconds of CPU. The only expensive part is running agents
+  on its cases, and that runs on validators through the same ticket and
+  inference path the agent competition already pays for.
 - Make every rule a generator is judged on reproducible locally and
   deterministic (no LLM judge, no clock).
 - Resist the obvious exploits:
@@ -41,8 +42,9 @@ Non-goals for v1:
   generator can import the contract types directly.
 - Tool-call cases. v1 is memory recall only. Tool cases need validator-served
   fixtures that a generator cannot author safely.
-- Folding generator cases into the agent benchmark automatically. Promotion is
-  an operator decision (see "Feedback loop").
+- Folding generator cases into the agent benchmark's weights automatically.
+  Rounds rank agents in shadow; a benchmark built from the matrix is a later
+  bench version (see "Rollout").
 
 ## Why generator code, not uploaded packs
 
@@ -159,37 +161,111 @@ in one pass. A pack is accepted only with zero issues.
 One invalid pack on any seed rejects the generator. A generator has to work on
 every seed, not just the ones its author tried.
 
-## Evaluation (`genrun.Evaluate`)
+## Qualification (`genrun.Evaluate`)
 
-One run of a generator:
+Qualification is the gate a generator passes before it can hold a round
+column. The scorer:
 
-1. Build the source once.
-2. Run each of the run's secret seeds (`seeds_per_run`, 2 by default).
-3. Validate each pack against its request.
-4. Run the current **probe seed**, an extra secret seed that is generated and
+1. Builds the source once.
+2. Runs each of the run's secret seeds (`seeds_per_run`, 2 by default).
+3. Validates each pack against its request.
+4. Runs the current **probe seed**, an extra secret seed that is generated and
    validated but never shown to agents (see "Copies").
-5. Re-run the first seed to check determinism.
+5. Re-runs the first seed to check determinism.
 
-A build failure, crash, timeout, invalid pack, invalid probe, or
-nondeterministic output is the generator's fault. It rejects the submission,
+A build failure, crash, timeout, invalid pack, invalid probe, nondeterministic
+output, or behavioral copy is the generator's fault. It rejects the submission,
 with the reason recorded. Sandbox failures (Docker unavailable, a host I/O
 error) are the scorer's fault. They are never reported, the lease simply
 expires, and the run is retried on new seeds.
 
-Only a fully valid generator meets the panel.
+A generator that passes is **qualified**.
 
-## Scoring (`challenge.ScoreCases`, `challenge.ScoreRun`)
+## Rounds: the agent × generator matrix
 
-The trusted scorer runs each valid pack against a **panel**: the current top N
-agents (one per owner, `panel_size` 5 by default) from the same ledger
-validators fold, with the first as champion. Each panel run seeds the pack's
-waves into a fresh harness, runs the cases, and grades them with the production
-memory grader. Case, pair, session, and user IDs are replaced with per-run
-opaque IDs. Infrastructure failures are marked `fault` and excluded, not counted
-as misses.
+Generators are scored against agents in **rounds**. A round is keyed on the
+chain's own epoch counter:
 
-For each case, the eligible agents are those not owned by the generator's
-coldkey and with an unfaulted result. Over those agents:
+```
+round_index = SubnetEpochIndex // epochs_per_round      (4 by default)
+```
+
+`SubnetEpochIndex` counts every subnet epoch the chain fires. It survives tempo
+changes and deferred or owner-triggered epochs, and it is the same counter the
+epoch-pinned validator ledger keys on. So a round opens and closes on a Yuma
+epoch boundary, and every validator folds the same generator ledger.
+
+### Seed: commit, then reveal
+
+The seed has to be unpredictable to miners, who know their own generator's
+source and could otherwise precompute its cases. It also has to be
+unpredictable to Platform, which must not be able to grind it.
+
+1. **Commit.** While round `r − 1` runs, Platform draws round `r`'s 32-byte
+   secret and publishes `commitment = RoundCommitment(r, secret)` =
+   `sha256("dittobench-generator-round-commit/v1" ‖ 0 ‖ u64be(r) ‖ secret)`.
+   The commitment goes on Platform and, when `onchain_commitment` is set, on
+   chain as a Commitments `set_commitment` of `dgr1:{r}:{commitment}`.
+2. **Open.** At round `r`'s epoch boundary, Platform derives
+   `seed = RoundSeed(r, secret, open_block_hash)`, using the hash of the block
+   the epoch fired at. That block did not exist when the secret was committed.
+3. **Reveal.** `privacy_window_rounds` (6) after the round opens, its secret,
+   seed, and dataset digest become public. Anyone can check the secret
+   against the commitment and recompute every case.
+
+A round that was not committed before its first epoch never opens; it is void.
+Each column runs on its own seed, `RoundColumnSeed(seed, column)`. So the
+public default generator can fill several columns without repeating cases. The
+derivations are pinned by `challenge/testdata/round_vectors.json`, which
+Platform's port replays.
+
+### Columns and panel
+
+When a round opens it freezes:
+
+- **Counted columns** (`counted_columns`, 5). These go first to the best
+  qualified generators by latest round score, then to qualified generators that
+  have never held a column. The **public default generator** fills whatever is
+  left; it is owned by nobody and never appears on the ledger. One column per
+  owner.
+- **Challenger columns** (`challenger_columns`, 1). These go to qualified
+  generators that have never held a column. They are scored as generators but
+  never move an agent, so a new generator qualifies against the top agents
+  without affecting them.
+- **The panel.** This is the top `panel_size` agent owners from the ledger
+  validators fold, plus `reference_agent_ids`: subnet-run baselines, each
+  counted as its own independent solver.
+
+### Execution
+
+1. The scorer runs every column generator on its column seed. It encodes the
+   valid packs into one canonical **round dataset**
+   (`challenge.EncodeRoundDataset`).
+2. A miner generator that qualified but fails on its round seed is rejected:
+   generators must work on every seed. A failed default-generator column is
+   only dropped.
+3. Validators run each panel agent on the round dataset. Platform re-leases the
+   agent's own ticket row with purpose `generator_round`, on idle capacity
+   left after canonical work and continual retests.
+4. The validator runs dittobench-api's `generator-round-v1` mode: the screened
+   image, ticket inference, and the production memory grader, one column at a
+   time.
+5. The validator posts signed per-case results. A failed run is handed back
+   without charging the agent anything.
+6. The round closes when every panel agent reported, or when its last epoch
+   ends. With fewer than `min_panel` results it is void.
+
+## Scoring (`challenge.ScoreCases`, `challenge.ScoreRound`)
+
+`challenge.ScoreRound` scores the whole matrix.
+
+**Generators.** Each column is scored with `ScoreCases` against the whole
+panel. The column owner's own agents never count. Columns claim their
+fingerprints in order, so a later column repeating an earlier column's cases,
+or a case an earlier round holds, scores as a duplicate.
+
+For each case, the eligible agents are those not owned by the column's owner
+and with an unfaulted result. Over those agents:
 
 ```
 solvable       ⇔ solved (score ≥ 0.5) by ≥ min_solver_owners distinct owners
@@ -198,16 +274,23 @@ discriminating ⇔ solvable ∧ ¬trivial
 credit         = (1 − mean score) × (1 + champion_bonus · [champion failed])
 ```
 
-For one seed's pack, with `n` cases, `dup` duplicate cases (fingerprints already
-claimed), and `u` unsolved cases:
+For one column's pack, with `n` cases, `dup` duplicate cases and `u` unsolved
+cases:
 
 ```
-pack score = Σ credit / ((1 + champion_bonus) · max(n, cases_per_seed)) × (1 − u / (n − dup))²
+column score = Σ credit / ((1 + champion_bonus) · max(n, cases_per_seed)) × (1 − u / (n − dup))²
 ```
 
-The run score is the mean pack score over the run's seeds, in order. Every
-fingerprint a seed emits is claimed for later seeds, so a generator that ignores
-its seed scores its first pack and duplicates for the rest.
+A generator's ledger score is its latest round column score within
+`window_days`.
+
+**Agents.** Agents are ranked **pairwise-neutral**. Agents A and B are
+compared only on cases of counted columns owned by neither A's owner nor B's
+owner, and only on cases neither faulted. A wins the pair when its summed
+score difference over those cases is positive. An agent's pairwise score is
+`(wins + ties/2) / opponents`. Ties break on the mean over columns no panel
+owner owns (the common cases), then on agent id. Standings are published per
+round; in shadow they move no weight.
 
 The shipped parameters are:
 
@@ -217,36 +300,36 @@ The shipped parameters are:
 | `min_solver_owners` | 2 |
 | `solve_threshold` | 0.5 |
 | `champion_bonus` | 0.5 |
-| `seeds_per_run` | 2 |
 | `cases_per_seed` | 16 |
+| `epochs_per_round` | 4 |
+| `counted_columns` | 5 |
+| `challenger_columns` | 1 |
+| `privacy_window_rounds` | 6 |
 
 Why each term is there:
 
-- **Secret seeds** mean neither the miner nor any agent knows a case before the
-  scorer generates it. Pre-screening and baking answers into an agent no longer
-  work.
-- **Solvability needs two owners.** A miner who controls a generator and a top
-  agent and shares the generator's source with it could teach the agent the
-  generator's families. That makes a case "solvable" for exactly one owner,
-  which is not enough. The generator's own agents never count at all.
+- **Secret, committed seeds** mean neither the miner nor any agent knows a case
+  before the round opens, and Platform cannot choose the seed either.
+- **Pairwise neutrality** is the answer to miners who mine both sides. A
+  generator's column is excluded from every comparison its owner's agent takes
+  part in. So a generator cannot lift its owner's agent, and cannot sink a
+  rival relative to that agent either.
+- **Solvability needs two independent owners.** A miner who shares a
+  generator's families with their own agent makes a case solvable for one
+  owner, which is not enough. The generator's own agents never count, and
+  reference agents count as independent solvers that colluding miners cannot
+  fake.
 - **The squared solvability factor** is the counterweight to the incentive to
   "defeat" agents with broken cases. If half a pack's cases are unsolved, the
   pack keeps at most a quarter of its credit.
 - **Trivial cases earn nothing.** They do not move the frontier.
 - **The champion bonus** pays most for the king's blind spots.
-- **Duplicates score zero.** The first scored run that emits a fingerprint holds
-  it. With random seeds, repeats come only from low-entropy generators or from
-  copies.
+- **Duplicates score zero.** The first round that emits a fingerprint holds it.
 
-If any case lacks `min_panel` eligible results, the run is
-`insufficient_panel`. It scores zero and is retried on new seeds after a
-backoff. A partial panel never decides a run. Platform does not lease at all
-while fewer than `min_panel` agents are on the ledger.
-
-Panel members are summed in `agent_id` order, so float results are identical
-across implementations. `challenge/testdata/score_vectors.json` and
-`run_vectors.json` hold golden vectors that Platform's Python port must
-reproduce exactly.
+Panel members are summed in `agent_id` order and cases in column then case
+order, so float results are identical across implementations.
+`challenge/testdata/score_vectors.json`, `run_vectors.json` and
+`round_vectors.json` hold golden vectors.
 
 ## Copies
 
@@ -255,7 +338,7 @@ Two copy checks apply.
 **Exact source.** Platform refuses an upload whose archive digest or tree
 digest matches an existing submission.
 
-**Behavior.** Every run also generates a pack on the current probe seed. That
+**Behavior.** Every qualification run also generates a pack on the current probe seed. That
 seed is secret, and it is shared by every run in a probe epoch. The probe
 pack's fingerprints are stored per submission and epoch. A new submission's
 probe output is compared with earlier submissions from **other owners** in the
@@ -267,8 +350,8 @@ Renaming variables or re-ordering files does not change what a program emits,
 so it does not evade the check. Because the probe seed is secret, a copy cannot
 detect the probe and behave differently on it. Operators can rotate the probe
 seed (for example after a suspected leak) with the Backroom confirmation
-`ROTATE GENERATOR PROBE SEED`. Every active generator is then re-probed on its
-next run.
+`ROTATE GENERATOR PROBE SEED`. Every active generator then re-qualifies, and
+re-probes, before its next round column.
 
 The public starter kit is a starting point, not a submission. An unmodified kit
 is accepted once. Every later identical upload is a duplicate, and the kit's
@@ -276,29 +359,25 @@ families are ones the top agents mostly solve.
 
 ## Freshness
 
-Each run is a snapshot against the panel at that time. An active generator is
-re-run on fresh seeds every `rescore_interval_hours` (24 by default). The
-ledger counts each hotkey's latest run scored within a rolling window (7 days by
-default).
-
-As agents improve, a generator's families become trivial and its score falls.
-Earnings therefore need a generator that keeps finding blind spots. Uploading a
-new generator supersedes the hotkey's previous one. The previous one's last run
-keeps counting until the new one is scored.
+Every round is a fresh snapshot: new seeds, the current top agents, and the
+current best generators. As agents improve, a generator's families become
+trivial, its column score falls, and it loses its counted column to a better
+generator. Earnings therefore need a generator that keeps finding blind spots.
+Uploading a new generator supersedes the hotkey's previous one. The previous
+one's last round score keeps counting until the new one is scored.
 
 ## Privacy
 
-Generator source, seeds of in-flight runs, probe seeds, and case content are
-never served publicly or to agent miners. If cases were served, agent miners
-could train on them and the "discriminating" signal would collapse.
-
-Platform publishes per-run scores and case status counts. Operators can read a
-finished run's seeds in Backroom to reproduce its packs exactly. Panel agent
-identities stay aggregated.
+Generator source, an open round's secret, seed, and dataset, probe seeds, and
+case content are never served publicly or to agent miners. Validators receive
+the round dataset only while they hold a round lease, at the same trust level
+as today's private datasets. A round's secret, seed, and dataset digest become
+public after `privacy_window_rounds`. Operators can download a closed round's
+dataset in Backroom (artifact scope) to reproduce it.
 
 ## Feedback loop
 
-Cases scored `discriminating` are recorded as promotion candidates. Operators
+Round cases scored `discriminating` are recorded as promotion candidates. Operators
 can review them in Backroom and curate them into a future private benchmark
 pool. A generator whose families keep earning can be adopted wholesale as a
 DittoBench datagen family. That is the counterbalance at its strongest: a
@@ -310,27 +389,28 @@ operator ruling.
 
 | Layer | Component | Responsibility |
 |---|---|---|
-| Contract | `research/dittobench-datagen/challenge` | Generator request and archive rules, pack schema, validation, scoring reference, golden vectors, reference pack |
+| Contract | `research/dittobench-datagen/challenge` | Generator request and archive rules, pack schema, validation, round derivations and dataset, `ScoreCases`/`ScoreRun`/`ScoreRound`, golden vectors |
 | Sandbox | `research/dittobench-datagen/genrun`, `cmd/challenge` | Package, build, and run a generator in the Docker sandbox (or locally); `rehearse` is the scorer path for miners |
-| Executor | `services/dittobench-api/internal/challengerun`, `cmd/challenge-scorer` | Lease runs from Platform, evaluate the generator, run each pack against the panel with the production runner and grader, post the evaluation |
-| Platform | `apps/platform` | Signed source uploads, archive checks, private storage, revisioned settings, secret seeds and probe epochs, scorer work and result intake, copy detection, Python scoring port, generator ledger |
-| Validator | `ditto/validator` | `generator` track in `SHADOW` at 0 bps, folding the generator ledger |
-| Backroom | `apps/backroom` | Read the competition, submissions, runs, and verdicts; set settings and rotate the probe with revision and confirmation |
+| Scorer | `services/dittobench-api/cmd/challenge-scorer` | Qualification runs; round dataset generation; round matrix scoring |
+| Round execution | `services/dittobench-api/cmd/dittobench-api` (`generator-round-v1`) | Run a round dataset against one screened agent image with ticket inference and the production grader |
+| Platform | `apps/platform` | Signed uploads, private storage, settings, qualification, chain-epoch rounds (commit, open, close, reveal, on-chain commitment), validator round leases, copy detection, generator ledger |
+| Validator | `ditto/validator` | Run round panel runs on idle slots; `generator` track in `SHADOW` at 0 bps folding the generator ledger |
+| Backroom | `apps/backroom` | Read and drive every part of the lane: settings, submissions, qualification runs, rounds, leases, results, the matrix, the round driver; activation and debugging writes with revision and confirmation |
 | Miner | `ditto generator`, `miners/dittobench-generator-starter-kit` | Rehearse, package, sign, and upload generators; reference generator to fork |
 
 ## Rollout
 
-1. **Shadow (this stack).**
-   - Settings `mode=shadow`.
+1. **Shadow (now).**
+   - Settings `mode=shadow`. Register the public default generator and let it
+     qualify. Set `validator_rounds_enabled=true`.
    - Every ledger entry is `weight_eligible: false` and the validator track is
-     `SHADOW`, so nothing touches emissions.
-   - The scorer host runs Docker and drives operator-provisioned panel
-     harnesses.
-2. **Panel automation.** The scorer launches panel agents from their screened
-   images through the DittoBench sandbox and inference broker, the same path a
-   validator scoring run uses.
+     `SHADOW`, so nothing touches emissions. Round standings are published,
+     not weighted.
+2. **Compare.** Run the matrix in shadow alongside the canonical benchmark.
+   Compare crown stability, copy and collusion signals, and how agents rank on
+   the matrix versus the benchmark.
 3. **Enforce.**
-   - Operators set a generator track share through governance.
-   - Settings move to `mode=enforce`.
-   - The ledger marks entries eligible.
-   - An upload fee is added at the same time.
+   - Operators set a generator track share through governance, and the ledger
+     marks entries eligible. An upload fee is added at the same time.
+   - A new bench version draws its memory cases from the round matrix, so the
+     agent competition is judged on the generators' cases.

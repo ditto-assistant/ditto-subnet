@@ -853,6 +853,7 @@ async def owner_live_lease_agent_ids(
                 ValidatorTicket.deadline > now,
                 ValidatorTicket.purpose != TicketPurpose.CONTINUAL_RETEST,
                 ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+                ValidatorTicket.purpose != TicketPurpose.GENERATOR_ROUND,
                 linkage.same_owner_predicate(
                     agent=sibling_agent, payment=sibling_payment
                 ),

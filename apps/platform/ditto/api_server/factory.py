@@ -90,6 +90,7 @@ from ditto.api_server.endpoints import (
     admin_efficiency_bonus_settings_router,
     admin_emission_eligibility_router,
     admin_generator_competition_router,
+    admin_generator_rounds_router,
     admin_hotkey_bans_router,
     admin_inference_admission_router,
     admin_inference_concurrency_settings_router,
@@ -160,6 +161,7 @@ from ditto.api_server.endpoints import (
     validator_coding_harness_router,
     validator_coding_inference_router,
     validator_confirmation_router,
+    validator_generator_round,
     validator_private_dataset,
     validator_router,
 )
@@ -192,6 +194,7 @@ from ditto.api_server.endpoints.verification_replay import (
     screener_router as screener_verification_replay_router,
 )
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
+from ditto.api_server.generator_rounds import GeneratorRoundLoop
 from ditto.api_server.github_link import GithubLinkClient
 from ditto.api_server.inference_concurrency_settings import (
     InferenceConcurrencySettingsResolver,
@@ -550,6 +553,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await ledger_pin_loop.start()
             app.state.ledger_pin_loop = ledger_pin_loop
+            # Generator-competition rounds follow the chain's epoch counter.
+            # Settings-gated: with mode off each tick is a settings read and
+            # nothing else, so it runs on the platform role unconditionally.
+            generator_round_loop = GeneratorRoundLoop(
+                app_state=app.state, session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(generator_round_loop.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await generator_round_loop.start()
+                app.state.generator_round_loop = generator_round_loop
             emission_collector = SourceEmissionCollector(
                 app_state=app.state,
                 session_maker=app.state.session_maker,
@@ -776,6 +789,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
     app.include_router(validator_private_dataset.router, prefix="/api/v1")
+    app.include_router(validator_generator_round.router, prefix="/api/v1")
     app.include_router(validator_coding_certification_router, prefix="/api/v1")
     app.include_router(validator_coding_certification_leases_router, prefix="/api/v1")
     app.include_router(validator_coding_claims_router, prefix="/api/v1")
@@ -806,6 +820,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
     app.include_router(admin_scoring_lease_settings_router, prefix="/api/v1")
     app.include_router(admin_generator_competition_router, prefix="/api/v1")
+    app.include_router(admin_generator_rounds_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")

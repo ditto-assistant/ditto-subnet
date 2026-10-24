@@ -1187,6 +1187,121 @@ async def issue_confirmation_ticket(
     return ticket
 
 
+async def issue_generator_round_ticket(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    validator_hotkey: str,
+    now: datetime,
+    ttl: timedelta,
+    seed: int,
+    dataset_sha256: str,
+    slot_id: str,
+) -> ValidatorTicket | None:
+    """Lease a generator-round panel run on the agent's existing ticket row.
+
+    Same rails as :func:`issue_confirmation_ticket`: one live lease per
+    ``(validator, slot)``, the immutable V13 scorer pin, never repurposing an
+    operator-authorized replacement, and only finalized (scored or live)
+    agents, whose canonical quorum is already complete. The purpose is
+    ``generator_round``, so no agent-score endpoint will accept the lease.
+    ``attempt_count`` and the retry grants are left untouched: a round run is
+    not a scoring attempt and must never consume the agent's retry budget.
+    """
+    await lock_validator_slot(
+        session, validator_hotkey=validator_hotkey, slot_id=slot_id
+    )
+    await expire_overdue_tickets(session, now=now)
+    from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+
+    if not await pinned_validator_allowed(session, hotkey=validator_hotkey, now=now):
+        return None
+    if (
+        await live_v9_confirmation_slot_ticket(
+            session, validator_hotkey=validator_hotkey, slot_id=slot_id, now=now
+        )
+        is not None
+    ):
+        return None
+    agent = await session.scalar(
+        select(Agent).where(Agent.agent_id == agent_id).with_for_update()
+    )
+    if agent is None or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}:
+        return None
+    # Checked under the agent lock: two requests for this agent on different
+    # slots both pass an earlier check, and the second would then overwrite
+    # the first's freshly issued lease on the shared ticket row.
+    live = await session.scalar(
+        select(ValidatorTicket)
+        .where(
+            ValidatorTicket.validator_hotkey == validator_hotkey,
+            ValidatorTicket.status == TicketStatus.ISSUED,
+            ValidatorTicket.deadline > now,
+            (ValidatorTicket.slot_id == slot_id)
+            | (
+                (ValidatorTicket.agent_id == agent_id)
+                & (ValidatorTicket.bench_version == 13)
+            ),
+        )
+        .limit(1)
+        .with_for_update()
+    )
+    if live is not None:
+        return None
+    latest_retest = await get_latest_score_retest_event(
+        session, agent_id=agent_id, validator_hotkey=validator_hotkey
+    )
+    if (
+        latest_retest is not None
+        and latest_retest.event == EVENT_SCORE_RETEST_REQUESTED
+    ):
+        return None
+    ticket = await session.get(ValidatorTicket, (agent_id, 13, validator_hotkey))
+    if ticket is not None and ticket.retry_after is not None:
+        retry_after = ticket.retry_after
+        if retry_after.tzinfo is None:
+            retry_after = retry_after.replace(tzinfo=UTC)
+        if retry_after > now:
+            return None
+    if ticket is None:
+        ticket = ValidatorTicket(
+            agent_id=agent_id,
+            validator_hotkey=validator_hotkey,
+            slot_id=slot_id,
+            status=TicketStatus.ISSUED,
+            purpose=TicketPurpose.GENERATOR_ROUND,
+            purpose_revision=1,
+            issued_at=now,
+            deadline=now + ttl,
+            bench_version=13,
+            seed=seed,
+            dataset_sha256=dataset_sha256,
+            # The table requires a positive count. A fresh row records one
+            # (this round run) and is never consulted by canonical retry
+            # budgets: the agent's quorum completed before it was eligible.
+            attempt_count=1,
+            manual_retry_grants=0,
+            retry_after=None,
+            legacy_completion_allowed=False,
+        )
+        session.add(ticket)
+    else:
+        ticket.status = TicketStatus.ISSUED
+        ticket.purpose = TicketPurpose.GENERATOR_ROUND
+        ticket.purpose_revision += 1
+        ticket.legacy_completion_allowed = False
+        ticket.slot_id = slot_id
+        ticket.issued_at = now
+        ticket.deadline = now + ttl
+        ticket.seed = seed
+        ticket.dataset_sha256 = dataset_sha256
+        ticket.seed_block = None
+        ticket.seed_block_hash = None
+        ticket.retry_after = None
+    await session.flush()
+    return ticket
+
+
 async def get_open_ticket(
     session: AsyncSession,
     *,

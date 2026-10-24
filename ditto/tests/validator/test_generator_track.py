@@ -32,12 +32,12 @@ def _entry(
     *,
     eligible: bool = True,
     seen: int = 0,
-    run_id: UUID | None = None,
+    submission_id: UUID | None = None,
 ) -> GeneratorLedgerEntry:
     return GeneratorLedgerEntry(
         miner_hotkey=hotkey,
-        submission_id=uuid4(),
-        run_id=run_id or uuid4(),
+        submission_id=submission_id or uuid4(),
+        round_index=7,
         weight_eligible=eligible,
         score=score,
         first_seen=_T0 + timedelta(hours=seen),
@@ -69,8 +69,8 @@ def test_fold_ranks_by_score_with_deterministic_ties() -> None:
     early, late = uuid4(), uuid4()
     entries = [
         _entry("hk-c", 0.10),
-        _entry("hk-a", 0.30, seen=5, run_id=late),
-        _entry("hk-b", 0.30, seen=1, run_id=early),
+        _entry("hk-a", 0.30, seen=5, submission_id=late),
+        _entry("hk-b", 0.30, seen=1, submission_id=early),
         _entry("hk-ineligible", 0.99, eligible=False),
         _entry("hk-zero", 0.0),
     ]
@@ -108,8 +108,7 @@ async def test_ledger_source_fails_closed() -> None:
     async def _boom() -> GeneratorLedgerResponse:
         raise RuntimeError("platform down")
 
-    ledger = await PlatformGeneratorLedgerSource(read=_boom).fetch()
-    assert ledger.entries == []
+    assert await PlatformGeneratorLedgerSource(read=_boom).fetch() is None
 
 
 def test_ledger_ignores_unknown_fields() -> None:
@@ -168,3 +167,66 @@ async def test_a_deregistered_generator_never_takes_a_paid_slot() -> None:
     assert absent not in weights
     assert weights[present] == pytest.approx(0.2)
     assert weights[champion] == pytest.approx(0.8)
+
+
+async def test_an_unreadable_eligible_ledger_leaves_weights_unchanged() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from ditto.tests.validator.test_worker import (
+        _config,
+        _platform_with_ledger,
+    )
+    from ditto.tests.validator.test_worker import (
+        _entry as _memory_entry,
+    )
+    from ditto.validator.worker import ValidatorWorker
+
+    champion = "5Champion" + "x" * 39
+    present = "5GenPresent" + "x" * 36
+    platform = _platform_with_ledger(jobs=[], ledger=[_memory_entry(champion, 0.9)])
+    source = MagicMock()
+    source.fetch = AsyncMock(return_value=None)
+    chain = MagicMock()
+    chain.get_recent_neurons = AsyncMock(
+        return_value=[SimpleNamespace(hotkey=champion), SimpleNamespace(hotkey=present)]
+    )
+    chain.put_weights = AsyncMock()
+    config = _config()
+    config.track_shares_bps = {TRACK_MEMORY: 8000, TRACK_GENERATOR: 2000}
+    config.generator_track_state = TrackState.ACTIVE.value
+    config.generator_weight_eligible = True
+    config.generator_ledger_read_enabled = True
+    worker = ValidatorWorker(
+        config=config,
+        platform=platform,
+        dittobench=MagicMock(),
+        chain=chain,
+        keypair=MagicMock(),
+        generator_ledger_source=source,
+    )
+
+    await worker.run_once()
+
+    chain.put_weights.assert_not_awaited()
+
+
+def test_a_run_shaped_ledger_from_an_older_platform_still_folds() -> None:
+    raw = {
+        "count": 1,
+        "mode": "shadow",
+        "entries": [
+            {
+                "miner_hotkey": "5Older" + "x" * 42,
+                "submission_id": str(uuid4()),
+                "run_id": str(uuid4()),
+                "weight_eligible": True,
+                "score": 0.4,
+                "first_seen": _T0.isoformat(),
+                "scored_at": _T0.isoformat(),
+            }
+        ],
+    }
+    ledger = GeneratorLedgerResponse.model_validate(raw)
+    assert ledger.entries[0].round_index is None
+    assert compute_generator_weights(ledger.entries, rank_shares=GENERATOR_RANK_SHARES)

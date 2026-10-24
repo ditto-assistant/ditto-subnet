@@ -135,28 +135,77 @@ are already-scored confirmation seeds, as exact decimal strings. The snapshot
 grants no work and changes nothing.
 
 The shadow DittoBench generator competition has its own operator surface.
-Miners submit CPU-only Go generator source. Platform runs each generator on
-fresh secret seeds against a top-agent panel and publishes a weight-zero ledger.
+Miners submit CPU-only Go generator source. The scorer qualifies each upload:
+it builds the source, checks that every pack on fresh secret seeds is valid,
+re-runs to check determinism, and runs the probe copy check. Qualified
+generators then compete in rounds keyed on the chain epoch counter
+(`round = SubnetEpochIndex // epochs_per_round`).
+
+Each round runs these steps:
+
+1. Platform commits the round's secret one round ahead, on Platform and
+   on-chain.
+2. When the round opens, Platform derives the seed from that secret and the
+   block the round opened at.
+3. Platform freezes the round's generator columns and agent panel.
+4. The scorer generates the round dataset.
+5. Validators run every panel agent on the dataset.
+6. The scorer scores the matrix: generators get column scores, agents get
+   pairwise-neutral standings.
+
+Each round's secret is revealed after `privacy_window_rounds`.
 
 - **Reads (`backroom:read`):**
-  - `get_generator_competition_settings` returns the policy.
+  - `get_generator_competition_settings` returns the policy, including the
+    round knobs (`epochs_per_round`, columns, reference agents, privacy
+    window, on-chain commitment and `validator_rounds_enabled`).
   - `list_generator_submissions` and `get_generator_submission` return
-    identity, status and runs, never source.
-  - `get_generator_run` returns the evaluation, panel snapshot and per-case
-    verdicts. Seeds appear only after the run finished, so an operator can
-    regenerate its packs.
+    identity, status, qualification and latest round score, never source.
+  - `get_generator_run` returns a qualification run's evaluation. Seeds appear
+    only after the run finished, so an operator can regenerate its packs.
   - `get_generator_probe` returns probe epochs. The probe seed is never served.
-  - `list_generator_promotion_candidates` returns discriminating cases.
+  - `list_generator_rounds`, `get_generator_round`, `preview_generator_round`
+    and `get_generator_round_loop` expose the following:
+    - the schedule;
+    - each round's commitment and its publication;
+    - columns, panel and per-column generation;
+    - every validator lease and result;
+    - pending agents;
+    - the scored matrix;
+    - what a round opened now would freeze, and every blocker;
+    - the round driver's last tick.
+  - `get_generator_round_dataset` (`backroom:artifact:read`) downloads a
+    closed round's exact dataset to reproduce it.
+  - `list_generator_promotion_candidates` returns discriminating round cases.
   - `get_generator_board` returns the ledger validators fold.
 - **Writes (`backroom:write`, actor recorded):**
   - `set_generator_competition_settings` stores a whole-object revision with
     `expectedRevision` and the confirmation `APPLY GENERATOR COMPETITION {MODE}`.
+  - `register_default_generator` (`REGISTER DEFAULT GENERATOR`) registers the
+    public generator that fills empty counted columns.
+  - `tick_generator_rounds` runs one idempotent round-driver tick now.
+  - `void_generator_round` (`VOID GENERATOR ROUND {n}`) voids a round.
+    `close_generator_round` (`CLOSE GENERATOR ROUND {n}`) scores a running
+    round with the results it already has.
+  - `republish_generator_round_commitment`
+    (`REPUBLISH GENERATOR ROUND COMMITMENT`) retries a failed on-chain
+    commitment for a round that has not opened.
+  - `release_generator_round_lease` (`RELEASE GENERATOR ROUND LEASE`) frees a
+    quiet validator's round lease.
   - `rotate_generator_probe_seed` needs the confirmation
-    `ROTATE GENERATOR PROBE SEED`. Every generator is re-probed on its next run.
-  - `rescore_generator_submission` makes an active generator due now.
+    `ROTATE GENERATOR PROBE SEED`. Every active generator re-qualifies.
+  - `rescore_generator_submission` re-qualifies an active generator now.
   - `reject_generator_submission` needs the confirmation
     `REJECT GENERATOR SUBMISSION` and `expectedStatus`. It abandons an
-    in-flight run and drops the generator from the ledger at once.
+    in-flight qualification run and drops the generator from the ledger at
+    once.
+
+Activating the lane in shadow takes four steps:
+
+1. Set `mode=shadow`.
+2. Register the default generator, and wait for it to qualify.
+3. Check `preview_generator_round`.
+4. Set `validator_rounds_enabled=true`.
 
 There is no enforcing mode: ledger entries stay `weight_eligible=false`.
 
