@@ -12,6 +12,14 @@ pylon_subtensor_url() {
   local key="${SUBTENSOR_ARCHIVE_RPC_API_KEY:-}"
   local mode="${SUBTENSOR_ARCHIVE_RPC_AUTH_MODE:-query}"
   [ -n "$url" ] || return 0
+  case "$mode" in
+    none | query | path) ;;
+    *)
+      # ChainConfig refuses any other mode; never put a key somewhere it does not belong.
+      echo "chain-transport: unsupported SUBTENSOR_ARCHIVE_RPC_AUTH_MODE=$mode; Pylon keeps SUBTENSOR_NETWORK" >&2
+      return 0
+      ;;
+  esac
   if [ -z "$key" ] || [ "$mode" = none ]; then
     printf '%s' "$url"
   elif [ "$mode" = path ]; then

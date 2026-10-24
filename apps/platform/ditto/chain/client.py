@@ -730,6 +730,7 @@ class ChainClient:
                 f"finalized block number {block_number} is invalid"
             )
         urls = self._live_substrate_urls()
+        not_finalized: ExtrinsicNotFoundError | None = None
         for index, url in enumerate(urls):
             try:
                 async with header_substrate(url) as substrate:
@@ -741,17 +742,27 @@ class ChainClient:
                         )
                     block_hash = await substrate.get_block_hash(block_number)
                 break
-            except (ExtrinsicNotFoundError, ChainTimeoutError, ChainConnectionError):
+            except ExtrinsicNotFoundError as e:
+                # A lagging provider may not have finalized this height yet.
+                not_finalized = e
+                if index + 1 < len(urls):
+                    continue
+                raise
+            except (ChainTimeoutError, ChainConnectionError):
                 raise
             except TimeoutError as e:
                 if index + 1 < len(urls):
                     continue
+                if not_finalized is not None:
+                    raise not_finalized from e
                 raise ChainTimeoutError(
                     f"get_finalized_block_hash({block_number}) timed out"
                 ) from e
             except Exception as e:
                 if index + 1 < len(urls):
                     continue
+                if not_finalized is not None:
+                    raise not_finalized from e
                 raise ChainConnectionError(
                     "get_finalized_block_hash"
                     f"({block_number}) failed: {self._safe_rpc_error(e)}"

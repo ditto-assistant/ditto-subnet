@@ -887,7 +887,18 @@ class TestFinalizedBlocks:
             "wss://entrypoint-finney.opentensor.ai:443",
         ]
 
-    async def test_not_finalized_does_not_try_the_next_provider(
+    async def test_lagging_provider_falls_through_on_not_finalized(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_chain_finalised_head.return_value = "0xfinal"
+        install_substrate_module.get_block_number.side_effect = [456, 460]
+        install_substrate_module.get_block_hash.return_value = "0xABCD"
+        config = make_chain_config(archive_rpc_url="wss://paid.example/rpc")
+
+        async with ChainClient(config) as client:
+            assert await client.get_finalized_block_hash(457) == "0xabcd"
+
+    async def test_not_finalized_everywhere_raises_not_found(
         self, install_substrate_module: AsyncMock
     ) -> None:
         install_substrate_module.get_chain_finalised_head.return_value = "0xfinal"
@@ -899,7 +910,7 @@ class TestFinalizedBlocks:
                 await client.get_finalized_block_hash(457)
 
         substrate_module = sys.modules["async_substrate_interface"]
-        assert substrate_module.AsyncSubstrateInterface.call_count == 1
+        assert substrate_module.AsyncSubstrateInterface.call_count == 2
 
 
 @pytest.mark.usefixtures("install_pylon_module")
