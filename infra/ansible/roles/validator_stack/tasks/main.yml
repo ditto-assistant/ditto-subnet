@@ -465,6 +465,46 @@
     fail_msg: The validator-wandb-key Secret Manager version is empty or malformed
   no_log: true
 
+- name: Read the paid chain provider key from Secret Manager
+  ansible.builtin.command:
+    argv:
+      - gcloud
+      - secrets
+      - versions
+      - access
+      - latest
+      - "--secret={{ validator_stack_subtensor_rpc_secret }}"
+      - "--project={{ validator_stack_project }}"
+  register: validator_stack_subtensor_rpc_key_read
+  changed_when: false
+  no_log: true
+  when:
+    - validator_stack_subtensor_rpc_url | length > 0
+    - validator_stack_subtensor_rpc_auth_mode != 'none'
+
+- name: Require a non-empty single-line chain provider key
+  ansible.builtin.assert:
+    that:
+      - validator_stack_subtensor_rpc_key_read.stdout | trim | length > 0
+      - "'\\n' not in validator_stack_subtensor_rpc_key_read.stdout"
+      - "'\\r' not in validator_stack_subtensor_rpc_key_read.stdout"
+    fail_msg: The chain provider key Secret Manager version is empty or malformed
+  no_log: true
+  when:
+    - validator_stack_subtensor_rpc_url | length > 0
+    - validator_stack_subtensor_rpc_auth_mode != 'none'
+
+- name: Compose the paid chain provider URL
+  ansible.builtin.set_fact:
+    validator_stack_subtensor_rpc_full_url: >-
+      {%- set base = validator_stack_subtensor_rpc_url -%}
+      {%- if base | length == 0 -%}
+      {%- elif validator_stack_subtensor_rpc_auth_mode == 'none' -%}{{ base }}
+      {%- elif validator_stack_subtensor_rpc_auth_mode == 'path' -%}{{ base | regex_replace('/+$', '') }}/{{ validator_stack_subtensor_rpc_key_read.stdout | trim | urlencode | replace('/', '%2F') }}
+      {%- else -%}{{ base }}{{ '&' if '?' in base else '?' }}authorization={{ validator_stack_subtensor_rpc_key_read.stdout | trim | urlencode | replace('/', '%2F') }}
+      {%- endif -%}
+  no_log: true
+
 - name: Render the production validator environment
   ansible.builtin.template:
     src: validator.env.j2

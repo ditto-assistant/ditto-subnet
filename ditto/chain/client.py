@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -333,10 +335,9 @@ class ChainClient:
 
     async def _query_subtensor_storage(self, storage_function: str, netuid: int) -> Any:
         """Query ``SubtensorModule.<storage_function>(netuid)`` at the latest block."""
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 result = await substrate.query(
                     module=_SUBTENSOR_MODULE,
                     storage_function=storage_function,
@@ -560,10 +561,9 @@ class ChainClient:
             ChainConnectionError: When the substrate node is unreachable.
             ChainTimeoutError: When the events query exceeds its timeout.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 events = await substrate.query(
                     module=_SYSTEM_MODULE,
                     storage_function="Events",
@@ -622,10 +622,9 @@ class ChainClient:
             ChainConnectionError: When the substrate node is unreachable.
             ChainTimeoutError: When the query exceeds its timeout.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 result = await substrate.query(
                     module=_SUBTENSOR_MODULE,
                     storage_function=_OWNER_STORAGE,
@@ -669,10 +668,9 @@ class ChainClient:
             ChainConnectionError: When the substrate node is unreachable.
             ChainTimeoutError: When the query exceeds its timeout.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 result = await substrate.query(
                     module=_TIMESTAMP_MODULE,
                     storage_function=_TIMESTAMP_NOW_STORAGE,
@@ -700,12 +698,11 @@ class ChainClient:
         self, policy: TreasuryEmissionPolicy, *, first_block: int, pinned_block: int
     ) -> TreasuryLedgerPin:
         """Revalidate collector identity with finalized read-only storage queries."""
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
             async with (
                 asyncio.timeout(8),
-                AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
+                self._live_substrate() as substrate,
             ):
                 return await read_finalized_collector_pin(
                     substrate,
@@ -728,12 +725,11 @@ class ChainClient:
         self, policy: TreasuryEmissionPolicy
     ) -> TreasuryDispatchObservation:
         """Read fresh finalized identity and epoch from the configured chain."""
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
             async with (
                 asyncio.timeout(8),
-                AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
+                self._live_substrate() as substrate,
             ):
                 return await read_treasury_dispatch_observation(substrate, policy)
         except ValueError:
@@ -746,6 +742,45 @@ class ChainClient:
             raise ChainConnectionError(
                 "treasury dispatch observation unavailable"
             ) from error
+
+    def _live_substrate_urls(self) -> tuple[str, ...]:
+        """Return the configured provider first, then the network's entrypoint."""
+        urls = (
+            [self._config.subtensor_rpc_url] if self._config.subtensor_rpc_url else []
+        )
+        urls.append(self._substrate_url())
+        return tuple(dict.fromkeys(urls))
+
+    @asynccontextmanager
+    async def _live_substrate(self) -> AsyncIterator[Any]:
+        """Open a substrate connection on the first provider that accepts it.
+
+        The public entrypoint rejects websocket handshakes with HTTP 429 under
+        load, so a failed connect falls through to the next provider. Failures
+        after the connection opens propagate unchanged.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        urls = self._live_substrate_urls()
+        for index, url in enumerate(urls):
+            stack = AsyncExitStack()
+            try:
+                substrate = await stack.enter_async_context(
+                    AsyncSubstrateInterface(url=url)
+                )
+            except Exception:
+                await stack.aclose()
+                if index + 1 < len(urls):
+                    logger.warning(
+                        "substrate provider %d of %d refused; trying next",
+                        index + 1,
+                        len(urls),
+                    )
+                    continue
+                raise
+            async with stack:
+                yield substrate
+            return
 
     def _substrate_url(self) -> str:
         """Resolve substrate WebSocket URL for the configured network identifier."""
