@@ -1,0 +1,53 @@
+---
+# Run with -i tests/aws-inventory: replays inventory/aws.yml's compose over an
+# instance-shaped host with the real group_vars. Needs no cloud credentials and
+# contacts no host.
+- name: Keep the EC2 inventory in step with Terraform and the GCE groups
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aws_inventory: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../inventory/aws.yml') | from_yaml }}"
+    fixture: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/aws-inventory/20-aws-compose.yml') | from_yaml }}"
+    terraform_regions: >-
+      {{ lookup('ansible.builtin.file', *query('ansible.builtin.fileglob', playbook_dir ~ '/../../terraform/stacks/aws-generator-scorer/*.tf'))
+         | regex_findall('"([a-z]{2}-[a-z]+-[0-9])"') | unique | sort }}
+  tasks:
+    - name: Discover every region Terraform places managed instances in
+      ansible.builtin.assert:
+        that:
+          - terraform_regions | length > 0
+          - aws_inventory.regions | sort == terraform_regions
+        fail_msg: "inventory/aws.yml regions {{ aws_inventory.regions }} != Terraform regions {{ terraform_regions }}"
+
+    - name: Replay the inventory's compose and groups unchanged
+      ansible.builtin.assert:
+        that:
+          - fixture.compose == aws_inventory.compose
+          - fixture.keyed_groups == aws_inventory.keyed_groups
+          - aws_inventory.filters['tag:managed'] == 'terraform'
+
+    - name: Put the EC2 scorer in the same role group as the GCE scorer
+      ansible.builtin.assert:
+        that:
+          - "'ditto-generator-scorer-prod' in groups['role_generator_scorer']"
+          - "'ditto-generator-scorer-prod' in groups['env_prod']"
+
+    - name: Reach it over SSM with the federated bearer source, not the IAP tunnel
+      vars:
+        scorer: "{{ hostvars['ditto-generator-scorer-prod'] }}"
+      ansible.builtin.assert:
+        that:
+          - scorer.ansible_connection == 'amazon.aws.aws_ssm'
+          - scorer.ansible_host == 'i-0123456789abcdef0'
+          - scorer.ansible_aws_ssm_region == 'us-east-1'
+          - scorer.ansible_aws_ssm_bucket_name == 'ditto-generator-scorer-ssm-339713011188'
+          - scorer.generator_scorer_token_source == 'aws-wif'
+          # group_vars/role_generator_scorer.yml still applies (base role
+          # switches), it just cannot redirect the connection.
+          - scorer.base_install_go
+
+- name: Require the scorer group under the EC2 inventory
+  ansible.builtin.import_playbook: ../playbooks/require-hosts.yml
+  vars:
+    required_group: role_generator_scorer

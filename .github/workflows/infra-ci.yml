@@ -45,6 +45,8 @@ jobs:
           - infra/terraform/stacks/gcp-subnet-recovery
           - infra/terraform/stacks/gcp-preview
           - infra/terraform/stacks/cloudflare-dittobench
+          - infra/terraform/stacks/aws-bootstrap
+          - infra/terraform/stacks/aws-generator-scorer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -89,6 +91,13 @@ jobs:
           terraform -chdir=infra/tests/compute-snapshot init -backend=false -input=false -lockfile=readonly
           terraform -chdir=infra/tests/compute-snapshot test
 
+      - name: Test the AWS scorer root and compute module with mocked providers
+        if: matrix.root == 'infra/terraform/stacks/aws-generator-scorer'
+        run: |
+          terraform -chdir=${{ matrix.root }} test
+          terraform -chdir=infra/terraform/modules/compute/aws init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/terraform/modules/compute/aws test
+
   ansible:
     runs-on: ubuntu-latest
     defaults:
@@ -121,7 +130,7 @@ jobs:
 
       - name: Syntax-check subnet playbooks
         run: |
-          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-pg-backup.yml playbooks/gcp-platform-app.yml playbooks/gcp-platform-github-link.yml playbooks/gcp-platform-backup-reader.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-generator-scorer.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml playbooks/hetzner-screener-logs.yml; do
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-pg-backup.yml playbooks/gcp-platform-app.yml playbooks/gcp-platform-github-link.yml playbooks/gcp-platform-backup-reader.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-generator-scorer.yml playbooks/aws-generator-scorer.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml playbooks/hetzner-screener-logs.yml; do
             uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
           done
 
@@ -182,6 +191,9 @@ jobs:
         run: >-
           uvx --from ansible-core==2.21.2 ansible-playbook --check
           -i localhost, tests/coding-hosted-postgres-environment.yml
+
+      - name: Prove the EC2 inventory matches Terraform and reaches the scorer over SSM
+        run: uvx --from ansible-core==2.21.2 ansible-playbook -i tests/aws-inventory tests/aws-inventory.yml
 
       - name: Prove GCP inventory spans every Terraform zone and fails closed on empty groups
         run: |
