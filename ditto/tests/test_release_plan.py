@@ -194,6 +194,18 @@ def test_coding_starter_kit_change_is_shadow_only(components, ignored_paths) -> 
     assert root_verification(components, ignored_paths, path) == "none"
 
 
+def test_reranker_season_change_is_isolated(components, ignored_paths) -> None:
+    path = "packages/dittobench-reranker/dittobench_reranker/contract.py"
+    assert selected(components, ignored_paths, path) == {"dittobench_reranker"}
+    assert root_verification(components, ignored_paths, path) == "none"
+
+
+def test_reranker_workflow_is_release_owned(components, ignored_paths) -> None:
+    assert selected(components, ignored_paths, ".github/workflows/reranker-ci.yml") == {
+        "dittobench_reranker"
+    }
+
+
 def test_coding_starter_workflow_is_release_owned(components, ignored_paths) -> None:
     assert selected(
         components,
