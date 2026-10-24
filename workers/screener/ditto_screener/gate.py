@@ -2149,6 +2149,21 @@ class BuildGate:
                 and review_key is not None
                 and os.path.isfile(review_key)
             )
+            if battery_mode == "shadow" and not (
+                policy_version == 13
+                and not build_only
+                and used_local_docker
+                and built_image_id
+            ):
+                logger.info(
+                    "probe battery not applicable agent_id=%s policy=%s "
+                    "build_only=%s local_docker=%s image=%s",
+                    agent_id,
+                    policy_version,
+                    build_only,
+                    used_local_docker,
+                    bool(built_image_id),
+                )
             if (
                 battery_mode == "shadow"
                 and policy_version == 13
@@ -2164,6 +2179,11 @@ class BuildGate:
                     # Reserve the decision's 30 s plus both bounded cleanups.
                     budget = min(
                         budget, remaining - 30.0 - 2 * _PROBE_BATTERY_CLEANUP_S
+                    )
+                if budget <= 0:
+                    logger.info(
+                        "probe battery skipped agent_id=%s: no lease budget left",
+                        agent_id,
                     )
                 if budget > 0:
                     try:
@@ -2181,6 +2201,17 @@ class BuildGate:
                         battery["settings_scope"] = bound[1]
                         battery["settings_checksum"] = bound[2]
                         self._probe_battery_reports[attempt_id] = battery
+                        review_summary = battery.get("review") or {}
+                        logger.info(
+                            "probe battery agent_id=%s status=%s leads=%d "
+                            "review=%s verified=%s cost_usd=%s",
+                            agent_id,
+                            battery.get("status"),
+                            len(battery.get("leads") or []),
+                            review_summary.get("status", "off"),
+                            review_summary.get("verified"),
+                            review_summary.get("cost_usd"),
+                        )
                     except Exception:  # noqa: BLE001 - never change a settled decision
                         logger.exception("probe battery shadow unavailable")
             return decision
@@ -2344,6 +2375,14 @@ class BuildGate:
                     proc.kill()
                 with contextlib.suppress(Exception):
                     await proc.wait()
+            if proc.returncode not in (0, None):
+                # The child's stderr is discarded (it can carry probe content),
+                # so the exit code is the only failure signal kept.
+                logger.warning(
+                    "probe battery child exited rc=%s lines=%d",
+                    proc.returncode,
+                    len(lines),
+                )
             for raw in lines:
                 with contextlib.suppress(ValueError):
                     parsed = json.loads(raw)
