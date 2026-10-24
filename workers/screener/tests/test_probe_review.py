@@ -1028,3 +1028,21 @@ def test_battery_separates_honest_and_violating_fixture(
             assert summary["http_status"] == 200, summary
         finally:
             session.stop()
+
+
+def test_session_root_is_traversable_for_the_rootless_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Production: a 0700 root made every battery's bind mount fail with
+    # "permission denied" from the rootless daemon (a different uid).
+    from ditto_screener.probe_review import sandbox
+
+    monkeypatch.setattr(sandbox, "_docker", lambda *_a, **_k: (1, "stop here"))
+    root = tmp_path / "session"
+    session = Session(
+        root=str(root), image="i", artifact_sha256="0" * 64, bench_version=13
+    )
+    with pytest.raises(sandbox.SandboxError):
+        session.start()
+    assert root.stat().st_mode & 0o777 == 0o711
+    assert session.state_dir.stat().st_mode & 0o777 == 0o711

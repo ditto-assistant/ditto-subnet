@@ -418,12 +418,14 @@ class Session:
             self._start_locked(health_timeout)
 
     def _start_locked(self, health_timeout: float) -> None:
-        # Same scheme as the gate's gateway state: the session root is private
-        # to the owner; the sidecar (a different uid, no DAC override) can
-        # traverse the state dir, read the script and throwaway shim certs,
-        # and append to the transcript without reading it back.
+        # Same scheme as the gate's gateway state: nobody else can list the
+        # session root, but the rootless daemon and the sidecar (different
+        # uids, no DAC override) must traverse it to reach the 0711 state dir,
+        # read the script and throwaway shim certs, and append to the
+        # transcript without reading it back. A 0700 root made every
+        # production battery fail its bind mount with "permission denied".
         Path(self.root).mkdir(parents=True, exist_ok=True)
-        Path(self.root).chmod(0o700)
+        Path(self.root).chmod(0o711)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.probes_dir.mkdir(parents=True, exist_ok=True)
         self.state_dir.chmod(0o711)
