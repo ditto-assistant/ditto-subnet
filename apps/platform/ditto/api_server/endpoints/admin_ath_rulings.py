@@ -97,10 +97,6 @@ from ditto.api_server.koth import (
     koth_entries_from_ledger,
     project_koth,
 )
-from ditto.api_server.middleware.error_envelope import (
-    ERROR_CODE_HTTP_EXCEPTION,
-    envelope_response,
-)
 from ditto.api_server.storage.errors import (
     ObjectDownloadFailedError,
     ObjectNotFoundError,
@@ -1358,6 +1354,13 @@ async def execute_ath_rulings_batch(
         logger.exception("ath rulings final board read failed batch_id=%s", batch_id)
         # The writes above already committed. Preserve their exact outcomes in
         # the failure response so an operator never blindly retries them.
+        # Imported here: error_envelope imports the endpoints package, so a
+        # module-level import is circular when middleware is imported first.
+        from ditto.api_server.middleware.error_envelope import (  # noqa: PLC0415
+            ERROR_CODE_HTTP_EXCEPTION,
+            envelope_response,
+        )
+
         return envelope_response(
             503,
             ERROR_CODE_HTTP_EXCEPTION,

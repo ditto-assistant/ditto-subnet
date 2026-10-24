@@ -29,10 +29,14 @@ def test_dittobench_workflow_uses_monorepo_contexts_without_repinning() -> None:
     jobs = workflow["jobs"]
 
     assert "repin" not in text.lower()
-    # Standalone verification is operator-dispatched (SN-120); the release
-    # graph, not a PR path filter, decides which changes are verified.
-    # safe_load reads the bare ``on`` key as YAML 1.1 boolean True.
-    assert set(workflow[True]) == {"workflow_dispatch"}
+    # PR-gated again, but coding-competition paths never trigger it and its
+    # coding-driver jobs skip on pull requests (SN-120). safe_load reads the
+    # bare ``on`` key as YAML 1.1 boolean True.
+    assert set(workflow[True]) == {"workflow_dispatch", "pull_request"}
+    assert not [p for p in workflow[True]["pull_request"]["paths"] if "coding" in p]
+    for name, job in jobs.items():
+        if "coding" in name or "suite-admission" in name:
+            assert job.get("if") == "github.event_name != 'pull_request'", name
     assert (
         _release_component_for("services/dittobench-api/cmd/x.go") == "dittobench_api"
     )
