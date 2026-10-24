@@ -1862,6 +1862,188 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Probe
+         * @description Probe epochs and how many submissions each has compared (never the seed).
+         */
+        get: operations["get_probe_api_v1_admin_generator_competition_probe_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/probe/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate Probe
+         * @description Retire the probe seed (for example after a suspected leak).
+         *
+         *     Copy detection only compares submissions probed in the same epoch, so every
+         *     active submission is re-probed on its next run.
+         */
+        post: operations["rotate_probe_api_v1_admin_generator_competition_probe_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/promotion-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Promotion Candidates
+         * @description Discriminating cases from scored runs, highest credit first.
+         */
+        get: operations["promotion_candidates_api_v1_admin_generator_competition_promotion_candidates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Run Detail */
+        get: operations["admin_run_detail_api_v1_admin_generator_competition_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings
+         * @description Current policy, append-only history, the default, and what is in force.
+         */
+        get: operations["get_settings_api_v1_admin_generator_competition_settings_get"];
+        put?: never;
+        /**
+         * Create Settings Revision
+         * @description Append one optimistic, confirmation-gated revision.
+         */
+        post: operations["create_settings_revision_api_v1_admin_generator_competition_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin List Submissions */
+        get: operations["admin_list_submissions_api_v1_admin_generator_competition_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Submission Detail */
+        get: operations["admin_submission_detail_api_v1_admin_generator_competition_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Submission
+         * @description Reject a generator by operator ruling (abuse, a copy the probe missed).
+         *
+         *     Its runs stop counting on the ledger at once, an in-flight run is abandoned,
+         *     and it is never leased again. The miner can still upload a new generator.
+         */
+        post: operations["reject_submission_api_v1_admin_generator_competition_submissions__submission_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/rescore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rescore Submission
+         * @description Make an active generator due now, so its next run starts on fresh seeds
+         *     against the current panel. An in-flight run is left to finish.
+         */
+        post: operations["rescore_submission_api_v1_admin_generator_competition_submissions__submission_id__rescore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/github-links/{link_id}": {
         parameters: {
             query?: never;
@@ -5172,6 +5354,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/generator-scorer/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Results
+         * @description Record one scorer evaluation for the current lease.
+         */
+        post: operations["post_results_api_v1_generator_scorer_results_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator-scorer/work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lease Work
+         * @description Lease the most overdue generator run, or return ``{"work": null}``.
+         */
+        get: operations["lease_work_api_v1_generator_scorer_work_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Board
+         * @description The shadow generator ledger (each hotkey's latest scored run).
+         */
+        get: operations["board_api_v1_generator_board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Hotkey Submissions
+         * @description A hotkey's recent generators: lifecycle and aggregate outcome only.
+         */
+        get: operations["list_hotkey_submissions_api_v1_generator_submissions_get"];
+        put?: never;
+        /**
+         * Upload Submission
+         * @description Accept one signed generator source archive and make it the hotkey's
+         *     active generator.
+         */
+        post: operations["upload_submission_api_v1_generator_submissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inference/chat/completions": {
         parameters: {
             query?: never;
@@ -6865,6 +7132,32 @@ export interface paths {
          * @description Return the minimal lifecycle status for ``agent_id``, or 404.
          */
         get: operations["agent_status_api_v1_retrieval_agent__agent_id__status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scoring/generator-ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Generator Ledger
+         * @description The shadow generator-track ledger, behind the memory ledger's proof.
+         *
+         *     Platform is the generator competition's system of record, so unlike the
+         *     router relay this is a direct read: each hotkey's latest run scored within
+         *     the freshness window. Every entry is ``weight_eligible=False`` and the
+         *     validator registers the track in ``SHADOW``, so a served ledger contributes
+         *     zero emission. ``mode=off`` serves an empty ledger.
+         */
+        get: operations["generator_ledger_api_v1_scoring_generator_ledger_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -11485,6 +11778,143 @@ export interface components {
             status: "queued" | "leased" | "running" | "succeeded" | "incomplete" | "skipped";
             /** Unmetered */
             unmetered: boolean;
+        };
+        /** AdminGeneratorProbeResponse */
+        AdminGeneratorProbeResponse: {
+            current: components["schemas"]["GeneratorProbeEpochView"] | null;
+            /** History */
+            history: components["schemas"]["GeneratorProbeEpochView"][];
+        };
+        /** AdminGeneratorProbeRotateRequest */
+        AdminGeneratorProbeRotateRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminGeneratorPromotionCandidatesResponse */
+        AdminGeneratorPromotionCandidatesResponse: {
+            /** Candidates */
+            candidates: components["schemas"]["GeneratorPromotionCandidate"][];
+        };
+        /**
+         * AdminGeneratorRunDetail
+         * @description Operator view of one run. Seeds are revealed once the run finished.
+         */
+        AdminGeneratorRunDetail: {
+            /** Cases Per Seed */
+            cases_per_seed: number;
+            /** Evaluation */
+            evaluation: {
+                [key: string]: unknown;
+            } | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Panel */
+            panel: components["schemas"]["GeneratorPanelSlot"][];
+            /** Probe Epoch */
+            probe_epoch: number;
+            /** Score Summary */
+            score_summary: {
+                [key: string]: unknown;
+            } | null;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /** Seeds */
+            seeds: string[] | null;
+            /** Settings Revision */
+            settings_revision: number;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            summary: components["schemas"]["GeneratorRunSummary"];
+            /** Verdicts */
+            verdicts: components["schemas"]["GeneratorCaseVerdictView"][];
+        };
+        /** AdminGeneratorSettingsRequest */
+        AdminGeneratorSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["GeneratorCompetitionSettings"];
+        };
+        /** AdminGeneratorSettingsResponse */
+        AdminGeneratorSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["GeneratorSettingsRevision"][];
+            default: components["schemas"]["GeneratorCompetitionSettings"];
+            effective: components["schemas"]["EffectiveGeneratorSettings"];
+            /** History */
+            history: components["schemas"]["GeneratorSettingsRevision"][];
+        };
+        /**
+         * AdminGeneratorSubmissionActionRequest
+         * @description An audited operator action on one submission.
+         *
+         *     ``expected_status`` guards against acting on a submission whose state moved
+         *     since the operator read it.
+         */
+        AdminGeneratorSubmissionActionRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation?: string | null;
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "active" | "superseded" | "rejected";
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * AdminGeneratorSubmissionDetail
+         * @description Operator view of one submission and its runs (never the source).
+         */
+        AdminGeneratorSubmissionDetail: {
+            /** Attempts */
+            attempts: number;
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Lease Run Id */
+            lease_run_id: string | null;
+            /** Owner Key */
+            owner_key: string;
+            /** Runs */
+            runs: components["schemas"]["GeneratorRunSummary"][];
+            summary: components["schemas"]["GeneratorSubmissionSummary"];
+        };
+        /** AdminGeneratorSubmissionListResponse */
+        AdminGeneratorSubmissionListResponse: {
+            /** Counts By Status */
+            counts_by_status: {
+                [key: string]: number;
+            };
+            /** Submissions */
+            submissions: components["schemas"]["GeneratorSubmissionSummary"][];
         };
         /** AdminHotkeyBanAuditEntry */
         AdminHotkeyBanAuditEntry: {
@@ -23035,6 +23465,24 @@ export interface components {
              */
             source: "revision" | "default";
         };
+        /** EffectiveGeneratorSettings */
+        EffectiveGeneratorSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["GeneratorCompetitionSettings"];
+            /**
+             * Settings Valid
+             * @default true
+             */
+            settings_valid: boolean;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
+        };
         /**
          * EffectiveInferenceConcurrencySettings
          * @description What the admission path is enforcing right now, and where it came from.
@@ -23757,6 +24205,571 @@ export interface components {
             source_fixture_v1: boolean;
             /** Version */
             version?: string | null;
+        };
+        /**
+         * GeneratorBuildResult
+         * @description Mirror of ``genrun.BuildOutput``.
+         */
+        GeneratorBuildResult: {
+            /** Binary Sha256 */
+            binary_sha256?: string | null;
+            /**
+             * Duration Ms
+             * @default 0
+             */
+            duration_ms: number;
+            /** Error */
+            error?: string | null;
+            /**
+             * Ok
+             * @default false
+             */
+            ok: boolean;
+        };
+        /** GeneratorCaseStatusCounts */
+        GeneratorCaseStatusCounts: {
+            /**
+             * Discriminating
+             * @default 0
+             */
+            discriminating: number;
+            /**
+             * Duplicate
+             * @default 0
+             */
+            duplicate: number;
+            /**
+             * Trivial
+             * @default 0
+             */
+            trivial: number;
+            /**
+             * Unsolved
+             * @default 0
+             */
+            unsolved: number;
+        };
+        /** GeneratorCaseVerdictView */
+        GeneratorCaseVerdictView: {
+            /** Case Id */
+            case_id: string;
+            /** Champion Failed */
+            champion_failed: boolean;
+            /** Credit */
+            credit: number;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Mean Score */
+            mean_score: number;
+            /** Panel Size */
+            panel_size: number;
+            /** Position */
+            position: number;
+            /** Seed Index */
+            seed_index: number;
+            /** Solver Owners */
+            solver_owners: number;
+            /** Solvers */
+            solvers: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "discriminating" | "trivial" | "unsolved" | "duplicate";
+        };
+        /**
+         * GeneratorCompetitionSettings
+         * @description The complete generator competition policy (one revision = whole object).
+         *
+         *     Scoring fields mirror ``challenge.ScoreParams`` in the Go contract and are
+         *     bounded identically; ``cases_per_seed`` is both the exact case count every
+         *     pack must contain and the score's ``target_cases``.
+         */
+        GeneratorCompetitionSettings: {
+            /**
+             * Cases Per Seed
+             * @default 16
+             */
+            cases_per_seed: number;
+            /**
+             * Champion Bonus
+             * @default 0.5
+             */
+            champion_bonus: number;
+            /**
+             * Copy Overlap Threshold
+             * @default 0.5
+             */
+            copy_overlap_threshold: number;
+            /**
+             * Lease Ttl Seconds
+             * @default 7200
+             */
+            lease_ttl_seconds: number;
+            /**
+             * Max Attempts
+             * @default 6
+             */
+            max_attempts: number;
+            /**
+             * Min Panel
+             * @default 3
+             */
+            min_panel: number;
+            /**
+             * Min Solver Owners
+             * @default 2
+             */
+            min_solver_owners: number;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /**
+             * Panel Size
+             * @default 5
+             */
+            panel_size: number;
+            /**
+             * Rescore Interval Hours
+             * @default 24
+             */
+            rescore_interval_hours: number;
+            /**
+             * Retry Backoff Seconds
+             * @default 3600
+             */
+            retry_backoff_seconds: number;
+            /**
+             * Seeds Per Run
+             * @default 2
+             */
+            seeds_per_run: number;
+            /**
+             * Solve Threshold
+             * @default 0.5
+             */
+            solve_threshold: number;
+            /**
+             * Upload Cooldown Seconds
+             * @default 3600
+             */
+            upload_cooldown_seconds: number;
+            /**
+             * Window Days
+             * @default 7
+             */
+            window_days: number;
+        };
+        /** GeneratorLedgerEntry */
+        GeneratorLedgerEntry: {
+            /**
+             * Discriminating Cases
+             * @default 0
+             */
+            discriminating_cases: number;
+            /**
+             * First Seen
+             * Format: date-time
+             */
+            first_seen: string;
+            /**
+             * Generator Contract Version
+             * @default 1
+             * @constant
+             */
+            generator_contract_version: 1;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number;
+            /**
+             * Scored At
+             * Format: date-time
+             */
+            scored_at: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /**
+             * Weight Eligible
+             * @description Whether this result may contribute emissions. Always False while the competition is in shadow; the validator's track state is the authority and this is a defensive echo.
+             * @default false
+             */
+            weight_eligible: boolean;
+        };
+        /** GeneratorLedgerResponse */
+        GeneratorLedgerResponse: {
+            /** Count */
+            count: number;
+            /** Entries */
+            entries?: components["schemas"]["GeneratorLedgerEntry"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at?: string;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /**
+             * Window Days
+             * @default 0
+             */
+            window_days: number;
+        };
+        /** GeneratorPanelSlot */
+        GeneratorPanelSlot: {
+            /** Agent Id */
+            agent_id: string;
+            /**
+             * Champion
+             * @default false
+             */
+            champion: boolean;
+            /** Owner Key */
+            owner_key: string;
+        };
+        /**
+         * GeneratorProbeEpochView
+         * @description A probe epoch's public facts; the seed itself is never served.
+         */
+        GeneratorProbeEpochView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Epoch */
+            epoch: number;
+            /** Probed Submissions */
+            probed_submissions: number;
+            /** Reason */
+            reason: string;
+            /** Retired At */
+            retired_at: string | null;
+        };
+        /** GeneratorPromotionCandidate */
+        GeneratorPromotionCandidate: {
+            /** Case Id */
+            case_id: string;
+            /** Champion Failed */
+            champion_failed: boolean;
+            /** Credit */
+            credit: number;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Mean Score */
+            mean_score: number;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Scored At
+             * Format: date-time
+             */
+            scored_at: string;
+            /** Seed Index */
+            seed_index: number;
+            /** Solver Owners */
+            solver_owners: number;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** GeneratorResultRequest */
+        GeneratorResultRequest: {
+            build: components["schemas"]["GeneratorBuildResult"];
+            /** Deterministic */
+            deterministic?: boolean | null;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            probe?: components["schemas"]["GeneratorSeedOutput"] | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Sandbox
+             * @default
+             */
+            sandbox: string;
+            /** Scorer Version */
+            scorer_version: string;
+            /** Seeds */
+            seeds?: components["schemas"]["GeneratorSeedResult"][] | null;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** GeneratorResultResponse */
+        GeneratorResultResponse: {
+            /** Outcome */
+            outcome: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "leased" | "scored" | "invalid" | "insufficient_panel" | "copy" | "abandoned";
+            /**
+             * Submission Status
+             * @enum {string}
+             */
+            submission_status: "active" | "superseded" | "rejected";
+        };
+        /**
+         * GeneratorRunSummary
+         * @description Public-safe view of one run: lifecycle and aggregate outcome.
+         *
+         *     Never includes seeds, case content, case ids, or panel agent identities.
+         */
+        GeneratorRunSummary: {
+            /** Attempt */
+            attempt: number;
+            case_counts: components["schemas"]["GeneratorCaseStatusCounts"] | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Leased At
+             * Format: date-time
+             */
+            leased_at: string;
+            /** Outcome */
+            outcome: string | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "leased" | "scored" | "invalid" | "insufficient_panel" | "copy" | "abandoned";
+        };
+        /**
+         * GeneratorSeedOutput
+         * @description Mirror of ``genrun.SeedOutput`` (the probe and each scored seed).
+         */
+        GeneratorSeedOutput: {
+            /**
+             * Duration Ms
+             * @default 0
+             */
+            duration_ms: number;
+            /** Error */
+            error?: string | null;
+            /** Pack Sha256 */
+            pack_sha256?: string | null;
+            /** Seed */
+            seed: string;
+            validation?: components["schemas"]["ValidationReport"];
+        };
+        /** GeneratorSeedResult */
+        GeneratorSeedResult: {
+            /**
+             * Duration Ms
+             * @default 0
+             */
+            duration_ms: number;
+            /** Error */
+            error?: string | null;
+            /** Pack Sha256 */
+            pack_sha256?: string | null;
+            /** Panel */
+            panel?: components["schemas"]["PanelMemberResult"][] | null;
+            /** Seed */
+            seed: string;
+            validation?: components["schemas"]["ValidationReport"];
+        };
+        /** GeneratorSettingsRevision */
+        GeneratorSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["GeneratorCompetitionSettings"];
+            /**
+             * Settings Valid
+             * @default true
+             */
+            settings_valid: boolean;
+        };
+        /** GeneratorSubmissionListResponse */
+        GeneratorSubmissionListResponse: {
+            /** Submissions */
+            submissions: components["schemas"]["GeneratorSubmissionSummary"][];
+        };
+        /**
+         * GeneratorSubmissionSummary
+         * @description Public-safe view of one submission. Never includes source.
+         */
+        GeneratorSubmissionSummary: {
+            /** File Count */
+            file_count: number;
+            /** Go Version */
+            go_version: string;
+            latest_run: components["schemas"]["GeneratorRunSummary"] | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Module */
+            module: string;
+            /** Next Run At */
+            next_run_at: string | null;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "superseded" | "rejected";
+            /** Status Reason */
+            status_reason: string | null;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+            /** Tree Sha256 */
+            tree_sha256: string;
+        };
+        /**
+         * GeneratorSubmissionUploadRequest
+         * @description A signed generator source upload (a gzip-compressed tar).
+         */
+        GeneratorSubmissionUploadRequest: {
+            /** Hotkey */
+            hotkey: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+        };
+        /** GeneratorSubmissionUploadResponse */
+        GeneratorSubmissionUploadResponse: {
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "superseded" | "rejected";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Superseded */
+            superseded?: string[];
+            /** Tree Sha256 */
+            tree_sha256: string;
+        };
+        /** GeneratorWorkItem */
+        GeneratorWorkItem: {
+            /** Cases Per Seed */
+            cases_per_seed: number;
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Panel */
+            panel: components["schemas"]["GeneratorPanelSlot"][];
+            /** Probe Seed */
+            probe_seed: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Seeds */
+            seeds: string[];
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** GeneratorWorkResponse */
+        GeneratorWorkResponse: {
+            work?: components["schemas"]["GeneratorWorkItem"] | null;
         };
         /** GithubLinkAttemptStatus */
         GithubLinkAttemptStatus: {
@@ -27517,6 +28530,38 @@ export interface components {
              * @constant
              */
             scope: "plagiarism-screening-only";
+        };
+        /** PanelCaseResult */
+        PanelCaseResult: {
+            /** Case Id */
+            case_id: string;
+            /**
+             * Fault
+             * @default false
+             */
+            fault: boolean;
+            /**
+             * Score
+             * @default 0
+             */
+            score: number;
+        };
+        /** PanelMemberResult */
+        PanelMemberResult: {
+            /** Agent Id */
+            agent_id: string;
+            /**
+             * Champion
+             * @default false
+             */
+            champion: boolean;
+            /**
+             * Owner Key
+             * @default
+             */
+            owner_key: string;
+            /** Results */
+            results?: components["schemas"]["PanelCaseResult"][] | null;
         };
         /** PendingWeightObservation */
         PendingWeightObservation: {
@@ -40125,6 +41170,13 @@ export interface components {
             /** Manifest Sha256 */
             manifest_sha256: string;
         };
+        /** ValidationCaseRef */
+        ValidationCaseRef: {
+            /** Case Id */
+            case_id: string;
+            /** Fingerprint */
+            fingerprint: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -40137,6 +41189,42 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** ValidationIssue */
+        ValidationIssue: {
+            /** Case Id */
+            case_id?: string | null;
+            /** Message */
+            message: string;
+            /** Rule */
+            rule: string;
+        };
+        /**
+         * ValidationReport
+         * @description Mirror of ``challenge.Report``.
+         */
+        ValidationReport: {
+            /**
+             * Case Count
+             * @default 0
+             */
+            case_count: number;
+            /** Cases */
+            cases?: components["schemas"]["ValidationCaseRef"][] | null;
+            /** Issues */
+            issues?: components["schemas"]["ValidationIssue"][] | null;
+            /** Pack Sha256 */
+            pack_sha256?: string | null;
+            /**
+             * Pair Count
+             * @default 0
+             */
+            pair_count: number;
+            /**
+             * Valid
+             * @default false
+             */
+            valid: boolean;
         };
         /**
          * ValidatorCapabilities
@@ -45681,6 +46769,348 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EmissionEligibilitySettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_probe_api_v1_admin_generator_competition_probe_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorProbeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_probe_api_v1_admin_generator_competition_probe_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorProbeRotateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorProbeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promotion_candidates_api_v1_admin_generator_competition_promotion_candidates_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorPromotionCandidatesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_run_detail_api_v1_admin_generator_competition_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorRunDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_generator_competition_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_generator_competition_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_submissions_api_v1_admin_generator_competition_submissions_get: {
+        parameters: {
+            query?: {
+                hotkey?: string | null;
+                status?: ("active" | "superseded" | "rejected") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSubmissionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_submission_detail_api_v1_admin_generator_competition_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_submission_api_v1_admin_generator_competition_submissions__submission_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorSubmissionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rescore_submission_api_v1_admin_generator_competition_submissions__submission_id__rescore_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorSubmissionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSubmissionDetail"];
                 };
             };
             /** @description Validation Error */
@@ -52130,6 +53560,157 @@ export interface operations {
             };
         };
     };
+    post_results_api_v1_generator_scorer_results_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorResultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorResultResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lease_work_api_v1_generator_scorer_work_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorWorkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_api_v1_generator_board_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorLedgerResponse"];
+                };
+            };
+        };
+    };
+    list_hotkey_submissions_api_v1_generator_submissions_get: {
+        parameters: {
+            query: {
+                hotkey: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorSubmissionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_submission_api_v1_generator_submissions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorSubmissionUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorSubmissionUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     proxy_chat_completions_api_v1_inference_chat_completions_post: {
         parameters: {
             query?: never;
@@ -54880,6 +56461,61 @@ export interface operations {
             };
             /** @description Malformed UUID path parameter. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    generator_ledger_api_v1_scoring_generator_ledger_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+                "x-validator-ledger-nonce"?: string | null;
+                "x-validator-ledger-requested-at"?: string | null;
+                "x-validator-ledger-signature"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorLedgerResponse"];
+                };
+            };
+            /** @description Missing/invalid validator auth. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale or replayed ledger request proof. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Chain unavailable, or nonce store unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

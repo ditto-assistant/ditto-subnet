@@ -69,6 +69,7 @@ from ditto.api_models.coding_inference_grants import (
     CodingInferenceRevokeRequest,
     CodingInferenceRevokeResponse,
 )
+from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
@@ -2085,6 +2086,40 @@ class PlatformClient:
             return RouterLedgerResponse.model_validate(resp.json())
         except (ValidationError, ValueError) as e:
             raise PlatformError("router ledger response was invalid") from e
+
+    async def get_generator_ledger(self) -> GeneratorLedgerResponse:
+        """Pull the shadow generator-competition ledger (best-effort).
+
+        Same signed proof-of-possession as :meth:`get_router_ledger`, against
+        ``GET /scoring/generator-ledger``. :class:`PlatformGeneratorLedgerSource`
+        degrades any failure to an empty ledger.
+        """
+        url = f"{self._base}{_SCORING_PREFIX}/generator-ledger"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Ledger-Nonce": str(nonce),
+            "X-Validator-Ledger-Requested-At": requested_at.isoformat(),
+            "X-Validator-Ledger-Signature": sign_ledger_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
+        try:
+            resp = await self._client.get(url, headers=proof_headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"generator ledger fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"generator ledger rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            return GeneratorLedgerResponse.model_validate(resp.json())
+        except (ValidationError, ValueError) as e:
+            raise PlatformError("generator ledger response was invalid") from e
 
     async def get_private_dataset(
         self, agent_id: UUID, *, dataset_sha256: str, deadline: datetime

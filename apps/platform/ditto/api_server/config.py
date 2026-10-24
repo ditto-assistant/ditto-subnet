@@ -404,6 +404,10 @@ class ApiServerConfig:
     admin_api_token: str | None = None
     """Bearer token for private Backroom/operator administration endpoints."""
 
+    generator_scorer_token: str | None = None
+    """Bearer token the trusted generator-competition scorer presents to lease
+    packs and post panel results. Unset disables the scorer endpoints (503)."""
+
     ditto_link: DittoLinkConfig = field(
         default_factory=lambda: DittoLinkConfig(
             enabled=False,
@@ -966,6 +970,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         ),
         inference_proxy=inference_proxy,
         admin_api_token=os.environ.get("DITTO_ADMIN_API_TOKEN") or None,
+        generator_scorer_token=os.environ.get("DITTO_GENERATOR_SCORER_TOKEN") or None,
         ditto_link=parse_ditto_link_config_from_env(),
         github_link=parse_github_link_config_from_env(),
         coding_catalog_curator_hotkeys=tuple(
@@ -1150,6 +1155,13 @@ def check_config(config: ApiServerConfig) -> None:
     if config.admin_api_token is not None and len(config.admin_api_token) < 32:
         raise ApiServerConfigError(
             "DITTO_ADMIN_API_TOKEN must be at least 32 characters"
+        )
+    if (
+        config.generator_scorer_token is not None
+        and len(config.generator_scorer_token) < 32
+    ):
+        raise ApiServerConfigError(
+            "DITTO_GENERATOR_SCORER_TOKEN must be at least 32 characters"
         )
     if not 1 <= config.coding_shadow_reconciliation_selection_delay_blocks <= 10_000:
         raise ApiServerConfigError(

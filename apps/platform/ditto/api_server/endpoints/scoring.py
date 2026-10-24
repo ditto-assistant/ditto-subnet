@@ -45,6 +45,7 @@ from ditto.api_models.continual_retest_settings import (
     ContinualRetestSettings,
 )
 from ditto.api_models.emission_eligibility import AgentEmissionEligibility
+from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.upload import _SS58_PATTERN
 from ditto.api_models.validator import (
@@ -75,6 +76,12 @@ from ditto.api_server.endpoints.validator import (
     ValidatorAuthError,
     _assert_validator_permitted,
     _verify_signature,
+)
+from ditto.api_server.generator_competition import (
+    build_ledger as build_generator_ledger,
+)
+from ditto.api_server.generator_competition import (
+    load_settings as load_generator_settings,
 )
 from ditto.api_server.treasury_read_diagnostics import treasury_read_failure_kind
 from ditto.chain.errors import (
@@ -1574,6 +1581,49 @@ async def _authorize_ledger_request(
                 detail="scoring ledger authorization temporarily unavailable",
             ) from exc
     return auth_now
+
+
+@router.get(
+    "/generator-ledger",
+    response_model=GeneratorLedgerResponse,
+    responses={
+        401: {"description": "Missing/invalid validator auth."},
+        409: {"description": "Stale or replayed ledger request proof."},
+        503: {"description": "Chain unavailable, or nonce store unavailable."},
+    },
+)
+async def generator_ledger(
+    request: Request,
+    response: Response,
+    chain: ChainDep,
+    session: SessionDep,
+    x_validator_hotkey: Annotated[str | None, Header()] = None,
+    x_validator_ledger_nonce: Annotated[UUID | None, Header()] = None,
+    x_validator_ledger_requested_at: Annotated[datetime | None, Header()] = None,
+    x_validator_ledger_signature: Annotated[str | None, Header()] = None,
+) -> GeneratorLedgerResponse:
+    """The shadow generator-track ledger, behind the memory ledger's proof.
+
+    Platform is the generator competition's system of record, so unlike the
+    router relay this is a direct read: each hotkey's latest run scored within
+    the freshness window. Every entry is ``weight_eligible=False`` and the
+    validator registers the track in ``SHADOW``, so a served ledger contributes
+    zero emission. ``mode=off`` serves an empty ledger.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    await _authorize_ledger_request(
+        request,
+        chain,
+        session,
+        x_validator_hotkey=x_validator_hotkey,
+        x_validator_ledger_nonce=x_validator_ledger_nonce,
+        x_validator_ledger_requested_at=x_validator_ledger_requested_at,
+        x_validator_ledger_signature=x_validator_ledger_signature,
+    )
+    resolved = await load_generator_settings(session)
+    return await build_generator_ledger(
+        session, resolved=resolved, now=datetime.now(UTC)
+    )
 
 
 @router.get(
