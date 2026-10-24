@@ -719,6 +719,9 @@ describe('Backroom MCP tools', () => {
     // in the catalog, measure 200,358. Keep the same ~0.5 KB headroom.
     // Two optional failure-release guards on both batch inputs add 715 bytes.
     // Keep procedure text in tool help and retain about 0.5 KB headroom.
+    // Those guards' scope is one clause in the quarantine batch preview
+    // summary (#3069); execute's procedure moved into tool help behind a
+    // one-line summary, so documenting the pair costs the catalog nothing.
     // Six official-control operations add compact UUID schemas and short
     // summaries. Detailed procedures stay in help; services validate IDs.
     // One publication-evidence read adds two compact UUIDs and a one-line
@@ -1482,6 +1485,32 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('scopes the quarantine batch attempt and score guards to a parked failed release', async () => {
+    // Two review agents attached the guards to an active quarantine and read
+    // the refusal as a concurrency conflict (#3069). The catalog
+    // entry carries the scope, because that is what reaches context before
+    // the first call.
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const catalog = await client.listTools()
+      const preview = catalog.tools.find(
+        tool => tool.name === 'preview_screening_quarantine_batch',
+      )
+      expect(preview?.description).toContain(
+        'the attempt/score guards are for a parked failed release only',
+      )
+      for (const [tool, fragment] of [
+        ['preview_screening_quarantine_batch', 'Send those two guards for that case only'],
+        ['execute_screening_quarantine_batch', 'not a parked screening failure'],
+      ] as const) {
+        const help = readJsonResult(await client.callTool({
+          name: 'get_backroom_tool_help', arguments: { tool },
+        })) as { guidance: string }
+        expect(help.guidance).toContain(fragment)
+      }
+    } finally { await client.close(); await server.close() }
   })
 
   it('retains actual detailed help and permission annotations for compacted receipt-era discovery', async () => {

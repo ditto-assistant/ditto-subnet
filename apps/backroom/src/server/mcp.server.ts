@@ -764,7 +764,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   open_ath_review:
     'Open or reopen one exact scored/live ATH review with audited reason. Not a quarantine or automatic reject; see tool help.',
   preview_screening_quarantine_batch:
-    'Validate up to 50 exact release/rescreen/reject selections. Dry-run only; no state or scoring writes.',
+    'Validate up to 50 exact release/rescreen/reject selections; the attempt/score guards are for a parked failed release only. Dry-run only; no state or scoring writes.',
+  execute_screening_quarantine_batch:
+    'Apply exactly the previewed decisions with confirmed=true; per-row applied, already-applied and failed results for safe retry. Write scope; see help.',
   get_ledger_epoch_snapshots:
     'Read frozen epoch ledger, fold digest, crown and recipients.',
   create_ath_rulings_upload:
@@ -2097,7 +2099,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Preview screening quarantine batch',
       description:
-        'Dry-run up to 50 per-item release, rescreen, or reject decisions. Validates exact agent and artifact identities, current actionability, reasons, and idempotent replays. To approve a screening_failed submission with a resolved rescreen quarantine, use release with expectedAttemptId and expectedScoreCount from the current context. This records manual source approval and retains ordinary build, health and scoring gates; active work or stale guards block it. Returns a short-lived actor-bound preview token. A reject on a terminal_ghost row closes it and keeps the terminal agent ruling (terminal_reconciliation); the token is fenced to terminal_ruling. This tool cannot change review state.',
+        'Dry-run up to 50 per-item release, rescreen, or reject decisions. Validates exact agent and artifact identities, current actionability, reasons, and idempotent replays. To approve a screening_failed submission with a resolved rescreen quarantine, use release with expectedAttemptId and expectedScoreCount from the current context. This records manual source approval and retains ordinary build, health and scoring gates; active work or stale guards block it. Send those two guards for that case only: any other actionable row refuses them by naming its own state instead of reporting a conflict, and a terminal_ghost reject is classified as a reconciliation before they are read. Returns a short-lived actor-bound preview token. A reject on a terminal_ghost row closes it and keeps the terminal agent ruling (terminal_reconciliation); the token is fenced to terminal_ruling. This tool cannot change review state.',
       inputSchema: screeningQuarantineBatchPreviewInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2115,7 +2117,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Execute screening quarantine batch',
       description:
-        'Execute exactly the per-item decisions from a current preview token. Requires confirmed=true and backroom:write. Each decision is separately authorized and audited to the signed-in operator; successful, already-applied, and failed rows are returned independently for safe retry.',
+        'Execute exactly the per-item decisions from a current preview token. Requires confirmed=true and backroom:write. Each decision is separately authorized and audited to the signed-in operator; successful, already-applied, and failed rows are returned independently for safe retry. It refuses exactly what the preview refuses, including expectedAttemptId and expectedScoreCount sent on a row that is not a parked screening failure.',
       inputSchema: screeningQuarantineBatchExecuteInputSchema,
       annotations: toolAnnotations('write', true),
     },
