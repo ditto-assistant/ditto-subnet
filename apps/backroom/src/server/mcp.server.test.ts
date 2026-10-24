@@ -771,9 +771,10 @@ describe('Backroom MCP tools', () => {
       // The canary review-posture pin clause measured 31,854; the node
       // canary cap (#2447) also adds a short catalog note.
       // Six concise official-control summaries, with procedure text in help.
-      // Retiring the thirteen coding-track summaries (SN-186) measures 25,588;
-      // keep about 200 chars of headroom.
-      25_800,
+      // Retiring the thirteen coding-track summaries (SN-186) measures 25,588.
+      // The eleven generator-competition summaries bring it to 26,304; keep
+      // about 200 chars of headroom.
+      26_500,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
