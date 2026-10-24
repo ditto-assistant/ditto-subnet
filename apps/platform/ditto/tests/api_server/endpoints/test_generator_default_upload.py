@@ -39,6 +39,7 @@ from ditto.tests.api_server.endpoints.test_generator_rounds import (
 _UPLOAD_URL = "/api/v1/admin/generator-competition/default-generator/upload-url"
 _REGISTER_URL = "/api/v1/admin/generator-competition/default-generator"
 _ACTOR = "Operator@Example.com"
+_ACTOR_HEADERS = {**_ADMIN, "X-Admin-Actor": _ACTOR}
 
 
 @dataclass
@@ -96,14 +97,14 @@ async def test_registers_an_uploaded_archive(
     assert issued["content_type"] == "application/gzip"
     assert issued["max_bytes"] == MAX_SOURCE_ARCHIVE_BYTES
     assert issued["key"].startswith(
-        f"{DEFAULT_GENERATOR_UPLOAD_PREFIX}operator-example.com/"
+        f"{DEFAULT_GENERATOR_UPLOAD_PREFIX}operator-example.com-"
     )
     assert store.presigned[0][1] == "application/gzip"
 
     raw = _archive("uploaded-default")
     store.objects[issued["key"]] = raw
     reg = await client.post(
-        _REGISTER_URL, headers=_ADMIN, json=_register_body(raw, issued["key"])
+        _REGISTER_URL, headers=_ACTOR_HEADERS, json=_register_body(raw, issued["key"])
     )
     assert reg.status_code == 200, reg.text
     async with session_maker() as session:
@@ -126,13 +127,20 @@ async def test_refuses_another_operators_key(
     _install(app, session_maker)
     store = _StubStore()
     app.state.traces_hippius = store
-    key = await _issue(client, actor="someone-else@example.com")
     raw = _archive("not-mine")
-    store.objects[key] = raw
-    resp = await client.post(
-        _REGISTER_URL, headers=_ADMIN, json=_register_body(raw, key)
-    )
-    assert resp.status_code == 403, resp.text
+    # A distinct actor whose slug folds to the same text, and a body that
+    # claims to be the issuer, are both refused: scope follows the header.
+    for issuer in ("operator@example.com", "someone-else@example.com"):
+        key = await _issue(client, actor=issuer)
+        store.objects[key] = raw
+        resp = await client.post(
+            _REGISTER_URL,
+            headers=_ACTOR_HEADERS,
+            json=_register_body(raw, key, actor=issuer),
+        )
+        assert resp.status_code == 403, resp.text
+    async with session_maker() as session:
+        assert (await session.scalar(select(GeneratorSubmission))) is None
 
 
 @pytest.mark.parametrize(
@@ -161,7 +169,7 @@ async def test_refuses_a_bad_upload(
         body["source_sha256"] = "0" * 64
     elif mutate == "oversize":
         store.objects[key] = b"\0" * (MAX_SOURCE_ARCHIVE_BYTES + 1)
-    resp = await client.post(_REGISTER_URL, headers=_ADMIN, json=body)
+    resp = await client.post(_REGISTER_URL, headers=_ACTOR_HEADERS, json=body)
     assert resp.status_code == status, resp.text
     async with session_maker() as session:
         assert (await session.scalar(select(GeneratorSubmission))) is None

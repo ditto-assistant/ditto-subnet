@@ -556,7 +556,17 @@ def _default_generator_store(request: Request) -> HippiusClient:
 
 
 def _default_generator_prefix(actor: str) -> str:
-    return f"{DEFAULT_GENERATOR_UPLOAD_PREFIX}{actor_slug(actor)}/"
+    # The slug is readable but lossy (case and punctuation fold), so a digest
+    # of the exact actor keeps two operators with one slug in distinct scopes.
+    digest = hashlib.sha256(actor.encode()).hexdigest()[:16]
+    return f"{DEFAULT_GENERATOR_UPLOAD_PREFIX}{actor_slug(actor)}-{digest}/"
+
+
+def _header_actor(x_admin_actor: str | None) -> str:
+    actor = (x_admin_actor or "").strip()
+    if not 1 <= len(actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    return actor
 
 
 @router.post(
@@ -571,9 +581,7 @@ async def admin_create_default_generator_upload(
     Register it with ``POST /default-generator`` and ``upload_key``; the key is
     scoped to the issuing operator.
     """
-    actor = (x_admin_actor or "").strip()
-    if not 1 <= len(actor) <= 120:
-        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    actor = _header_actor(x_admin_actor)
     client = _default_generator_store(request)
     now = datetime.now(UTC)
     key = f"{_default_generator_prefix(actor)}{now:%Y-%m-%d}/{uuid4()}.tar.gz"
@@ -593,7 +601,9 @@ async def admin_create_default_generator_upload(
 
 
 async def _inspect_default_source(
-    request: Request, payload: AdminDefaultGeneratorRequest, actor: str
+    request: Request,
+    payload: AdminDefaultGeneratorRequest,
+    x_admin_actor: str | None,
 ) -> InspectedUpload:
     if payload.upload_key is None:
         assert payload.source_base64 is not None
@@ -601,7 +611,9 @@ async def _inspect_default_source(
             source_base64=payload.source_base64, source_sha256=payload.source_sha256
         )
     key = normalize_object_key(payload.upload_key)
-    scope = _default_generator_prefix(actor)
+    # Scope by the authenticated actor header, as the issuing route does, never
+    # by the free-form body actor.
+    scope = _default_generator_prefix(_header_actor(x_admin_actor))
     if not key.startswith(scope):
         raise HTTPException(
             status_code=403,
@@ -632,6 +644,7 @@ async def admin_register_default_generator(
     request: Request,
     _admin: AdminDep,
     session: SessionDep,
+    x_admin_actor: ActorDep = None,
 ) -> AdminDefaultGeneratorResponse:
     """Register the public default generator that fills empty counted columns.
 
@@ -649,7 +662,7 @@ async def admin_register_default_generator(
         )
     reason, actor = _check_reason(payload.reason, payload.actor)
     try:
-        inspected = await _inspect_default_source(request, payload, actor)
+        inspected = await _inspect_default_source(request, payload, x_admin_actor)
     except UploadRejected as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     info = inspected.info
