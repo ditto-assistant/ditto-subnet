@@ -46,7 +46,6 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-api/internal/store"
 	"github.com/ditto-assistant/dittobench-datagen/catalog"
-	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/datagen"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -176,9 +175,14 @@ type server struct {
 	sandbox sandbox.Sandbox
 	// allowPrivate relaxes caller-supplied URL checks for local development.
 	// Validator-owned loopback sandboxes use a separate trusted client.
-	allowPrivate           bool
-	allowScreenedImages    bool
-	allowPrivateDatasets   bool
+	allowPrivate         bool
+	allowScreenedImages  bool
+	allowPrivateDatasets bool
+	// allowGeneratorRounds admits generator-round-v1 runs. It follows the
+	// trusted screened-image mode every validator stack sets, not the
+	// private V13 transport: a round run is a screened-image run whose
+	// tickets only Platform issues, and only while validator rounds are on.
+	allowGeneratorRounds   bool
 	requireTicketInference bool
 	softwareVersion        string
 	sourceRevision         string
@@ -286,6 +290,7 @@ func main() {
 		allowPrivate:           allowPrivate,
 		allowScreenedImages:    allowScreenedImages,
 		allowPrivateDatasets:   envBool("DITTOBENCH_ALLOW_PRIVATE_DATASETS"),
+		allowGeneratorRounds:   allowScreenedImages,
 		requireTicketInference: requireTicketInference,
 		softwareVersion:        identity.SoftwareVersion,
 		sourceRevision:         identity.SourceRevision,
@@ -1161,8 +1166,8 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	var req submitRequest
 	bodyLimit := int64(maxSubmitBody)
-	if s.allowPrivateDatasets {
-		bodyLimit += (max(gen.MaxPrivateArtifactBytes, challenge.MaxRoundDatasetBytes) + 2) / 3 * 4
+	if extra := s.privateBodyBytes(); extra > 0 {
+		bodyLimit += int64((extra + 2) / 3 * 4)
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1175,7 +1180,7 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.BenchVersion = version
-	if err := validatePrivateDatasetRequest(req, s.allowPrivateDatasets); err != nil {
+	if err := validatePrivateDatasetRequest(req, s.allowPrivateDatasets, s.allowGeneratorRounds); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

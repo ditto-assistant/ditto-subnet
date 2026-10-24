@@ -1271,3 +1271,23 @@ class TestRoundRunsNeverSpendScoringAttempts:
             assert row is not None
             assert row.status == TicketStatus.SCORED
             assert (row.attempt_count, row.manual_retry_grants) == (1, 1)
+
+
+def test_round_capability_does_not_need_the_private_v13_transport() -> None:
+    """A scorer serving rounds is round-capable with private datasets off.
+
+    The private V13 transport stays disabled fleet-wide, so requiring it here
+    would leave every validator unable to lease a round.
+    """
+    from ditto.tests.db.queries.test_benchmark_rollout import _heartbeat
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    heartbeat = _heartbeat("5" + "C" * 47, now, versions=[7, 13], protocol_version=18)
+    assert heartbeat.capabilities is not None
+    heartbeat.capabilities["sandbox_memory_limit"] = True
+    scorer = heartbeat.capabilities["scorer_benchmarks"]
+    scorer["private_datasets"] = False
+    scorer["generator_rounds"] = True
+    assert lane_mod._round_capable(heartbeat, now=now)
+    scorer["generator_rounds"] = False
+    assert not lane_mod._round_capable(heartbeat, now=now)

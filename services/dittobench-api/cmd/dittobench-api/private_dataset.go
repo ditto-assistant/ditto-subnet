@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 
+	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/ditto-assistant/dittobench-datagen/universe"
@@ -13,17 +14,32 @@ const privateDatasetMode = "platform-private-v1"
 func (s *server) datasetFeatures() []string {
 	features := []string{"git_subdir", universe.V13EnterpriseRevision}
 	if s.allowPrivateDatasets {
-		features = append(features, privateDatasetMode, generatorRoundMode)
+		features = append(features, privateDatasetMode)
+	}
+	if s.allowGeneratorRounds {
+		features = append(features, generatorRoundMode)
 	}
 	return features
 }
 
-func validatePrivateDatasetRequest(req submitRequest, enabled bool) error {
+// privateBodyBytes is the largest decoded dataset a request may carry inline.
+func (s *server) privateBodyBytes() int {
+	limit := 0
+	if s.allowPrivateDatasets {
+		limit = gen.MaxPrivateArtifactBytes
+	}
+	if s.allowGeneratorRounds {
+		limit = max(limit, challenge.MaxRoundDatasetBytes)
+	}
+	return limit
+}
+
+func validatePrivateDatasetRequest(req submitRequest, enabled, roundsEnabled bool) error {
 	if req.PrivateDatasetMode == "" && len(req.PrivateDatasetBytes) == 0 {
 		return nil // Existing public contracts are unchanged.
 	}
 	if req.PrivateDatasetMode == generatorRoundMode {
-		return validateGeneratorRoundRequest(req, enabled)
+		return validateGeneratorRoundRequest(req, roundsEnabled)
 	}
 	if !enabled || req.PrivateDatasetMode != privateDatasetMode || req.BenchVersion != 13 {
 		return errors.New("private dataset mode unavailable")

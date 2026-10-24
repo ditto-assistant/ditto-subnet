@@ -15,10 +15,11 @@ func TestGeneratorRoundAdmission(t *testing.T) {
 		PrivateDatasetBytes:   []byte(`{"contract":"x"}`),
 		ExpectedDatasetSHA256: strings.Repeat("a", 64),
 	}
-	if err := validatePrivateDatasetRequest(valid, true); err != nil {
+	// Round admission follows its own gate, never the private V13 one.
+	if err := validatePrivateDatasetRequest(valid, false, true); err != nil {
 		t.Fatalf("valid round request refused: %v", err)
 	}
-	if validatePrivateDatasetRequest(valid, false) == nil {
+	if validatePrivateDatasetRequest(valid, true, false) == nil {
 		t.Fatal("disabled round mode admitted")
 	}
 	for _, edit := range []func(*submitRequest){
@@ -29,7 +30,7 @@ func TestGeneratorRoundAdmission(t *testing.T) {
 	} {
 		r := valid
 		edit(&r)
-		if validatePrivateDatasetRequest(r, true) == nil {
+		if validatePrivateDatasetRequest(r, true, true) == nil {
 			t.Fatalf("invalid round request admitted: %+v", r.BenchVersion)
 		}
 	}

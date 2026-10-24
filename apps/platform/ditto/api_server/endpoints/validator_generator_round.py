@@ -94,12 +94,13 @@ def _round_capable(heartbeat: ValidatorHeartbeat | None, *, now: datetime) -> bo
     except ValidationError:
         return False
     scorer = capabilities.scorer_benchmarks
+    # Round runs carry their own dataset bytes; they do not need the private
+    # V13 transport (``private_datasets``), which stays off fleet-wide.
     return bool(
         capabilities.ticket_inference
         and capabilities.sandbox_memory_limit
         and scorer is not None
         and scorer.status == "fresh_verified"
-        and scorer.private_datasets
         and scorer.generator_rounds
     )
 
