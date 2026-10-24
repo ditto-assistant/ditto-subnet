@@ -21,6 +21,7 @@ from longmemeval_adapter import (
     stable_id,
 )
 from openrouter_judge_proxy import (
+    reasoning_allowed,
     OFFICIAL_MODEL,
     OFFICIAL_OPENROUTER_MODEL,
     is_official,
@@ -448,6 +449,65 @@ class EndToEndTests(unittest.TestCase):
                 pair["pair_id"] for pair in entry_to_pairs(fixture_entry())
             }
             self.assertTrue(seeded_pair_ids.isdisjoint(default_pair_ids))
+
+
+class JudgeReasoningBudgetTest(unittest.TestCase):
+    """The official protocol's 10-token budget cannot absorb reasoning tokens.
+
+    evaluate_qa.py calls with max_tokens=10 and labels by
+    `'yes' in response.lower()`. A reasoning model spends that budget before
+    emitting visible content, returns content="" with finish_reason="length",
+    and is scored "no" — silently, for every question. Measured against the
+    official protocol on 2026-10-23, mistral-large-4-0 and qwen3.8-flash
+    returned empty content on 30/30 calls and deepseek-v4.1-flash on 28/30;
+    with reasoning disabled the same models answered "yes" in 1-2 tokens.
+    """
+
+    def setUp(self) -> None:
+        self._model = os.environ.pop("LONGMEMEVAL_JUDGE_TARGET_MODEL", None)
+        self._reasoning = os.environ.pop("LONGMEMEVAL_JUDGE_TARGET_REASONING", None)
+
+    def tearDown(self) -> None:
+        for key, saved in (
+            ("LONGMEMEVAL_JUDGE_TARGET_MODEL", self._model),
+            ("LONGMEMEVAL_JUDGE_TARGET_REASONING", self._reasoning),
+        ):
+            os.environ.pop(key, None)
+            if saved is not None:
+                os.environ[key] = saved
+
+    def test_official_request_is_never_given_a_reasoning_field(self) -> None:
+        # The default configuration must stay byte-identical to the frozen judge.
+        value = rewrite_request({"model": OFFICIAL_MODEL, "messages": []})
+        self.assertNotIn("reasoning", value)
+
+    def test_official_request_is_untouched_even_when_reasoning_is_allowed(self) -> None:
+        os.environ["LONGMEMEVAL_JUDGE_TARGET_REASONING"] = "allow"
+        value = rewrite_request({"model": OFFICIAL_MODEL, "messages": []})
+        self.assertNotIn("reasoning", value)
+
+    def test_substituted_target_disables_reasoning_by_default(self) -> None:
+        os.environ["LONGMEMEVAL_JUDGE_TARGET_MODEL"] = "qwen/qwen3.8-flash"
+        value = rewrite_request({"model": OFFICIAL_MODEL, "messages": []})
+        self.assertEqual(value["reasoning"], {"enabled": False})
+
+    def test_substituted_target_can_opt_into_reasoning_for_study(self) -> None:
+        os.environ["LONGMEMEVAL_JUDGE_TARGET_MODEL"] = "qwen/qwen3.8-flash"
+        os.environ["LONGMEMEVAL_JUDGE_TARGET_REASONING"] = "allow"
+        self.assertTrue(reasoning_allowed())
+        value = rewrite_request({"model": OFFICIAL_MODEL, "messages": []})
+        self.assertNotIn("reasoning", value)
+
+    def test_only_the_exact_allow_token_re_enables_reasoning(self) -> None:
+        os.environ["LONGMEMEVAL_JUDGE_TARGET_MODEL"] = "qwen/qwen3.8-flash"
+        for value in ("", "  ", "true", "yes", "1", "ALLOWED", "enable"):
+            os.environ["LONGMEMEVAL_JUDGE_TARGET_REASONING"] = value
+            self.assertFalse(reasoning_allowed(), value)
+            self.assertEqual(
+                rewrite_request({"model": OFFICIAL_MODEL, "messages": []})["reasoning"],
+                {"enabled": False},
+                value,
+            )
 
 
 if __name__ == "__main__":
