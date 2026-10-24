@@ -3392,26 +3392,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/screening-submissions/{agent_id}/attempts/{attempt_id}/private-package-registration": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Register V13 Private Package
-         * @description Persist exact digests only; this cannot verify cases or clear a hold.
-         */
-        post: operations["register_v13_private_package_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__private_package_registration_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/admin/screening-submissions/{agent_id}/attempts/{attempt_id}/verification-readiness": {
         parameters: {
             query?: never;
@@ -4306,23 +4286,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/v13-official-controls/images": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Stage Official Control Image */
-        post: operations["stage_official_control_image_api_v1_admin_v13_official_controls_images_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/admin/v13-official-controls/{control_id}/approvals": {
         parameters: {
             query?: never;
@@ -4333,8 +4296,7 @@ export interface paths {
         /** List Official Control Approvals */
         get: operations["list_official_control_approvals_api_v1_admin_v13_official_controls__control_id__approvals_get"];
         put?: never;
-        /** Approve Official Control */
-        post: operations["approve_official_control_api_v1_admin_v13_official_controls__control_id__approvals_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4355,43 +4317,6 @@ export interface paths {
         get: operations["get_official_control_artifact_api_v1_admin_v13_official_controls__control_id__artifact_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/v13-official-controls/{control_id}/verify": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Verify Official Control Image */
-        post: operations["verify_official_control_image_api_v1_admin_v13_official_controls__control_id__verify_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/v13-private-generation/groups": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record Generation Start
-         * @description Commit one target-specific, two-role event before any seed issuance.
-         */
-        post: operations["record_generation_start_api_v1_admin_v13_private_generation_groups_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4431,15 +4356,7 @@ export interface paths {
          */
         get: operations["get_group_package_api_v1_admin_v13_private_generation_groups__group_id__packages__role__get"];
         put?: never;
-        /**
-         * Register Group Package
-         * @description Record a digest-only package after a committed generation start.
-         *
-         *     This does not authenticate the protected package or make an admin-supplied
-         *     manifest a trusted matched control. A separate provisioner and verifier
-         *     must validate sealed bytes and independent benign-control provenance.
-         */
-        post: operations["register_group_package_api_v1_admin_v13_private_generation_groups__group_id__packages__role__post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4459,13 +4376,7 @@ export interface paths {
          */
         get: operations["list_known_benign_approvals_api_v1_admin_v13_private_generation_known_benign_approvals_get"];
         put?: never;
-        /**
-         * Record Known Benign Approval
-         * @description Audit an operator-claimed clean candidate; no semantic pass inferred.
-         *
-         *     X-Admin-Actor is an audit label, not proof of an independent approver.
-         */
-        post: operations["record_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4499,11 +4410,7 @@ export interface paths {
         /** Get Replay Generation Group */
         get: operations["get_replay_generation_group_api_v1_admin_v13_private_generation_replays__replay_id__group_get"];
         put?: never;
-        /**
-         * Record Replay Generation Start
-         * @description Commit replay image and clean control before protected seed generation.
-         */
-        post: operations["record_replay_generation_start_api_v1_admin_v13_private_generation_replays__replay_id__group_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4520,11 +4427,7 @@ export interface paths {
         /** Get Replay Group Package */
         get: operations["get_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__get"];
         put?: never;
-        /**
-         * Register Replay Group Package
-         * @description Record sealed package digests; registration alone is not verification.
-         */
-        post: operations["register_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7946,46 +7849,6 @@ export interface paths {
         get: operations["get_replay_inputs_api_v1_screener_verification_replays__replay_id__inputs_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/verification-replays/{replay_id}/private-inputs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Replay Private Inputs
-         * @description Short-lived exact image inputs for an active independent replay worker.
-         */
-        get: operations["get_replay_private_inputs_api_v1_screener_verification_replays__replay_id__private_inputs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/screener/verification-replays/{replay_id}/private-receipt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Append Replay Private Receipt
-         * @description Authenticate one sealed execution claim; leave policy unverified.
-         */
-        post: operations["append_replay_private_receipt_api_v1_screener_verification_replays__replay_id__private_receipt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -14471,38 +14334,6 @@ export interface components {
              * @enum {string}
              */
             registration_status: "not_registered" | "registered_unverified";
-        };
-        /**
-         * AdminV13PrivatePackageRegisterRequest
-         * @description Operator assertion of sealed digests; never private case bytes.
-         */
-        AdminV13PrivatePackageRegisterRequest: {
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Clean Agent Id
-             * Format: uuid
-             */
-            clean_agent_id: string;
-            /** Clean Artifact Sha256 */
-            clean_artifact_sha256: string;
-            /**
-             * Clean Attempt Id
-             * Format: uuid
-             */
-            clean_attempt_id: string;
-            /** Clean Image Sha256 */
-            clean_image_sha256: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /** Manifest Sha256 */
-            manifest_sha256: string;
-            /** Pair Inventory Sha256 */
-            pair_inventory_sha256: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /** Runner Hotkey */
-            runner_hotkey: string;
         };
         /** AdminV13PrivatePrerequisite */
         AdminV13PrivatePrerequisite: {
@@ -27178,19 +27009,6 @@ export interface components {
              */
             schema_sha256: string;
         };
-        /** OfficialControlApprovalRequest */
-        OfficialControlApprovalRequest: {
-            /** Image Id */
-            image_id: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /** Reason */
-            reason: string;
-            /** Review Evidence Sha256 */
-            review_evidence_sha256: string;
-        };
         /** OfficialControlApprovalView */
         OfficialControlApprovalView: {
             /** Actor */
@@ -27258,47 +27076,6 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
-        };
-        /** OfficialControlImageRequest */
-        OfficialControlImageRequest: {
-            /**
-             * Fixture Id
-             * Format: uuid
-             */
-            fixture_id: string;
-            /** Image Id */
-            image_id: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /**
-             * Request Id
-             * Format: uuid
-             */
-            request_id: string;
-            /** Size Bytes */
-            size_bytes: number;
-        };
-        /** OfficialControlImageUpload */
-        OfficialControlImageUpload: {
-            control: components["schemas"]["OfficialControlImageView"];
-            /**
-             * Expires At
-             * Format: date-time
-             */
-            expires_at: string;
-            /** Required Headers */
-            required_headers: {
-                [key: string]: string;
-            };
-            /** Upload Url */
-            upload_url: string;
-        };
-        /** OfficialControlImageVerifyRequest */
-        OfficialControlImageVerifyRequest: {
-            /** Image Id */
-            image_id: string;
-            /** Image Sha256 */
-            image_sha256: string;
         };
         /** OfficialControlImageView */
         OfficialControlImageView: {
@@ -27794,35 +27571,6 @@ export interface components {
             signature: string;
             /** Validator Hotkey */
             validator_hotkey: string;
-        };
-        /**
-         * PrivateExecutionResult
-         * @description Report-only paired outcomes; no materiality decision or policy verdict.
-         */
-        PrivateExecutionResult: {
-            /** Aggregates */
-            aggregates: components["schemas"]["PrivatePairCounts"][];
-            summary: components["schemas"]["V13PrivateRunSummary"];
-        };
-        /**
-         * PrivatePairCounts
-         * @description Sanitized aggregate; no prompts, answers, case IDs, or hidden seeds.
-         */
-        PrivatePairCounts: {
-            /** Control Correct */
-            control_correct: number;
-            /** Control Only Correct */
-            control_only_correct: number;
-            /** Pairs */
-            pairs: number;
-            /** Seed Commitment */
-            seed_commitment: string;
-            /** Transformation Class */
-            transformation_class: string;
-            /** Variant Correct */
-            variant_correct: number;
-            /** Variant Only Correct */
-            variant_only_correct: number;
         };
         /** ProbeBatteryLead */
         ProbeBatteryLead: {
@@ -39161,39 +38909,6 @@ export interface components {
             /** Target Receipt Sha256 */
             target_receipt_sha256: string;
         };
-        /** V13GenerationStartRequest */
-        V13GenerationStartRequest: {
-            /**
-             * Approval Id
-             * Format: uuid
-             */
-            approval_id: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /**
-             * Target Agent Id
-             * Format: uuid
-             */
-            target_agent_id: string;
-            /** Target Artifact Sha256 */
-            target_artifact_sha256: string;
-            /**
-             * Target Attempt Id
-             * Format: uuid
-             */
-            target_attempt_id: string;
-            /** Target Image Sha256 */
-            target_image_sha256: string;
-        };
-        /** V13GroupPackageRegisterRequest */
-        V13GroupPackageRegisterRequest: {
-            /** Generation Receipt Sha256 */
-            generation_receipt_sha256: string;
-            /** Manifest Sha256 */
-            manifest_sha256: string;
-            /** Pair Inventory Sha256 */
-            pair_inventory_sha256: string;
-        };
         /** V13GroupPackageView */
         V13GroupPackageView: {
             /**
@@ -39242,29 +38957,6 @@ export interface components {
              */
             status: "recorded_unverified";
         };
-        /** V13KnownBenignApprovalRequest */
-        V13KnownBenignApprovalRequest: {
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /** Reason */
-            reason: string;
-            /** Review Evidence Sha256 */
-            review_evidence_sha256: string;
-        };
         /** V13KnownBenignApprovalView */
         V13KnownBenignApprovalView: {
             /** Actor */
@@ -39308,68 +39000,6 @@ export interface components {
              */
             status: "recorded_unverified";
         };
-        /**
-         * V13MatchedCleanControlCommitment
-         * @description Digest-only same-case commitment, not an execution or policy result.
-         */
-        V13MatchedCleanControlCommitment: {
-            /**
-             * Control Agent Id
-             * Format: uuid
-             */
-            control_agent_id: string;
-            /**
-             * Control Approval Id
-             * Format: uuid
-             */
-            control_approval_id: string;
-            /** Control Approval Receipt Sha256 */
-            control_approval_receipt_sha256: string;
-            /** Control Artifact Sha256 */
-            control_artifact_sha256: string;
-            /**
-             * Control Attempt Id
-             * Format: uuid
-             */
-            control_attempt_id: string;
-            /** Control Generation Receipt Sha256 */
-            control_generation_receipt_sha256: string;
-            /** Control Image Sha256 */
-            control_image_sha256: string;
-            /** Control Manifest Sha256 */
-            control_manifest_sha256: string;
-            /**
-             * Group Id
-             * Format: uuid
-             */
-            group_id: string;
-            /** Pair Count */
-            pair_count: number;
-            /** Pair Inventory Sha256 */
-            pair_inventory_sha256: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /** Replay Id */
-            replay_id?: string | null;
-            /**
-             * Target Agent Id
-             * Format: uuid
-             */
-            target_agent_id: string;
-            /** Target Artifact Sha256 */
-            target_artifact_sha256: string;
-            /**
-             * Target Attempt Id
-             * Format: uuid
-             */
-            target_attempt_id: string;
-            /** Target Generation Receipt Sha256 */
-            target_generation_receipt_sha256: string;
-            /** Target Image Sha256 */
-            target_image_sha256: string;
-            /** Target Manifest Sha256 */
-            target_manifest_sha256: string;
-        };
         /** V13PrivateClassSignal */
         V13PrivateClassSignal: {
             /** Clean Degradation Bps */
@@ -39392,41 +39022,6 @@ export interface components {
             target_degradation_bps: number;
             /** Transformation Class */
             transformation_class: string;
-        };
-        /**
-         * V13PrivateRunSummary
-         * @description Sanitized runner output; this alone is never a V13 policy decision.
-         */
-        V13PrivateRunSummary: {
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-            /** Completed Pairs */
-            completed_pairs: number;
-            /** Evidence Sha256 */
-            evidence_sha256: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /** Manifest Sha256 */
-            manifest_sha256: string;
-            /** Profile Sha256 */
-            profile_sha256: string;
-            /** Runner Hotkey */
-            runner_hotkey: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "completed" | "failed" | "inconclusive";
         };
         /** V13PrivateStatisticalReport */
         V13PrivateStatisticalReport: {
@@ -39636,31 +39231,6 @@ export interface components {
              * @enum {string}
              */
             status: "passed" | "failed" | "inconclusive";
-        };
-        /**
-         * V13ReplayPrivateReceipt
-         * @description Runner-signed aggregate claim bound to both exact images and sealed roles.
-         */
-        V13ReplayPrivateReceipt: {
-            binding: components["schemas"]["V13ReplayBinding"];
-            known_benign: components["schemas"]["PrivateExecutionResult"];
-            matched: components["schemas"]["V13MatchedCleanControlCommitment"];
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-            /**
-             * Revision
-             * @default v13-replay-private-receipt-v1
-             * @constant
-             */
-            revision: "v13-replay-private-receipt-v1";
-            /** Runner Hotkey */
-            runner_hotkey: string;
-            /** Signature */
-            signature: string;
-            target: components["schemas"]["PrivateExecutionResult"];
         };
         /** V13ReportOnlyCurrentPacket */
         V13ReportOnlyCurrentPacket: {
@@ -41118,79 +40688,6 @@ export interface components {
             /** Miner Hotkey */
             miner_hotkey: string;
             replay: components["schemas"]["VerificationReplayState"];
-            /**
-             * Urls Expire At
-             * Format: date-time
-             */
-            urls_expire_at: string;
-        };
-        /** VerificationReplayPrivateImageInput */
-        VerificationReplayPrivateImageInput: {
-            /**
-             * Agent Id
-             * Format: uuid
-             */
-            agent_id: string;
-            /** Artifact Sha256 */
-            artifact_sha256: string;
-            /**
-             * Attempt Id
-             * Format: uuid
-             */
-            attempt_id: string;
-            /**
-             * Committed At
-             * Format: date-time
-             */
-            committed_at: string;
-            /** Image Id */
-            image_id: string;
-            /** Image Sha256 */
-            image_sha256: string;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "target" | "known_benign";
-            /** Size Bytes */
-            size_bytes: number;
-            /** Url */
-            url: string;
-            /**
-             * Verified At
-             * Format: date-time
-             */
-            verified_at: string;
-        };
-        /** VerificationReplayPrivateInputs */
-        VerificationReplayPrivateInputs: {
-            approval: components["schemas"]["V13KnownBenignApprovalView"];
-            control_image: components["schemas"]["VerificationReplayPrivateImageInput"];
-            control_package: components["schemas"]["V13ReplayGroupPackageView"];
-            group: components["schemas"]["V13ReplayGenerationGroupView"];
-            /**
-             * Lease Deadline
-             * Format: date-time
-             */
-            lease_deadline: string;
-            /**
-             * Lease Started At
-             * Format: date-time
-             */
-            lease_started_at: string;
-            /**
-             * Policy Verification Complete
-             * @default false
-             * @constant
-             */
-            policy_verification_complete: false;
-            /**
-             * Replay Id
-             * Format: uuid
-             */
-            replay_id: string;
-            target_image: components["schemas"]["VerificationReplayPrivateImageInput"];
-            target_package: components["schemas"]["V13ReplayGroupPackageView"];
             /**
              * Urls Expire At
              * Format: date-time
@@ -48834,43 +48331,6 @@ export interface operations {
             };
         };
     };
-    register_v13_private_package_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__private_package_registration_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                agent_id: string;
-                attempt_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AdminV13PrivatePackageRegisterRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_screening_verification_readiness_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__verification_readiness_get: {
         parameters: {
             query?: never;
@@ -50794,41 +50254,6 @@ export interface operations {
             };
         };
     };
-    stage_official_control_image_api_v1_admin_v13_official_controls_images_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfficialControlImageRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfficialControlImageUpload"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_official_control_approvals_api_v1_admin_v13_official_controls__control_id__approvals_get: {
         parameters: {
             query?: never;
@@ -50862,43 +50287,6 @@ export interface operations {
             };
         };
     };
-    approve_official_control_api_v1_admin_v13_official_controls__control_id__approvals_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                control_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfficialControlApprovalRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfficialControlApprovalView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_official_control_artifact_api_v1_admin_v13_official_controls__control_id__artifact_get: {
         parameters: {
             query?: never;
@@ -50919,79 +50307,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OfficialControlImageArtifact"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    verify_official_control_image_api_v1_admin_v13_official_controls__control_id__verify_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                control_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfficialControlImageVerifyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfficialControlImageView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_generation_start_api_v1_admin_v13_private_generation_groups_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13GenerationStartRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["V13GenerationGroupView"];
                 };
             };
             /** @description Validation Error */
@@ -51072,45 +50387,6 @@ export interface operations {
             };
         };
     };
-    register_group_package_api_v1_admin_v13_private_generation_groups__group_id__packages__role__post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                group_id: string;
-                role: "target" | "known_benign";
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13GroupPackageRegisterRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["V13GroupPackageView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_known_benign_approvals_api_v1_admin_v13_private_generation_known_benign_approvals_get: {
         parameters: {
             query?: {
@@ -51132,42 +50408,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["V13KnownBenignApprovalView"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13KnownBenignApprovalRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["V13KnownBenignApprovalView"];
                 };
             };
             /** @description Validation Error */
@@ -51247,44 +50487,6 @@ export interface operations {
             };
         };
     };
-    record_replay_generation_start_api_v1_admin_v13_private_generation_replays__replay_id__group_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                replay_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13GenerationStartRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["V13ReplayGenerationGroupView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__get: {
         parameters: {
             query?: never;
@@ -51298,45 +50500,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["V13ReplayGroupPackageView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    register_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-admin-actor"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                replay_id: string;
-                role: "target" | "known_benign";
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13GroupPackageRegisterRequest"];
-            };
-        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -57500,78 +56663,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationReplayInputs"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_replay_private_inputs_api_v1_screener_verification_replays__replay_id__private_inputs_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                replay_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VerificationReplayPrivateInputs"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    append_replay_private_receipt_api_v1_screener_verification_replays__replay_id__private_receipt_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "x-screener-hotkey"?: string | null;
-                authorization?: string | null;
-            };
-            path: {
-                replay_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["V13ReplayPrivateReceipt"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VerificationReplayPrivateReceiptState"];
                 };
             };
             /** @description Validation Error */
