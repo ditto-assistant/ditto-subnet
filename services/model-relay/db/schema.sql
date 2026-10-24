@@ -7268,7 +7268,7 @@ CREATE TABLE public.validator_tickets (
     CONSTRAINT ck_validator_tickets_validator_tickets_purpose_valid CHECK ((purpose = ANY (ARRAY['legacy_unclassified'::text, 'canonical_quorum'::text, 'continual_retest'::text, 'benchmark_canary'::text, 'generator_round'::text]))),
     CONSTRAINT ck_validator_tickets_validator_tickets_seed_nonnegative CHECK (((seed IS NULL) OR (seed >= 0))),
     CONSTRAINT ck_validator_tickets_validator_tickets_slot_id CHECK ((slot_id = ANY (ARRAY['slot-0'::text, 'slot-1'::text, 'slot-2'::text, 'slot-3'::text, 'slot-4'::text, 'slot-5'::text, 'slot-6'::text, 'slot-7'::text]))),
-    CONSTRAINT validator_tickets_attempt_count_positive CHECK ((attempt_count > 0)),
+    CONSTRAINT validator_tickets_attempt_count_nonnegative CHECK ((attempt_count >= 0)),
     CONSTRAINT validator_tickets_bench_version_positive CHECK ((bench_version > 0)),
     CONSTRAINT validator_tickets_manual_retry_grants_nonnegative CHECK ((manual_retry_grants >= 0))
 );
