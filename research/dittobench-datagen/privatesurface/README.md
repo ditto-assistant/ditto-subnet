@@ -42,6 +42,22 @@ any failed request for which the provider did not return usage.
 Neither check proves the benchmark qualification gates. Failed requests do not
 fall back to public generation or weaker validation.
 
+`-rewrite-mode literal-text-v1` is an opt-in, unqualified alternative to opaque
+masking. It gives the writer natural source text plus the protected values that
+are actually present. Exact value and typo occurrence counts, absent-answer
+introduction checks, and the independent semantic judge remain mandatory.
+Empty mode retains the legacy behavior and profile digest; the explicit mode
+changes the profile digest. Unknown modes fail closed. A successful semantic
+receipt, or a high fraction of changed surfaces, is not adversarial qualification
+and does not permit production activation. The separate worker can select it
+only with a matching approved executable and profile digest.
+
+The experimental literal mode now supplies exact counts and retry feedback for
+source-visible literals only. It never sends the rejected proposal or names an
+absent grading value. This prompt revision changes the literal-mode digest;
+earlier diagnostic artifacts do not qualify the revised profile. Legacy mode
+and its digest are unchanged. These hints do not relax any acceptance check.
+
 The CLI makes a new 0700 output directory, draws a nonzero cryptographic salt,
 and writes 0600 files with exclusive creation. Credentials come only from the
 trusted process's `OPENROUTER_API_KEY` environment. Never put that key, base
@@ -57,7 +73,7 @@ credentials or inference. Explicit reasoning efforts, when configured, replace
 temperature and are bound into the profile digest.
 Restricted diagnostics retain candidate text, including failed attempts' final
 candidate; they are not public artifacts or qualification evidence. The bounded
-semantic receipt may be up to 4 MiB for a full-profile run.
+semantic receipt may be up to 32 MiB for a full-profile run.
 
 ## Evidence so far (2026-09-17)
 
