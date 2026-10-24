@@ -96,6 +96,7 @@ def test_record_selection_is_not_rejectable_alone(render) -> None:
     assert "resolve such I2/W3 leads as refuted, not unresolved" in prompt
     assert "deduplication or collapsing of similar records even when it drops" in prompt
     assert "withheld needed records" not in prompt
+    assert "field projections\nthat strip a field such as saved timestamps" in prompt
     policy = (
         Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
     ).read_text()

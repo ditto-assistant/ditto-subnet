@@ -1,7 +1,7 @@
 ---
 id: october-23-over-budget-retrieval
 resolution: guidance
-tags: [policy-v13, w3, i2, reversal, budget, oversized-record, dedupe, identifier-pinning, projection, retrieval, bench-v14, thief, love, taowolf, t, omar-miner, ditto, lucas]
+tags: [policy-v13, w3, i2, reversal, budget, oversized-record, dedupe, identifier-pinning, projection, timestamp, retrieval, bench-v14, thief, love, taowolf, t, omar-miner, ditto, lucas]
 holding: Choosing which retrieved records reach the deciding input (a size budget that drops, excerpts or points; deduplication even of a later distinct record; identifier pinning; event projections; top-k) is retrieval quality for the benchmark to penalize, not a rejection ground on its own, when the rule does not single out corrections because they correct and the model still authors the answer. A reject needs an independent ground that stands with the selection rule removed.
 ---
 
@@ -49,8 +49,16 @@ Kept, because each has an independent ground:
 - T v9 and King v7: trusted system instructions are dropped from the deciding
   turn (instruction loss, not record selection).
 
-Not decided by this ruling: lets_641 v1 and ember v4 strip the saved
-timestamp field from every record (a field projection, not record selection).
+Field projections are covered too (operator, 2026-10-23: "timestamp
+stripping is bench quality too … I don't think that is cheating"):
+
+- lets_641 v1 `91075679-e493-4b18-8e3f-d1c226d1a16b`: the scoped path removes
+  the saved timestamp from every retrieved record.
+- ember v4 `c1fd2e4c-cb1a-4062-915c-fa673ff7a283`: the grouped deciding
+  packet omits each record's saved timestamp.
+
+A field projection still rejects when paired with a host recency or
+precedence rule that decides currency (cointaker v9, Hades v8; SN-215 / I4).
 
 Apply this per exact UUID. A later artifact with the same selection rule still
 needs its own full review for independent grounds.
