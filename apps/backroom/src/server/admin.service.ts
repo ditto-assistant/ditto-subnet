@@ -5,10 +5,56 @@ import {
   githubRevocationReadInputSchema, githubRevocationWriteInputSchema, githubRevocationControlSchema,
 } from '../lib/contributor.schemas'
 import '@tanstack/react-start/server-only'
-import { manualControlSchema } from '../lib/treasury-manual.schemas'
+import {
+  alphaRao, manualControlSchema, manualPreviewInputSchema, manualPreviewSchema, manualRequestId,
+  manualSubmitSchema, manualTransferConfirmation, manualTransferSchema,
+} from '../lib/treasury-manual.schemas'
 
 export async function fetchTreasuryManualTransfers() {
   return manualControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual'))
+}
+
+/**
+ * MCP twin of previewManualTransfer: same Platform body and actor. Accepts
+ * exactly one of integer `amount_rao` or decimal `amount_alpha`, and returns
+ * the exact confirmation phrase the Transfer once button asks the operator
+ * to type. Preview grants no spending authority (`not_queued`).
+ */
+export async function previewTreasuryManualTransfer(rawInput: {
+  bucket_id: string
+  amount_rao?: number
+  amount_alpha?: string
+  retained_alpha_rao: number
+  reason: string
+  request_id?: string
+}, actor: string) {
+  const { amount_rao: amountRao, amount_alpha: amountAlpha, request_id: requestId, ...rest } = rawInput
+  if ((amountRao === undefined) === (amountAlpha === undefined)) {
+    throw new Error('Provide exactly one of amount_rao or amount_alpha')
+  }
+  const amount = amountRao ?? alphaRao(amountAlpha!.trim())
+  if (amount === null) {
+    throw new Error('amount_alpha must be a positive decimal alpha amount with at most 9 fractional digits')
+  }
+  const body = manualPreviewInputSchema.parse({
+    ...rest, amount_rao: amount, request_id: requestId ?? manualRequestId(),
+  })
+  const preview = manualPreviewSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual/preview', {
+    method: 'POST', body, actor,
+  }))
+  return { ...preview, confirmation: manualTransferConfirmation(preview.envelope) }
+}
+
+/**
+ * MCP twin of queueManualTransfer. manualSubmitSchema refuses any
+ * confirmation other than the exact amount-and-destination phrase before a
+ * Platform request; the Platform wire literal is then supplied server-side.
+ */
+export async function queueTreasuryManualTransfer(rawInput: unknown, actor: string) {
+  const data = manualSubmitSchema.parse(rawInput)
+  return manualTransferSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual', {
+    method: 'POST', body: { ...data, confirmation: 'TRANSFER SN118 ALPHA ONCE' }, actor,
+  }))
 }
 import { z } from 'zod'
 import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema, treasuryReceiptPreflightInputSchema, treasuryReceiptPreflightSchema } from '../lib/treasury-receipts.schemas'

@@ -2,8 +2,9 @@
 
 An operator reads this after a Subtensor upgrade: it says whether source
 attribution and treasury receipt reading admit the runtime, and for the
-treasury signer, which calls moved since the runtime its cold-signed
-policy binds. It changes no admission state and authorizes nothing.
+treasury signer, whether it keeps signing (its consumed surface is unchanged
+from the runtime its cold-signed policy binds) and which calls moved since
+then. It changes no admission state and authorizes nothing.
 """
 
 from __future__ import annotations
@@ -93,6 +94,36 @@ def _verdict(
     )
 
 
+async def _signer_surface_unchanged(substrate: Any, metadata: Any) -> bool:
+    """Mirror custody's admission: same signer surface as the signed runtime.
+
+    Custody computes this itself before signing; this is the report's view of
+    it. Any read failure reports "does not sign" rather than guessing.
+    """
+    from ditto_screening_protocol.collector_receipts import (
+        AUDITED_COLLECTOR_CODE_HASH,
+        AUDITED_COLLECTOR_REFERENCE_BLOCK,
+        COLLECTOR_SIGNER_SURFACE,
+    )
+
+    number, reference = AUDITED_COLLECTOR_REFERENCE_BLOCK
+    try:
+        if await substrate.get_block_hash(number) != reference:
+            return False
+        stored = await substrate.rpc_request(
+            "state_getStorageHash", ["0x3a636f6465", reference]
+        )
+        if stored.get("result") != AUDITED_COLLECTOR_CODE_HASH:
+            return False
+        signed = runtime_interface(
+            await metadata_at(substrate, reference), COLLECTOR_SIGNER_SURFACE
+        )
+        live = runtime_interface(metadata, COLLECTOR_SIGNER_SURFACE)
+    except Exception:  # noqa: BLE001 - report-only; custody refuses on its own
+        return False
+    return live.digest == signed.digest
+
+
 async def read_runtime_interface_report(
     substrate: Any, *, block: int | None = None
 ) -> RuntimeInterfaceReport:
@@ -158,7 +189,8 @@ async def read_runtime_interface_report(
         ),
         treasury_signer=TreasurySignerView(
             approved_runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH,
-            signs_on_this_runtime=code == AUDITED_COLLECTOR_CODE_HASH,
+            signs_on_this_runtime=code == AUDITED_COLLECTOR_CODE_HASH
+            or await _signer_surface_unchanged(substrate, metadata),
             call_baseline_release=baseline_release,
             changed_calls=tuple(changed_calls[:_CHANGED_CALL_LIMIT]),
             changed_calls_truncated=len(changed_calls) > _CHANGED_CALL_LIMIT,

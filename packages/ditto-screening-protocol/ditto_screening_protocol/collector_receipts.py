@@ -13,6 +13,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ditto_screening_protocol.runtime_interface import RuntimeSurface
+
 FINNEY_GENESIS = "0x2f0555cc76fc2840a25a6ea3b9637146806f1f44b090c175ffde2a7e5ab36c03"
 # Exact hashes, never version-only acceptance. Historical v472 evidence remains
 # readable; new signing requires the current hash and a new cold approval.
@@ -71,6 +73,58 @@ AUDITED_COLLECTOR_RECEIPT_HASHES = COLLECTOR_READABLE_RUNTIME_HASHES - {
 # guard_runtime independently requires an audited v482 policy and, for current
 # signing, the exact same v482 chain hash before consulting this shape set.
 COLLECTOR_POW_REGISTRATION_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER[2:])
+
+# A finalized Finney block whose stored :code is AUDITED_COLLECTOR_CODE_HASH
+# (live_current in docs/audits/collector-finney-v482/manifest.json). Custody
+# fingerprints COLLECTOR_SIGNER_SURFACE here and at the live block; an upgrade
+# that leaves that surface identical keeps signing under the existing cold-
+# signed policy, and any change still stops for an audit and a new signature.
+AUDITED_COLLECTOR_REFERENCE_BLOCK = (
+    9336443,
+    "0x462f5051b205f26f487491fbd02fedc9128dd484110e11ba98ae2e1a9462e338",
+)
+# Everything ditto.treasury.collector_chain reads, decodes or signs, plus what
+# it matches by number: SubtensorModule's pallet index and AmountTooLow's
+# error index in the retry proof, and the signed extensions it encodes.
+# Runtime API results are validated field by field where they are read.
+COLLECTOR_SIGNER_SURFACE = RuntimeSurface(
+    "collector_signer",
+    storage=(
+        ("Proxy", "Proxies"),
+        ("Proxy", "RealPaysFeeConsentV1"),
+        ("SubtensorModule", "AutoStakeDestination"),
+        ("SubtensorModule", "Burn"),
+        ("SubtensorModule", "Keys"),
+        ("SubtensorModule", "LastMechansimStepBlock"),
+        ("SubtensorModule", "MinerCollateral"),
+        ("SubtensorModule", "Owner"),
+        ("SubtensorModule", "SubnetEpochConsensus"),
+        ("SubtensorModule", "SubnetOwner"),
+        ("SubtensorModule", "Tempo"),
+        ("SubtensorModule", "Uids"),
+        ("System", "Account"),
+    ),
+    events=(
+        ("Proxy", "ProxyExecuted"),
+        ("SubtensorModule", "AutoStakeAdded"),
+        ("SubtensorModule", "IncentiveAlphaEmittedToMiners"),
+        ("SubtensorModule", "NeuronRegistered"),
+        ("SubtensorModule", "StakeAdded"),
+        ("SubtensorModule", "StakeRemoved"),
+        ("System", "ExtrinsicFailed"),
+        ("System", "ExtrinsicSuccess"),
+        ("TransactionPayment", "TransactionFeePaid"),
+    ),
+    calls=(
+        ("Proxy", "proxy"),
+        ("SubtensorModule", "register_limit"),
+        ("SubtensorModule", "transfer_stake"),
+    ),
+    errors=(("SubtensorModule", "AmountTooLow"),),
+    constants=(("SubtensorModule", "InitialMinTransfer"),),
+    pallet_indices=("Balances", "Proxy", "SubtensorModule", "System"),
+    signed_extensions=True,
+)
 
 
 def collector_receipt_runtime(parent: str, post: str) -> str:

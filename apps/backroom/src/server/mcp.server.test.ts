@@ -108,6 +108,141 @@ describe('Backroom MCP tools', () => {
     } finally { await writer.client.close(); await writer.server.close() }
   })
 
+  describe('manual Gamma collector transfers', () => {
+    const destination = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY'
+    const requestId = '11111111-2222-4333-8444-555555555555'
+    const envelope = {
+      version: 1, collector_policy_digest: 'a'.repeat(64), destination,
+      request: {
+        request_id: requestId, after_operation: 3, source_block: 100, bucket_id: 'gm_credits',
+        amount_rao: 1_500_000_000, retained_alpha_rao: 10_000_000_000, expires_block: 200,
+        reason: 'Fund GM credits for October',
+      },
+    }
+    const preview = { envelope, confirmation_digest: 'b'.repeat(64), spending_authority: 'not_queued' }
+    const confirmation = `TRANSFER 1.5 ALPHA TO GM_CREDITS ${destination}`
+    const previewInput = {
+      bucket_id: 'gm_credits', amount_alpha: '1.5', retained_alpha_rao: 10_000_000_000,
+      reason: 'Fund GM credits for October',
+    }
+
+    it('previews with the operator actor, the Platform body and the exact confirmation phrase', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+      const fetchMock = vi.fn().mockImplementation(async () => Response.json(preview))
+      vi.stubGlobal('fetch', fetchMock)
+      const readonly = await connect([BACKROOM_READ_SCOPE])
+      try {
+        // The panel's preview server function requires a write-level session.
+        expect((await readonly.client.callTool({ name: 'preview_treasury_manual_transfer', arguments: previewInput })).isError).toBe(true)
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally { await readonly.client.close(); await readonly.server.close() }
+      const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        for (const args of [
+          { ...previewInput, amount_rao: 1_500_000_000 },
+          { ...previewInput, amount_alpha: undefined },
+          { ...previewInput, amount_alpha: '1.0000000001' },
+          { ...previewInput, amount_alpha: '0' },
+        ]) {
+          expect((await writer.client.callTool({ name: 'preview_treasury_manual_transfer', arguments: args })).isError).toBe(true)
+        }
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        const response = await writer.client.callTool({ name: 'preview_treasury_manual_transfer', arguments: previewInput })
+        expect(response.isError).not.toBe(true)
+        expect(readJsonResult(response)).toEqual({ ...preview, confirmation })
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(url).toMatch(/\/api\/v1\/admin\/treasury-manual\/preview$/)
+        expect(init.method).toBe('POST')
+        expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        expect(body).toEqual({
+          request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+          bucket_id: 'gm_credits', amount_rao: 1_500_000_000, retained_alpha_rao: 10_000_000_000,
+          reason: 'Fund GM credits for October',
+        })
+
+        const { amount_alpha: _alpha, ...rest } = previewInput
+        const exact = await writer.client.callTool({
+          name: 'preview_treasury_manual_transfer',
+          arguments: { ...rest, amount_rao: 1_500_000_000, request_id: requestId },
+        })
+        expect(exact.isError).not.toBe(true)
+        const [, exactInit] = fetchMock.mock.calls[1] as [string, RequestInit]
+        expect(JSON.parse(String(exactInit.body))).toMatchObject({ request_id: requestId, amount_rao: 1_500_000_000 })
+      } finally { await writer.client.close(); await writer.server.close() }
+    })
+
+    it('queues only the exact previewed confirmation and adapts to the Platform wire literal', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+      const transfer = {
+        request_id: requestId, envelope, status: 'queued', actor: session.email,
+        created_at: '2026-10-24T18:00:00Z', updated_at: '2026-10-24T18:00:00Z', last_error: null, receipt: null,
+      }
+      const fetchMock = vi.fn().mockImplementation(async () => Response.json(transfer))
+      vi.stubGlobal('fetch', fetchMock)
+      const input = { envelope, confirmation_digest: preview.confirmation_digest, confirmation }
+      const readonly = await connect([BACKROOM_READ_SCOPE])
+      try {
+        expect((await readonly.client.callTool({ name: 'queue_treasury_manual_transfer', arguments: input })).isError).toBe(true)
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally { await readonly.client.close(); await readonly.server.close() }
+      const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        for (const wrong of [
+          'TRANSFER SN118 ALPHA ONCE',
+          `TRANSFER 15 ALPHA TO GM_CREDITS ${destination}`,
+          confirmation.toLowerCase(),
+          `${confirmation} `,
+        ]) {
+          const refused = await writer.client.callTool({ name: 'queue_treasury_manual_transfer', arguments: { ...input, confirmation: wrong } })
+          expect(refused.isError).toBe(true)
+        }
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        const response = await writer.client.callTool({ name: 'queue_treasury_manual_transfer', arguments: input })
+        expect(response.isError).not.toBe(true)
+        expect(readJsonResult(response)).toEqual(transfer)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(url).toMatch(/\/api\/v1\/admin\/treasury-manual$/)
+        expect(init.method).toBe('POST')
+        expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
+        expect(JSON.parse(String(init.body))).toEqual({
+          envelope, confirmation_digest: preview.confirmation_digest, confirmation: 'TRANSFER SN118 ALPHA ONCE',
+        })
+      } finally { await writer.client.close(); await writer.server.close() }
+    })
+
+    it('publishes the queue tool as a destructive, write-scoped, non-idempotent operation', async () => {
+      const { client, server } = await connect([BACKROOM_READ_SCOPE])
+      try {
+        const { tools } = await client.listTools()
+        const previewTool = tools.find(tool => tool.name === 'preview_treasury_manual_transfer')
+        const queueTool = tools.find(tool => tool.name === 'queue_treasury_manual_transfer')
+        expect(previewTool?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
+        expect(queueTool?.annotations).toEqual({
+          readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true,
+        })
+        expect(TOOL_SCOPE_REQUIREMENTS.get('preview_treasury_manual_transfer')).toBe(BACKROOM_WRITE_SCOPE)
+        expect(TOOL_SCOPE_REQUIREMENTS.get('queue_treasury_manual_transfer')).toBe(BACKROOM_WRITE_SCOPE)
+        expect(previewTool?.description).toContain('not_queued')
+        for (const fragment of [
+          'real on-chain SN118 alpha transfer from the Gamma collector',
+          "named bucket's holding coldkey",
+          'Custody re-verifies everything',
+          'one unresolved claim blocks another',
+          'Call preview first',
+        ]) expect(queueTool?.description).toContain(fragment)
+        const help = readJsonResult(await client.callTool({
+          name: 'get_backroom_tool_help', arguments: { tool: 'queue_treasury_manual_transfer' },
+        })) as { guidance: string }
+        expect(help.guidance).toContain('DESTRUCTIVE')
+        expect(help.guidance).toContain('preview_treasury_manual_transfer first')
+      } finally { await client.close(); await server.close() }
+    })
+  })
+
   it('preflights a receipt with read scope and never invokes receipt ingress', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const selection = { stage: 'service_distribution', epoch_index: 9, bucket_id: 'gamma', source_block: 100,
@@ -529,6 +664,8 @@ describe('Backroom MCP tools', () => {
         'get_treasury_ledger',
         'get_treasury_receipt_preflight',
         'get_treasury_manual_transfers',
+        'preview_treasury_manual_transfer',
+        'queue_treasury_manual_transfer',
         'get_treasury_activation_preflight',
         'get_treasury_ledger_readiness',
         'quote_treasury_topup',
@@ -620,9 +757,10 @@ describe('Backroom MCP tools', () => {
           properties?: Record<string, { maxLength?: number }>
         }
       ).properties?.reason
-      if (tool.name === 'record_treasury_receipt') {
-        // Machine observation metadata is bounded by the Platform wire model;
-        // it is not a case review or a substitute for independent proof.
+      if (tool.name === 'record_treasury_receipt' || tool.name === 'preview_treasury_manual_transfer') {
+        // Machine observation metadata and the manual transfer envelope's
+        // audit reason are bounded by the Platform wire model; neither is a
+        // case review or a substitute for independent proof.
         expect(reason?.maxLength).toBe(240)
       } else {
         expect(reason?.maxLength, `${tool.name} must preserve detailed reasons`).toBeUndefined()

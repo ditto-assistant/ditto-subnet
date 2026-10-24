@@ -96,7 +96,7 @@ import { observerGrant } from './treasury-observer-access.server'
 import { createTreasuryObserverServer } from './treasury-observer-mcp.server'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
-import { fetchTreasuryLedger, fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers } from './admin.service'
+import { fetchTreasuryLedger, fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers, previewTreasuryManualTransfer, queueTreasuryManualTransfer } from './admin.service'
 import { fetchTreasuryActivationPreflight, fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 import { fetchRuntimeInterfaceReport, fetchTreasuryRuntime, recordTreasuryRuntime } from './admin.service'
 import { runtimeInterfaceReportInputSchema } from '../lib/runtime-interface.schemas'
@@ -460,6 +460,10 @@ export const WRITE_TOOL_NAMES = new Set([
   'record_treasury_settings',
   'record_treasury_runtime',
   'record_treasury_receipt',
+  // Both mirror the Transfer once panel, whose preview and queue server
+  // functions already require a write-level session.
+  'preview_treasury_manual_transfer',
+  'queue_treasury_manual_transfer',
   'schedule_l2_report_canary',
   'register_canonical_starter_fixture',
   'review_canonical_starter_fixture',
@@ -1031,6 +1035,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_treasury_receipts: 'Read treasury receipt history/publication.',
   get_treasury_ledger: 'Read per-epoch Gamma earnings, balance, lock and unreceipted outflow.',
   get_treasury_manual_transfers: 'Read manual custody readiness, requests and public receipts; no funds.',
+  preview_treasury_manual_transfer: 'Preview one Gamma collector transfer: envelope, digest and the exact confirmation to echo. not_queued; nothing moves.',
+  queue_treasury_manual_transfer: "Queues a real on-chain SN118 alpha transfer from the Gamma collector to the named bucket's holding coldkey. Call preview first; exact confirmation. Custody re-verifies everything; one unresolved claim blocks another.",
   get_treasury_receipt_preflight: 'Read exact receipt readiness/archive checkpoint; no writes.',
   record_treasury_receipt: 'Ingest finalized receipt; no signing/provider credit.',
   quote_treasury_topup: 'Quote GM routes/impact; no execution.',
@@ -3733,6 +3739,37 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_treasury_manual_transfers',
     { title: 'Read manual collector transfer controls', description: 'Read the manual bridge enablement, fresh signer observation, approved destinations, blocking reason and latest 20 requests with finality and independent public receipt state. Recurring transfers remain off. A signer report is not chain proof. No signing, transfer, settings mutation or provider credit authority. Requires backroom:read.', annotations: toolAnnotations('read') },
     async () => result(await fetchTreasuryManualTransfers()),
+  )
+  registerTool(
+    'preview_treasury_manual_transfer',
+    {
+      title: 'Preview a manual Gamma collector transfer',
+      description: 'Preview one manual transfer of SN118 alpha from the Gamma collector to an approved bucket\'s holding wallet, exactly like the Backroom Preview manual transfer button. Give bucket_id, exactly one of amount_rao (integer rao) or amount_alpha (decimal alpha, at most 9 fractional digits), retained_alpha_rao (minimum stake that must stay staked) and an 8-240 char audit reason; request_id is generated when omitted. Platform checks the destination, entitlement, signed ceiling and reserve and returns the immutable envelope, confirmation_digest and `confirmation`, the exact phrase queue_treasury_manual_transfer requires. spending_authority is not_queued: nothing is queued, signed or moved. Requires backroom:write.',
+      inputSchema: {
+        bucket_id: z.string().min(2).max(48),
+        amount_rao: z.number().int().positive().optional(),
+        amount_alpha: z.string().max(32).optional(),
+        retained_alpha_rao: z.number().int().positive(),
+        reason: z.string().min(8).max(240),
+        request_id: z.string().meta({ format: 'uuid' }).optional(),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => write(() => previewTreasuryManualTransfer(input, props.session.email)),
+  )
+  registerTool(
+    'queue_treasury_manual_transfer',
+    {
+      title: 'Queue a manual Gamma collector transfer',
+      description: 'DESTRUCTIVE: queues a real on-chain transfer of SN118 alpha from the Gamma collector to the named bucket\'s holding coldkey, exactly like the Backroom Transfer once button. Call preview_treasury_manual_transfer first and pass its envelope and confirmation_digest unchanged plus `confirmation` equal to its exact TRANSFER <amount> ALPHA TO <BUCKET> <destination> phrase; any other text is refused before Platform. The signed-in operator is the audit actor. Custody re-verifies everything before signing. One unresolved claim blocks another; never resend an unresolved request. Requires backroom:write.',
+      inputSchema: {
+        envelope: z.record(z.string(), z.unknown()),
+        confirmation_digest: z.string().max(64),
+        confirmation: z.string().max(200),
+      },
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => queueTreasuryManualTransfer(input, props.session.email)),
   )
   registerTool(
     'get_treasury_receipt_preflight',

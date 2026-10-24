@@ -259,7 +259,7 @@ Three scopes, in ascending sensitivity:
 |---|---|
 | `backroom:read` | Every read. Required for any connection. |
 | `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/lineage/baseline diffs, and sanitized private screening failure details. |
-| `backroom:write` | Mutations, including `set_burn_settings`, which moves TAO. |
+| `backroom:write` | Mutations, including `set_burn_settings`, which moves TAO, and `queue_treasury_manual_transfer`, which moves SN118 alpha. |
 
 Two independent gates apply to every privileged call. The grant must carry the
 scope, **and** the operator's account must still resolve to `write` through
@@ -334,6 +334,29 @@ local allowlist alone is not credential custody protection. An operator must
 separately approve and obtain the dedicated grant through ordinary browser
 consent. No desktop credential copying, mint/refresh helper, secret provisioning
 or observer activation is included.
+
+### Manual Gamma collector transfers
+
+`preview_treasury_manual_transfer` and `queue_treasury_manual_transfer` are the
+MCP form of the **Transfer once** panel under Emissions & treasury and call the
+same Platform routes with the signed-in operator as the audit actor. Both need
+`backroom:write`, because the panel's server functions need a write-level
+session.
+
+Preview takes `bucket_id`, exactly one of integer `amount_rao` or decimal
+`amount_alpha`, `retained_alpha_rao`, an 8-240 character `reason` and an
+optional `request_id` (generated when omitted). It returns Platform's envelope,
+`confirmation_digest`, `spending_authority: "not_queued"` and `confirmation`,
+the exact `TRANSFER <amount> ALPHA TO <BUCKET> <destination>` phrase the panel
+asks the operator to type. Nothing is queued, signed or moved.
+
+Queue is destructive: it queues a real on-chain transfer of SN118 alpha from the
+Gamma collector to that bucket's holding coldkey. Pass the preview's envelope
+and digest unchanged with that exact `confirmation`; any other text is refused
+before Platform is called, and Backroom supplies Platform's own wire
+confirmation. Custody re-verifies balances, reserve, destination and the
+previous claim before signing. One unresolved claim blocks another, and an
+unresolved request is never resent automatically.
 
 ## Bindings
 
