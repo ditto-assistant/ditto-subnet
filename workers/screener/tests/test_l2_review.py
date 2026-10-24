@@ -4303,6 +4303,47 @@ async def test_every_trajectory_failure_carries_its_subcode(
     assert result.failure_subcode == "no_tool_call_after_corrections"
 
 
+async def test_l3_adjudicator_gets_bounded_no_tool_correction_without_clearing(
+    tmp_path: Path,
+) -> None:
+    source = "fn main() { serve(); }\nfn serve() {}"
+    archive, artifact_sha = _tar(tmp_path, source)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    safe = _clearance_certificate(
+        {
+            "disposition": "safe",
+            "risk_level": "low",
+            "confidence": 1.0,
+            "resolution_basis": "authoritative_model_tool_path",
+            "categories": ["none"],
+            "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+            "evidence": [],
+            "summary": "sanitized",
+        }
+    )
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) == 3:
+            return _response([])
+        return _response([_tool_call(str(len(requests)), "submit_l2_review", safe)])
+
+    result = await _sol_agent(tmp_path, _PartialHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert len(requests) == 4
+    assert "No tool call was returned" in json.dumps(requests[3]["input"])
+    assert not result.observation.ok
+    assert result.observation.error_code == "l3-adjudicator-incomplete"
+    assert not result.dossier_complete
+
+
 async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     tmp_path: Path,
 ) -> None:
