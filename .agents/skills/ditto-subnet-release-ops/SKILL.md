@@ -35,6 +35,32 @@ Read [`references/release-ops-index.md`](references/release-ops-index.md), then 
 - Never place cloud, GitHub, Platform, or provider credentials in untrusted build/runtime environments.
 - Do not create service accounts or IAM bindings out of band merely to bypass an unapplied Terraform bootstrap.
 
+## Hetzner screener host logs
+
+Read Backroom first for production queue, policy, attempt and capacity state.
+For supporting journals on `subnet-screener-1`, use the bounded read-only helper:
+
+```bash
+.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh --since 15m --lines 200
+.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh --worker 12 --json --lines 20
+.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh --service updater --since 1d
+```
+
+It always authenticates as `logs@100.79.84.29` over the omniaura.ai tailnet with
+committed host-key pins. `DITTOBOX_SSH_IDENTITY` selects one readable approved key
+(default `~/.ssh/id_ed25519`); missing or empty keys fail before connecting.
+Ambient SSH config is ignored. There is no public-host, privileged-user or
+GCE fallback. The account reads journals without sudo and cannot use Docker or
+control services. Deployment, enrollment and host changes keep their separately
+authorized operator identity. JSON output is native journal JSON (`MESSAGE`
+contains the worker event), not a provider transcript. Avoid exposing raw
+prompt, credential or artifact content from journals in reports.
+
+Use `--service worker|agent|updater|enroll|egress`, `--worker N`, `--since [-]N[s|m|h|d]`,
+`--lines 1..10000`, `--json` or an explicitly requested `--follow`.
+The default is all workers, last hour, newest 200 records. A successful read is
+not proof of worker readiness or an active lease; corroborate with Backroom.
+
 ## Platform app VM disk
 
 `deploy_platform` `No space left on device` during `git fetch` is a full boot
