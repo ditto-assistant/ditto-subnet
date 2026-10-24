@@ -246,7 +246,7 @@ func TestReleaseGateCoversEverySupportedVersionAndPolicyFloor(t *testing.T) {
 			t.Fatalf("supported bench_version %d not covered by the release gate", v)
 		}
 	}
-	if covered[protocol.BenchVersionV9] != robustnessBankVersion || covered[protocol.BenchVersionV12] != robustnessBankV12 || covered[protocol.BenchVersionV13] != grade.AuditBankV13().Version {
+	if covered[protocol.BenchVersionV9] != robustnessBankVersion || covered[protocol.BenchVersionV12] != robustnessBankV12 || covered[protocol.BenchVersionV13] != grade.AuditBankV13().Version || covered[protocol.BenchVersionV14] != grade.AuditBankV14().Version {
 		t.Fatalf("bank resolution drifted: %+v", covered)
 	}
 	// Every grading policy floor from the audit floor up owns exactly one bank.

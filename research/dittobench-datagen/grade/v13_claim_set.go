@@ -31,6 +31,7 @@ func gradeClaimSetV13(mc protocol.MemoryCase, resp protocol.RunResponse, an anal
 		}
 		claimLex := lex
 		claimLex.setMembership = claim.Kind == protocol.ClaimKindSetMember
+		claimLex.protectedCorrection = policy.claimValuesAreNotCorrections
 		// Negation intrinsic to a reviewed semantic value ("do not agree",
 		// "not happening") is not rejection of that value. An outer "not"
 		// still opens a rejected segment.

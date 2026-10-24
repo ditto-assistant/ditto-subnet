@@ -130,11 +130,23 @@ type gradingPolicy struct {
 	// claimProvenance populates Verdict.Provenance with the credited span so the
 	// v13 claim-span provenance gate can check it. It changes no score: v13
 	// grades byte-identically to v12 and only reports which span won.
-	claimProvenance bool
+	claimProvenance              bool
+	claimValuesAreNotCorrections bool
 }
 
 func gradingPolicyForVersion(benchVersion int) gradingPolicy {
 	switch {
+	case benchVersion >= protocol.BenchVersionV14:
+		return gradingPolicy{
+			strictGenericKinds:           true,
+			authoritativeAnswerSlot:      true,
+			rejectQuestionEcho:           true,
+			chitchatCredit:               0.5,
+			distractorScanSlotOnly:       true,
+			typedClaims:                  true,
+			claimProvenance:              true,
+			claimValuesAreNotCorrections: true,
+		}
 	case benchVersion >= protocol.BenchVersionV13:
 		return gradingPolicy{
 			strictGenericKinds:      true,
