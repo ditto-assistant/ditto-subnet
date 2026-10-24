@@ -1,4 +1,4 @@
-FROM rust:1-trixie@sha256:1bcff4befb740599103a2c7cb51058e14479b2e35e3a34a3f0dc4ede09927488 AS builder
+FROM rust:1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc AS builder
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 WORKDIR /app
 
@@ -19,7 +19,7 @@ COPY src ./src
 RUN find src -type f -name '*.rs' -exec touch {} + \
     && cargo build --locked --release --bin dittobench-router-miner
 
-FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

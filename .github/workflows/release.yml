@@ -525,7 +525,7 @@ jobs:
       - name: Install Go for model-relay verification
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.27.3"
           cache-dependency-path: services/model-relay/go.sum
 
       - name: Gate model-relay release on exact merge source
@@ -600,7 +600,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.27.3"
           cache-dependency-path: services/dittobench-api/go.sum
 
       - name: Gate DittoBench API release on exact merge source
@@ -628,7 +628,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25"
+          go-version: "1.27.3"
           cache-dependency-path: research/dittobench-datagen/go.mod
 
       - name: Gate DittoBench datagen release on exact merge source
@@ -1970,7 +1970,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25"
+          go-version: "1.27.3"
           cache-dependency-path: research/dittobench-datagen/go.mod
 
       - name: Verify the monorepo-tagged generate service
