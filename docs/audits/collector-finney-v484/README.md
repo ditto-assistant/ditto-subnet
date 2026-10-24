@@ -33,6 +33,11 @@ The surface covers:
 Both fingerprints are computed in the signer's own process. No digest from
 Platform or another library version is trusted.
 
+The live runtime must also keep the signed runtime's `transactionVersion`
+(1 at v482 and v484) and must not have a lower `specVersion`. Runtimes bump
+`transactionVersion` when a dispatchable's encoding or meaning changes for
+signed transactions.
+
 Any change to that surface still refuses with `runtime_changed`. That case still
 needs an audit, a policy naming the new runtime and the usual offline bundle.
 The live proxy filter allowlist and Yuma consensus checks still run on every

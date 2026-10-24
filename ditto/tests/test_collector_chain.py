@@ -1428,7 +1428,9 @@ def test_upgrade_consensus_still_validates_exact_native_filter_inventory():
         c.guard_runtime(policy(), "b100", historical=True)
 
 
-def surface_adapter(live, digests, *, reference=None, reference_code=None):
+def surface_adapter(
+    live, digests, *, reference=None, reference_code=None, live_version=(484, 1)
+):
     """Live runtime ``live``; ``digests`` maps metadata block -> surface digest."""
     from ditto.treasury import collector_chain
     from ditto_screening_protocol.collector_receipts import (
@@ -1439,7 +1441,10 @@ def surface_adapter(live, digests, *, reference=None, reference_code=None):
     c, filters = runtime_adapter(AUDITED_CODE_HASH)
     reads = []
 
-    def rpc(_method, params):
+    def rpc(method, params):
+        if method == "state_getRuntimeVersion":
+            spec, tx = (482, 1) if params[0] == pinned else live_version
+            return {"result": {"specVersion": spec, "transactionVersion": tx}}
         at = params[1]
         return {
             "result": (reference_code or AUDITED_CODE_HASH) if at == pinned else live
@@ -1534,3 +1539,13 @@ def test_unreadable_live_surface_refuses(monkeypatch):
     with pytest.raises(ValueError, match="runtime changed"):
         c.guard_runtime(policy(runtime_code_hash=AUDITED_CODE_HASH), "head")
     collector_chain.SIGNER_SURFACE_VERDICTS.clear()
+
+
+@pytest.mark.usefixtures("fingerprint")
+@pytest.mark.parametrize("live_version", [(484, 2), (481, 1)])
+def test_transaction_version_bump_or_downgrade_stops_for_audit(live_version):
+    c, pinned, reads = surface_adapter("0x" + "bb" * 32, {}, live_version=live_version)
+    c._metadata = lambda at: reads.append(at) or "same"
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(policy(runtime_code_hash=AUDITED_CODE_HASH), "head")
+    assert reads == []  # refused before any surface is fingerprinted

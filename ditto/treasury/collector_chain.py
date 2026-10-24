@@ -254,6 +254,22 @@ class PublicCollectorChain:
             # Without the signed runtime's own surface nothing is comparable.
             # Not cached: a later read of the reference may succeed.
             return False
+        signed, current = (
+            s.rpc_request("state_getRuntimeVersion", [at]).get("result") or {}
+            for at in (reference, block_hash)
+        )
+        # Runtimes bump transactionVersion when a dispatchable's encoding or
+        # meaning changes for signed transactions; that always needs an audit,
+        # as does any downgrade below the signed runtime.
+        if (
+            type(signed.get("transactionVersion")) is not int
+            or current.get("transactionVersion") != signed["transactionVersion"]
+            or type(current.get("specVersion")) is not int
+            or type(signed.get("specVersion")) is not int
+            or current["specVersion"] < signed["specVersion"]
+        ):
+            SIGNER_SURFACE_VERDICTS[key] = False
+            return False
         try:
             pinned = runtime_interface(
                 self._metadata(reference), COLLECTOR_SIGNER_SURFACE

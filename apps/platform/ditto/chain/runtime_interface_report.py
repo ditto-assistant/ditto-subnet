@@ -94,7 +94,9 @@ def _verdict(
     )
 
 
-async def _signer_surface_unchanged(substrate: Any, metadata: Any) -> bool:
+async def _signer_surface_unchanged(
+    substrate: Any, metadata: Any, live_version: dict[str, Any]
+) -> bool:
     """Mirror custody's admission: same signer surface as the signed runtime.
 
     Custody computes this itself before signing; this is the report's view of
@@ -114,6 +116,14 @@ async def _signer_surface_unchanged(substrate: Any, metadata: Any) -> bool:
             "state_getStorageHash", ["0x3a636f6465", reference]
         )
         if stored.get("result") != AUDITED_COLLECTOR_CODE_HASH:
+            return False
+        signed_version = (
+            await substrate.rpc_request("state_getRuntimeVersion", [reference])
+        )["result"]
+        if (
+            live_version["transactionVersion"] != signed_version["transactionVersion"]
+            or live_version["specVersion"] < signed_version["specVersion"]
+        ):
             return False
         signed = runtime_interface(
             await metadata_at(substrate, reference), COLLECTOR_SIGNER_SURFACE
@@ -190,7 +200,7 @@ async def read_runtime_interface_report(
         treasury_signer=TreasurySignerView(
             approved_runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH,
             signs_on_this_runtime=code == AUDITED_COLLECTOR_CODE_HASH
-            or await _signer_surface_unchanged(substrate, metadata),
+            or await _signer_surface_unchanged(substrate, metadata, version),
             call_baseline_release=baseline_release,
             changed_calls=tuple(changed_calls[:_CHANGED_CALL_LIMIT]),
             changed_calls_truncated=len(changed_calls) > _CHANGED_CALL_LIMIT,
