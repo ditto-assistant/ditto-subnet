@@ -20,6 +20,7 @@ from ditto.db.queries.confirmation_failure_taxonomy import (
     load_confirmation_failure_taxonomy_rows,
 )
 from ditto.db.queries.confirmation_inference import (
+    ConfirmationInferenceDecline,
     begin_confirmation_inference_request,
     ensure_confirmation_inference_grants,
     finish_confirmation_inference_request,
@@ -83,6 +84,8 @@ async def _one_call(
         max_chargeable_tokens=256,
         now=now,
     )
+    # A decline is a str, so narrow before unpacking the admitted pair.
+    assert not isinstance(begun, ConfirmationInferenceDecline), begun
     begun_grant, _request = begun
     await finish_confirmation_inference_request(
         session,
