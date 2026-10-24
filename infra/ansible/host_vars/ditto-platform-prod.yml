@@ -92,3 +92,10 @@ platform_github_link_enabled: true
 platform_github_link_client_id: "Ov23lilTsAripA4MWrWS"
 platform_github_link_redirect_url: "https://dittobench.ai/api/v1/miner-auth/github/callback"
 secret_github_link_client_secret: "platform-github-link-client-secret"
+
+# Activated 2026-10-23. At bench 13 the LongMem confirmation lane lost 63 of 76
+# bundles (83%): ~1,200 serial calls run with allow_fallbacks false, so one
+# shared-pool 429 on the Azure-pinned judge ends the whole 48-case run, and each
+# failed attempt still settles its full ~$14 reservation. Only a rejection that
+# proves no endpoint was selected and no receipt was issued is re-dispatched.
+platform_confirmation_backpressure_retry: true

@@ -273,6 +273,10 @@ platform_treasury_manual_report_subscription: sn118-manual-reports
 secret_screener_controller_api_token: ""
 
 # Platform-owned inference stays dark until the coordinated rollout enables it.
+# Re-dispatch a provably receipt-free confirmation 429/503 once instead of
+# parking the whole bundle. Default off: re-sending a frozen scored request
+# changes what the shadow evidence attests, so it is a per-host decision.
+platform_confirmation_backpressure_retry: false
 platform_inference_proxy_enabled: false
 platform_inference_proxy_required: false
 secret_platform_openrouter_key: validator-openrouter-key
