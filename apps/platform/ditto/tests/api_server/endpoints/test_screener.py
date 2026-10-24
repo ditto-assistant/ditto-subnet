@@ -2654,8 +2654,15 @@ class TestProbeBattery:
         }
         url = f"/api/v1/screener/agent/{agent_id}/probe-battery"
 
+        # A battery stored without its review accepts the review on retry.
+        no_review = {**payload, "review": None}
+        assert (await client.post(url, json=no_review)).status_code == 200
         assert (await client.post(url, json=payload)).status_code == 200
         assert (await client.post(url, json=payload)).status_code == 200
+        review = payload["review"]
+        assert isinstance(review, dict)
+        other_review = {**payload, "review": {**review, "verified": False}}
+        assert (await client.post(url, json=other_review)).status_code == 409
         async with session_maker() as session:
             row = await session.get(ScreenerProbeBattery, attempt_id)
             agent = await session.get(Agent, agent_id)

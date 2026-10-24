@@ -326,7 +326,7 @@ export const screenerReviewSettingsSchema = z
     probe_battery_mode: z.enum(['off', 'shadow']).default('off'),
     probe_battery_timeout_seconds: z.number().int().min(30).max(600).default(120),
     probe_review_mode: z.enum(['off', 'shadow']).default('off'),
-    probe_review_timeout_seconds: z.number().int().min(60).max(900).default(420),
+    probe_review_timeout_seconds: z.number().int().min(120).max(900).default(420),
     probe_review_max_cost_usd: z.number().positive().max(5).default(1),
     max_input_tokens: z.number().int().min(1).max(5_000_000),
     max_output_tokens: z.number().int().min(1).max(1_000_000),

@@ -188,7 +188,7 @@ class ScreenerReviewSettings(BaseModel):
     # Report-only probe reviewer agent after the battery: it spends Router
     # tokens through a node-local key whose own daily cap is the second guard.
     probe_review_mode: Literal["off", "shadow"] = "off"
-    probe_review_timeout_seconds: Annotated[int, Field(ge=60, le=900)] = 420
+    probe_review_timeout_seconds: Annotated[int, Field(ge=120, le=900)] = 420
     probe_review_max_cost_usd: Annotated[float, Field(gt=0, le=5)] = 1.0
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
     # Send every L1 result through the L2/L3 models, even a certified low-risk

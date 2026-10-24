@@ -2558,6 +2558,11 @@ async def submit_probe_battery(
             raise AgentNotScreenableError(
                 "probe battery does not match a revision that enables it"
             )
+        review: dict[str, Any] | None = (
+            payload.review.model_dump(mode="json")
+            if payload.review is not None
+            else None
+        )
         values = {
             "agent_id": agent_id,
             "screener_hotkey": screener_hotkey,
@@ -2572,15 +2577,23 @@ async def submit_probe_battery(
             "probe_count": payload.probe_count,
             "leads": [lead.model_dump(mode="json") for lead in payload.leads],
             "battery_ms": payload.battery_ms,
-            "review": payload.review.model_dump(mode="json")
-            if payload.review is not None
-            else None,
+            "review": review,
         }
         existing = await session.get(ScreenerProbeBattery, payload.attempt_id)
         if existing is not None:
-            if any(getattr(existing, key) != value for key, value in values.items()):
+            battery_values = {k: v for k, v in values.items() if k != "review"}
+            if any(
+                getattr(existing, key) != value for key, value in battery_values.items()
+            ):
                 raise AgentNotScreenableError(
                     "probe battery conflicts with the stored attempt observation"
+                )
+            if existing.review is None and review is not None:
+                # A retry may attach the report-only review to its battery.
+                existing.review = review
+            elif review is not None and existing.review != review:
+                raise AgentNotScreenableError(
+                    "probe review conflicts with the stored attempt observation"
                 )
             return ShadowReviewObservationResponse(accepted=True)
         session.add(ScreenerProbeBattery(attempt_id=payload.attempt_id, **values))

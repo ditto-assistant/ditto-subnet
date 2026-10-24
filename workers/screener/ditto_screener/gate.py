@@ -2172,6 +2172,7 @@ class BuildGate:
                             artifact_sha256=sha256.lower(),
                             bench_version=bench_version,
                             budget=budget,
+                            battery_budget=float(battery_timeout),
                             archive_path=tmp_path if run_review else None,
                             review_timeout=float(review_timeout),
                             review_max_cost_usd=float(review_cost),
@@ -2230,6 +2231,7 @@ class BuildGate:
         artifact_sha256: str,
         bench_version: int,
         budget: float,
+        battery_budget: float | None = None,
         archive_path: str | None = None,
         review_timeout: float = 420.0,
         review_max_cost_usd: float = 1.0,
@@ -2308,15 +2310,26 @@ class BuildGate:
                 limit=65_536,
             )
             try:
-                async with asyncio.timeout(budget):
-                    # The battery line arrives first; keep it if the review is
-                    # killed at the budget.
-                    while proc.stdout is not None and len(lines) < 2:
-                        line = await proc.stdout.readline()
-                        if not line:
-                            break
-                        lines.append(line)
-                    await proc.wait()
+                loop = asyncio.get_running_loop()
+                overall = loop.time() + budget
+                # The battery keeps its own cap: its line must arrive within
+                # battery_budget, so a slow battery never spends the review's
+                # allowance. A review killed at the overall budget keeps it.
+                first = min(budget, battery_budget or budget)
+                async with asyncio.timeout(first):
+                    line = await proc.stdout.readline() if proc.stdout else b""
+                if line:
+                    lines.append(line)
+                    async with asyncio.timeout_at(overall):
+                        while proc.stdout is not None and len(lines) < 2:
+                            line = await proc.stdout.readline()
+                            if not line:
+                                break
+                            lines.append(line)
+                        await proc.wait()
+                else:
+                    async with asyncio.timeout_at(overall):
+                        await proc.wait()
             except (TimeoutError, ValueError):
                 status = "timeout"
                 with contextlib.suppress(ProcessLookupError):

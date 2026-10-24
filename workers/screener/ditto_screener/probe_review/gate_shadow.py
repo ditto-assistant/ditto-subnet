@@ -31,6 +31,8 @@ _CITATION = re.compile(r"^[\w./+-]{1,160}:\d{1,7}$")
 MAX_REVIEW_FINDINGS = 4
 MAX_FINDING_CITATIONS = 4
 # Wall time kept back for the verdict replay and session stop after the loop.
+# The settings floor (probe_review_timeout_seconds >= 120) leaves the loop at
+# least _MIN_REVIEW_S whenever the lease is not the tighter bound.
 _REVIEW_TAIL_S = 45.0
 _MIN_REVIEW_S = 60.0
 

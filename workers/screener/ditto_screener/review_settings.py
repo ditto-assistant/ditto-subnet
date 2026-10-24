@@ -214,7 +214,7 @@ class ReviewSettings(BaseModel):
     # Report-only probe reviewer agent after the battery (needs the battery on
     # and a node-local Router key). Per-artifact cost and wall-time caps.
     probe_review_mode: Literal["off", "shadow"] = "off"
-    probe_review_timeout_seconds: Annotated[int, Field(ge=60, le=900)] = 420
+    probe_review_timeout_seconds: Annotated[int, Field(ge=120, le=900)] = 420
     probe_review_max_cost_usd: Annotated[float, Field(gt=0, le=5)] = 1.0
     # Aggregate effective input: uncached tokens plus 10% of cached tokens.
     max_input_tokens: Annotated[int, Field(ge=1, le=5_000_000)]

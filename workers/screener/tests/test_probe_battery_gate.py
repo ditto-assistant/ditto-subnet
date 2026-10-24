@@ -406,3 +406,48 @@ async def test_gate_without_archive_passes_no_key(
     )
     assert "review" not in summary
     assert "--review-key-file" not in seen[0]
+
+
+async def test_battery_keeps_its_own_cap_when_the_reviewer_is_on(
+    make_config: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("k")
+    _child(monkeypatch, "import time; time.sleep(30)")
+    gate = BuildGate(
+        make_config(probe_review_key_file=str(key)),
+        Mock(),
+        policy=Mock(),
+        journal=Mock(),
+    )
+    gate._run = AsyncMock(return_value=(0, ""))  # type: ignore[method-assign]
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    summary = await gate._run_probe_battery(
+        image_id="sha256:" + "c" * 64,
+        artifact_sha256="a" * 64,
+        bench_version=13,
+        budget=20,
+        battery_budget=0.5,
+        archive_path=str(tmp_path / "a.tar"),
+    )
+    assert loop.time() - started < 10, (
+        "the review allowance must not extend the battery"
+    )
+    assert summary["status"] == "timeout"
+    assert summary["review"]["status"] == "timeout"
+
+
+def test_review_timeout_floor_leaves_a_usable_review(make_config: Any) -> None:
+    from pydantic import ValidationError
+
+    from ditto_screener.probe_review import gate_shadow
+    from ditto_screener.review_settings import ReviewSettings, bootstrap_review_settings
+
+    valid = bootstrap_review_settings(make_config()).settings.model_dump(mode="json")
+    ok = ReviewSettings.model_validate({**valid, "probe_review_timeout_seconds": 120})
+    assert ok.probe_review_timeout_seconds - gate_shadow._REVIEW_TAIL_S >= (
+        gate_shadow._MIN_REVIEW_S
+    )
+    with pytest.raises(ValidationError, match="probe_review_timeout_seconds"):
+        ReviewSettings.model_validate({**valid, "probe_review_timeout_seconds": 90})
