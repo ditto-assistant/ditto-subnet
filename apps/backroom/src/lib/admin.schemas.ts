@@ -5436,6 +5436,7 @@ export const screeningVerificationReadinessSchema = z.object({
     limitations: z.string(),
   }).nullish(),
   private_package: z.object({
+    program_status: z.literal('retired').optional(),
     registration_status: z.enum(['not_registered', 'registered_unverified']),
     prerequisites: z.array(z.object({
       code: z.string(),

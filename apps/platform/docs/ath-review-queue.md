@@ -181,8 +181,9 @@ whose only ground was a benign 6000-character tool-result cut.
   the agent to it: `live`, `scored`, or `evaluating` for a below-quorum reject,
   which goes back to the validator queue rather than to a score it never earned.
   A copy hold that never recorded one defaults to `scored`, never `live`.
-- `would_change_crown` estimates the restored agent's canonical quorum median
-  against the board, exactly like clearing a held agent.
+- `would_change_crown` reprojects the canonical finalized ledger with the
+  restored status, exactly like clearing a held agent. A `live` or `evaluating`
+  restoration stays outside the scored ledger.
 - The action history keeps `reject`, `reopen`, `clear`. Nothing is deleted.
   Quarantines the reject closed stay closed, and validator tickets it expired
   are not reissued.
@@ -190,6 +191,27 @@ whose only ground was a benign 6000-character tool-result cut.
   has no review to reopen and stays a `conflict`. The miner-wide
   `banned_hotkeys` upload gate is separate (`unban_hotkey`) and is never
   touched here.
+
+## Court crown projections
+
+Preview uses the canonical ledger inputs and fleet gates, including current
+registration, statistical bands and the active epoch pin's champion owner.
+Each hypothetical removal or restoration is applied before owner collapse;
+hidden sibling generations can therefore replace a removed representative.
+The original pin-owner anchor survives every simulated step. A legacy pin
+without an owner root anchors only its exact champion UUID.
+
+The diagnostic builder never materializes efficiency assignments, records
+eligibility rehearsals, writes a pin or rolls back the caller's transaction.
+An enabled efficiency fold requires existing current-epoch assignments.
+Restoration while reward eligibility is enforcing is explicitly unsupported
+and previews as a conflict; the court does not guess the restored posture.
+
+Version 2 preview tokens bind the pin/policy context and every cumulative
+champion and raw leader. Execute checks these before each item, including
+after an earlier item lands. A changed successor is stale even when the
+`would_change_crown` boolean stays true. These read guards do not lock epoch
+pin production atomically with an individual ruling transaction.
 
 ## Precedents are the resolved holdings
 
