@@ -263,7 +263,8 @@ class PublicCollectorChain:
         # as does any downgrade below the signed runtime.
         if (
             type(signed.get("transactionVersion")) is not int
-            or current.get("transactionVersion") != signed["transactionVersion"]
+            or type(current.get("transactionVersion")) is not int
+            or current["transactionVersion"] != signed["transactionVersion"]
             or type(current.get("specVersion")) is not int
             or type(signed.get("specVersion")) is not int
             or current["specVersion"] < signed["specVersion"]

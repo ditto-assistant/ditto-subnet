@@ -1542,7 +1542,7 @@ def test_unreadable_live_surface_refuses(monkeypatch):
 
 
 @pytest.mark.usefixtures("fingerprint")
-@pytest.mark.parametrize("live_version", [(484, 2), (481, 1)])
+@pytest.mark.parametrize("live_version", [(484, 2), (481, 1), (484, True)])
 def test_transaction_version_bump_or_downgrade_stops_for_audit(live_version):
     c, pinned, reads = surface_adapter("0x" + "bb" * 32, {}, live_version=live_version)
     c._metadata = lambda at: reads.append(at) or "same"
