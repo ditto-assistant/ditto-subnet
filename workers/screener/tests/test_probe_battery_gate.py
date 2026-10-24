@@ -435,7 +435,8 @@ async def test_battery_keeps_its_own_cap_when_the_reviewer_is_on(
         "the review allowance must not extend the battery"
     )
     assert summary["status"] == "timeout"
-    assert summary["review"]["status"] == "timeout"
+    # The child never reached the review phase.
+    assert summary["review"]["status"] == "skipped"
 
 
 def test_review_timeout_floor_leaves_a_usable_review(make_config: Any) -> None:
@@ -505,3 +506,35 @@ def test_review_summary_rejects_nan_and_reviewer_without_battery(
         ReviewSettings.model_validate({**valid, "probe_review_mode": "shadow"})
     both = {**valid, "probe_review_mode": "shadow", "probe_battery_mode": "shadow"}
     assert ReviewSettings.model_validate(both).probe_review_mode == "shadow"
+
+
+def test_extract_source_writes_only_contained_regular_files(tmp_path: Any) -> None:
+    import io
+    import tarfile
+
+    from ditto_screener.probe_review.tools import extract_source
+
+    archive = tmp_path / "a.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for name, kind in (
+            ("ok/agent.py", tarfile.REGTYPE),
+            ("../escape.py", tarfile.REGTYPE),
+            ("/abs.py", tarfile.REGTYPE),
+            ("link", tarfile.SYMTYPE),
+            ("link/through.py", tarfile.REGTYPE),
+        ):
+            info = tarfile.TarInfo(name)
+            info.type = kind
+            data = b"x = 1\n"
+            if kind == tarfile.SYMTYPE:
+                info.linkname = str(tmp_path / "outside")
+                tar.addfile(info)
+            else:
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+    dest = tmp_path / "src"
+    extract_source(archive, dest)
+    assert (dest / "ok" / "agent.py").exists()
+    assert not (tmp_path / "escape.py").exists()
+    assert not (dest / "link").is_symlink()
+    assert not (tmp_path / "outside").exists()

@@ -478,7 +478,14 @@ def triage(archive: Path) -> dict[str, Any]:
 
 
 def extract_source(archive: Path, dest: Path) -> int:
+    """Copy regular archive files under ``dest``; never links or escapes.
+
+    Members are submission-controlled: only regular files are written (no
+    symlinks, hard links or devices), absolute and ``..`` names are skipped,
+    and every resolved target must stay inside ``dest``.
+    """
     dest.mkdir(parents=True, exist_ok=True)
+    root = dest.resolve()
     count = 0
     total = 0
     with tarfile.open(archive, "r:gz") as tar:
@@ -498,6 +505,8 @@ def extract_source(archive: Path, dest: Path) -> int:
             if name.startswith("/") or ".." in Path(name).parts:
                 continue
             target = dest / name
+            if root not in target.resolve().parents:
+                continue
             target.parent.mkdir(parents=True, exist_ok=True)
             handle = tar.extractfile(member)
             if handle is not None:

@@ -2381,8 +2381,16 @@ class BuildGate:
             from ditto_screener.probe_review.gate_shadow import summarize_review
 
             # A killed or crashed reviewer still reports, without its output.
+            # No battery line means the review phase was never reached.
             summary["review"] = review or summarize_review(
-                None, status="timeout" if status == "timeout" else "error"
+                None,
+                status=(
+                    "skipped"
+                    if not lines
+                    else "timeout"
+                    if status == "timeout"
+                    else "error"
+                ),
             )
         return summary
 
