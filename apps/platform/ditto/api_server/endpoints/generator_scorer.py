@@ -1,15 +1,21 @@
-"""Trusted generator-competition scorer: lease runs, post evaluations.
+"""Trusted generator-competition scorer: qualification runs and round work.
 
 The scorer (``services/dittobench-api/cmd/challenge-scorer``) authenticates
-with ``DITTO_GENERATOR_SCORER_TOKEN``; unset disables both endpoints. The token
-is compared in constant time and never logged.
+with ``DITTO_GENERATOR_SCORER_TOKEN``; unset disables every endpoint. The
+token is compared in constant time and never logged.
 
-``GET /generator-scorer/work`` row-locks the most overdue active generator,
-creates a run on fresh secret seeds with the current probe seed and a panel
-snapshot, and serves the exact uploaded source archive. ``POST
-/generator-scorer/results`` accepts an evaluation only for the current lease
-and scores it against that run, so a scorer cannot choose the seeds, the
-panel, an agent's owner, or the champion.
+Qualification: ``GET /generator-scorer/work`` row-locks the most overdue
+unqualified generator, creates a run on fresh secret seeds with the current
+probe seed, and serves the exact uploaded source archive. ``POST
+/generator-scorer/results`` accepts an evaluation only for the current lease.
+
+Rounds: ``GET /generator-scorer/round-work`` leases a round that needs its
+dataset generated (``kind=generate``: frozen columns, their sources, the round
+seed) or its matrix scored (``kind=score``: the columns' case refs, every
+panel agent's validator results, claimed fingerprints, and the score
+parameters). ``POST /round-results`` and ``POST /round-score`` accept work only
+for the round's current lease, so the scorer never chooses a seed, a column,
+a panel agent, an owner, or the champion.
 """
 
 from __future__ import annotations
@@ -24,11 +30,16 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import (
-    GeneratorPanelSlot,
     GeneratorResultRequest,
     GeneratorResultResponse,
     GeneratorWorkItem,
     GeneratorWorkResponse,
+)
+from ditto.api_models.generator_rounds import (
+    GeneratorRoundAck,
+    GeneratorRoundGenerateResult,
+    GeneratorRoundScoreResult,
+    GeneratorRoundWorkResponse,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.generator_competition import (
@@ -37,9 +48,14 @@ from ditto.api_server.generator_competition import (
     load_settings,
     record_result,
 )
+from ditto.api_server.generator_rounds import (
+    RoundResultRejected,
+    lease_round_work,
+    record_generation,
+    record_round_score,
+)
 from ditto.db.models import GeneratorProbeEpoch
 from ditto.db.queries.generator import get_run, get_submission
-from ditto.generator_scoring import ScoreInputError
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +84,7 @@ ScorerDep = Annotated[None, Depends(require_generator_scorer)]
 
 @router.get("/work", response_model=GeneratorWorkResponse)
 async def lease_work(_scorer: ScorerDep, session: SessionDep) -> GeneratorWorkResponse:
-    """Lease the most overdue generator run, or return ``{"work": null}``."""
+    """Lease the most overdue qualification run, or return ``{"work": null}``."""
     resolved = await load_settings(session)
     if resolved.settings.mode == "off":
         return GeneratorWorkResponse()
@@ -88,16 +104,14 @@ async def lease_work(_scorer: ScorerDep, session: SessionDep) -> GeneratorWorkRe
         seeds=list(run.seeds),
         probe_seed=lease.probe_seed,
         cases_per_seed=run.cases_per_seed,
-        panel=[GeneratorPanelSlot(**slot) for slot in run.panel],
         lease_expires_at=row.lease_expires_at,  # type: ignore[arg-type]
     )
     await session.commit()
     logger.info(
-        "generator run leased submission_id=%s run_id=%s attempt=%d panel=%d",
+        "generator qualification leased submission_id=%s run_id=%s attempt=%d",
         row.submission_id,
         run.run_id,
         run.attempt,
-        len(run.panel),
     )
     return GeneratorWorkResponse(work=work)
 
@@ -131,9 +145,6 @@ async def post_results(
     except ResultRejected as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ScoreInputError as exc:
-        await session.rollback()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     await session.commit()
     logger.info(
         "generator run result submission_id=%s run_id=%s status=%s outcome=%s score=%s",
@@ -150,3 +161,63 @@ async def post_results(
         score=recorded.score,
         submission_status=recorded.submission_status,  # type: ignore[arg-type]
     )
+
+
+@router.get("/round-work", response_model=GeneratorRoundWorkResponse)
+async def lease_round(
+    _scorer: ScorerDep, session: SessionDep
+) -> GeneratorRoundWorkResponse:
+    """Lease the oldest round needing generation or scoring, if any."""
+    resolved = await load_settings(session)
+    try:
+        lease = await lease_round_work(
+            session, resolved=resolved, now=datetime.now(UTC)
+        )
+    except RoundResultRejected as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    if lease is None:
+        return GeneratorRoundWorkResponse()
+    logger.info(
+        "generator round leased round=%s kind=%s attempt=%d",
+        lease.row.round_index,
+        lease.work.kind,
+        lease.row.lease_attempts,
+    )
+    return GeneratorRoundWorkResponse(work=lease.work)
+
+
+@router.post("/round-results", response_model=GeneratorRoundAck)
+async def post_round_results(
+    payload: GeneratorRoundGenerateResult, _scorer: ScorerDep, session: SessionDep
+) -> GeneratorRoundAck:
+    """Store a round's generated dataset for the current generation lease."""
+    try:
+        row = await record_generation(session, payload, now=datetime.now(UTC))
+    except RoundResultRejected as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    logger.info(
+        "generator round generated round=%s status=%s dataset=%s",
+        row.round_index,
+        row.status,
+        row.dataset_sha256,
+    )
+    return GeneratorRoundAck(round_index=row.round_index, status=row.status)  # type: ignore[arg-type]
+
+
+@router.post("/round-score", response_model=GeneratorRoundAck)
+async def post_round_score(
+    payload: GeneratorRoundScoreResult, _scorer: ScorerDep, session: SessionDep
+) -> GeneratorRoundAck:
+    """Store a round's scored matrix for the current scoring lease."""
+    try:
+        row = await record_round_score(session, payload, now=datetime.now(UTC))
+    except RoundResultRejected as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    logger.info("generator round scored round=%s", row.round_index)
+    return GeneratorRoundAck(round_index=row.round_index, status=row.status)  # type: ignore[arg-type]

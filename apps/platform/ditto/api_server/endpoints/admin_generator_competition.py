@@ -2,10 +2,11 @@
 
 Settings are append-only, whole-object revisions guarded by
 ``expected_revision`` and an exact confirmation phrase naming the mode.
-Submission and run detail expose the evaluation (build, per-seed validation,
-determinism, probe), the panel snapshot, per-case verdicts, and the score
-summary. Generator source is never served, a run's seeds are revealed only
-after it finished, and probe seeds are never served at all.
+Submission and qualification-run detail expose the evaluation (build,
+per-seed validation, determinism, probe) and its outcome. Generator source is
+never served, a run's seeds are revealed only after it finished, and probe
+seeds are never served at all. Round control lives in
+``admin_generator_rounds``.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +34,6 @@ from ditto.api_models.generator import (
     AdminGeneratorSubmissionListResponse,
     EffectiveGeneratorSettings,
     GeneratorCaseVerdictView,
-    GeneratorPanelSlot,
     GeneratorProbeEpochView,
     GeneratorPromotionCandidate,
     GeneratorSettingsRevision,
@@ -42,13 +43,20 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.generator_competition import (
     DEFAULT_SETTINGS,
+    load_settings,
     run_summary,
     settings_checksum,
     settings_from_row,
     submission_summary,
 )
+from ditto.api_server.generator_rounds import void_round
 from ditto.db.models import GeneratorCompetitionSettingsRevision as RevisionRow
-from ditto.db.models import GeneratorProbeEpoch
+from ditto.db.models import (
+    GeneratorProbeEpoch,
+    GeneratorRound,
+    GeneratorRoundCaseVerdict,
+    GeneratorSubmission,
+)
 from ditto.db.queries.generator import (
     abandon_run,
     case_status_counts,
@@ -60,7 +68,6 @@ from ditto.db.queries.generator import (
     latest_runs,
     list_generator_settings_revisions,
     list_probe_epochs,
-    list_promotion_candidates,
     list_runs,
     list_submissions,
     list_verdicts,
@@ -115,6 +122,42 @@ async def get_settings(
     )
 
 
+async def _retire_rounds_for_interval_change(
+    session: AsyncSession, *, old: int, new: int, actor: str, reason: str
+) -> None:
+    """A round's index is its first epoch divided by the interval, so a new
+    interval would remap rounds already in flight. A round that has opened
+    (seeded, generating or running) blocks the change; a committed round that
+    never opened holds no seed and is voided in this same transaction."""
+    open_rows = list(
+        await session.scalars(
+            select(GeneratorRound)
+            .where(GeneratorRound.status.in_(("committed", "generating", "running")))
+            .with_for_update()
+        )
+    )
+    started = [r.round_index for r in open_rows if r.status != "committed"]
+    if started:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"epochs_per_round cannot change while round(s) {started} are "
+                "open; let them finish or void them, then retry"
+            ),
+        )
+    now = datetime.now(UTC)
+    for row in open_rows:
+        void_round(row, f"round interval changed from {old} to {new}", now=now)
+        record_operator_action(
+            session,
+            action="void",
+            subject=f"round:{row.round_index}",
+            actor=actor,
+            reason=f"epochs_per_round {old} -> {new}: {reason}",
+        )
+
+
 @router.post("/settings", response_model=GeneratorSettingsRevision)
 async def create_settings_revision(
     payload: AdminGeneratorSettingsRequest, _admin: AdminDep, session: SessionDep
@@ -156,6 +199,15 @@ async def create_settings_revision(
                 "generator competition settings changed; refresh before applying "
                 f"(expected {payload.expected_revision}, current {actual})"
             ),
+        )
+    current = (await load_settings(session)).settings
+    if payload.settings.epochs_per_round != current.epochs_per_round:
+        await _retire_rounds_for_interval_change(
+            session,
+            old=current.epochs_per_round,
+            new=payload.settings.epochs_per_round,
+            actor=actor,
+            reason=reason,
         )
     try:
         row = await insert_generator_settings_revision(
@@ -270,13 +322,15 @@ async def rescore_submission(
     _admin: AdminDep,
     session: SessionDep,
 ) -> AdminGeneratorSubmissionDetail:
-    """Make an active generator due now, so its next run starts on fresh seeds
-    against the current panel. An in-flight run is left to finish."""
+    """Re-qualify an active generator now on fresh seeds (build, validity,
+    determinism, probe). It stays out of new round columns until it passes
+    again; an in-flight qualification run is left to finish."""
     row, reason, actor = await _locked_submission(session, submission_id, payload)
     if row.status != "active":
         raise HTTPException(status_code=409, detail="only an active generator runs")
     now = datetime.now(UTC)
     row.next_run_at = now
+    row.qualified_at = None
     row.attempts = 0
     row.updated_at = now
     record_operator_action(
@@ -302,8 +356,10 @@ async def reject_submission(
 ) -> AdminGeneratorSubmissionDetail:
     """Reject a generator by operator ruling (abuse, a copy the probe missed).
 
-    Its runs stop counting on the ledger at once, an in-flight run is abandoned,
-    and it is never leased again. The miner can still upload a new generator.
+    It leaves the ledger at once, an in-flight qualification run is abandoned,
+    and it never holds another round column. A column it holds in a round
+    already generated keeps running (the dataset is frozen) but its score is
+    never credited. The miner can still upload a new generator.
     """
     if payload.confirmation != REJECT_SUBMISSION_CONFIRMATION:
         raise HTTPException(
@@ -356,7 +412,7 @@ async def admin_run_detail(
         cases_per_seed=run.cases_per_seed,
         settings_revision=run.settings_revision,
         scorer_version=run.scorer_version,
-        panel=[GeneratorPanelSlot(**slot) for slot in run.panel or ()],
+        panel=[],
         evaluation=run.evaluation,
         score_summary=run.score_summary,
         verdicts=[
@@ -441,23 +497,51 @@ async def promotion_candidates(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AdminGeneratorPromotionCandidatesResponse:
-    """Discriminating cases from scored runs, highest credit first."""
-    rows = await list_promotion_candidates(session, limit=limit, offset=offset)
+    """Discriminating cases from scored rounds, highest credit first.
+
+    The public default generator's cases are included: a default family that
+    still splits the top agents is as useful to promote as a miner's.
+    """
+    rows = await session.execute(
+        select(GeneratorRoundCaseVerdict, GeneratorRound, GeneratorSubmission)
+        .join(
+            GeneratorRound,
+            GeneratorRound.round_index == GeneratorRoundCaseVerdict.round_index,
+        )
+        .join(
+            GeneratorSubmission,
+            GeneratorSubmission.submission_id
+            == GeneratorRoundCaseVerdict.submission_id,
+        )
+        .where(
+            GeneratorRoundCaseVerdict.status == "discriminating",
+            GeneratorRound.status == "scored",
+            GeneratorSubmission.status != "rejected",
+        )
+        .order_by(
+            GeneratorRoundCaseVerdict.credit.desc(),
+            GeneratorRound.round_index.desc(),
+            GeneratorRoundCaseVerdict.column_id,
+            GeneratorRoundCaseVerdict.case_id,
+        )
+        .limit(limit)
+        .offset(offset)
+    )
     return AdminGeneratorPromotionCandidatesResponse(
         candidates=[
             GeneratorPromotionCandidate(
-                run_id=run.run_id,
+                round_index=rnd.round_index,
+                column_id=verdict.column_id,
                 submission_id=sub.submission_id,
                 miner_hotkey=sub.miner_hotkey,
-                seed_index=verdict.seed_index,
                 case_id=verdict.case_id,
                 fingerprint=verdict.fingerprint,
                 mean_score=verdict.mean_score,
                 solver_owners=verdict.solver_owners,
                 champion_failed=verdict.champion_failed,
                 credit=verdict.credit,
-                scored_at=run.finished_at,  # type: ignore[arg-type]
+                scored_at=rnd.scored_at,  # type: ignore[arg-type]
             )
-            for verdict, run, sub in rows
+            for verdict, rnd, sub in rows.tuples()
         ]
     )

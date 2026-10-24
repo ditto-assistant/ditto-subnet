@@ -1,7 +1,7 @@
 """add the report-only probe reviewer summary to screener probe batteries
 
 Revision ID: 8b3d6f0c2a71
-Revises: 5c1e9a7d2b40
+Revises: 8e2f4c6a1d93
 Create Date: 2026-10-24
 """
 
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "8b3d6f0c2a71"
-down_revision: str | Sequence[str] | None = "5c1e9a7d2b40"
+down_revision: str | Sequence[str] | None = "8e2f4c6a1d93"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

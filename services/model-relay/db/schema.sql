@@ -4088,6 +4088,130 @@ CREATE TABLE public.generator_probe_results (
 
 
 --
+-- Name: generator_round_attempts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_round_attempts (
+    round_index bigint NOT NULL,
+    agent_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    ticket_deadline timestamp with time zone NOT NULL,
+    slot_id text NOT NULL,
+    status text NOT NULL,
+    detail text,
+    issued_at timestamp with time zone NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT ck_generator_round_attempts_generator_round_attempts_st_8330 CHECK ((status = ANY (ARRAY['leased'::text, 'completed'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: generator_round_case_verdicts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_round_case_verdicts (
+    round_index bigint NOT NULL,
+    column_id text NOT NULL,
+    case_id text NOT NULL,
+    submission_id uuid NOT NULL,
+    "position" integer NOT NULL,
+    fingerprint text NOT NULL,
+    status text NOT NULL,
+    panel_size integer NOT NULL,
+    solvers integer NOT NULL,
+    solver_owners integer NOT NULL,
+    mean_score double precision NOT NULL,
+    champion_failed boolean NOT NULL,
+    credit double precision NOT NULL,
+    CONSTRAINT ck_generator_round_case_verdicts_generator_round_case_v_b62d CHECK ((status = ANY (ARRAY['discriminating'::text, 'trivial'::text, 'unsolved'::text, 'duplicate'::text, 'insufficient_panel'::text])))
+);
+
+
+--
+-- Name: generator_round_results; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_round_results (
+    round_index bigint NOT NULL,
+    agent_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    ticket_deadline timestamp with time zone NOT NULL,
+    run_id text NOT NULL,
+    results jsonb NOT NULL,
+    answered integer NOT NULL,
+    faulted integer NOT NULL,
+    signature text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: generator_rounds; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_rounds (
+    round_index bigint NOT NULL,
+    status text NOT NULL,
+    epochs_per_round integer NOT NULL,
+    secret bytea NOT NULL,
+    commitment text NOT NULL,
+    committed_at timestamp with time zone NOT NULL,
+    committed_epoch_index bigint NOT NULL,
+    commitment_publication text NOT NULL,
+    commitment_published_at timestamp with time zone,
+    commitment_error text,
+    open_epoch_index bigint,
+    open_block bigint,
+    open_block_hash text,
+    opened_at timestamp with time zone,
+    seed text,
+    settings_revision integer,
+    cases_per_column integer,
+    columns jsonb,
+    panel jsonb,
+    lease_id uuid,
+    lease_expires_at timestamp with time zone,
+    lease_attempts integer DEFAULT 0 NOT NULL,
+    generation jsonb,
+    dataset_sha256 text,
+    dataset_bytes bytea,
+    column_cases jsonb,
+    closed_at timestamp with time zone,
+    score jsonb,
+    scorer_version text,
+    scored_at timestamp with time zone,
+    void_reason text,
+    revealed_at timestamp with time zone,
+    CONSTRAINT ck_generator_rounds_generator_rounds_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_dataset_check CHECK ((((dataset_sha256 IS NULL) = (dataset_bytes IS NULL)) AND ((dataset_sha256 IS NULL) OR (dataset_sha256 = encode(sha256(dataset_bytes), 'hex'::text))))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_lease_check CHECK (((lease_id IS NULL) = (lease_expires_at IS NULL))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_publication_check CHECK ((commitment_publication = ANY (ARRAY['pending'::text, 'published'::text, 'failed'::text, 'disabled'::text]))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_seed_check CHECK ((((status <> 'committed'::text) OR (seed IS NULL)) AND ((seed IS NOT NULL) OR (status = ANY (ARRAY['committed'::text, 'void'::text]))))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_status_check CHECK ((status = ANY (ARRAY['committed'::text, 'generating'::text, 'running'::text, 'scoring'::text, 'scored'::text, 'void'::text]))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_void_check CHECK (((status = 'void'::text) = (void_reason IS NOT NULL)))
+);
+
+
+--
+-- Name: generator_rounds_round_index_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.generator_rounds_round_index_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: generator_rounds_round_index_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.generator_rounds_round_index_seq OWNED BY public.generator_rounds.round_index;
+
+
+--
 -- Name: generator_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4112,7 +4236,7 @@ CREATE TABLE public.generator_runs (
     CONSTRAINT ck_generator_runs_generator_runs_cases_check CHECK (((cases_per_seed >= 8) AND (cases_per_seed <= 64))),
     CONSTRAINT ck_generator_runs_generator_runs_finished_check CHECK (((status = 'leased'::text) = (finished_at IS NULL))),
     CONSTRAINT ck_generator_runs_generator_runs_score_check CHECK (((status = 'scored'::text) = (score IS NOT NULL))),
-    CONSTRAINT ck_generator_runs_generator_runs_status_check CHECK ((status = ANY (ARRAY['leased'::text, 'scored'::text, 'invalid'::text, 'insufficient_panel'::text, 'copy'::text, 'abandoned'::text])))
+    CONSTRAINT ck_generator_runs_generator_runs_status_check CHECK ((status = ANY (ARRAY['leased'::text, 'scored'::text, 'qualified'::text, 'invalid'::text, 'insufficient_panel'::text, 'copy'::text, 'abandoned'::text])))
 );
 
 
@@ -4140,6 +4264,10 @@ CREATE TABLE public.generator_submissions (
     lease_expires_at timestamp with time zone,
     submitted_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    qualified_at timestamp with time zone,
+    public_default boolean DEFAULT false NOT NULL,
+    round_score double precision,
+    round_scored_index bigint,
     CONSTRAINT ck_generator_submissions_generator_submissions_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT ck_generator_submissions_generator_submissions_digest_check CHECK (((source_sha256 ~ '^[0-9a-f]{64}$'::text) AND (tree_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_generator_submissions_generator_submissions_lease_check CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((lease_id IS NULL) = (lease_run_id IS NULL)))),
@@ -7137,7 +7265,7 @@ CREATE TABLE public.validator_tickets (
     CONSTRAINT ck_validator_tickets_validator_tickets_failure_reason CHECK (((failure_reason IS NULL) OR (failure_reason = ANY (ARRAY['infrastructure'::text, 'scoring_error'::text, 'sandbox_oom'::text])))),
     CONSTRAINT ck_validator_tickets_validator_tickets_infra_retry_gran_aa85 CHECK ((infra_retry_grants >= 0)),
     CONSTRAINT ck_validator_tickets_validator_tickets_purpose_revision_df08 CHECK ((purpose_revision >= 0)),
-    CONSTRAINT ck_validator_tickets_validator_tickets_purpose_valid CHECK ((purpose = ANY (ARRAY['legacy_unclassified'::text, 'canonical_quorum'::text, 'continual_retest'::text, 'benchmark_canary'::text]))),
+    CONSTRAINT ck_validator_tickets_validator_tickets_purpose_valid CHECK ((purpose = ANY (ARRAY['legacy_unclassified'::text, 'canonical_quorum'::text, 'continual_retest'::text, 'benchmark_canary'::text, 'generator_round'::text]))),
     CONSTRAINT ck_validator_tickets_validator_tickets_seed_nonnegative CHECK (((seed IS NULL) OR (seed >= 0))),
     CONSTRAINT ck_validator_tickets_validator_tickets_slot_id CHECK ((slot_id = ANY (ARRAY['slot-0'::text, 'slot-1'::text, 'slot-2'::text, 'slot-3'::text, 'slot-4'::text, 'slot-5'::text, 'slot-6'::text, 'slot-7'::text]))),
     CONSTRAINT validator_tickets_attempt_count_positive CHECK ((attempt_count > 0)),
@@ -7293,6 +7421,13 @@ ALTER TABLE ONLY public.generator_operator_actions ALTER COLUMN id SET DEFAULT n
 --
 
 ALTER TABLE ONLY public.generator_probe_epochs ALTER COLUMN epoch SET DEFAULT nextval('public.generator_probe_epochs_epoch_seq'::regclass);
+
+
+--
+-- Name: generator_rounds round_index; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_rounds ALTER COLUMN round_index SET DEFAULT nextval('public.generator_rounds_round_index_seq'::regclass);
 
 
 --
@@ -9138,6 +9273,38 @@ ALTER TABLE ONLY public.generator_probe_epochs
 
 ALTER TABLE ONLY public.generator_probe_results
     ADD CONSTRAINT pk_generator_probe_results PRIMARY KEY (submission_id, epoch);
+
+
+--
+-- Name: generator_round_attempts pk_generator_round_attempts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_attempts
+    ADD CONSTRAINT pk_generator_round_attempts PRIMARY KEY (round_index, agent_id, validator_hotkey, ticket_deadline);
+
+
+--
+-- Name: generator_round_case_verdicts pk_generator_round_case_verdicts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_case_verdicts
+    ADD CONSTRAINT pk_generator_round_case_verdicts PRIMARY KEY (round_index, column_id, case_id);
+
+
+--
+-- Name: generator_round_results pk_generator_round_results; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_results
+    ADD CONSTRAINT pk_generator_round_results PRIMARY KEY (round_index, agent_id);
+
+
+--
+-- Name: generator_rounds pk_generator_rounds; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_rounds
+    ADD CONSTRAINT pk_generator_rounds PRIMARY KEY (round_index);
 
 
 --
@@ -11235,6 +11402,34 @@ CREATE INDEX generator_probe_results_epoch_idx ON public.generator_probe_results
 
 
 --
+-- Name: generator_round_attempts_round_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_round_attempts_round_idx ON public.generator_round_attempts USING btree (round_index, agent_id);
+
+
+--
+-- Name: generator_round_case_verdicts_fingerprint_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_round_case_verdicts_fingerprint_idx ON public.generator_round_case_verdicts USING btree (fingerprint);
+
+
+--
+-- Name: generator_round_case_verdicts_submission_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_round_case_verdicts_submission_idx ON public.generator_round_case_verdicts USING btree (submission_id, round_index);
+
+
+--
+-- Name: generator_rounds_dataset_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_rounds_dataset_idx ON public.generator_rounds USING btree (dataset_sha256) WHERE (dataset_sha256 IS NOT NULL);
+
+
+--
 -- Name: generator_runs_scored_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -11253,6 +11448,13 @@ CREATE INDEX generator_runs_submission_idx ON public.generator_runs USING btree 
 --
 
 CREATE INDEX generator_submissions_hotkey_idx ON public.generator_submissions USING btree (miner_hotkey, submitted_at DESC);
+
+
+--
+-- Name: generator_submissions_public_default_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX generator_submissions_public_default_key ON public.generator_submissions USING btree (public_default) WHERE (public_default AND (status = 'active'::text));
 
 
 --
@@ -14051,6 +14253,30 @@ ALTER TABLE ONLY public.generator_probe_results
 
 ALTER TABLE ONLY public.generator_probe_results
     ADD CONSTRAINT fk_generator_probe_results_submission_id_generator_submissions FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_round_attempts fk_generator_round_attempts_round_index_generator_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_attempts
+    ADD CONSTRAINT fk_generator_round_attempts_round_index_generator_rounds FOREIGN KEY (round_index) REFERENCES public.generator_rounds(round_index) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_round_case_verdicts fk_generator_round_case_verdicts_round_index_generator_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_case_verdicts
+    ADD CONSTRAINT fk_generator_round_case_verdicts_round_index_generator_rounds FOREIGN KEY (round_index) REFERENCES public.generator_rounds(round_index) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_round_results fk_generator_round_results_round_index_generator_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_results
+    ADD CONSTRAINT fk_generator_round_results_round_index_generator_rounds FOREIGN KEY (round_index) REFERENCES public.generator_rounds(round_index) ON DELETE CASCADE;
 
 
 --

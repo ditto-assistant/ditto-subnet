@@ -126,3 +126,96 @@ async def test_generator_competition_round_trip(engine: AsyncEngine) -> None:
     finally:
         await _clear(engine)
         _alembic("upgrade", "head")
+
+
+async def test_generator_rounds_enforce_their_invariants(engine: AsyncEngine) -> None:
+    round_sql = (
+        "INSERT INTO generator_rounds (round_index, status, epochs_per_round, "
+        "secret, commitment, committed_at, committed_epoch_index, "
+        "commitment_publication, seed, void_reason) VALUES (:idx, :status, 4, "
+        "decode(repeat('ab', 32), 'hex'), repeat('c', 64), now(), 1, :pub, "
+        ":seed, :void)"
+    )
+
+    async def insert(**overrides: object) -> None:
+        values: dict[str, object] = {
+            "idx": 1,
+            "status": "committed",
+            "pub": "pending",
+            "seed": None,
+            "void": None,
+        }
+        values.update(overrides)
+        async with engine.begin() as connection:
+            await connection.execute(text(round_sql), values)
+
+    try:
+        await insert()
+        # A round voided before it opened has no seed; that is allowed.
+        await insert(idx=2, status="void", void="never opened")
+        await insert(idx=3, status="generating", seed="d" * 64)
+        for bad in (
+            {"idx": 4, "status": "committed", "seed": "d" * 64},  # seed leaks early
+            {"idx": 5, "status": "running"},  # opened without a seed
+            {"idx": 6, "status": "void"},  # void needs a reason
+            {"idx": 7, "pub": "maybe"},  # unknown publication state
+            {"idx": 8, "status": "limbo"},
+        ):
+            with pytest.raises(IntegrityError):
+                await insert(**bad)
+        with pytest.raises(IntegrityError):  # the digest must match the bytes
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "UPDATE generator_rounds SET dataset_bytes = 'x', "
+                        "dataset_sha256 = repeat('0', 64) WHERE round_index = 3"
+                    )
+                )
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE generator_rounds SET dataset_bytes = 'x', "
+                    "dataset_sha256 = encode(sha256('x'), 'hex') "
+                    "WHERE round_index = 3"
+                )
+            )
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(text("DELETE FROM generator_rounds"))
+
+
+async def test_round_downgrade_keeps_qualification_runs_unscored(
+    engine: AsyncEngine,
+) -> None:
+    try:
+        await _clear(engine)
+        submission = await _insert_submission(engine)
+        async with engine.begin() as connection:
+            epoch = await connection.scalar(
+                text(
+                    "INSERT INTO generator_probe_epochs (seed, reason, actor) "
+                    "VALUES (repeat('e', 64), 'initial', 'test') RETURNING epoch"
+                )
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO generator_runs (run_id, submission_id, attempt, "
+                    "seeds, probe_epoch, cases_per_seed, panel, settings_revision, "
+                    "status, outcome, finished_at) VALUES (gen_random_uuid(), "
+                    "CAST(:sub AS uuid), 1, '[]', :epoch, 16, '[]', 1, 'qualified', "
+                    "'qualified', now())"
+                ),
+                {"sub": submission, "epoch": epoch},
+            )
+        _alembic("downgrade", "5c1e9a7d2b40")
+        async with engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text("SELECT status, score, outcome FROM generator_runs")
+                )
+            ).one()
+        # A qualification run was never scored: no zero score appears.
+        assert tuple(row) == ("abandoned", None, "qualified")
+    finally:
+        await _clear(engine)
+        _alembic("upgrade", "head")

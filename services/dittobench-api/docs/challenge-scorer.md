@@ -1,8 +1,11 @@
 # Generator competition scorer
 
-`cmd/challenge-scorer` evaluates generator-competition submissions. It builds a
-generator's source in a no-network sandbox, runs it on seeds, and runs every
-resulting challenge pack against a panel of agent harnesses.
+`cmd/challenge-scorer` does the generator competition's CPU-only work. It
+builds generator source in a no-network sandbox and runs it on seeds. It never
+talks to a model, and in Platform mode it never runs an agent: validators run
+round datasets on screened agent images through the ordinary ticket and
+inference path (`generator-round-v1` on `/v2/score`, see
+`cmd/dittobench-api/generator_round.go`).
 
 - `genrun` (in `research/dittobench-datagen`) owns the generator half: build,
   run, validate, and check determinism.
@@ -65,31 +68,40 @@ instead of a generator.
 
 ```bash
 DITTO_GENERATOR_SCORER_TOKEN=... go run ./cmd/challenge-scorer serve \
-  -platform https://platform.example -harness-map panel-harnesses.json
+  -platform https://platform.example
 ```
 
 `-platform` must be an `https://` URL, because the scorer token is a bearer
 credential. Use `-insecure-platform` only for a local stack. `-once` processes
-at most one item and exits nonzero if that cycle failed.
+at most one item of each kind and exits nonzero if either cycle failed.
 
-The `serve` loop works through Platform one run at a time:
+Each `serve` cycle does at most one round work item, then at most one
+qualification. Round work goes first because it gates the validators and the
+ledger.
 
-1. It leases a run from `GET /api/v1/generator-scorer/work`. The work carries
-   the exact source archive, fresh secret seeds, the current probe seed, the
-   case count, and a panel snapshot.
-2. It refuses served bytes whose SHA-256 differs from the lease pin.
-3. It evaluates the generator: build, each seed, the probe, and a determinism
-   re-run.
-4. If the generator is valid, it runs each seed's pack against each panel agent
-   that has an entry in the harness map.
-5. It posts the evaluation and per-agent results to
-   `POST /api/v1/generator-scorer/results`.
+**Rounds** (`GET /api/v1/generator-scorer/round-work`):
 
-Platform computes the score and runs the copy check. The token is read from the
-environment, is sent only as a Bearer header, and is never logged.
+- `kind=generate`: the work carries the round seed, the case count, and every
+  frozen column's exact source.
+  1. The scorer refuses any source whose SHA-256 differs from the column pin.
+  2. It builds and runs each column generator on
+     `challenge.RoundColumnSeed(seed, column)` and validates the pack.
+  3. It encodes the valid packs with `challenge.EncodeRoundDataset`.
+  4. It posts the column results and the dataset to `POST /round-results`.
+- `kind=score`: the work carries the round matrix. That is each column's case
+  refs and owner, every panel agent's validator results, and the fingerprints
+  earlier rounds claimed. The scorer applies `challenge.ScoreRound` and posts
+  column scores and pairwise-neutral agent standings to `POST /round-score`.
 
-In v1 an operator provisions the panel harnesses. A panel agent missing from
-the harness map is skipped. If too few agents remain, the run scores as
-`insufficient_panel` and is retried later on new seeds. Launching panel agents
-from their screened images through the DittoBench sandbox and inference broker
-is the next rollout step.
+**Qualification** (`GET /api/v1/generator-scorer/work`):
+
+1. The work carries a new submission's exact archive, fresh secret seeds, the
+   current probe seed, and the case count.
+2. The scorer builds the generator.
+3. It runs each seed and the probe, then re-runs the first seed to check
+   determinism.
+4. It posts the evaluation to `POST /results`. Platform marks the generator
+   qualified or rejects it, which includes the copy check.
+
+The token is read from the environment, is sent only as a Bearer header, and is
+never logged.

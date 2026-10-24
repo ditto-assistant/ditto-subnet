@@ -1,6 +1,6 @@
 // Command challenge-scorer evaluates generator-competition submissions: it
 // builds a generator's source in a no-network sandbox, runs it on seeds, and
-// runs every resulting challenge pack against a panel of agent harnesses.
+// (locally) runs every resulting challenge pack against agent harnesses.
 //
 // Local rehearsal (a generator miner, or an operator spot-check). Generators
 // build and run in the Docker sandbox unless -sandbox local opts out:
@@ -18,18 +18,25 @@
 // Platform mode (the trusted shadow scorer):
 //
 //	DITTO_GENERATOR_SCORER_TOKEN=... challenge-scorer serve \
-//	    -platform https://platform.example -harness-map panel-harnesses.json
+//	    -platform https://platform.example
 //
-// serve leases one evaluation at a time: Platform serves the exact uploaded
-// source archive, fresh secret seeds, the current probe seed, and a panel
-// snapshot. The scorer refuses bytes that do not hash to the pin, builds and
-// runs the generator in the Docker sandbox (genrun.Docker), validates every
-// pack against its request, checks determinism, runs each valid pack against
-// every panel agent it has a harness for, and posts the evaluation. Platform
-// computes the score. A sandbox failure is never posted as a generator
-// failure: the lease simply expires and the run is retried. The control token
-// is read from the environment, sent only as a Bearer header to the configured
-// Platform URL, and never logged.
+// serve does Platform's CPU-only generator work, one lease at a time:
+//
+//   - qualification: Platform serves a new submission's exact source
+//     archive, fresh secret seeds, and the current probe seed. The scorer
+//     refuses bytes that do not hash to the pin, builds and runs the generator
+//     in the Docker sandbox (genrun.Docker), validates every pack against its
+//     request, checks determinism, and posts the evaluation. A qualified
+//     generator becomes eligible for round columns.
+//   - rounds (round.go): generate a round's columns on their seeds and encode
+//     the round dataset validators run the agent panel on, then score the
+//     finished agent x generator matrix with challenge.ScoreRound.
+//
+// No agent runs here: validators execute round datasets on screened agent
+// images through the ordinary ticket and inference path. A sandbox failure is
+// never posted as a generator failure: the lease simply expires and the work
+// is retried. The control token is read from the environment, sent only as a
+// Bearer header to the configured Platform URL, and never logged.
 package main
 
 import (
@@ -58,7 +65,7 @@ import (
 
 // ScorerVersion is reported with every result so Platform can audit which
 // executor produced it.
-const ScorerVersion = "challenge-scorer/2"
+const ScorerVersion = "challenge-scorer/3"
 
 const tokenEnv = "DITTO_GENERATOR_SCORER_TOKEN"
 
@@ -175,6 +182,9 @@ func runLocal(ctx context.Context, args []string) error {
 	slots := make([]panelSlot, len(agents))
 	urls := map[string]string{}
 	for i, a := range agents {
+		if _, dup := urls[a.ID]; dup {
+			return fmt.Errorf("run: duplicate -agent id %q", a.ID)
+		}
 		slots[i] = panelSlot{AgentID: a.ID, OwnerKey: a.Owner, Champion: a.Champion}
 		if _, dup := urls[a.ID]; dup {
 			return fmt.Errorf("run: duplicate -agent id %q", a.ID)
@@ -349,11 +359,10 @@ type workItem struct {
 	MinerHotkey  string `json:"miner_hotkey"`
 	SourceSHA256 string `json:"source_sha256"`
 	// SourceBase64 carries the exact uploaded archive; the pin is its digest.
-	SourceBase64 string      `json:"source_base64"`
-	Seeds        []string    `json:"seeds"`
-	ProbeSeed    string      `json:"probe_seed"`
-	CasesPerSeed int         `json:"cases_per_seed"`
-	Panel        []panelSlot `json:"panel"`
+	SourceBase64 string   `json:"source_base64"`
+	Seeds        []string `json:"seeds"`
+	ProbeSeed    string   `json:"probe_seed"`
+	CasesPerSeed int      `json:"cases_per_seed"`
 }
 
 type panelSlot struct {
@@ -362,22 +371,17 @@ type panelSlot struct {
 	Champion bool   `json:"champion"`
 }
 
-type seedResult struct {
-	genrun.SeedOutput
-	Panel []challenge.PanelMember `json:"panel"`
-}
-
 type resultRequest struct {
-	LeaseID       string             `json:"lease_id"`
-	RunID         string             `json:"run_id"`
-	SubmissionID  string             `json:"submission_id"`
-	SourceSHA256  string             `json:"source_sha256"`
-	ScorerVersion string             `json:"scorer_version"`
-	Sandbox       string             `json:"sandbox"`
-	Build         genrun.BuildOutput `json:"build"`
-	Deterministic *bool              `json:"deterministic"`
-	Seeds         []seedResult       `json:"seeds"`
-	Probe         *genrun.SeedOutput `json:"probe"`
+	LeaseID       string              `json:"lease_id"`
+	RunID         string              `json:"run_id"`
+	SubmissionID  string              `json:"submission_id"`
+	SourceSHA256  string              `json:"source_sha256"`
+	ScorerVersion string              `json:"scorer_version"`
+	Sandbox       string              `json:"sandbox"`
+	Build         genrun.BuildOutput  `json:"build"`
+	Deterministic *bool               `json:"deterministic"`
+	Seeds         []genrun.SeedOutput `json:"seeds"`
+	Probe         *genrun.SeedOutput  `json:"probe"`
 }
 
 type platformClient struct {
@@ -424,17 +428,14 @@ func (c *platformClient) do(ctx context.Context, method, path string, body, out 
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	platform := fs.String("platform", "", "Platform base URL (required)")
-	harnessMap := fs.String("harness-map", "", `JSON object {"<agent_id>": "<harness url>"} for provisioned panel agents (required)`)
 	interval := fs.Duration("interval", 30*time.Second, "idle poll interval")
-	once := fs.Bool("once", false, "process at most one evaluation and exit")
-	allowPrivate := fs.Bool("allow-private-harness", false, "allow loopback/private harness URLs (local stacks)")
+	once := fs.Bool("once", false, "process at most one work item of each kind and exit")
 	unsandboxed := fs.Bool("unsafe-local-sandbox", false, "build and run generators on the host with no isolation (local stacks only)")
-	concurrency := fs.Int("concurrency", challengerun.DefaultConcurrency, "concurrent cases per wave")
 	insecure := fs.Bool("insecure-platform", false, "allow an http:// Platform URL (local stacks only; the token travels in clear text)")
 	_ = fs.Parse(args)
 	token := strings.TrimSpace(os.Getenv(tokenEnv))
-	if *platform == "" || *harnessMap == "" || token == "" {
-		return fmt.Errorf("serve: -platform, -harness-map, and %s are required", tokenEnv)
+	if *platform == "" || token == "" {
+		return fmt.Errorf("serve: -platform and %s are required", tokenEnv)
 	}
 	if *interval <= 0 {
 		return errors.New("serve: -interval must be positive")
@@ -442,34 +443,31 @@ func serve(ctx context.Context, args []string) error {
 	if !strings.HasPrefix(strings.ToLower(*platform), "https://") && !*insecure {
 		return errors.New("serve: -platform must be an https URL (the scorer token is a bearer credential); pass -insecure-platform only for a local stack")
 	}
-	runner.Configure(*allowPrivate)
 	var sb genrun.Sandbox = genrun.Docker{}
 	if *unsandboxed {
 		log.Printf("WARNING: -unsafe-local-sandbox runs untrusted generator code on this host")
 		sb = genrun.Local{}
 	}
-	harnesses := map[string]string{}
-	raw, err := os.ReadFile(*harnessMap)
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(raw, &harnesses); err != nil {
-		return fmt.Errorf("harness map: %w", err)
-	}
-	client := &platformClient{base: strings.TrimRight(*platform, "/"), token: token, http: &http.Client{Timeout: 60 * time.Second}}
+	client := &platformClient{base: strings.TrimRight(*platform, "/"), token: token, http: &http.Client{Timeout: 120 * time.Second}}
 	for {
-		processed, err := processOne(ctx, client, sb, harnesses, *concurrency)
-		if err != nil {
-			log.Printf("scorer cycle failed: %v", err)
+		// Rounds first: a round's dataset gates every validator panel run, and
+		// its scoring gates the ledger. Qualification can wait a cycle.
+		roundBusy, roundErr := processRound(ctx, client, sb)
+		if roundErr != nil {
+			log.Printf("round cycle failed: %v", roundErr)
+		}
+		qualBusy, qualErr := processOne(ctx, client, sb)
+		if qualErr != nil {
+			log.Printf("qualification cycle failed: %v", qualErr)
 		}
 		if ctx.Err() != nil {
 			return nil
 		}
 		if *once {
 			// One-shot automation must see a failed cycle as a failure.
-			return err
+			return errors.Join(roundErr, qualErr)
 		}
-		if processed && err == nil {
+		if (roundBusy && roundErr == nil) || (qualBusy && qualErr == nil) {
 			continue
 		}
 		select {
@@ -480,10 +478,10 @@ func serve(ctx context.Context, args []string) error {
 	}
 }
 
-// processOne leases and evaluates one generator run. It reports whether work
-// was leased. Returning an error without posting leaves the lease to expire,
-// which is the only correct response to a scorer-side failure.
-func processOne(ctx context.Context, client *platformClient, sb genrun.Sandbox, harnesses map[string]string, concurrency int) (bool, error) {
+// processOne leases and qualifies one generator submission. It reports whether
+// work was leased. Returning an error without posting leaves the lease to
+// expire, which is the only correct response to a scorer-side failure.
+func processOne(ctx context.Context, client *platformClient, sb genrun.Sandbox) (bool, error) {
 	var work workResponse
 	if err := client.do(ctx, http.MethodGet, "/api/v1/generator-scorer/work", nil, &work); err != nil {
 		return false, err
@@ -512,28 +510,14 @@ func processOne(ctx context.Context, client *platformClient, sb genrun.Sandbox, 
 	if err != nil {
 		return true, fmt.Errorf("run %s: %w", item.RunID, err)
 	}
-	result := resultRequest{
-		LeaseID: item.LeaseID, RunID: item.RunID, SubmissionID: item.SubmissionID,
-		SourceSHA256: item.SourceSHA256, ScorerVersion: ScorerVersion,
-		Sandbox: ev.Sandbox, Build: ev.Build, Deterministic: ev.Deterministic, Probe: ev.Probe,
-	}
-	// Only a fully valid generator meets the panel: one bad seed rejects the
-	// run, so panel time is never spent on a generator that will score zero.
-	valid := ev.Valid()
-	for _, s := range ev.Seeds {
-		sr := seedResult{SeedOutput: s}
-		if valid {
-			pack, err := challenge.Decode(s.Pack)
-			if err != nil {
-				return true, err
-			}
-			sr.Panel = runPanel(ctx, pack, item.Panel, harnesses, concurrency, "run "+item.RunID)
-		}
-		result.Seeds = append(result.Seeds, sr)
-	}
 	if ctx.Err() != nil {
 		return true, ctx.Err()
 	}
-	log.Printf("run %s: build=%t valid=%t seeds=%d panel=%d", item.RunID, ev.Build.OK, valid, len(result.Seeds), len(item.Panel))
-	return true, client.do(ctx, http.MethodPost, "/api/v1/generator-scorer/results", result, nil)
+	log.Printf("run %s: build=%t valid=%t seeds=%d", item.RunID, ev.Build.OK, ev.Valid(), len(ev.Seeds))
+	return true, client.do(ctx, http.MethodPost, "/api/v1/generator-scorer/results", resultRequest{
+		LeaseID: item.LeaseID, RunID: item.RunID, SubmissionID: item.SubmissionID,
+		SourceSHA256: item.SourceSHA256, ScorerVersion: ScorerVersion,
+		Sandbox: ev.Sandbox, Build: ev.Build, Deterministic: ev.Deterministic,
+		Seeds: ev.Seeds, Probe: ev.Probe,
+	}, nil)
 }

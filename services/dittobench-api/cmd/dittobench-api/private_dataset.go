@@ -13,7 +13,7 @@ const privateDatasetMode = "platform-private-v1"
 func (s *server) datasetFeatures() []string {
 	features := []string{"git_subdir", universe.V13EnterpriseRevision}
 	if s.allowPrivateDatasets {
-		features = append(features, privateDatasetMode)
+		features = append(features, privateDatasetMode, generatorRoundMode)
 	}
 	return features
 }
@@ -21,6 +21,9 @@ func (s *server) datasetFeatures() []string {
 func validatePrivateDatasetRequest(req submitRequest, enabled bool) error {
 	if req.PrivateDatasetMode == "" && len(req.PrivateDatasetBytes) == 0 {
 		return nil // Existing public contracts are unchanged.
+	}
+	if req.PrivateDatasetMode == generatorRoundMode {
+		return validateGeneratorRoundRequest(req, enabled)
 	}
 	if !enabled || req.PrivateDatasetMode != privateDatasetMode || req.BenchVersion != 13 {
 		return errors.New("private dataset mode unavailable")

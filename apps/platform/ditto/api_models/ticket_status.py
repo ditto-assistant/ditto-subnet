@@ -40,3 +40,6 @@ class TicketPurpose(StrEnum):
     CANONICAL_QUORUM = "canonical_quorum"
     CONTINUAL_RETEST = "continual_retest"
     BENCHMARK_CANARY = "benchmark_canary"
+    # A generator-competition round panel run: the agent is scored on the
+    # round's generator dataset, and results go only to the round matrix.
+    GENERATOR_ROUND = "generator_round"

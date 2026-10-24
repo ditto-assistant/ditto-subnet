@@ -162,7 +162,9 @@ func InspectArchive(raw []byte) (ArchiveInfo, []SourceFile, error) {
 			dirs[parent] = true
 		}
 		seen[name] = true
-		if hdr.Size < 0 || total+hdr.Size > MaxSourceBytes {
+		// Compared as a remainder so a size near MaxInt64 cannot overflow
+		// past the limit.
+		if hdr.Size < 0 || hdr.Size > MaxSourceBytes-total {
 			return ArchiveInfo{}, nil, fmt.Errorf("source archive expands past %d bytes", MaxSourceBytes)
 		}
 		data, err := io.ReadAll(io.LimitReader(tr, hdr.Size+1))

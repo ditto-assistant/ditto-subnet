@@ -283,7 +283,7 @@ def compute_generator_weights(
     top-agent panel and folded every hotkey to its latest run scored inside the
     freshness window (see :mod:`ditto.api_models.generator_ledger`). This fold
     only ranks that pool and assigns ``rank_shares`` by position, tie-breaking
-    on ``first_seen`` then ``run_id`` so every validator folds identical bytes.
+    on ``first_seen`` then ``submission_id`` so every validator folds identical bytes.
     Only entries marked ``weight_eligible`` with a positive score earn anything,
     and
     malformed ``rank_shares`` degrade to ``{}``: like the router fold, this
@@ -299,7 +299,8 @@ def compute_generator_weights(
         if entry.weight_eligible and math.isfinite(entry.score) and entry.score > 0.0
     ]
     ranked = sorted(
-        scored, key=lambda entry: (-entry.score, entry.first_seen, entry.run_id)
+        scored,
+        key=lambda entry: (-entry.score, entry.first_seen, str(entry.submission_id)),
     )
     distinct: list[GeneratorLedgerEntry] = []
     seen_hotkeys: set[str] = set()

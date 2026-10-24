@@ -59,8 +59,27 @@ import {
   rescoreGenerator,
   rotateGeneratorProbe,
   setGeneratorSettings,
+  closeGeneratorRound,
+  fetchGeneratorRound,
+  fetchGeneratorRoundDataset,
+  fetchGeneratorRoundLoop,
+  fetchGeneratorRoundPreview,
+  listGeneratorRounds,
+  registerDefaultGenerator,
+  releaseGeneratorRoundLease,
+  republishGeneratorRoundCommitment,
+  tickGeneratorRounds,
+  voidGeneratorRound,
 } from './generator-competition.service'
 import {
+  closeGeneratorRoundInputSchema,
+  tickGeneratorRoundsInputSchema,
+  generatorRoundIndexInputSchema,
+  listGeneratorRoundsInputSchema,
+  registerDefaultGeneratorInputSchema,
+  releaseRoundLeaseInputSchema,
+  republishRoundCommitmentInputSchema,
+  voidGeneratorRoundInputSchema,
   generatorPromotionInputSchema,
   generatorRunIdInputSchema,
   generatorSubmissionIdInputSchema,
@@ -437,6 +456,12 @@ export const WRITE_TOOL_NAMES = new Set([
   'rotate_generator_probe_seed',
   'rescore_generator_submission',
   'reject_generator_submission',
+  'tick_generator_rounds',
+  'void_generator_round',
+  'close_generator_round',
+  'republish_generator_round_commitment',
+  'release_generator_round_lease',
+  'register_default_generator',
   'advance_scored_policy_rescreen',
   'record_treasury_settings',
   'record_treasury_runtime',
@@ -528,6 +553,9 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   ['get_agent_source_release_evidence', BACKROOM_READ_SCOPE],
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
+  // A closed round's dataset is every column's generated cases: private
+  // benchmark content, gated like other private artifacts.
+  ['get_generator_round_dataset', BACKROOM_ARTIFACT_SCOPE],
   ['get_v13_official_control_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_verification_readiness', BACKROOM_ARTIFACT_SCOPE],
@@ -884,12 +912,23 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   set_generator_competition_settings: 'Write complete generator policy with CAS and APPLY GENERATOR COMPETITION {MODE}.',
   list_generator_submissions: 'Page generator submissions with latest run; filter hotkey/status.',
   get_generator_submission: 'Read one generator submission, lease and every run (never source).',
-  get_generator_run: 'Read one run: evaluation, panel, per-case verdicts; seeds once finished.',
+  get_generator_run: 'Read one qualification run: evaluation and outcome; seeds once finished.',
   get_generator_probe: 'Read probe epochs and probed counts; the probe seed is never served.',
-  rotate_generator_probe_seed: 'Retire the probe seed; every generator is re-probed on its next run.',
-  list_generator_promotion_candidates: 'Discriminating generator cases, highest credit first.',
+  rotate_generator_probe_seed: 'Retire the probe seed; every active generator re-qualifies.',
+  list_generator_promotion_candidates: 'Discriminating round cases, highest credit first.',
   get_generator_board: 'Read the shadow generator ledger (weight_eligible=false).',
-  rescore_generator_submission: 'Make an active generator due now on fresh seeds.',
+  list_generator_rounds: 'Page chain-epoch generator rounds with schedule and counts by status.',
+  get_generator_round: 'Read one round: columns, panel, generation, leases, results, pending agents, matrix.',
+  preview_generator_round: 'What a round opened now would freeze, and every blocker.',
+  get_generator_round_loop: 'Read the round driver\'s last tick, actions, errors and chain position.',
+  tick_generator_rounds: 'Run one idempotent round-driver tick now.',
+  get_generator_round_dataset: 'Download a closed round\'s exact dataset to reproduce it. Artifact scope.',
+  void_generator_round: 'Void a round with VOID GENERATOR ROUND {n}; expires its live leases.',
+  close_generator_round: 'Close a running round now with CLOSE GENERATOR ROUND {n}; scores what it has.',
+  republish_generator_round_commitment: 'Retry a failed on-chain commitment for a committed round.',
+  release_generator_round_lease: 'Release one validator\'s stuck round lease so the agent re-leases.',
+  register_default_generator: 'Register the public default generator that fills empty counted columns.',
+  rescore_generator_submission: 'Re-qualify an active generator now on fresh seeds.',
   reject_generator_submission: 'Reject a generator by ruling; abandons its live run, drops it from the ledger.',
   get_bounty: 'Operator view of one bounty: claims, appeals, full private audit.',
   get_bounty_claim: 'Read one bounty claim: submissions, obligations, facts.',
@@ -1721,14 +1760,14 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_competition_settings', {
     title: 'Get generator competition settings',
-    description: 'Read the shadow DittoBench generator competition policy: mode (off refuses uploads and leases nothing; shadow runs the lane at zero emission), panel_size/min_panel/min_solver_owners/solve_threshold/champion_bonus (the discrimination score), seeds_per_run and cases_per_seed (each run generates that many packs of exactly that many cases on fresh secret seeds), rescore_interval_hours, window_days (the ledger counts each hotkey\'s latest run scored inside it), copy_overlap_threshold (share of probe fingerprints that marks a behavioral copy), upload cooldown, lease TTL, max_attempts and retry backoff. Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
+    description: 'Read the shadow DittoBench generator competition policy: mode (off refuses uploads, leases nothing and opens no rounds; shadow runs the lane at zero emission); the score (panel_size top agent owners, min_panel, min_solver_owners, solve_threshold, champion_bonus); qualification (seeds_per_run secret seeds of exactly cases_per_seed cases, copy_overlap_threshold on the probe, upload cooldown, lease TTL, max_attempts, retry backoff); rounds (epochs_per_round chain epochs per round, counted_columns, challenger_columns, reference_agent_ids added to every panel as independent solvers, privacy_window_rounds before a round is revealed, onchain_commitment, validator_rounds_enabled which lets validators run panel agents); and window_days for the ledger. Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
     inputSchema: MCP_SETTINGS_HISTORY_INPUT, annotations: toolAnnotations('read'),
   }, async ({ historyLimit, historyOffset }) =>
     result(compacted(pageRevisionHistory(await fetchGeneratorSettings(), historyLimit, historyOffset), REVISION_LISTS)))
 
   registerTool('set_generator_competition_settings', {
     title: 'Set generator competition settings',
-    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel or min_panel > panel_size. Returns the revision this write created. There is no enforcing mode: every ledger entry stays weight_eligible=false and the validator track stays SHADOW. Requires backroom:write.',
+    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel, min_panel above the round panel (panel_size plus reference agents), duplicate reference agents, and more than 8 columns. To start rounds: mode=shadow, a registered and qualified default generator (register_default_generator), then validator_rounds_enabled=true; check preview_generator_round first. Returns the revision this write created. There is no enforcing mode: every ledger entry stays weight_eligible=false and the validator track stays SHADOW. Requires backroom:write.',
     inputSchema: setGeneratorSettingsInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => setGeneratorSettings(input, props.session.email)))
 
@@ -1746,7 +1785,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_run', {
     title: 'Get generator run',
-    description: 'One generator run: status and outcome, the panel snapshot it was judged against (agent ids, owner keys, champion), the settings revision, scorer version, the stored evaluation (sandbox, build result and binary SHA-256, per-seed pack SHA-256, validation summary with up to 50 issues, generation errors, durations, determinism, and the probe result without its seed), the score summary (per-seed score, credit and status counts, or copy_of/overlap for a behavioral copy), and per-case verdicts by seed. seeds is null while the run is leased (they are live secrets) and the exact seeds once it finished, so an operator can regenerate the packs with `challenge rehearse`. Requires backroom:read.',
+    description: 'One qualification run: status (qualified, invalid, copy, abandoned) and outcome, settings revision, scorer version, the stored evaluation (sandbox, build result and binary SHA-256, per-seed pack SHA-256, validation summary with up to 50 issues, generation errors, durations, determinism, and the probe result without its seed), and the outcome summary (case and probe counts, or copy_of/overlap for a behavioral copy). seeds is null while the run is leased and the exact seeds once it finished, so an operator can regenerate the packs with `challenge rehearse`. Round results live on get_generator_round. Requires backroom:read.',
     inputSchema: generatorRunIdInputSchema.extend({ runId: sourceAgentId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorRun(input)))
 
@@ -1758,33 +1797,99 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('rotate_generator_probe_seed', {
     title: 'Rotate generator probe seed',
-    description: 'Retire the current probe epoch and start one with a fresh secret seed, for example after a suspected leak. Copy detection compares submissions probed in the same epoch only, so every active generator is re-probed on its next run and earlier epochs stop catching copies. Needs a reason and the confirmation ROTATE GENERATOR PROBE SEED. Requires backroom:write.',
+    description: 'Retire the current probe epoch and start one with a fresh secret seed, for example after a suspected leak. Copy detection compares submissions probed in the same epoch only, so every active generator loses its qualification and re-qualifies (and re-probes) before its next round column. Needs a reason and the confirmation ROTATE GENERATOR PROBE SEED. Requires backroom:write.',
     inputSchema: rotateGeneratorProbeInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => rotateGeneratorProbe(input, props.session.email)))
 
   registerTool('list_generator_promotion_candidates', {
     title: 'List generator promotion candidates',
-    description: 'Discriminating cases from scored runs of non-rejected generators, highest credit first: run, submission, hotkey, seed index, case id, fingerprint, mean panel score, solver owners and whether the champion failed. Promotion into a private benchmark pool is an operator decision; regenerate a case\'s pack from the run\'s seeds (get_generator_run) to read it. Requires backroom:read.',
+    description: 'Discriminating cases from scored rounds of non-rejected generators (the public default included), highest credit first: round, column, submission, hotkey, case id, fingerprint, mean panel score, solver owners and whether the champion failed. Promotion into a private benchmark pool is an operator decision; read a case from the closed round\'s dataset (get_generator_round_dataset). Requires backroom:read.',
     inputSchema: generatorPromotionInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorPromotionCandidates(input)))
 
   registerTool('get_generator_board', {
     title: 'Get generator board',
-    description: 'The shadow generator ledger validators fold: each hotkey\'s latest run scored inside window_days, best score first, with submission and run ids and discriminating case counts. Every entry is weight_eligible=false and mode=off serves an empty ledger. Requires backroom:read.',
+    description: 'The shadow generator ledger validators fold: each hotkey\'s latest scored round column score inside window_days, best first, with submission id, round index and discriminating case count. The public default generator and rejected generators never appear. Every entry is weight_eligible=false and mode=off serves an empty ledger. Requires backroom:read.',
     inputSchema: {}, annotations: toolAnnotations('read'),
   }, async () => result(await fetchGeneratorBoard()))
 
   registerTool('rescore_generator_submission', {
     title: 'Rescore generator submission',
-    description: 'Make an active generator due now, so the next scorer lease runs it on fresh secret seeds against the current panel instead of waiting for rescore_interval_hours. An in-flight run is left to finish. Refused unless the submission is active. Needs a reason. Requires backroom:write.',
+    description: 'Re-qualify an active generator now on fresh secret seeds (build, every pack valid, determinism, probe copy check). It holds no new round column until it passes again; a column in a round already generated keeps running. An in-flight qualification run is left to finish. Refused unless the submission is active. Needs a reason. Requires backroom:write.',
     inputSchema: rescoreGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', false),
   }, async (input) => write(() => rescoreGenerator(input, props.session.email)))
 
   registerTool('reject_generator_submission', {
     title: 'Reject generator submission',
-    description: 'Reject one generator by operator ruling, for example a copy the probe missed or abuse. Its runs stop counting on the ledger at once, an in-flight run is abandoned (its result will be refused), and it is never leased again; the miner can still upload a new generator. expectedStatus must match the current status, and the confirmation is REJECT GENERATOR SUBMISSION. The reason is stored as the miner-visible status_reason. Requires backroom:write.',
+    description: 'Reject one generator by operator ruling, for example a copy the probe missed or abuse. It leaves the ledger at once, an in-flight qualification run is abandoned (its result will be refused), and it never holds another round column; the miner can still upload a new generator. expectedStatus must match the current status, and the confirmation is REJECT GENERATOR SUBMISSION. The reason is stored as the miner-visible status_reason. Requires backroom:write.',
     inputSchema: rejectGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => rejectGenerator(input, props.session.email)))
+
+  registerTool('list_generator_rounds', {
+    title: 'List generator rounds',
+    description: 'Newest-first generator rounds and the chain schedule. A round is keyed on the chain epoch counter (round = SubnetEpochIndex // epochs_per_round). Each round reports status (committed: secret drawn and commitment published one round ahead; generating: columns and panel frozen, seed derived from the committed secret and the block the round opened at, waiting for the scorer to build the dataset; running: validators are running panel agents on it; scoring; scored; void with void_reason), commitment and its on-chain publication state, open epoch and block, column count, panel size, results received, and once past privacy_window_rounds the revealed secret and seed. schedule shows the observed SubnetEpochIndex, current round, and the epoch the next round opens at. Requires backroom:read.',
+    inputSchema: listGeneratorRoundsInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listGeneratorRounds(input)))
+
+  registerTool('get_generator_round', {
+    title: 'Get generator round',
+    description: 'Everything about one round for running or debugging it: the frozen columns (submission, hotkey, owner key, source SHA-256, counted or challenger, public default), the panel (agents, owner keys, champion, reference agents), the settings revision and cases per column, per-column generation results (ok, error, build and generate durations, scorer version), case counts per column and dataset size, the scorer lease and its attempts, commitment publication and error, every validator lease attempt (validator, slot, deadline, status, detail), every accepted result (validator, run id, answered, faulted, mean score), the panel agents still pending, and once scored the per-column scores and pairwise-neutral agent standings. The seed and secret are withheld until the round is revealed; get_generator_round_dataset (backroom:artifact:read) returns the seed with the dataset. Requires backroom:read.',
+    inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGeneratorRound(input)))
+
+  registerTool('preview_generator_round', {
+    title: 'Preview generator round',
+    description: 'What a round opened right now would freeze: counted columns (best qualified generators by latest round score, then never-scored ones, then the public default generator filling the rest) and challenger columns, and the panel (top ledger owners plus reference agents). Lists every blocker: mode off, invalid settings, no counted columns (no qualified generator and no registered or qualified default), a panel below min_panel, skipped reference agents, and validator_rounds_enabled=false. Use it before switching the lane on. Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchGeneratorRoundPreview()))
+
+  registerTool('get_generator_round_loop', {
+    title: 'Get generator round loop',
+    description: 'The round driver\'s last tick on the Platform process that runs it: tick and success times, the last error (chain read failures leave rounds untouched), the actions the last tick took (commit, open, close, void, reveal), the tick count, and the observed chain schedule. available=false means this process does not run the driver. Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchGeneratorRoundLoop()))
+
+  registerTool('tick_generator_rounds', {
+    title: 'Tick generator rounds',
+    description: 'Run one round-driver tick now instead of waiting up to a minute: read the epoch schedule at a finalized head and apply every transition already due (commit the next round, open the current one, close or void earlier ones, reveal past the privacy window), then publish pending on-chain commitments. Idempotent: at the same chain position a second tick changes nothing. Needs a reason. Returns the actions taken or the error. Requires backroom:write.',
+    inputSchema: tickGeneratorRoundsInputSchema, annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => tickGeneratorRounds(input, props.session.email)))
+
+  registerTool('get_generator_round_dataset', {
+    title: 'Get generator round dataset',
+    description: 'Download a closed (scoring, scored or void) round\'s exact dataset bytes as base64 with its SHA-256 and seed, to reproduce the round: decode it with challenge.DecodeRoundDataset or rerun each column generator on challenge.RoundColumnSeed(seed, column). Refused while the round runs. Requires the dedicated backroom:artifact:read scope because the cases are private benchmark content.',
+    inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => artifact(() => fetchGeneratorRoundDataset(input)))
+
+  registerTool('void_generator_round', {
+    title: 'Void generator round',
+    description: 'Void one round by operator ruling (a bad dataset, a compromised secret). Live validator round leases are expired and no column score from it is ever credited. expectedStatus must match the round\'s current status; scored and void rounds are final. Confirmation: VOID GENERATOR ROUND {roundIndex}. Requires backroom:write.',
+    inputSchema: voidGeneratorRoundInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => voidGeneratorRound(input, props.session.email)))
+
+  registerTool('close_generator_round', {
+    title: 'Close generator round',
+    description: 'Close a running round now and send it to scoring with the results it has, for a round that will not complete (a panel agent no validator can run). Live leases are expired; fewer than min_panel results voids the round instead. Confirmation: CLOSE GENERATOR ROUND {roundIndex}. Requires backroom:write.',
+    inputSchema: closeGeneratorRoundInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => closeGeneratorRound(input, props.session.email)))
+
+  registerTool('republish_generator_round_commitment', {
+    title: 'Republish generator round commitment',
+    description: 'Retry the on-chain publication (Commitments set_commitment from Platform\'s Pylon identity, payload dgr1:{round}:{commitment}) of a committed round whose publication failed or was disabled. Only before the round opens: a commitment published after the open proves nothing. Confirmation: REPUBLISH GENERATOR ROUND COMMITMENT. Requires backroom:write.',
+    inputSchema: republishRoundCommitmentInputSchema, annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => republishGeneratorRoundCommitment(input, props.session.email)))
+
+  registerTool('release_generator_round_lease', {
+    title: 'Release generator round lease',
+    description: 'Release one validator\'s live round lease for one panel agent so another validator can take it, for a validator that went quiet mid-run. The ticket returns to rest without charging the agent anything, the attempt is recorded failed with your reason, and an audit entry is written. Confirmation: RELEASE GENERATOR ROUND LEASE. Requires backroom:write.',
+    inputSchema: releaseRoundLeaseInputSchema.extend({ agentId: sourceAgentId(), validatorHotkey: z.string() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => releaseGeneratorRoundLease(input, props.session.email)))
+
+  registerTool('register_default_generator', {
+    title: 'Register default generator',
+    description: 'Register (or replace) the public default generator: the base64 gzip tar of a Go generator module (for example `challenge pack` of miners/dittobench-generator-starter-kit) with its SHA-256 and the hotkey its packs echo. It is checked like any upload, qualified by the scorer like any generator, owned by nobody, never on the ledger, and fills every counted column no qualified miner generator holds, each on its own column seed. A new registration supersedes the previous default. Confirmation: REGISTER DEFAULT GENERATOR. Requires backroom:write.',
+    inputSchema: registerDefaultGeneratorInputSchema.extend({ minerHotkey: z.string(), sourceSha256: z.string(), sourceBase64: z.string() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => registerDefaultGenerator(input, props.session.email)))
 
   registerTool('get_bounty_board', {
     title: 'List build bounties',

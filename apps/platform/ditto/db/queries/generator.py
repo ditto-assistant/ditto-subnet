@@ -23,6 +23,7 @@ from ditto.db.models import (
     GeneratorOperatorAction,
     GeneratorProbeEpoch,
     GeneratorProbeResult,
+    GeneratorRoundCaseVerdict,
     GeneratorRun,
     GeneratorSubmission,
 )
@@ -226,13 +227,14 @@ async def supersede_active(
 async def lock_next_runnable_submission(
     session: AsyncSession, *, now: datetime
 ) -> GeneratorSubmission | None:
-    """The active submission whose next run is most overdue: unleased past
-    ``next_run_at``, or leased with an expired lease. Row-locked and skipped by
-    concurrent callers."""
+    """The unqualified active submission whose qualification is most overdue:
+    unleased past ``next_run_at``, or leased with an expired lease. Row-locked
+    and skipped by concurrent callers."""
     return await session.scalar(
         select(GeneratorSubmission)
         .where(
             GeneratorSubmission.status == "active",
+            GeneratorSubmission.qualified_at.is_(None),
             or_(
                 and_(
                     GeneratorSubmission.lease_id.is_(None),
@@ -358,19 +360,40 @@ async def current_probe_epoch(
     return row
 
 
+async def lock_probe_epoch_if_current(session: AsyncSession, epoch: int) -> bool:
+    """Whether ``epoch`` is still current, holding it against rotation.
+
+    The row is locked ``FOR SHARE`` so a concurrent rotation (which retires the
+    row before clearing every qualification) waits for this transaction; once
+    it commits, the rotation clears whatever this transaction qualified.
+    """
+    row = await session.scalar(
+        select(GeneratorProbeEpoch)
+        .where(GeneratorProbeEpoch.epoch == epoch)
+        .with_for_update(read=True)
+    )
+    return row is not None and row.retired_at is None
+
+
 async def rotate_probe_epoch(
     session: AsyncSession, *, reason: str, actor: str, now: datetime
 ) -> GeneratorProbeEpoch:
     """Retire the current epoch and start a new one with a fresh seed.
 
-    Copy detection only compares submissions probed in the same epoch; every
-    active submission is re-probed on its next run.
+    Copy detection only compares submissions probed in the same epoch, so every
+    active submission loses its qualification and is re-qualified (and
+    re-probed) before its next round column.
     """
     await _lock_probe_epochs(session)
     current = await current_probe_epoch(session, create=False)
     if current is not None:
         current.retired_at = now
         await session.flush()
+    await session.execute(
+        update(GeneratorSubmission)
+        .where(GeneratorSubmission.status == "active")
+        .values(qualified_at=None, next_run_at=now, updated_at=now)
+    )
     row = GeneratorProbeEpoch(seed=secrets.token_hex(32), reason=reason, actor=actor)
     session.add(row)
     await session.flush()
@@ -451,12 +474,16 @@ async def earlier_probe_results(
 
 
 async def claimed_fingerprints(
-    session: AsyncSession, *, fingerprints: Sequence[str], exclude_run_id: UUID
+    session: AsyncSession,
+    *,
+    fingerprints: Sequence[str],
+    exclude_round_index: int | None = None,
 ) -> list[str]:
-    """Fingerprints an earlier scored run (of any generator) already holds."""
+    """Fingerprints an earlier scored round (or legacy scored run) holds."""
     if not fingerprints:
         return []
-    rows = await session.scalars(
+    wanted = list(fingerprints)
+    legacy = (
         select(GeneratorCaseVerdict.fingerprint)
         .join(GeneratorRun, GeneratorRun.run_id == GeneratorCaseVerdict.run_id)
         .join(
@@ -464,16 +491,34 @@ async def claimed_fingerprints(
             GeneratorSubmission.submission_id == GeneratorRun.submission_id,
         )
         .where(
-            GeneratorCaseVerdict.fingerprint.in_(list(fingerprints)),
+            GeneratorCaseVerdict.fingerprint.in_(wanted),
             GeneratorCaseVerdict.status != "duplicate",
             GeneratorRun.status == "scored",
-            GeneratorRun.run_id != exclude_run_id,
             # An operator-rejected generator's cases no longer hold claims.
             GeneratorSubmission.status != "rejected",
         )
-        .distinct()
     )
-    return sorted(rows)
+    rounds = (
+        select(GeneratorRoundCaseVerdict.fingerprint)
+        .join(
+            GeneratorSubmission,
+            GeneratorSubmission.submission_id
+            == GeneratorRoundCaseVerdict.submission_id,
+        )
+        .where(
+            GeneratorRoundCaseVerdict.fingerprint.in_(wanted),
+            GeneratorRoundCaseVerdict.status.notin_(
+                ("duplicate", "insufficient_panel")
+            ),
+            GeneratorSubmission.status != "rejected",
+        )
+    )
+    if exclude_round_index is not None:
+        rounds = rounds.where(
+            GeneratorRoundCaseVerdict.round_index != exclude_round_index
+        )
+    rows = await session.scalars(legacy.union(rounds))
+    return sorted(set(rows))
 
 
 # --- listings --------------------------------------------------------------
@@ -569,74 +614,3 @@ async def list_verdicts(
             .order_by(GeneratorCaseVerdict.seed_index, GeneratorCaseVerdict.position)
         )
     )
-
-
-async def latest_scored_runs(
-    session: AsyncSession, *, since: datetime
-) -> list[tuple[GeneratorRun, GeneratorSubmission]]:
-    """Each hotkey's latest run scored since ``since``, best score first.
-
-    Runs of rejected submissions never count; a superseded submission's run
-    counts until a newer submission of the hotkey is scored.
-    """
-    latest = (
-        select(GeneratorRun.run_id)
-        .join(
-            GeneratorSubmission,
-            GeneratorSubmission.submission_id == GeneratorRun.submission_id,
-        )
-        .where(
-            GeneratorRun.status == "scored",
-            GeneratorRun.finished_at >= since,
-            GeneratorSubmission.status != "rejected",
-        )
-        .order_by(
-            GeneratorSubmission.miner_hotkey,
-            GeneratorRun.finished_at.desc(),
-            GeneratorRun.run_id,
-        )
-        .distinct(GeneratorSubmission.miner_hotkey)
-        .subquery()
-    )
-    rows = await session.execute(
-        select(GeneratorRun, GeneratorSubmission)
-        .join(
-            GeneratorSubmission,
-            GeneratorSubmission.submission_id == GeneratorRun.submission_id,
-        )
-        .join(latest, latest.c.run_id == GeneratorRun.run_id)
-        .order_by(
-            GeneratorRun.score.desc(),
-            GeneratorSubmission.submitted_at.asc(),
-            GeneratorRun.run_id.asc(),
-        )
-    )
-    return [(run, sub) for run, sub in rows.tuples()]
-
-
-async def list_promotion_candidates(
-    session: AsyncSession, *, limit: int = 100, offset: int = 0
-) -> Sequence[tuple[GeneratorCaseVerdict, GeneratorRun, GeneratorSubmission]]:
-    rows = await session.execute(
-        select(GeneratorCaseVerdict, GeneratorRun, GeneratorSubmission)
-        .join(GeneratorRun, GeneratorRun.run_id == GeneratorCaseVerdict.run_id)
-        .join(
-            GeneratorSubmission,
-            GeneratorSubmission.submission_id == GeneratorRun.submission_id,
-        )
-        .where(
-            GeneratorCaseVerdict.status == "discriminating",
-            GeneratorRun.status == "scored",
-            GeneratorSubmission.status != "rejected",
-        )
-        .order_by(
-            GeneratorCaseVerdict.credit.desc(),
-            GeneratorRun.finished_at.desc(),
-            GeneratorCaseVerdict.run_id,
-            GeneratorCaseVerdict.seed_index,
-            GeneratorCaseVerdict.case_id,
-        )
-        .limit(limit)
-        .offset(offset)
-    )
-    return [(v, r, s) for v, r, s in rows.tuples()]

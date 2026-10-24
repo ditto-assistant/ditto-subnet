@@ -1,0 +1,404 @@
+{
+  "GeneratorRoundCaseResult": {
+    "properties": {
+      "case_id": {
+        "maxLength": 72,
+        "minLength": 3,
+        "type": "string"
+      },
+      "fault": {
+        "default": false,
+        "type": "boolean"
+      },
+      "score": {
+        "default": 0.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      }
+    },
+    "required": [
+      "case_id"
+    ],
+    "type": "object"
+  },
+  "GeneratorRoundFailRequest": {
+    "properties": {
+      "detail": {
+        "anyOf": [
+          {
+            "maxLength": 500,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "reason": {
+        "enum": [
+          "scoring_error",
+          "infrastructure"
+        ],
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "round_index": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "signature": {
+        "default": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "pattern": "^[0-9a-f]{128}$",
+        "type": "string"
+      },
+      "ticket_deadline": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "round_index",
+      "ticket_deadline",
+      "reason",
+      "nonce",
+      "requested_at"
+    ],
+    "type": "object"
+  },
+  "GeneratorRoundFailResponse": {
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "released": {
+        "type": "boolean"
+      },
+      "round_index": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "round_index",
+      "agent_id",
+      "released"
+    ],
+    "type": "object"
+  },
+  "GeneratorRoundJobRequest": {
+    "properties": {
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "signature": {
+        "default": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "pattern": "^[0-9a-f]{128}$",
+        "type": "string"
+      },
+      "slot_id": {
+        "pattern": "^slot-[0-7]$",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "slot_id",
+      "nonce",
+      "requested_at"
+    ],
+    "type": "object"
+  },
+  "GeneratorRoundJobResponse": {
+    "$defs": {
+      "InferenceGrantOffer": {
+        "properties": {
+          "allowed_models": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "type": "array"
+          },
+          "exchange_url": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "grant_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "profile_revision": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "proxy_url": {
+            "type": "string"
+          },
+          "request_budget": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "token_budget": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "grant_id",
+          "exchange_url",
+          "proxy_url",
+          "allowed_models",
+          "request_budget",
+          "token_budget",
+          "expires_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "bench_version": {
+        "type": "integer"
+      },
+      "benchmark_runtime": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "case_count": {
+        "maximum": 256,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "dataset_mode": {
+        "const": "generator-round-v1",
+        "default": "generator-round-v1",
+        "type": "string"
+      },
+      "dataset_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "deadline": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "inference": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/InferenceGrantOffer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "miner_hotkey": {
+        "type": "string"
+      },
+      "minimum_screening_policy_version": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "requires_screened_image": {
+        "default": true,
+        "type": "boolean"
+      },
+      "round_index": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "run_size": {
+        "default": "full",
+        "type": "string"
+      },
+      "seed": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "slot_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "round_index",
+      "agent_id",
+      "slot_id",
+      "miner_hotkey",
+      "sha256",
+      "deadline",
+      "bench_version",
+      "dataset_sha256",
+      "seed",
+      "case_count"
+    ],
+    "type": "object"
+  },
+  "GeneratorRoundScoreRequest": {
+    "$defs": {
+      "GeneratorRoundCaseResult": {
+        "properties": {
+          "case_id": {
+            "maxLength": 72,
+            "minLength": 3,
+            "type": "string"
+          },
+          "fault": {
+            "default": false,
+            "type": "boolean"
+          },
+          "score": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "case_id"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "dataset_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "results": {
+        "items": {
+          "$ref": "#/$defs/GeneratorRoundCaseResult"
+        },
+        "maxItems": 256,
+        "minItems": 1,
+        "type": "array"
+      },
+      "round_index": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "run_id": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "signature": {
+        "default": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "pattern": "^[0-9a-f]{128}$",
+        "type": "string"
+      },
+      "ticket_deadline": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "round_index",
+      "ticket_deadline",
+      "dataset_sha256",
+      "run_id",
+      "results"
+    ],
+    "type": "object"
+  },
+  "GeneratorRoundScoreResponse": {
+    "properties": {
+      "accepted": {
+        "type": "boolean"
+      },
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "duplicate": {
+        "default": false,
+        "type": "boolean"
+      },
+      "round_index": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "round_index",
+      "agent_id",
+      "accepted"
+    ],
+    "type": "object"
+  }
+}

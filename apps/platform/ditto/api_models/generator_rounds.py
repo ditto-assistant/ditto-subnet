@@ -1,0 +1,415 @@
+"""Wire models for generator-competition rounds (the agent x generator matrix).
+
+A round is keyed on the chain's epoch counter:
+``round_index = SubnetEpochIndex // epochs_per_round``. Platform commits each
+round's secret one round ahead (``commitment``, also published on-chain),
+derives the seed from the secret and the block the round opened at, and
+freezes the round's generator columns and agent panel. The trusted scorer
+generates the round dataset and later scores the matrix; validators run every
+panel agent on the dataset (``generator_round_validator``). Derivations and
+scoring mirror ``research/dittobench-datagen/challenge/round.go``.
+
+Public views never include the secret, seed, dataset, or case content until a
+round is revealed (``privacy_window_rounds`` after it opens).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Annotated, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ditto.api_models.generator import (
+    GeneratorBuildResult,
+    GeneratorSeedOutput,
+    PanelCaseResult,
+    SubmissionStatus,
+)
+
+RoundStatus = Literal["committed", "generating", "running", "scoring", "scored", "void"]
+CommitmentPublication = Literal["pending", "published", "failed", "disabled"]
+RoundCaseStatus = Literal[
+    "discriminating", "trivial", "unsolved", "duplicate", "insufficient_panel"
+]
+
+ROUND_COMMITMENT_TAG = "dgr1"
+REGISTER_DEFAULT_GENERATOR_CONFIRMATION = "REGISTER DEFAULT GENERATOR"
+REPUBLISH_COMMITMENT_CONFIRMATION = "REPUBLISH GENERATOR ROUND COMMITMENT"
+RELEASE_ROUND_LEASE_CONFIRMATION = "RELEASE GENERATOR ROUND LEASE"
+
+_SHA256 = r"^[0-9a-f]{64}$"
+_SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
+
+
+def void_round_confirmation(round_index: int) -> str:
+    return f"VOID GENERATOR ROUND {round_index}"
+
+
+def onchain_commitment_payload(round_index: int, commitment: str) -> bytes:
+    """The bytes Platform writes with ``Commitments.set_commitment``."""
+    return f"{ROUND_COMMITMENT_TAG}:{round_index}:{commitment}".encode("ascii")
+
+
+class RoundModel(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+
+# --- public -----------------------------------------------------------------
+
+
+class GeneratorRoundSchedule(RoundModel):
+    """Where the chain is relative to rounds, as last observed by Platform."""
+
+    mode: str
+    epochs_per_round: int
+    subnet_epoch_index: int | None = None
+    current_round: int | None = None
+    next_round_epoch: int | None = None
+    tempo: int | None = None
+    block: int | None = None
+    observed_at: datetime | None = None
+    last_error: str | None = None
+
+
+class GeneratorRoundColumnView(RoundModel):
+    column_id: str
+    submission_id: UUID
+    miner_hotkey: str | None
+    """``None`` for the public default generator."""
+    counted: bool
+    public_default: bool
+    generated: bool | None = None
+    score: float | None = None
+    discriminating: int | None = None
+    trivial: int | None = None
+    unsolved: int | None = None
+    duplicate: int | None = None
+
+
+class GeneratorRoundStandingView(RoundModel):
+    agent_id: UUID
+    rank: int
+    pairwise_score: float
+    wins: int
+    ties: int
+    losses: int
+    opponents: int
+    common_mean: float
+    common_cases: int
+    reference: bool = False
+
+
+class GeneratorRoundSummary(RoundModel):
+    round_index: int
+    status: RoundStatus
+    epochs_per_round: int
+    commitment: str
+    commitment_publication: CommitmentPublication
+    committed_at: datetime
+    open_epoch_index: int | None = None
+    open_block: int | None = None
+    open_block_hash: str | None = None
+    opened_at: datetime | None = None
+    column_count: int = 0
+    panel_size: int = 0
+    results: int = 0
+    closed_at: datetime | None = None
+    scored_at: datetime | None = None
+    void_reason: str | None = None
+    revealed_at: datetime | None = None
+    secret_hex: str | None = None
+    """Revealed secret; ``RoundCommitment(round, secret)`` must equal
+    ``commitment`` and ``RoundSeed(round, secret, open_block_hash)`` the seed."""
+    seed: str | None = None
+    dataset_sha256: str | None = None
+
+
+class GeneratorRoundDetail(RoundModel):
+    summary: GeneratorRoundSummary
+    columns: list[GeneratorRoundColumnView]
+    standings: list[GeneratorRoundStandingView]
+
+
+class GeneratorRoundListResponse(RoundModel):
+    schedule: GeneratorRoundSchedule
+    rounds: list[GeneratorRoundSummary]
+
+
+# --- admin ------------------------------------------------------------------
+
+
+class GeneratorRoundAttemptView(RoundModel):
+    agent_id: UUID
+    validator_hotkey: str
+    ticket_deadline: datetime
+    slot_id: str
+    status: Literal["leased", "completed", "failed"]
+    detail: str | None
+    issued_at: datetime
+    finished_at: datetime | None
+
+
+class GeneratorRoundResultView(RoundModel):
+    agent_id: UUID
+    validator_hotkey: str
+    run_id: str
+    answered: int
+    faulted: int
+    mean_score: float | None
+    recorded_at: datetime
+
+
+class GeneratorRoundPanelSlot(RoundModel):
+    agent_id: UUID
+    owner_key: str
+    miner_hotkey: str | None = None
+    champion: bool = False
+    reference: bool = False
+
+
+class GeneratorRoundColumnSlot(RoundModel):
+    column_id: str
+    submission_id: UUID
+    miner_hotkey: str
+    owner_key: str
+    source_sha256: str
+    counted: bool
+    public_default: bool = False
+
+
+class AdminGeneratorRoundDetail(RoundModel):
+    """Operator view of a round. The seed is shown once the round closed."""
+
+    summary: GeneratorRoundSummary
+    settings_revision: int | None
+    cases_per_column: int | None
+    seed: str | None
+    columns: list[GeneratorRoundColumnSlot]
+    panel: list[GeneratorRoundPanelSlot]
+    generation: dict | None
+    column_case_counts: dict[str, int]
+    dataset_bytes: int | None
+    lease_id: UUID | None
+    lease_expires_at: datetime | None
+    lease_attempts: int
+    commitment_published_at: datetime | None
+    commitment_error: str | None
+    attempts: list[GeneratorRoundAttemptView]
+    results: list[GeneratorRoundResultView]
+    pending_agents: list[UUID]
+    score: dict | None
+    scorer_version: str | None
+    standings: list[GeneratorRoundStandingView]
+    columns_scored: list[GeneratorRoundColumnView]
+
+
+class AdminGeneratorRoundListResponse(RoundModel):
+    schedule: GeneratorRoundSchedule
+    rounds: list[GeneratorRoundSummary]
+    counts_by_status: dict[str, int]
+
+
+class AdminGeneratorRoundActionRequest(BaseModel):
+    """An audited operator action on one round, guarded by its status."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    expected_status: RoundStatus
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+
+
+class AdminGeneratorRoundLeaseReleaseRequest(BaseModel):
+    """Release one stuck round panel lease so another validator can take it."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    validator_hotkey: Annotated[str, Field(pattern=_SS58)]
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+
+
+class AdminDefaultGeneratorRequest(BaseModel):
+    """Register (or replace) the public default generator's source."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    miner_hotkey: Annotated[str, Field(pattern=_SS58)]
+    """The hotkey the default generator's packs echo; any operator hotkey."""
+    source_sha256: Annotated[str, Field(pattern=_SHA256)]
+    source_base64: Annotated[str, Field(min_length=4, max_length=5_600_000)]
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+
+
+class AdminDefaultGeneratorResponse(RoundModel):
+    submission_id: UUID
+    source_sha256: str
+    tree_sha256: str
+    status: SubmissionStatus
+    superseded: list[UUID] = Field(default_factory=list)
+
+
+class AdminGeneratorRoundPreview(RoundModel):
+    """What a round opened now would freeze, and anything blocking it."""
+
+    schedule: GeneratorRoundSchedule
+    columns: list[GeneratorRoundColumnSlot]
+    panel: list[GeneratorRoundPanelSlot]
+    qualified_generators: int
+    awaiting_qualification: int
+    blockers: list[str]
+
+
+class GeneratorRoundLoopStatus(RoundModel):
+    """The round driver's last tick, for diagnosing a stalled lane."""
+
+    last_tick_at: datetime | None
+    last_success_at: datetime | None
+    last_error: str | None
+    last_actions: list[str]
+    ticks: int
+
+
+# --- scorer -----------------------------------------------------------------
+
+
+class RoundSourceColumn(RoundModel):
+    column_id: str
+    submission_id: UUID
+    miner_hotkey: str
+    source_sha256: str
+    source_base64: str
+
+
+class RoundCaseRef(RoundModel):
+    case_id: str
+    fingerprint: str
+
+
+class RoundMatrixColumn(RoundModel):
+    column_id: str
+    owner_key: str
+    counted: bool
+    cases: list[RoundCaseRef]
+
+
+class RoundMatrixAgent(RoundModel):
+    agent_id: str
+    owner_key: str
+    reference: bool = False
+    champion: bool = False
+    results: list[PanelCaseResult]
+
+
+class RoundMatrix(RoundModel):
+    """Mirror of ``challenge.RoundInput``."""
+
+    columns: list[RoundMatrixColumn]
+    agents: list[RoundMatrixAgent]
+    claimed_fingerprints: list[str] = Field(default_factory=list)
+
+
+class GeneratorRoundWork(RoundModel):
+    kind: Literal["generate", "score"]
+    lease_id: UUID
+    round_index: int
+    lease_expires_at: datetime
+    seed: str | None = None
+    cases_per_column: int | None = None
+    columns: list[RoundSourceColumn] | None = None
+    params: dict | None = None
+    matrix: RoundMatrix | None = None
+
+
+class GeneratorRoundWorkResponse(RoundModel):
+    work: GeneratorRoundWork | None = None
+
+
+class RoundColumnResult(RoundModel):
+    column_id: str
+    submission_id: UUID
+    ok: bool = False
+    build: GeneratorBuildResult = Field(default_factory=GeneratorBuildResult)
+    seed: GeneratorSeedOutput | None = None
+    error: Annotated[str | None, Field(max_length=8192)] = None
+
+
+class GeneratorRoundGenerateResult(RoundModel):
+    lease_id: UUID
+    round_index: int
+    scorer_version: Annotated[str, Field(min_length=1, max_length=64)]
+    sandbox: Annotated[str, Field(max_length=32)] = ""
+    columns: list[RoundColumnResult]
+    dataset_sha256: Annotated[str, Field(pattern=_SHA256)] | None = None
+    dataset_base64: Annotated[str | None, Field(max_length=45_000_000)] = None
+
+
+class RoundCaseVerdict(RoundModel):
+    """Mirror of ``challenge.CaseVerdict``."""
+
+    case_id: str
+    fingerprint: str
+    status: RoundCaseStatus
+    panel_size: int
+    solvers: int
+    solver_owners: int
+    mean_score: float
+    champion_failed: bool
+    credit: float
+
+
+class RoundPackScore(RoundModel):
+    """Mirror of ``challenge.PackScore``."""
+
+    status: str
+    score: float
+    raw_credit: float
+    discriminating: int
+    trivial: int
+    unsolved: int
+    duplicate: int
+    unsolved_rate: float
+    cases: list[RoundCaseVerdict]
+
+
+class RoundColumnScore(RoundModel):
+    column_id: str
+    pack: RoundPackScore
+
+
+class RoundAgentStanding(RoundModel):
+    """Mirror of ``challenge.AgentStanding``."""
+
+    agent_id: str
+    rank: int
+    pairwise_score: float
+    wins: int
+    ties: int
+    losses: int
+    opponents: int
+    common_mean: float
+    common_cases: int
+
+
+class RoundScore(RoundModel):
+    columns: list[RoundColumnScore]
+    agents: list[RoundAgentStanding]
+
+
+class GeneratorRoundScoreResult(RoundModel):
+    lease_id: UUID
+    round_index: int
+    scorer_version: Annotated[str, Field(min_length=1, max_length=64)]
+    score: RoundScore
+
+
+class GeneratorRoundAck(RoundModel):
+    round_index: int
+    status: RoundStatus

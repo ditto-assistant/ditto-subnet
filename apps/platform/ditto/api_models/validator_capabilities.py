@@ -226,6 +226,9 @@ class ScorerBenchmarkCapability(BaseModel):
     deterministic_v13_datasets: bool = Field(
         default=False, exclude_if=lambda value: not value
     )
+    # The scorer accepts ``generator-round-v1`` round datasets. Absent unless
+    # true, so validators without it sign exactly the bytes they always did.
+    generator_rounds: bool = Field(default=False, exclude_if=lambda value: not value)
     # Additive and optional so a validator that predates heartbeat protocol v15
     # produces the exact same signing bytes it always did. Absent means "this
     # validator cannot report probe evidence", never "the probe succeeded".

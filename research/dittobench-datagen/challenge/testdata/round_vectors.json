@@ -1,0 +1,560 @@
+{
+  "derivations": [
+    {
+      "round": 1000,
+      "secret_hex": "6161616161616161616161616161616161616161616161616161616161616161",
+      "open_block_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "commitment": "ca0a6e489768a0e2e398bf47bcd82f420ab5062d1399aedbee97be6f641c3884",
+      "seed": "fd480ccf127765f67bc7c3dc6e2a749fc175f81ecc90ee4c735d66dd7a624114",
+      "column_seeds": {
+        "c0": "49ca1b9a042c71c7e8987188668a2fabd391406612dcf409856806759b97c42e",
+        "c1": "0bd90637d9b354457f9ca5d868876a1bd0edf782fb393bc742d0f45eed4f4ab9",
+        "c5": "320476cdde6be91d7beee55b74ebeedb3370919d9c4eeb55ca9b6c2434649a66"
+      }
+    },
+    {
+      "round": 1001,
+      "secret_hex": "6262626262626262626262626262626262626262626262626262626262626262",
+      "open_block_hash": "abababababababababababababababababababababababababababababababab",
+      "commitment": "dcab82f3fe7bef4372ab06f44c225b8b1ae8c6a40e316345b0da330d5059c148",
+      "seed": "d46702ba0156b65db05bbad94a1291b6a2dfcd0b1bfd538c46bc0ac24d2a1bce",
+      "column_seeds": {
+        "c0": "ff94f14d0bef30bc6f14bedbca7026e251ff52282039ce4899a7113bcca5314e",
+        "c1": "3a1c069eebe3a2a25a7f8caa8682741e7cf35758b476d58b1459f62e634731e9",
+        "c5": "ffb62a499c0e4801efc62876eb1846a9a46c1747fafc10a283da1560483bda5b"
+      }
+    }
+  ],
+  "scores": [
+    {
+      "name": "handshake",
+      "input": {
+        "columns": [
+          {
+            "column_id": "c0",
+            "owner_key": "",
+            "counted": true,
+            "cases": [
+              {
+                "case_id": "c0/ka",
+                "fingerprint": "63302f6b61"
+              },
+              {
+                "case_id": "c0/kb",
+                "fingerprint": "63302f6b62"
+              },
+              {
+                "case_id": "c0/kc",
+                "fingerprint": "63302f6b63"
+              },
+              {
+                "case_id": "c0/kd",
+                "fingerprint": "63302f6b64"
+              }
+            ]
+          },
+          {
+            "column_id": "c1",
+            "owner_key": "alice",
+            "counted": true,
+            "cases": [
+              {
+                "case_id": "c1/ka",
+                "fingerprint": "63312f6b61"
+              },
+              {
+                "case_id": "c1/kb",
+                "fingerprint": "63312f6b62"
+              },
+              {
+                "case_id": "c1/kc",
+                "fingerprint": "63312f6b63"
+              },
+              {
+                "case_id": "c1/kd",
+                "fingerprint": "63312f6b64"
+              }
+            ]
+          },
+          {
+            "column_id": "c2",
+            "owner_key": "dave",
+            "counted": false,
+            "cases": [
+              {
+                "case_id": "c2/ka",
+                "fingerprint": "63322f6b61"
+              },
+              {
+                "case_id": "c2/kb",
+                "fingerprint": "63322f6b62"
+              },
+              {
+                "case_id": "c2/kc",
+                "fingerprint": "63322f6b63"
+              },
+              {
+                "case_id": "c2/kd",
+                "fingerprint": "63322f6b64"
+              }
+            ]
+          }
+        ],
+        "agents": [
+          {
+            "agent_id": "a-alice",
+            "owner_key": "alice",
+            "champion": true,
+            "results": [
+              {
+                "case_id": "c0/ka",
+                "score": 0.75
+              },
+              {
+                "case_id": "c0/kb",
+                "score": 0.75
+              },
+              {
+                "case_id": "c0/kc",
+                "score": 0.75
+              },
+              {
+                "case_id": "c0/kd",
+                "score": 0.75
+              },
+              {
+                "case_id": "c1/ka",
+                "score": 1
+              },
+              {
+                "case_id": "c1/kb",
+                "score": 1
+              },
+              {
+                "case_id": "c1/kc",
+                "score": 1
+              },
+              {
+                "case_id": "c1/kd",
+                "score": 1
+              },
+              {
+                "case_id": "c2/ka",
+                "score": 0
+              },
+              {
+                "case_id": "c2/kb",
+                "score": 0
+              },
+              {
+                "case_id": "c2/kc",
+                "score": 0
+              },
+              {
+                "case_id": "c2/kd",
+                "score": 0
+              }
+            ]
+          },
+          {
+            "agent_id": "a-bob",
+            "owner_key": "bob",
+            "results": [
+              {
+                "case_id": "c0/ka",
+                "score": 0.75
+              },
+              {
+                "case_id": "c0/kb",
+                "score": 0.75
+              },
+              {
+                "case_id": "c0/kc",
+                "score": 0.75
+              },
+              {
+                "case_id": "c0/kd",
+                "score": 0.75
+              },
+              {
+                "case_id": "c1/ka",
+                "score": 0
+              },
+              {
+                "case_id": "c1/kb",
+                "score": 0
+              },
+              {
+                "case_id": "c1/kc",
+                "score": 0
+              },
+              {
+                "case_id": "c1/kd",
+                "score": 0
+              },
+              {
+                "case_id": "c2/ka",
+                "score": 1
+              },
+              {
+                "case_id": "c2/kb",
+                "score": 1
+              },
+              {
+                "case_id": "c2/kc",
+                "score": 1
+              },
+              {
+                "case_id": "c2/kd",
+                "score": 1
+              }
+            ]
+          },
+          {
+            "agent_id": "a-carol",
+            "owner_key": "carol",
+            "results": [
+              {
+                "case_id": "c0/ka",
+                "score": 0.25
+              },
+              {
+                "case_id": "c0/kb",
+                "score": 0.25
+              },
+              {
+                "case_id": "c0/kc",
+                "score": 0.25
+              },
+              {
+                "case_id": "c0/kd",
+                "score": 0.25
+              },
+              {
+                "case_id": "c1/ka",
+                "score": 0
+              },
+              {
+                "case_id": "c1/kb",
+                "score": 0
+              },
+              {
+                "case_id": "c1/kc",
+                "score": 0
+              },
+              {
+                "case_id": "c1/kd",
+                "score": 0
+              },
+              {
+                "case_id": "c2/ka",
+                "score": 1
+              },
+              {
+                "case_id": "c2/kb",
+                "score": 1
+              },
+              {
+                "case_id": "c2/kc",
+                "score": 1
+              },
+              {
+                "case_id": "c2/kd",
+                "score": 1
+              }
+            ]
+          },
+          {
+            "agent_id": "ref-1",
+            "owner_key": "subnet",
+            "reference": true,
+            "results": [
+              {
+                "case_id": "c0/ka",
+                "score": 0.5
+              },
+              {
+                "case_id": "c0/kb",
+                "score": 0.5
+              },
+              {
+                "case_id": "c0/kc",
+                "score": 0.5
+              },
+              {
+                "case_id": "c0/kd",
+                "score": 0.5
+              },
+              {
+                "case_id": "c1/ka",
+                "score": 0
+              },
+              {
+                "case_id": "c1/kb",
+                "score": 0
+              },
+              {
+                "case_id": "c1/kc",
+                "score": 0
+              },
+              {
+                "case_id": "c1/kd",
+                "score": 0
+              },
+              {
+                "case_id": "c2/ka",
+                "score": 0.25
+              },
+              {
+                "case_id": "c2/kb",
+                "score": 0.25
+              },
+              {
+                "case_id": "c2/kc",
+                "score": 0.25
+              },
+              {
+                "case_id": "c2/kd",
+                "score": 0.25
+              }
+            ]
+          }
+        ]
+      },
+      "params": {
+        "min_panel": 3,
+        "min_solver_owners": 2,
+        "solve_threshold": 0.5,
+        "champion_bonus": 0.5,
+        "target_cases": 32
+      },
+      "expected": {
+        "columns": [
+          {
+            "column_id": "c0",
+            "pack": {
+              "status": "scored",
+              "score": 0.036458333333333336,
+              "raw_credit": 1.75,
+              "discriminating": 4,
+              "trivial": 0,
+              "unsolved": 0,
+              "duplicate": 0,
+              "unsolved_rate": 0,
+              "cases": [
+                {
+                  "case_id": "c0/ka",
+                  "fingerprint": "63302f6b61",
+                  "status": "discriminating",
+                  "panel_size": 4,
+                  "solvers": 3,
+                  "solver_owners": 3,
+                  "mean_score": 0.5625,
+                  "champion_failed": false,
+                  "credit": 0.4375
+                },
+                {
+                  "case_id": "c0/kb",
+                  "fingerprint": "63302f6b62",
+                  "status": "discriminating",
+                  "panel_size": 4,
+                  "solvers": 3,
+                  "solver_owners": 3,
+                  "mean_score": 0.5625,
+                  "champion_failed": false,
+                  "credit": 0.4375
+                },
+                {
+                  "case_id": "c0/kc",
+                  "fingerprint": "63302f6b63",
+                  "status": "discriminating",
+                  "panel_size": 4,
+                  "solvers": 3,
+                  "solver_owners": 3,
+                  "mean_score": 0.5625,
+                  "champion_failed": false,
+                  "credit": 0.4375
+                },
+                {
+                  "case_id": "c0/kd",
+                  "fingerprint": "63302f6b64",
+                  "status": "discriminating",
+                  "panel_size": 4,
+                  "solvers": 3,
+                  "solver_owners": 3,
+                  "mean_score": 0.5625,
+                  "champion_failed": false,
+                  "credit": 0.4375
+                }
+              ]
+            }
+          },
+          {
+            "column_id": "c1",
+            "pack": {
+              "status": "scored",
+              "score": 0,
+              "raw_credit": 0,
+              "discriminating": 0,
+              "trivial": 0,
+              "unsolved": 4,
+              "duplicate": 0,
+              "unsolved_rate": 1,
+              "cases": [
+                {
+                  "case_id": "c1/ka",
+                  "fingerprint": "63312f6b61",
+                  "status": "unsolved",
+                  "panel_size": 3,
+                  "solvers": 0,
+                  "solver_owners": 0,
+                  "mean_score": 0,
+                  "champion_failed": false,
+                  "credit": 0
+                },
+                {
+                  "case_id": "c1/kb",
+                  "fingerprint": "63312f6b62",
+                  "status": "unsolved",
+                  "panel_size": 3,
+                  "solvers": 0,
+                  "solver_owners": 0,
+                  "mean_score": 0,
+                  "champion_failed": false,
+                  "credit": 0
+                },
+                {
+                  "case_id": "c1/kc",
+                  "fingerprint": "63312f6b63",
+                  "status": "unsolved",
+                  "panel_size": 3,
+                  "solvers": 0,
+                  "solver_owners": 0,
+                  "mean_score": 0,
+                  "champion_failed": false,
+                  "credit": 0
+                },
+                {
+                  "case_id": "c1/kd",
+                  "fingerprint": "63312f6b64",
+                  "status": "unsolved",
+                  "panel_size": 3,
+                  "solvers": 0,
+                  "solver_owners": 0,
+                  "mean_score": 0,
+                  "champion_failed": false,
+                  "credit": 0
+                }
+              ]
+            }
+          },
+          {
+            "column_id": "c2",
+            "pack": {
+              "status": "scored",
+              "score": 0.0546875,
+              "raw_credit": 2.625,
+              "discriminating": 4,
+              "trivial": 0,
+              "unsolved": 0,
+              "duplicate": 0,
+              "unsolved_rate": 0,
+              "cases": [
+                {
+                  "case_id": "c2/ka",
+                  "fingerprint": "63322f6b61",
+                  "status": "discriminating",
+                  "panel_size": 4,
+                  "solvers": 2,
+                  "solver_owners": 2,
+                  "mean_score": 0.5625,
+                  "champion_failed": true,
+                  "credit": 0.65625
+                },
+                {
+                  "case_id": "c2/kb",
+                  "fingerprint": "63322f6b62",
+                  "status": "discriminating",
+                  "panel_size": 4,
+                  "solvers": 2,
+                  "solver_owners": 2,
+                  "mean_score": 0.5625,
+                  "champion_failed": true,
+                  "credit": 0.65625
+                },
+                {
+                  "case_id": "c2/kc",
+                  "fingerprint": "63322f6b63",
+                  "status": "discriminating",
+                  "panel_size": 4,
+                  "solvers": 2,
+                  "solver_owners": 2,
+                  "mean_score": 0.5625,
+                  "champion_failed": true,
+                  "credit": 0.65625
+                },
+                {
+                  "case_id": "c2/kd",
+                  "fingerprint": "63322f6b64",
+                  "status": "discriminating",
+                  "panel_size": 4,
+                  "solvers": 2,
+                  "solver_owners": 2,
+                  "mean_score": 0.5625,
+                  "champion_failed": true,
+                  "credit": 0.65625
+                }
+              ]
+            }
+          }
+        ],
+        "agents": [
+          {
+            "agent_id": "a-alice",
+            "rank": 1,
+            "pairwise_score": 0.8333333333333334,
+            "wins": 2,
+            "ties": 1,
+            "losses": 0,
+            "opponents": 3,
+            "common_mean": 0.75,
+            "common_cases": 4
+          },
+          {
+            "agent_id": "a-bob",
+            "rank": 2,
+            "pairwise_score": 0.8333333333333334,
+            "wins": 2,
+            "ties": 1,
+            "losses": 0,
+            "opponents": 3,
+            "common_mean": 0.75,
+            "common_cases": 4
+          },
+          {
+            "agent_id": "ref-1",
+            "rank": 3,
+            "pairwise_score": 0.3333333333333333,
+            "wins": 1,
+            "ties": 0,
+            "losses": 2,
+            "opponents": 3,
+            "common_mean": 0.5,
+            "common_cases": 4
+          },
+          {
+            "agent_id": "a-carol",
+            "rank": 4,
+            "pairwise_score": 0,
+            "wins": 0,
+            "ties": 0,
+            "losses": 3,
+            "opponents": 3,
+            "common_mean": 0.25,
+            "common_cases": 4
+          }
+        ]
+      }
+    }
+  ]
+}

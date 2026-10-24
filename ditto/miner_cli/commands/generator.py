@@ -12,7 +12,7 @@ credit for cases strong agents split on. The lane is weight-zero in shadow.
   (``challenge rehearse``; ``--sandbox docker`` uses the scorer's images).
 * ``package DIR``: write the deterministic, vendored source archive.
 * ``upload [ARCHIVE | --dir DIR]``: check, sign ``ditto-generator-v1``, upload.
-* ``status``: list your generators and their latest runs.
+* ``status``: list your generators, their qualification, and latest round score.
 * ``board``: the shadow generator ledger.
 
 See ``research/dittobench-datagen/docs/generator-competition.md`` and
