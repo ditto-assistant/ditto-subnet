@@ -2,9 +2,17 @@
 # Converge the generator competition scorer: Docker for the generator sandbox,
 # challenge-scorer built from an exact monorepo revision with the base role's
 # pinned Go toolchain, and a systemd unit holding the Platform bearer.
+- name: Validate the Platform bearer source
+  ansible.builtin.assert:
+    that:
+      - generator_scorer_token_source in ['gcloud', 'aws-wif', 'file']
+    fail_msg: "generator_scorer_token_source must be gcloud, aws-wif, or file (got {{ generator_scorer_token_source }})"
+    quiet: true
+
 - name: Verify gcloud is available for Secret Manager
   ansible.builtin.command: gcloud --version
   changed_when: false
+  when: generator_scorer_token_source == 'gcloud'
 
 - name: Verify the pinned Go toolchain from the base role
   ansible.builtin.command: /usr/local/go/bin/go version
@@ -113,19 +121,17 @@
   register: generator_scorer_pull
   changed_when: "'Downloaded newer image' in generator_scorer_pull.stdout"
 
-- name: Read the Platform bearer through the attached identity
-  ansible.builtin.command: >-
-    gcloud secrets versions access latest
-    --secret={{ generator_scorer_token_secret }} --project={{ generator_scorer_gcp_project }}
-  register: generator_scorer_token_read
-  changed_when: false
-  no_log: true
+# Each source registers generator_scorer_token_read with the bearer on stdout:
+# the attached GCE identity (gcloud), the EC2 instance role federated into GCP
+# (aws-wif), or a root-only file already on the host (file).
+- name: Read the Platform bearer
+  ansible.builtin.include_tasks: "token-{{ generator_scorer_token_source }}.yml"
 
 - name: Validate the Platform bearer before rendering it
   ansible.builtin.assert:
     that:
       - generator_scorer_token_read.stdout | trim | length >= 32
-    fail_msg: "generator-scorer-token-prod has no usable version (Platform requires at least 32 characters)"
+    fail_msg: "the Platform bearer from {{ generator_scorer_token_source }} has no usable value (Platform requires at least 32 characters)"
   no_log: true
 
 - name: Render the scorer environment
