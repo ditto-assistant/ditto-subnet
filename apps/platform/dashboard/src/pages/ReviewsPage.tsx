@@ -105,6 +105,7 @@ interface DittoLinkAttempt {
   ditto_email?: string | null;
   miner_hotkey?: string | null;
   link?: DittoLinkView | null;
+  github_proof_attempt_id?: string | null;
 }
 
 interface MinerSubmission {
@@ -634,7 +635,7 @@ function AccountPanel(): JSX.Element {
         "/me/ditto-link/attempts/" + encodeURIComponent(attempt.attempt_id) + "/confirm",
         { method: "POST", headers: sessionAuthHeader() },
       );
-      setDittoAttempt(null);
+      setDittoAttempt(confirmed.github_proof_attempt_id ? confirmed : null);
       setDittoNotice({ ok: confirmed.status === "linked", text: "Ditto account linked." });
       await loadDittoLink();
     } catch (err) {
@@ -936,14 +937,33 @@ function AccountPanel(): JSX.Element {
                 )}
               </Show>
               <Show
+                when={
+                  dittoAttempt()?.status === "linked" && dittoAttempt()?.github_proof_attempt_id
+                }
+              >
+                {(attemptId) => (
+                  <div>
+                    <p>
+                      GitHub is connected through your Ditto account. If you need a miner GitHub
+                      proof, finish the hotkey signature in your terminal:
+                    </p>
+                    <code>ditto link-github --ditto-attempt {attemptId()}</code>
+                    <p class="muted">
+                      This uses the same sign-in. Existing signed proofs and their history remain
+                      available.
+                    </p>
+                  </div>
+                )}
+              </Show>
+              <Show
                 when={status().link}
                 fallback={
                   <>
                     <p class="muted">
-                      Sign in with Ditto to attach your Ditto account to this hotkey. The link lets
-                      DittoBench attribute Router inference to your consenting account and credit
-                      Feedback Track contributions to it. Nothing is signed and no TAO moves; the
-                      hotkey is proven by this session, the account by Ditto.
+                      Connect Ditto to attach your account and reuse its GitHub connection. The link
+                      lets DittoBench attribute Router inference to your consenting account and
+                      credit Feedback Track contributions to it. No TAO moves. A GitHub miner proof
+                      still needs your hotkey signature; the account is verified by Ditto.
                     </p>
                     <Show
                       when={status().enabled}
@@ -954,7 +974,7 @@ function AccountPanel(): JSX.Element {
                         disabled={dittoBusy()}
                         onClick={() => void startDittoLink()}
                       >
-                        Sign in with Ditto
+                        Connect Ditto
                       </button>
                     </Show>
                     <p class="muted">

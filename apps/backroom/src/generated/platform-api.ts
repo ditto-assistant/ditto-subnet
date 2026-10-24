@@ -24756,6 +24756,8 @@ export interface components {
             ditto_user_id?: string | null;
             /** Error */
             error?: string | null;
+            /** Github Proof Attempt Id */
+            github_proof_attempt_id?: string | null;
             link?: components["schemas"]["MinerDittoLinkView"] | null;
             /** Miner Hotkey */
             miner_hotkey?: string | null;
