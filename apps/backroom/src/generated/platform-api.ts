@@ -10151,7 +10151,12 @@ export interface components {
             /** Steps Applied */
             steps_applied?: ("open" | "clear" | "attest" | "reject")[];
             /** Would Change Crown */
-            would_change_crown: boolean;
+            would_change_crown: boolean | null;
+            /**
+             * Write Outcome Unknown
+             * @default false
+             */
+            write_outcome_unknown: boolean;
         };
         /** AdminAthRulingPreviewItem */
         AdminAthRulingPreviewItem: {

@@ -2206,7 +2206,7 @@ async def test_court_preserves_committed_ruling_outcomes_when_board_read_fails(
     assert detail["already_applied_count"] == 0
     assert detail["items"][0]["status"] == "applied"
     assert detail["items"][0]["steps_applied"] == ["open", "reject"]
-    assert "inspect applied items before any retry" in response.json()["message"]
+    assert "inspect all item outcomes before any retry" in response.json()["message"]
     assert "private read failure" not in response.text
     assert await _status(maker, agent_id) == "banned"
 
@@ -2430,6 +2430,59 @@ async def test_court_stops_later_simulation_without_losing_committed_items(
     assert [item["status"] for item in detail["items"]] == ["applied", "failed"]
     assert detail["items"][0]["steps_applied"] == ["open", "reject"]
     assert detail["items"][1]["steps_applied"] == []
+    assert detail["items"][1]["would_change_crown"] is None
     assert "private" not in response.text
     assert await _status(maker, first_id) == "banned"
+    assert await _status(maker, next_id) == "scored"
+
+
+async def test_court_keeps_uncertain_outcome_when_writer_commits_then_raises(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    board = await _seed_board(maker)
+    _install(app, maker)
+    first_id, first_sha = board["champion"]
+    next_id, next_sha = board["runner"]
+    rulings = [
+        _ruling("reject", first_id, first_sha),
+        _ruling("reject", next_id, next_sha),
+    ]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    original_apply = rulings_mod._apply_step
+    original_preview = rulings_mod._preview_ruling
+
+    async def committed_then_failed(*args, **kwargs):
+        await original_apply(*args, **kwargs)
+        raise RuntimeError("private postcommit coldkey-read failure")
+
+    async def no_later_preview(*args, **kwargs):
+        if kwargs["index"] == 1:
+            pytest.fail("an uncertain write must stop later simulation")
+        return await original_preview(*args, **kwargs)
+
+    monkeypatch.setattr(rulings_mod, "_apply_step", committed_then_failed)
+    monkeypatch.setattr(rulings_mod, "_preview_ruling", no_later_preview)
+    response = await client.post(
+        _EXECUTE,
+        headers=_HEADERS,
+        json={
+            "preview_token": preview.json()["preview_token"],
+            "confirmation": ATH_RULINGS_CONFIRMATION,
+            "rulings": rulings,
+        },
+    )
+    assert response.status_code == 503, response.text
+    first, later = response.json()["detail"]["items"]
+    assert first["status"] == "failed" and first["steps_applied"] == []
+    assert first["write_outcome_unknown"] is True
+    assert "inspect current state before retry" in first["message"]
+    assert later["status"] == "failed" and later["steps_applied"] == []
+    assert later["write_outcome_unknown"] is False
+    assert later["would_change_crown"] is None
+    assert "private" not in response.text
+    assert await _status(maker, first_id) == "ath_pending_review"
     assert await _status(maker, next_id) == "scored"

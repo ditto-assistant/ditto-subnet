@@ -7824,7 +7824,8 @@ export const athRulingExecuteItemSchema = z.object({
   agent_id: z.string().uuid(),
   status: z.enum(['applied', 'already_applied', 'failed']),
   agent_status: z.string().nullable().default(null),
-  would_change_crown: z.boolean(),
+  would_change_crown: z.boolean().nullable(),
+  write_outcome_unknown: z.boolean().default(false),
   steps_applied: z.array(athRulingStepSchema).default([]),
   // False on an applied row: the ruling landed, only the audit annotation
   // failed. Never re-run it.
@@ -7842,6 +7843,7 @@ export const athRulingsReadbackFailureSchema = z.object({
     agent_id: true,
     status: true,
     would_change_crown: true,
+    write_outcome_unknown: true,
     steps_applied: true,
     annotated: true,
   }).extend({

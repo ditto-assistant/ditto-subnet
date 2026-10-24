@@ -1122,6 +1122,7 @@ async def execute_ath_rulings_batch(
     # fold and refuses an item whose flag no longer matches what was confirmed.
     # None means a post-write re-read failed; later ready items are refused.
     board_now: BoardSnapshot | None = board_before
+    write_attempted = False
     for index, ruling in enumerate(document.rulings):
         started_at = datetime.now(UTC)
         base: dict[str, Any] = {
@@ -1129,7 +1130,7 @@ async def execute_ath_rulings_batch(
             "action": ruling.action,
             "agent_id": ruling.agent_id,
             "agent_status": None,
-            "would_change_crown": str(ruling.agent_id) in previewed_crown,
+            "would_change_crown": None,
         }
         if board_now is None:
             # Do not even simulate later items against a known failed board:
@@ -1149,7 +1150,7 @@ async def execute_ath_rulings_batch(
             await session.rollback()
         except Exception:
             await session.rollback()
-            if not any(item.steps_applied for item in results):
+            if not write_attempted:
                 raise
             logger.exception(
                 "ath rulings next-item preview failed batch_id=%s index=%s",
@@ -1215,21 +1216,28 @@ async def execute_ath_rulings_batch(
         steps_applied: list[AthRulingStep] = []
         try:
             for step in preview.steps:
+                write_attempted = True
                 await _apply_step(session, ruling=ruling, step=step, actor=actor)
                 steps_applied.append(step)
         except HTTPException as exc:
             await session.rollback()
+            board_now = None
             results.append(
                 AdminAthRulingExecuteItem(
                     **base,
                     status="failed",
                     steps_applied=steps_applied,
-                    message=str(exc.detail),
+                    write_outcome_unknown=True,
+                    message=(
+                        f"{exc.detail}; write outcome unknown, inspect current state "
+                        "before retry"
+                    ),
                 )
             )
             continue
         except Exception:
             await session.rollback()
+            board_now = None
             logger.exception(
                 "ath rulings batch failed actor=%s batch_id=%s index=%s agent_id=%s",
                 actor,
@@ -1242,7 +1250,11 @@ async def execute_ath_rulings_batch(
                     **base,
                     status="failed",
                     steps_applied=steps_applied,
-                    message="internal error while applying ruling",
+                    write_outcome_unknown=True,
+                    message=(
+                        "error while applying ruling; write outcome unknown, "
+                        "inspect current state before retry"
+                    ),
                 )
             )
             continue
@@ -1350,7 +1362,7 @@ async def execute_ath_rulings_batch(
             503,
             ERROR_CODE_HTTP_EXCEPTION,
             "Board read failed after ruling processing; "
-            "inspect applied items before any retry",
+            "inspect all item outcomes before any retry",
             detail={
                 "batch_id": str(batch_id),
                 "items": [item.model_dump(mode="json") for item in results],

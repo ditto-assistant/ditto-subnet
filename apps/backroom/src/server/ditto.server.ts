@@ -308,7 +308,7 @@ export async function platformAdminRequest(
       const detail = payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : null
       const retained = athRulingsReadbackFailureSchema.safeParse(detail)
       if (retained.success) {
-        message = `Board read failed after ruling processing; inspect applied items before any retry. Retained outcomes: ${JSON.stringify(retained.data)}`
+        message = `Board read failed after ruling processing; inspect all item outcomes before any retry. Retained outcomes: ${JSON.stringify(retained.data)}`
       }
     }
     if (response.status === 401 || response.status === 403) {

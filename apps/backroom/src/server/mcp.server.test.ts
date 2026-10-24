@@ -6840,8 +6840,12 @@ describe('Backroom MCP tools', () => {
         index: 0, action: 'clear', agent_id: agentId, status: 'applied',
         would_change_crown: true, steps_applied: ['open', 'clear'], annotated: true,
         agent_status: 'scored', message: 'private audit context',
+      }, {
+        index: 1, action: 'reject', agent_id: 'db9b919d-241b-4131-a2cc-f426b4356950',
+        status: 'failed', would_change_crown: null, steps_applied: [],
+        write_outcome_unknown: true, annotated: false, message: 'private error',
       }],
-      applied_count: 1, already_applied_count: 0, failed_count: 0,
+      applied_count: 1, already_applied_count: 0, failed_count: 1,
     } }, { status: 503 }))
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
@@ -6854,12 +6858,14 @@ describe('Backroom MCP tools', () => {
     })
     expect(execute.isError).toBe(true)
     const text = readTextResult(execute)
-    expect(text).toContain('inspect applied items before any retry')
+    expect(text).toContain('inspect all item outcomes before any retry')
     expect(text).toContain(batchId)
     expect(text).toContain(agentId)
     expect(text).toContain('"status":"applied"')
     expect(text).toContain('"steps_applied":["open","clear"]')
     expect(text).toContain('"applied_count":1')
+    expect(text).toContain('"write_outcome_unknown":true')
+    expect(text).toContain('"would_change_crown":null')
     expect(text).not.toContain('private')
     expect(text).not.toContain('never-expose-this')
     expect(fetchMock).toHaveBeenCalledTimes(1)
