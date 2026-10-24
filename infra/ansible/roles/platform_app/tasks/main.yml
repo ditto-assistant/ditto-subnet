@@ -477,6 +477,10 @@
 - name: Load and validate GitHub linking configuration
   ansible.builtin.import_tasks: github-link-config.yml
 
+# `validate` renders to a temp file and installs it ONLY on exit 0, so a
+# placeholder never replaces the live .env. The postflight guard below still
+# runs: this prevents, that verifies. `backup` keeps a timestamped copy on the
+# host so a bad-but-valid render is still recoverable without a re-converge.
 - name: Render .env
   ansible.builtin.template:
     src: platform.env.j2
@@ -484,6 +488,8 @@
     owner: "{{ platform_owner }}"
     group: "{{ platform_group }}"
     mode: "0640"
+    backup: true
+    validate: "{{ env_render_validate_placeholders }}"
   no_log: true
 
 # Postflight backstop for the whole placeholder class, including variables
