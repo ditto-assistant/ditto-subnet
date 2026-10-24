@@ -781,9 +781,10 @@ describe('Backroom MCP tools', () => {
       // canary cap (#2447) also adds a short catalog note.
       // Six concise official-control summaries, with procedure text in help.
       // Retiring the thirteen coding-track summaries (SN-186) measures 25,588.
-      // The eleven generator-competition summaries bring it to 26,304; keep
-      // about 200 chars of headroom.
-      26_500,
+      // The eleven generator-competition summaries bring it to 26,304, and
+      // the eleven generator-round summaries to 27,023; keep about 200 chars
+      // of headroom.
+      27_200,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
