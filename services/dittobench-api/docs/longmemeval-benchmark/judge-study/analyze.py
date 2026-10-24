@@ -12,9 +12,22 @@ for r in rows:
     by[r["model_arm"]][r["probe_id"]].append(r)
 
 REPS = 3
-complete = {a: {p: v for p, v in d.items() if len(v) >= REPS}
+# A row with no "label" is an API error, not a verdict. An arm that errored on
+# every call would otherwise read as perfectly stable with 0% empty responses:
+# a zero that could never have been non-zero.
+complete = {a: {p: [x for x in v if "label" in x] for p, v in d.items()}
             for a, d in by.items()}
+complete = {a: {p: v for p, v in d.items() if len(v) >= 2}
+            for a, d in complete.items()}
+unusable = {a: len(by[a]) for a, d in complete.items() if len(d) < 1800}
 complete = {a: d for a, d in complete.items() if len(d) >= 1800}
+if unusable:
+    print("ARMS EXCLUDED (too few labelled verdicts):")
+    for a in sorted(unusable):
+        errs = sum(1 for p in by[a] for x in by[a][p] if "error" in x)
+        tot = sum(len(v) for v in by[a].values())
+        print("  %-46s %d/%d calls errored (%.0f%%)" % (a, errs, tot, 100*errs/tot))
+    print()
 
 def modal(recs):
     labs = [x.get("label") for x in recs[:REPS] if "label" in x]
@@ -114,3 +127,77 @@ if REF in complete:
         print("%-46s %9.1f%% %9.3f %9.1f%% %10d" % (a, 100*po, kappa, 100*(a_yes-r_yes)/n, n))
     print()
     print("  yes-bias = (candidate YES rate - incumbent YES rate); positive = more lenient")
+
+# ---------- 5. score translation ----------
+# If a candidate judge J has, relative to the incumbent,
+#   alpha = P(J says yes | 4o says yes)      (sensitivity)
+#   beta  = P(J says no  | 4o says no)       (specificity)
+# then an agent whose true-under-4o accuracy is S scores, under J,
+#   S_J = alpha*S + (1 - beta)*(1 - S)
+# and the inverse (Rogan-Gladen) recovers the 4o-denominated score:
+#   S_4o = (S_J - (1 - beta)) / (alpha - (1 - beta))
+# The denominator is Youden's J = alpha + beta - 1. As it approaches 0 the
+# translation becomes unstable, which is the honest way to say "this judge
+# cannot be converted back".
+if REF in complete:
+    print()
+    print("=" * 94)
+    print("5. SCORE TRANSLATION  (alpha/beta estimated per question type vs the incumbent)")
+    print("=" * 94)
+    ref = {p: modal(v) for p, v in complete[REF].items()}
+    TYPE_N = {"knowledge-update": 78, "multi-session": 133,
+              "single-session-assistant": 56, "single-session-preference": 30,
+              "single-session-user": 70, "temporal-reasoning": 133}
+    print("%-46s %8s %8s %9s %12s" % ("arm", "alpha", "beta", "youden", "translatable"))
+    trans = {}
+    for a in sorted(complete):
+        if a == REF: continue
+        shared = [p for p in complete[a] if p in ref]
+        if len(shared) < 1000: continue
+        tp = sum(1 for p in shared if ref[p] and modal(complete[a][p]))
+        pos = sum(1 for p in shared if ref[p])
+        tn = sum(1 for p in shared if not ref[p] and not modal(complete[a][p]))
+        neg = sum(1 for p in shared if not ref[p])
+        if pos == 0 or neg == 0: continue
+        al, be = tp/pos, tn/neg
+        j = al + be - 1
+        trans[a] = (al, be, j)
+        print("%-46s %8.3f %8.3f %9.3f %12s" % (
+            a, al, be, j, "yes" if j > 0.5 else ("marginal" if j > 0.2 else "NO")))
+    print()
+    print("  S_J = alpha*S + (1-beta)*(1-S)     S_4o = (S_J - (1-beta)) / youden")
+    print("  youden <= 0.2 means the judge destroys too much signal to convert back.")
+
+    # project the frozen 2026-07-23 leaderboard under each candidate
+    import os as _os
+    lb = _os.environ.get("LME_LEADERBOARD", "")
+    if lb and _os.path.exists(lb):
+        board = json.load(open(lb))
+        print()
+        print("  PROJECTED 2026-07-23 LEADERBOARD UNDER EACH JUDGE")
+        print("  (projection, not a measurement: alpha/beta come from the probe suite,")
+        print("   whose hypothesis mixture is adversarial, not agent-realistic)")
+        pertype = collections.defaultdict(dict)
+        for a in trans:
+            shared = [p for p in complete[a] if p in ref]
+            for qt in TYPE_N:
+                s = [p for p in shared if qtype_of[p] == qt]
+                pos = [p for p in s if ref[p]]; neg = [p for p in s if not ref[p]]
+                if not pos or not neg: continue
+                al = sum(1 for p in pos if modal(complete[a][p]))/len(pos)
+                be = sum(1 for p in neg if not modal(complete[a][p]))/len(neg)
+                pertype[a][qt] = (al, be)
+        names = [ag["name"] for ag in board["agents"]]
+        print("  %-44s %s" % ("judge", "".join("%-16s" % n[:15] for n in names)))
+        print("  %-44s %s" % ("gpt-4o (actual)",
+              "".join("%-16s" % ("%.1f%%" % (100*ag["accuracy"])) for ag in board["agents"])))
+        for a in sorted(trans, key=lambda x: -trans[x][2]):
+            cells = []
+            for ag in board["agents"]:
+                num = den = 0.0
+                for qt, meta in ag["per_category"].items():
+                    if qt not in pertype[a]: continue
+                    al, be = pertype[a][qt]; S = meta["accuracy"]; n = meta["n"]
+                    num += n * (al*S + (1-be)*(1-S)); den += n
+                cells.append("%-16s" % ("%.1f%%" % (100*num/den) if den else "n/a"))
+            print("  %-44s %s" % (a[:43], "".join(cells)))

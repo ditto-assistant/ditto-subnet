@@ -1,6 +1,7 @@
 # The Longevity of LongMemEval
 
-*Draft — the nine-model panel is still running; §4 and §5 are incomplete.*
+Nine models, two calling conventions, three replicates, 1,893 probes,
+102,222 judge calls, $6.89.
 
 Every LongMemEval score ever published is denominated in one model:
 `gpt-4o-2024-08-06`. LongMemEval's official evaluator hard-codes it in a
@@ -40,20 +41,32 @@ with `finish_reason="length"`. And `'yes' in ""` is `False`.
 So the model is scored **"no"**. On every question. With no error raised
 anywhere — not in the evaluator, not in the client, not in the logs.
 
-Measured against the official protocol, 30 calls per model:
+Measured across the full suite — 1,893 probes × 3 replicates = 5,679 calls per
+model, under the official calling convention:
 
-| model | empty content | reasoning tokens used of 10 |
-|---|---|---|
-| `mistralai/mistral-large-4-0` | 30/30 | 9 |
-| `qwen/qwen3.8-flash` | 30/30 | 10 |
-| `deepseek/deepseek-v4.1-flash` | 28/30 | 10 |
-| `moonshotai/kimi-k3` | 25/30 | — |
-| `z-ai/glm-5.3-flash` | 24/30 | — |
-| `openai/gpt-6-luna` | 14/30 | 0 (intermittent) |
-| `openai/gpt-4o-2024-08-06` | 0/30 | 0 |
+| model | empty content | truncated at 10 tokens | silently scored "no" |
+|---|---|---|---|
+| `qwen/qwen3.8-flash` | 100.0% | 100.0% | 100.0% |
+| `mistralai/mistral-large-4-0` | 99.3% | 99.3% | 99.3% |
+| `deepseek/deepseek-v4.1-flash` | 92.0% | 94.0% | 92.0% |
+| `moonshotai/kimi-k3` | 75.9% | 100.0% | 75.9% |
+| `z-ai/glm-5.3-flash` | 72.4% | 72.7% | 72.4% |
+| `minimax/minimax-m3.1-flash` | 30.0% | 30.0% | 30.0% |
+| `openai/gpt-6-luna` | 23.9% | 24.4% | 23.9% |
+| `openai/gpt-5.6-luna` | 0.4% | 0.4% | 0.4% |
+| `openai/gpt-4o-2024-08-06` | 0.0% | 0.0% | 0.0% |
 
-With `reasoning: {"enabled": false}` every one of those models answers `"yes"`
-or `"no"` in one or two tokens.
+The mechanism is not inferred. `usage.completion_tokens_details.reasoning_tokens`
+reports 9–10 of the 10-token budget consumed before any visible output, and
+
+```json
+{"reasoning": {"enabled": false}}
+```
+
+drops every one of those rates to 0.0% and produces `"yes"` or `"no"` in one or
+two tokens.
+
+
 
 The failure is silent and it is *biased*: it does not produce noise, it produces
 a uniform "incorrect" verdict. An agent evaluated by a truncated judge scores
@@ -133,7 +146,120 @@ agreement with itself**, which is 98.9%.
 
 ## 4. Which model should replace it
 
-*Pending — full panel running.*
+Two arms per model. **`@official`** is the official calling convention
+untouched. **`@noreason`** adds `reasoning: {"enabled": false}` and changes
+nothing else — same prompt, same `max_tokens=10`, same label extraction.
+
+### Agreement with the incumbent
+
+Modal verdict over three replicates, 1,893 probes:
+
+| judge | agree | κ | yes-bias | Youden J | $/M in |
+|---|---|---|---|---|---|
+| `gpt-4o-2024-08-06` @noreason | 99.3% | 0.985 | −0.4% | 0.986 | 2.50 |
+| **`qwen3.8-flash` @noreason** | **97.9%** | **0.957** | −2.1% | 0.963 | 0.15 |
+| `mistral-large-4-0` @noreason | 97.8% | 0.955 | −1.3% | 0.959 | 1.36 |
+| `gpt-5.6-luna` @noreason | 96.9% | 0.936 | +1.4% | 0.932 | 0.20 |
+| `gpt-6-luna` @noreason | 96.7% | 0.932 | +2.0% | 0.926 | 0.10 |
+| `deepseek-v4.1-flash` @noreason | 95.9% | 0.916 | +1.5% | 0.912 | 0.02 |
+| `kimi-k3` @noreason | 95.6% | 0.910 | −4.3% | 0.923 | 0.24 |
+| `gpt-6-luna` @official | 93.4% | 0.868 | −6.6% | 0.887 | 0.10 |
+| `minimax-m3.1-flash` @official | 92.4% | 0.849 | −7.4% | 0.869 | 0.15 |
+| `glm-5.3-flash` @official | 59.5% | 0.265 | −40.5% | 0.300 | 0.15 |
+| `kimi-k3` @official | 54.8% | 0.190 | −45.2% | 0.218 | 0.24 |
+| `deepseek-v4.1-flash` @official | 45.2% | 0.042 | −54.1% | 0.049 | 0.02 |
+| `mistral-large-4-0` @official | 42.3% | 0.000 | −57.7% | 0.000 | 1.36 |
+| `qwen3.8-flash` @official | 42.2% | 0.000 | −57.8% | 0.000 | 0.15 |
+
+The `@official` rows are the §1 failure, quantified. `qwen3.8-flash` and
+`mistral-large-4-0` reach **κ = 0.000** — literally zero information beyond the
+base rate — and the identical models with one flag flipped are the two best
+candidates in the panel.
+
+### Two models cannot be fixed by the flag
+
+`z-ai/glm-5.3-flash` and `minimax/minimax-m3.1-flash` rejected
+`reasoning: {"enabled": false}` on **5,679 of 5,679 calls**:
+
+```
+400 {"error":{"message":"Reasoning is mandatory for this endpoint
+     and cannot be disabled."}}
+```
+
+They are structurally incompatible with the official protocol. The only remedy
+is raising `max_tokens`, which means editing LongMemEval itself and forfeiting
+protocol equivalence. Worth stating plainly because `glm-5.3-flash` is
+otherwise an attractive candidate and is already this repo's screener
+adjudicator model.
+
+### Stability
+
+Several candidates are **more stable than the incumbent**:
+
+| judge | non-unanimous / 1,893 | flip rate |
+|---|---|---|
+| `mistral-large-4-0` @noreason | 2 | 0.11% |
+| `qwen3.8-flash` @noreason | 10 | 0.53% |
+| **`gpt-4o-2024-08-06` @official** | **20** | **1.06%** |
+| `kimi-k3` @noreason | 21 | 1.11% |
+| `gpt-5.6-luna` @noreason | 24 | 1.27% |
+| `deepseek-v4.1-flash` @noreason | 25 | 1.32% |
+| `gpt-6-luna` @noreason | 37 | 1.95% |
+| `gpt-6-luna` @official | 73 | 3.86% |
+| `glm-5.3-flash` @official | 77 | 4.07% |
+| `minimax-m3.1-flash` @official | 200 | 10.57% |
+
+The truncated arms are the unstable ones, which makes sense: the reasoning/
+content boundary at exactly ten tokens is marginal, so the same input lands on
+either side of it run to run. `minimax-m3.1-flash@official` flips on one probe
+in ten.
+
+### The result that actually matters
+
+Rank by agreement with 4o and `qwen3.8-flash` wins. Rank by conformance to
+LongMemEval's own rubric and it is near the bottom:
+
+| judge | clause conformance | off-by-one clause (§2) |
+|---|---|---|
+| `gpt-6-luna` @noreason | **98.8%** | **83%** |
+| `gpt-5.6-luna` @noreason | 98.4% | 66% |
+| `gpt-4o-2024-08-06` @official | 98.0% | 58% |
+| `mistral-large-4-0` @noreason | 97.1% | 27% |
+| `qwen3.8-flash` @noreason | 96.9% | **6%** |
+| `deepseek-v4.1-flash` @noreason | 96.8% | 32% |
+| `kimi-k3` @noreason | 94.8% | 6% |
+
+**`qwen3.8-flash` agrees with the incumbent partly because it reproduces the
+incumbent's defect.** It almost never forgives an off-by-one, and neither does
+4o, 42% of the time. `gpt-6-luna` agrees *less* — and a good share of that
+disagreement is it following the written rule that 4o ignores.
+
+So "closest to 4o" and "most faithful to LongMemEval" are different objectives
+that point at different models. A drop-in replacement selected on agreement
+alone locks in a known defect, permanently, and calls it compatibility.
+
+### Recommendation
+
+There is no single answer, so here are two, with the trade stated:
+
+- **For continuity** — scores that stay comparable to the published record:
+  **`qwen/qwen3.8-flash` with reasoning disabled.** κ = 0.957, Youden 0.963,
+  half the incumbent's flip rate, **16.7× cheaper**, and open-weight. Accept
+  that it inherits the off-by-one defect.
+- **For correctness** — scores that mean what the benchmark says they mean:
+  **`openai/gpt-6-luna` with reasoning disabled.** Highest clause conformance in
+  the panel (98.8%), 83% on the off-by-one clause against the incumbent's 58%,
+  **25× cheaper**. It is not open-weight, and it will *raise* scores by roughly
+  three points, so it is not drop-in comparable.
+
+**No open-weight model in this panel honours the off-by-one clause well.** The
+best is `deepseek-v4.1-flash` at 32%, against 4o's 58% and `gpt-6-luna`'s 83%.
+If an open-weight judge is a requirement, continuity is currently the only
+option on offer, and the rubric gap is the price.
+
+For a subnet ranking miners against historical scores, continuity wins: the
+leaderboard is a relative ordering, and changing the denominator mid-flight
+invalidates every prior comparison.
 
 ## 5. Translating old scores to a new judge
 
@@ -150,21 +276,47 @@ and the inverse recovers the old denomination:
 
 &nbsp;&nbsp;&nbsp;&nbsp;`S_4o = (S_J − (1 − β)) / (α + β − 1)`
 
-This is the Rogan–Gladen prevalence correction. The denominator is Youden's J.
-As it approaches zero the translation becomes unstable — which is the honest way
-of saying that a judge below some agreement threshold destroys too much signal
-to convert back, no matter what formula you apply.
+This is the Rogan–Gladen prevalence correction. The denominator is Youden's J,
+and it is the quantity that decides whether translation is possible at all. At
+J = 0.963 (`qwen3.8-flash@noreason`) a measured score converts back with a small
+multiplier on the error. At J = 0.000 (`qwen3.8-flash@official`) there is
+nothing to convert: the judge emitted no information, and no formula recovers a
+score from it.
 
-Two limits worth stating plainly:
+Applying α and β estimated **per question type** to the frozen 2026-07-23
+leaderboard projects what those five agents would have scored under each judge:
 
-- α and β must be estimated **per question type**, because conformance varies
-  enormously by type (see §2). A single global pair will mis-translate
-  temporal-reasoning in one direction and knowledge-update in the other.
-- α and β estimated on an adversarial probe suite do not automatically transfer
-  to a realistic mixture of agent outputs. The probes are deliberately
-  concentrated on the boundaries where judges disagree. Translating a real
-  leaderboard with probe-derived coefficients is a **projection**, not a
-  measurement, and we label it as such.
+| judge | whitycatboss | killer-4 | ditto-max-v1 | avadakedavra | zeus_v12 |
+|---|---|---|---|---|---|
+| **gpt-4o (actual)** | **20.2%** | **53.0%** | **57.6%** | **6.2%** | **35.6%** |
+| `gpt-4o` @noreason | 20.0% | 52.6% | 57.4% | 6.5% | 35.5% |
+| `qwen3.8-flash` @noreason | 18.5% | 50.8% | 56.1% | 5.8% | 34.3% |
+| `mistral-large-4-0` @noreason | 18.9% | 51.0% | 56.5% | 6.5% | 34.8% |
+| `gpt-5.6-luna` @noreason | 22.9% | 55.0% | 60.0% | 9.9% | 38.4% |
+| `gpt-6-luna` @noreason | 23.7% | 55.7% | 60.9% | 11.0% | 39.3% |
+| `deepseek-v4.1-flash` @noreason | 23.8% | 55.4% | 60.3% | 10.8% | 39.0% |
+| `gpt-6-luna` @official | 16.8% | 46.6% | 51.7% | 5.2% | 31.5% |
+| `glm-5.3-flash` @official | 5.6% | 16.0% | 17.7% | 1.7% | 10.7% |
+| `deepseek-v4.1-flash` @official | 2.0% | 3.6% | 3.6% | 1.1% | 2.6% |
+| **`qwen3.8-flash` @official** | **0.0%** | **0.0%** | **0.0%** | **0.0%** | **0.0%** |
+
+The ordering of the five agents survives every viable judge. The *values* do
+not: the spread between the best and worst viable candidate is about five
+points on a 57.6% agent. And the bottom row is §1 in its final form — a
+benchmark run that completes successfully, reports zero for every agent, and
+raises no error.
+
+Two limits, stated plainly:
+
+- α and β **must** be per question type. Conformance varies enormously by type,
+  so a single global pair mis-translates temporal-reasoning in one direction and
+  knowledge-update in the other.
+- These coefficients come from an adversarial probe suite, deliberately
+  concentrated on the boundaries where judges disagree. The table above is a
+  **projection, not a measurement**. Validating it needs the original hypothesis
+  text from those runs, which was not retained — only `hypotheses_sha256`.
+  Publishing hypotheses alongside scores would make this directly checkable, and
+  nobody in this field does it.
 
 ---
 
