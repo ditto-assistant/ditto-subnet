@@ -66,16 +66,14 @@
     force: true
   become: true
   become_user: "{{ generator_scorer_owner }}"
-  register: generator_scorer_clone
 
-- name: Check for an installed challenge-scorer
-  ansible.builtin.stat:
-    path: "{{ generator_scorer_binary }}"
-  register: generator_scorer_installed
-
+# Build on every converge. The Go build cache makes an unchanged revision
+# cheap, and gating on the checkout changing would let a retry after a failed
+# build skip the build and install stale output. The copy below replaces the
+# binary, and restarts the unit, only when the bytes differ.
 - name: Build challenge-scorer
   ansible.builtin.command:
-    cmd: /usr/local/go/bin/go build -trimpath -o {{ generator_scorer_state_dir }}/challenge-scorer ./cmd/challenge-scorer
+    cmd: /usr/local/go/bin/go build -trimpath -buildvcs=false -o {{ generator_scorer_state_dir }}/challenge-scorer ./cmd/challenge-scorer
     chdir: "{{ generator_scorer_checkout }}/services/dittobench-api"
   become: true
   become_user: "{{ generator_scorer_owner }}"
@@ -84,8 +82,7 @@
     GOCACHE: "{{ generator_scorer_state_dir }}/go/cache"
     GOTOOLCHAIN: local
     CGO_ENABLED: "0"
-  when: generator_scorer_clone.changed or not generator_scorer_installed.stat.exists
-  changed_when: true
+  changed_when: false
 
 - name: Install the challenge-scorer binary
   ansible.builtin.copy:

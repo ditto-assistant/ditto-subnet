@@ -114,7 +114,8 @@ screener, and validator hosts never build a generator.
 
 1. Protected Terraform apply with `enable_generator_scorer = true`
    (`infra/terraform/stacks/gcp-platform/generator-scorer.tf`). This creates
-   the VM, its identity, and the `generator-scorer-token-prod` secret. Both
+   the VM, its identity, and the `generator-scorer-token-prod` secret (which
+   exists even with the flag off, since Platform names it). Both
    the scorer identity and the Platform identity can read the secret.
 2. Add one secret version without printing it:
    `openssl rand -hex 32 | gcloud secrets versions add generator-scorer-token-prod --data-file=- --project=ditto-app-dev`.

@@ -10,7 +10,7 @@
 ###############################################################################
 
 variable "enable_generator_scorer" {
-  description = "Create the private generator-competition scorer VM, its identity, and its Platform bearer secret."
+  description = "Create the private generator-competition scorer VM and its identity. The Platform bearer secret exists regardless."
   type        = bool
   default     = false
 }
@@ -21,8 +21,10 @@ locals {
 
 # The value is populated out of band (a random 64-hex bearer). Platform reads it
 # as DITTO_GENERATOR_SCORER_TOKEN; the scorer presents it on every request.
+# The secret and Platform's read grant do not follow enable_generator_scorer:
+# Platform's host_vars name the secret whether or not the VM exists, and the
+# destroy guard must not block disabling the scorer.
 resource "google_secret_manager_secret" "generator_scorer_token" {
-  count     = local.generator_scorer_count
   project   = var.project
   secret_id = "generator-scorer-token-prod"
   replication {
@@ -43,15 +45,14 @@ resource "google_service_account" "generator_scorer" {
 resource "google_secret_manager_secret_iam_member" "generator_scorer_token_scorer_access" {
   count     = local.generator_scorer_count
   project   = var.project
-  secret_id = google_secret_manager_secret.generator_scorer_token[0].secret_id
+  secret_id = google_secret_manager_secret.generator_scorer_token.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.generator_scorer[0].email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "generator_scorer_token_platform_access" {
-  count     = local.generator_scorer_count
   project   = var.project
-  secret_id = google_secret_manager_secret.generator_scorer_token[0].secret_id
+  secret_id = google_secret_manager_secret.generator_scorer_token.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${local.platform_api_sa_email}"
 }
