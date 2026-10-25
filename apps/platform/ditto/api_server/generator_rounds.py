@@ -88,6 +88,7 @@ if TYPE_CHECKING:
 
     from ditto.api_models.generator import GeneratorCompetitionSettings
     from ditto.api_server.generator_competition import ResolvedSettings
+    from ditto.chain.models import EpochSchedule
 
 logger = logging.getLogger(__name__)
 
@@ -879,19 +880,25 @@ ROUND_LEASE_CUTOFF = timedelta(minutes=20)
 CHAIN_BLOCK_SECONDS = 12
 
 
-def round_seconds_left(row: GeneratorRound, *, block: int, tempo: int) -> float | None:
-    """Estimated seconds until ``row`` closes, at chain head ``block``.
+def round_seconds_left(row: GeneratorRound, head: EpochSchedule) -> float | None:
+    """Estimated seconds until ``row`` closes, at a chain ``head`` read now.
 
-    A round opens on its first epoch's boundary block (``open_block``) and
-    closes at the first boundary of the next round, ``epochs_per_round`` epochs
-    of ``tempo`` blocks later. The caller passes a head it read at lease time,
-    so the estimate never extrapolates from a stale snapshot. None when the
-    round has no open block.
+    The round closes when ``SubnetEpochIndex`` reaches the first epoch of the
+    next round. The next epoch fires at the chain client's predicted
+    ``next_epoch_block``, which honors an owner-scheduled ``PendingEpochAt``
+    and the stateful scheduler; each further epoch the round still spans adds
+    ``tempo`` blocks. The caller reads ``head`` at lease time,
+    so nothing is extrapolated from a stale snapshot. None when ``head`` is not
+    inside this round.
     """
-    if row.open_block is None:
+    closing_epoch = (row.round_index + 1) * row.epochs_per_round
+    epochs_after_next = closing_epoch - head.subnet_epoch_index - 1
+    if epochs_after_next < 0 or head.subnet_epoch_index < (
+        row.round_index * row.epochs_per_round
+    ):
         return None
-    close_block = row.open_block + row.epochs_per_round * tempo
-    return (close_block - block) * CHAIN_BLOCK_SECONDS
+    close_block = head.next_epoch_block + epochs_after_next * head.tempo
+    return (close_block - head.block) * CHAIN_BLOCK_SECONDS
 
 
 async def running_round(

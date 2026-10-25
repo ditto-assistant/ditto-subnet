@@ -233,7 +233,7 @@ async def request_generator_round_job(
         )
         if slot is None:
             return _no_work()
-        left = round_seconds_left(row, block=head.block, tempo=head.tempo)
+        left = round_seconds_left(row, head)
         if left is not None and left < ROUND_LEASE_CUTOFF.total_seconds():
             return _no_work()
         ticket: ValidatorTicket | None = None

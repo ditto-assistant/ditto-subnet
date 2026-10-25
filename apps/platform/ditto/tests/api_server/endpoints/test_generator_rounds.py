@@ -62,7 +62,7 @@ from ditto.api_server.generator_rounds import (
     round_seconds_left,
     round_seed,
 )
-from ditto.chain.models import NeuronInfo
+from ditto.chain.models import EpochSchedule, NeuronInfo
 from ditto.db.models import (
     Agent,
     GeneratorOperatorAction,
@@ -565,8 +565,16 @@ class TestRoundLifecycle:
             row = await get_round(session, 3)
             assert row is not None and row.open_block is not None
             close_block = row.open_block + row.epochs_per_round * 360
+        first = row.round_index * row.epochs_per_round
+        last_epoch = first + row.epochs_per_round - 1
         for read in (
-            AsyncMock(return_value=SimpleNamespace(block=close_block - 10, tempo=360)),
+            AsyncMock(
+                return_value=_head(
+                    epoch=last_epoch,
+                    last_epoch_block=close_block - 360,
+                    block=close_block - 10,
+                )
+            ),
             AsyncMock(side_effect=RuntimeError("rpc down")),
         ):
             chain.read_epoch_schedule = read
@@ -577,7 +585,9 @@ class TestRoundLifecycle:
             )
             assert declined.status_code == 204, declined.text
         chain.read_epoch_schedule = AsyncMock(
-            return_value=SimpleNamespace(block=row.open_block + 5, tempo=360)
+            return_value=_head(
+                epoch=first, last_epoch_block=row.open_block, block=row.open_block + 5
+            )
         )
 
         # Validators run every panel agent on round tickets.
@@ -1325,15 +1335,42 @@ def test_round_capability_does_not_need_the_private_v13_transport() -> None:
     assert not lane_mod._round_capable(heartbeat, now=now)
 
 
+def _head(
+    *, epoch: int, last_epoch_block: int, block: int, next_epoch: int | None = None
+) -> EpochSchedule:
+    return EpochSchedule(
+        netuid=118,
+        subnet_epoch_index=epoch,
+        last_epoch_block=last_epoch_block,
+        pending_epoch_at=0 if next_epoch is None else next_epoch,
+        tempo=360,
+        blocks_since_last_step=block - last_epoch_block,
+        block=block,
+        block_hash=_BLOCK,
+        block_timestamp=None,
+        next_epoch_block=(last_epoch_block + 360 if next_epoch is None else next_epoch),
+    )
+
+
 def test_round_seconds_left_tracks_the_closing_boundary() -> None:
     row = GeneratorRound(round_index=7, epochs_per_round=1, open_block=9_000)
     cutoff = ROUND_LEASE_CUTOFF.total_seconds()
-    closing = round_seconds_left(row, block=9_300, tempo=360)
+    closing = round_seconds_left(
+        row, _head(epoch=7, last_epoch_block=9_000, block=9_300)
+    )
     assert closing == 60 * 12
     assert closing < cutoff
-    opened = round_seconds_left(row, block=9_005, tempo=360)
+    opened = round_seconds_left(
+        row, _head(epoch=7, last_epoch_block=9_000, block=9_005)
+    )
     assert opened is not None and opened > cutoff
-    row.epochs_per_round = 4
-    assert round_seconds_left(row, block=9_300, tempo=360) == (4 * 360 - 300) * 12
-    row.open_block = None
-    assert round_seconds_left(row, block=9_300, tempo=360) is None
+    # An owner-scheduled early epoch closes the round sooner than the tempo.
+    early = _head(epoch=7, last_epoch_block=9_000, block=9_005, next_epoch=9_050)
+    assert round_seconds_left(row, early) == 45 * 12
+    # A multi-epoch round adds a tempo per epoch still to run after the next.
+    row = GeneratorRound(round_index=7, epochs_per_round=4, open_block=9_000)
+    mid = round_seconds_left(row, _head(epoch=29, last_epoch_block=9_360, block=9_400))
+    assert mid == ((9_360 + 360 + 2 * 360) - 9_400) * 12
+    # A head outside the round is not estimated.
+    assert round_seconds_left(row, _head(epoch=32, last_epoch_block=0, block=1)) is None
+    assert round_seconds_left(row, _head(epoch=27, last_epoch_block=0, block=1)) is None
