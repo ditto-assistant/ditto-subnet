@@ -46640,7 +46640,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The attempt has no lineage parent, or its bound packet can no longer be rebuilt identically. */
+            /** @description The attempt has no lineage parent or bound packet, or the packet can no longer be rebuilt identically. */
             409: {
                 headers: {
                     [name: string]: unknown;

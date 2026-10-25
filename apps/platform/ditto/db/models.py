@@ -607,6 +607,10 @@ class ScreeningAttempt(Base):
             ondelete="RESTRICT",
             name="screening_attempts_lineage_parent_fkey",
         ),
+        # The claim names the parent before any packet exists; scope and
+        # digest bind together on the first packet fetch. A parent with no
+        # scope or digest is therefore a claimed attempt whose packet was
+        # never fetched (an ordinary full review), not a partial binding.
         CheckConstraint(
             "(lineage_scope IS NULL AND lineage_packet_sha256 IS NULL) OR "
             "(lineage_parent_agent_id IS NOT NULL "

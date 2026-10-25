@@ -5762,7 +5762,11 @@ CREATE TABLE public.screening_attempts (
     private_failure_log_tail text,
     failure_captured_at timestamp with time zone,
     artifact_sha256 text,
+    lineage_parent_agent_id uuid,
+    lineage_scope text,
+    lineage_packet_sha256 text,
     CONSTRAINT ck_screening_attempts_screening_attempts_artifact_sha_check CHECK (((artifact_sha256 IS NULL) OR (length(artifact_sha256) = 64))),
+    CONSTRAINT ck_screening_attempts_screening_attempts_lineage_binding_check CHECK ((((lineage_scope IS NULL) AND (lineage_packet_sha256 IS NULL)) OR ((lineage_parent_agent_id IS NOT NULL) AND (lineage_scope = ANY (ARRAY['diff'::text, 'full'::text])) AND (length(lineage_packet_sha256) = 64)))),
     CONSTRAINT ck_screening_attempts_screening_attempts_review_setting_b74a CHECK ((((review_settings_revision IS NULL) AND (review_settings_instance_id IS NULL) AND (review_settings_scope IS NULL) AND (review_settings_checksum IS NULL)) OR ((review_settings_revision > 0) AND (review_settings_instance_id IS NOT NULL) AND (review_settings_scope IS NOT NULL) AND (length(review_settings_checksum) = 64)))),
     CONSTRAINT screening_attempts_deadline_check CHECK ((deadline >= started_at)),
     CONSTRAINT screening_attempts_finished_check CHECK (((finished_at IS NULL) OR (finished_at >= started_at))),
@@ -14957,6 +14961,14 @@ ALTER TABLE ONLY public.screening_attempts
 
 ALTER TABLE ONLY public.screening_attempts
     ADD CONSTRAINT screening_attempts_duplicate_of_fkey FOREIGN KEY (duplicate_of) REFERENCES public.agents(agent_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screening_attempts screening_attempts_lineage_parent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_attempts
+    ADD CONSTRAINT screening_attempts_lineage_parent_fkey FOREIGN KEY (lineage_parent_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
 
 
 --

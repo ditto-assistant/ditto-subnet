@@ -44,6 +44,9 @@ def upgrade() -> None:
         ["agent_id"],
         ondelete="RESTRICT",
     )
+    # The claim names the parent before any packet exists; scope and digest
+    # bind together on the first packet fetch, so a parent with neither is a
+    # claimed attempt whose packet was never fetched, not a partial binding.
     op.create_check_constraint(
         "screening_attempts_lineage_binding_check",
         "screening_attempts",

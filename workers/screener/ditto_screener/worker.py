@@ -782,7 +782,7 @@ class ScreenerWorker:
             packet = await self._platform.get_review_lineage(
                 item.agent_id, attempt_id=attempt_id, artifact_sha256=item.sha256
             )
-        except (PlatformError, ValidationError) as error:
+        except (PlatformError, ValidationError, ValueError) as error:
             logger.warning(
                 "agent_id=%s lineage packet unavailable; full review: %s",
                 item.agent_id,

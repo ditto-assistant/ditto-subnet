@@ -7842,7 +7842,7 @@ const reviewLineageAgentSchema = z.object({
   version: z.number().int().positive(),
   artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   status: z.string(),
-  screening_policy_version: z.number().int().positive().nullable(),
+  screening_policy_version: z.number().int().positive().nullable().optional(),
   submitted_at: z.string(),
 })
 

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 from ditto.api_server.review_lineage import (
+    ReviewLineageContext,
+    _ArtifactRef,
     dockerfile_build_surface_changed,
     is_build_surface,
     is_dockerfile,
@@ -85,3 +89,45 @@ def test_legacy_env_form_is_read_by_name() -> None:
         _BASE, _BASE + "ENV HARNESS_LEGACY on\n"
     )
     assert dockerfile_build_surface_changed(_BASE, _BASE + "ENV PIP_NO_CACHE_DIR 1\n")
+
+
+_RUN_READS_ENV = _BASE.replace(
+    "RUN pip install -r requirements.txt",
+    "ENV EXTRAS=\nRUN pip install -r requirements.txt ${EXTRAS}",
+)
+
+
+def test_an_env_a_run_step_reads_is_build_surface() -> None:
+    # The RUN line is unchanged, but what it installs now depends on the value.
+    assert dockerfile_build_surface_changed(
+        _RUN_READS_ENV, _RUN_READS_ENV.replace("ENV EXTRAS=\n", "ENV EXTRAS=dev\n")
+    )
+    # an unrelated switch in the same file still keeps the diff scope
+    assert not dockerfile_build_surface_changed(
+        _RUN_READS_ENV, _RUN_READS_ENV.replace("HARNESS_KG=1", "HARNESS_KG=0")
+    )
+
+
+_AGENT, _ATTEMPT, _PARENT = uuid4(), uuid4(), uuid4()
+
+
+def _context(rulings: list[dict[str, object]]) -> ReviewLineageContext:
+    ref = _ArtifactRef(_PARENT, "ab" * 32)
+    return ReviewLineageContext(
+        agent_id=_AGENT,
+        attempt_id=_ATTEMPT,
+        artifact_sha256="de" * 32,
+        policy_version=13,
+        candidate=ref,
+        parent=ref,
+        parent_row={"agent_id": ref.agent_id, "version": 1},
+        history=[{"agent_id": ref.agent_id, "version": 1}],
+        rulings=rulings,
+        findings=[],
+    )
+
+
+def test_history_digest_moves_with_the_rulings() -> None:
+    ruling = {"court": "quarantine", "resolution": "release", "decided_at": "t1"}
+    assert _context([ruling]).history_digest() == _context([ruling]).history_digest()
+    assert _context([ruling]).history_digest() != _context([]).history_digest()

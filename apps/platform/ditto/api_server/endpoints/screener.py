@@ -4176,6 +4176,25 @@ async def agent_review_lineage(
             await get_screening_attempt(session, attempt_id=attempt_id, for_update=True)
         )
         if attempt.lineage_packet_sha256 is None:
+            # A ruling can land between building the packet and taking this
+            # lock; re-read the history under the lock and refuse to bind a
+            # packet that no longer matches it (the worker retries or falls
+            # back to a full review).
+            locked_agent = await get_agent_by_id(session, agent_id=agent_id)
+            if locked_agent is None:
+                raise AgentNotFoundError(f"no agent with id={agent_id}")
+            try:
+                fresh = await load_review_lineage(
+                    session, agent=locked_agent, attempt=attempt
+                )
+            except ReviewLineageUnavailableError as error:
+                raise AgentNotScreenableError(
+                    f"lineage packet unavailable: {error}"
+                ) from error
+            if fresh.history_digest() != context.history_digest():
+                raise AgentNotScreenableError(
+                    "lineage history moved while the packet was built"
+                )
             attempt.lineage_scope = packet.scope.value
             attempt.lineage_packet_sha256 = packet.packet_sha256
         elif attempt.lineage_packet_sha256 != packet.packet_sha256:

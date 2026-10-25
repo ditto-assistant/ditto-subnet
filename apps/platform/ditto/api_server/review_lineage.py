@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -218,9 +219,19 @@ def dockerfile_build_surface_changed(
 
     if built(before) != built(after):
         return True
+    # A changed ENV that a RUN step reads ("$NAME", "${NAME}") can change what
+    # the image builds even though no RUN line moved.
+    run_text = " ".join(
+        line for line in (*before, *after) if line.split(None, 1)[0].lower() == "run"
+    )
+
+    def read_by_run(name: str) -> bool:
+        return f"${name}" in run_text or "${" + name in run_text
+
     changed = set(before).symmetric_difference(after)
     return any(
-        line.split(None, 1)[0].lower() == "env" and _steers_build(line)
+        line.split(None, 1)[0].lower() == "env"
+        and (_steers_build(line) or any(read_by_run(n) for n in _env_names(line)))
         for line in changed
     )
 
@@ -532,6 +543,20 @@ class ReviewLineageContext:
     history: list[dict[str, Any]]
     rulings: list[dict[str, Any]]
     findings: list[dict[str, Any]]
+
+    def history_digest(self) -> str:
+        """Digest of the database half of the packet, so a caller can re-read
+        the history under a lock and refuse to bind a packet built before a
+        ruling landed."""
+        payload = {
+            "parent": self.parent_row,
+            "history": self.history,
+            "rulings": self.rulings,
+            "findings": self.findings,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode()
+        ).hexdigest()
 
 
 async def load_review_lineage(

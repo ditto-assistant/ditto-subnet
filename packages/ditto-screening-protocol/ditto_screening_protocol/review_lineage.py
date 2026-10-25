@@ -55,7 +55,7 @@ class ReviewLineageFullReviewReason(StrEnum):
 class ReviewLineageAgent(BaseModel):
     """One prior version in the lineage, newest first."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(frozen=True)
 
     agent_id: UUID
     version: Annotated[int, Field(ge=1)]
@@ -68,7 +68,7 @@ class ReviewLineageAgent(BaseModel):
 class ReviewLineageRuling(BaseModel):
     """An operator or court decision on one prior version."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(frozen=True)
 
     agent_id: UUID
     version: Annotated[int, Field(ge=1)]
@@ -83,7 +83,7 @@ class ReviewLineageRuling(BaseModel):
 class ReviewLineageFinding(BaseModel):
     """One automated review outcome on the parent (L1/L2/L3 or the court)."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(frozen=True)
 
     agent_id: UUID
     version: Annotated[int, Field(ge=1)]
@@ -102,7 +102,7 @@ class ReviewLineageFinding(BaseModel):
 class ReviewLineageFileChange(BaseModel):
     """One changed path between the parent and this artifact."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(frozen=True)
 
     path: Annotated[str, Field(min_length=1, max_length=512)]
     change: Literal["added", "removed", "modified", "renamed"]
@@ -114,9 +114,15 @@ class ReviewLineageFileChange(BaseModel):
 
 
 class ReviewLineagePacketBody(BaseModel):
-    """Every packet field except its digest."""
+    """Every packet field except its digest.
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    Unknown fields are ignored, as on every wire model in this repository
+    (additive JSON compatibility across rolling upgrades). A newer Platform
+    that adds a field seals its digest over that field, so an older worker's
+    re-computed digest will not match and it falls back to a full review.
+    """
+
+    model_config = ConfigDict(frozen=True)
 
     packet_version: Literal[1] = REVIEW_LINEAGE_PACKET_VERSION
     agent_id: UUID
