@@ -49,7 +49,9 @@ class ValidatorNativeLegacyGuardTests(unittest.TestCase):
         self.assert_refused(self.run_playbook())
 
     def test_refuses_when_acknowledgement_is_false(self):
-        self.assert_refused(self.run_playbook("-e", "validator_native_legacy_ack=false"))
+        self.assert_refused(
+            self.run_playbook("-e", "validator_native_legacy_ack=false")
+        )
 
     def test_refuses_under_tag_selection(self):
         self.assert_refused(self.run_playbook("--tags", "dittobench"))
