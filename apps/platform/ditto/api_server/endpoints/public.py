@@ -269,6 +269,10 @@ from ditto.api_server.gate_evidence import (
     gate_note_ids_for,
     public_gate_evidence,
 )
+from ditto.api_server.generator_round_reservation import (
+    round_reservation_active,
+    validator_advertises_rounds,
+)
 from ditto.api_server.koth import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
@@ -297,6 +301,7 @@ from ditto.api_server.storage import ObjectDownloadFailedError, ObjectNotFoundEr
 from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
     allowed_slot_count,
+    reserved_round_slots,
     resolve_slot_settings,
     validator_issuance_paused,
 )
@@ -4968,6 +4973,7 @@ def _validator_heartbeats_response(
     now: datetime,
     active_bench_version: int,
     slot_settings: ValidatorSlotSettings,
+    round_reservation_active: bool = False,
 ) -> PublicValidatorHeartbeatsResponse:
     """Reconcile platform leases and signed heartbeat claims without conflating them.
 
@@ -5153,6 +5159,24 @@ def _validator_heartbeats_response(
         bench_serviceability = _bench_serviceability(
             row, active_bench_version=active_bench_version
         )
+        allowed_slots = (
+            0
+            if issuance_paused
+            else allowed_slot_count(
+                slot_settings,
+                advertised_slots=(capacity.configured_slots if capacity else 1),
+                sample=HostResourceSample(
+                    cpu_percent=(metrics.cpu_percent if metrics is not None else None),
+                    memory_percent=(
+                        metrics.memory_percent if metrics is not None else None
+                    ),
+                    disk_percent=(
+                        metrics.disk_percent if metrics is not None else None
+                    ),
+                ),
+                validator_hotkey=row.validator_hotkey,
+            )
+        )
         entries.append(
             PublicValidatorHeartbeat(
                 validator_hotkey=row.validator_hotkey,
@@ -5181,24 +5205,14 @@ def _validator_heartbeats_response(
                 issuance_paused=issuance_paused,
                 # Resolved with the very function ticket issue calls, so the
                 # fleet view cannot drift from dispatch as the policy changes.
-                allowed_slots=(
-                    0
-                    if issuance_paused
-                    else allowed_slot_count(
-                        slot_settings,
-                        advertised_slots=(capacity.configured_slots if capacity else 1),
-                        sample=HostResourceSample(
-                            cpu_percent=(
-                                metrics.cpu_percent if metrics is not None else None
-                            ),
-                            memory_percent=(
-                                metrics.memory_percent if metrics is not None else None
-                            ),
-                            disk_percent=(
-                                metrics.disk_percent if metrics is not None else None
-                            ),
-                        ),
-                    )
+                allowed_slots=allowed_slots,
+                reserved_round_slots=reserved_round_slots(
+                    slot_settings,
+                    validator_hotkey=row.validator_hotkey,
+                    allowed_slots=allowed_slots,
+                    rounds_active=(
+                        round_reservation_active and validator_advertises_rounds(row)
+                    ),
                 ),
                 healthy_slots=(capacity.healthy_slots if capacity else ["slot-0"]),
                 admission=(capacity.admission if capacity else "accepting"),
@@ -5306,6 +5320,7 @@ async def load_validator_fleet(
         now=now,
         active_bench_version=await active_bench_version(session),
         slot_settings=await resolve_slot_settings(app_state),
+        round_reservation_active=await round_reservation_active(app_state, session),
     )
 
 
@@ -7312,6 +7327,9 @@ async def operations(
         now=now,
         active_bench_version=active_version,
         slot_settings=await resolve_slot_settings(request.app.state),
+        round_reservation_active=await round_reservation_active(
+            request.app.state, session
+        ),
     )
     rows_by_agent = {row.agent.agent_id: row for row in activity_rows}
     desired_version = cast(int, benchmark_rollout["desired_version"])

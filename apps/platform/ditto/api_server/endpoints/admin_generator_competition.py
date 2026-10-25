@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +48,9 @@ from ditto.api_server.generator_competition import (
     settings_checksum,
     settings_from_row,
     submission_summary,
+)
+from ditto.api_server.generator_round_reservation import (
+    invalidate_round_reservation,
 )
 from ditto.api_server.generator_rounds import void_round
 from ditto.db.models import GeneratorCompetitionSettingsRevision as RevisionRow
@@ -160,7 +163,10 @@ async def _retire_rounds_for_interval_change(
 
 @router.post("/settings", response_model=GeneratorSettingsRevision)
 async def create_settings_revision(
-    payload: AdminGeneratorSettingsRequest, _admin: AdminDep, session: SessionDep
+    request: Request,
+    payload: AdminGeneratorSettingsRequest,
+    _admin: AdminDep,
+    session: SessionDep,
 ) -> GeneratorSettingsRevision:
     """Append one optimistic, confirmation-gated revision."""
     reason = payload.reason.strip()
@@ -226,6 +232,9 @@ async def create_settings_revision(
             detail="generator competition settings changed concurrently; refresh",
         ) from exc
     await session.refresh(row)
+    # Round slot reservations follow mode/validator_rounds_enabled; land the
+    # change on this worker now, the others within the resolver TTL.
+    invalidate_round_reservation(request.app.state)
     return _revision(row)
 
 

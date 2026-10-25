@@ -206,6 +206,10 @@ async def request_generator_round_job(
             slot_settings=slot_settings,
             validator_hotkey=payload.validator_hotkey,
             now=now,
+            # Rounds may take any free slot below the validator's allowance,
+            # including the ones the reservation holds back from other lanes.
+            lane="round",
+            round_reservation_active=True,
             requested_slot_id=payload.slot_id,
         )
         if slot is None:

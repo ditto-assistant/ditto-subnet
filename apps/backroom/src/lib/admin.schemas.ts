@@ -4232,6 +4232,39 @@ function refineCeiling(value: number, key: string, context: z.RefinementCtx) {
   }
 }
 
+// One validator's departure from the subnet-wide policy. Validators differ a
+// lot in CPU, RAM and disk (their heartbeats carry host_specs), so a uniform cap
+// is wrong for most of them. `null`/absent inherits the global value; an
+// override never widens past what the validator advertises, and the resource
+// ceilings and pause list still apply on top of it.
+export const MAX_PER_VALIDATOR_OVERRIDES = 256
+
+export const validatorSlotOverrideSchema = z
+  .object({
+    max_concurrent_slots: z
+      .number()
+      .int()
+      .min(1)
+      .max(VALIDATOR_HARD_SLOT_CEILING)
+      .nullable()
+      .optional(),
+    generator_round_reserved_slots: z
+      .number()
+      .int()
+      .min(0)
+      .max(VALIDATOR_HARD_SLOT_CEILING)
+      .nullable()
+      .optional(),
+  })
+  .refine(
+    (value) =>
+      value.max_concurrent_slots != null || value.generator_round_reserved_slots != null,
+    {
+      message:
+        'a per_validator override must set max_concurrent_slots or generator_round_reserved_slots; remove the entry to inherit the global policy',
+    },
+  )
+
 // Every knob is REQUIRED. A revision stores the complete policy and never a
 // diff, so a field omitted from a write is not inherited from the current
 // revision — it would resolve to the shipped default. The platform correctly
@@ -4257,8 +4290,34 @@ export const validatorSlotSettingsSchema = z
     // an older or partial client cannot resume a paused validator while
     // changing an unrelated capacity knob.
     paused_validator_hotkeys: z.array(z.string().regex(SS58_HOTKEY_PATTERN)).max(256),
+    // Slots on each validator held back for generator-competition round runs
+    // while rounds are enabled: min(n, allowed - 1), so at least one slot stays
+    // for canonical and retest work. Optional on the wire only so a platform
+    // that predates it still parses; Platform refuses a write that omits it (or
+    // per_validator) while the current revision sets a non-default value, so
+    // leaving either out can never silently reset it.
+    generator_round_reserved_slots: z
+      .number()
+      .int()
+      .min(0)
+      .max(VALIDATOR_HARD_SLOT_CEILING)
+      .optional(),
+    // Per-validator overrides keyed by ss58 hotkey.
+    per_validator: z
+      .record(z.string().regex(SS58_HOTKEY_PATTERN), validatorSlotOverrideSchema)
+      .optional(),
   })
   .superRefine((value, context) => {
+    if (
+      value.per_validator &&
+      Object.keys(value.per_validator).length > MAX_PER_VALIDATOR_OVERRIDES
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: `per_validator holds at most ${MAX_PER_VALIDATOR_OVERRIDES} overrides`,
+        path: ['per_validator'],
+      })
+    }
     refineCeiling(value.disk_percent_ceiling, 'disk_percent_ceiling', context)
     refineCeiling(value.memory_percent_ceiling, 'memory_percent_ceiling', context)
     refineCeiling(value.cpu_percent_ceiling, 'cpu_percent_ceiling', context)
@@ -4324,11 +4383,39 @@ export const effectiveValidatorSlotSettingsSchema = z.object({
   max_age_seconds: z.number().nonnegative(),
 })
 
+// How the policy resolves for one validator right now, computed by Platform with
+// the same functions ticket issue calls, beside the hardware it announced.
+export const validatorSlotAllocationSchema = z.object({
+  validator_hotkey: z.string(),
+  seen_at: z.string().nullable(),
+  online: z.boolean(),
+  issuance_paused: z.boolean(),
+  // Whether the heartbeat advertises generator-round support; a validator that
+  // does not reserves nothing.
+  round_capable: z.boolean(),
+  override: validatorSlotOverrideSchema.nullable(),
+  advertised_slots: z.number().int().nonnegative(),
+  healthy_slots: z.number().int().nonnegative(),
+  max_concurrent_slots: z.number().int().positive(),
+  allowed_slots: z.number().int().nonnegative(),
+  configured_reserved_round_slots: z.number().int().nonnegative(),
+  reserved_round_slots: z.number().int().nonnegative(),
+  non_round_slot_budget: z.number().int().nonnegative(),
+  live_leases_by_purpose: z.record(z.string(), z.number().int().nonnegative()),
+  host_specs: screenerHostSpecsSchema.nullable(),
+  cpu_percent: z.number().int().nullable(),
+  memory_percent: z.number().int().nullable(),
+  disk_percent: z.number().int().nullable(),
+})
+
 export const validatorSlotSettingsControlSchema = z.object({
   current: z.array(validatorSlotSettingsRevisionSchema),
   history: z.array(validatorSlotSettingsRevisionSchema),
   default: validatorSlotSettingsSchema,
   effective: effectiveValidatorSlotSettingsSchema,
+  // Optional only so a Backroom deployed ahead of Platform still parses.
+  generator_round_reservation_active: z.boolean().optional(),
+  fleet: z.array(validatorSlotAllocationSchema).optional(),
 })
 
 // The confirmation names the RESULTING cap, so the number is stated twice in one
@@ -4388,6 +4475,8 @@ export const setValidatorSlotSettingsInputSchema = z
   })
 
 export type ValidatorSlotSettings = z.infer<typeof validatorSlotSettingsSchema>
+export type ValidatorSlotOverride = z.infer<typeof validatorSlotOverrideSchema>
+export type ValidatorSlotAllocation = z.infer<typeof validatorSlotAllocationSchema>
 export type ValidatorSlotSettingsControl = z.infer<
   typeof validatorSlotSettingsControlSchema
 >
@@ -9330,6 +9419,7 @@ const validatorCapacityEntrySchema = z.object({
   issuance_paused: z.boolean(),
   configured_slots: z.number().int().positive(),
   serviceable_slots: z.number().int().nonnegative(),
+  reserved_round_slots: z.number().int().nonnegative(),
   claimed_slots: z.number().int().nonnegative(),
   assignments: z.array(validatorCapacityAssignmentSchema),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityEntry>)

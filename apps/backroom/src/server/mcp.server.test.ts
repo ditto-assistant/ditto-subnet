@@ -4401,6 +4401,7 @@ describe('Backroom MCP tools', () => {
             issuance_paused: false,
             configured_slots: 8,
             serviceable_slots: 8,
+            reserved_round_slots: 1,
             claimed_slots: 2,
             assignments: [
               {
@@ -4460,6 +4461,7 @@ describe('Backroom MCP tools', () => {
     expect(
       body.validators[0]?.assignments.map((item) => item.estimated_remaining_slot_minutes),
     ).toEqual([120, null])
+    expect(body.validators[0]).toMatchObject({ reserved_round_slots: 1 })
 
     await client.close()
     await server.close()
@@ -6245,6 +6247,66 @@ describe('Backroom MCP tools', () => {
       reason: 'ramp the fleet to three slots now that dispatch is stable',
       actor: 'peyton@omniaura.ai',
       confirmation: 'APPLY VALIDATOR SLOT CAP 3',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('forwards per-validator overrides and the round reservation verbatim', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const bigHost = '5' + 'B'.repeat(47)
+    const settings = {
+      max_concurrent_slots: 3,
+      disk_percent_ceiling: 90,
+      memory_percent_ceiling: 90,
+      cpu_percent_ceiling: 0,
+      resource_block_percent_ceiling: 95,
+      paused_validator_hotkeys: [],
+      generator_round_reserved_slots: 1,
+      per_validator: {
+        [bigHost]: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+      },
+    }
+    const control = {
+      current: [],
+      history: [],
+      default: { ...settings, per_validator: {} },
+      effective: {
+        revision: 1,
+        scope: '*',
+        settings,
+        checksum: 'ef'.repeat(32),
+        source: 'revision',
+        hard_slot_ceiling: 8,
+        disk_restricted_slots: 1,
+        max_age_seconds: 5.0,
+      },
+      generator_round_reservation_active: true,
+      fleet: [],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 1 }))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_validator_slot_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings,
+        reason: 'size the big validator up and reserve two round slots on it',
+        confirmation: 'APPLY VALIDATOR SLOT CAP 3',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).settings).toEqual(settings)
+    expect(readJsonResult(response)).toMatchObject({
+      generator_round_reservation_active: true,
+      effective: { settings },
     })
 
     await client.close()

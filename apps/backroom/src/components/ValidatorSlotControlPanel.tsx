@@ -151,6 +151,12 @@ export function ValidatorSlotControlPanel({
     cpu_percent_ceiling: toWholeNumber(cpuCeiling),
     resource_block_percent_ceiling: toWholeNumber(blockCeiling),
     paused_validator_hotkeys: inForce.paused_validator_hotkeys,
+    // Not edited here (set_validator_slot_settings owns them), but a revision
+    // stores the whole policy, so carry the ones in force forward untouched.
+    ...(inForce.generator_round_reserved_slots === undefined
+      ? {}
+      : { generator_round_reserved_slots: inForce.generator_round_reserved_slots }),
+    ...(inForce.per_validator === undefined ? {} : { per_validator: inForce.per_validator }),
   }
   // The same schema the MCP tool validates against, so the console cannot send a
   // policy the platform would reject and cannot invent a bound of its own.

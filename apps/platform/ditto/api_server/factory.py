@@ -160,6 +160,9 @@ from ditto.api_server.endpoints.verification_replay import (
     screener_router as screener_verification_replay_router,
 )
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
+from ditto.api_server.generator_round_reservation import (
+    GeneratorRoundReservationResolver,
+)
 from ditto.api_server.generator_rounds import GeneratorRoundLoop
 from ditto.api_server.github_link import GithubLinkClient
 from ditto.api_server.inference_concurrency_settings import (
@@ -606,6 +609,10 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # issue time; falls back to its conservative module default (cap 2) whenever
     # a revision cannot be read, so no failure path uncaps the fleet.
     app.state.validator_slot_settings = ValidatorSlotSettingsResolver()
+    # Whether each validator's reserved generator-round slots are held back
+    # right now (competition on and validator rounds enabled). Cached for the
+    # same short TTL because the canonical issue path asks on every poll.
+    app.state.generator_round_reservation = GeneratorRoundReservationResolver()
     # The object exists even when lifespan is skipped in unit tests. Its
     # snapshot path is synchronous and disabled by default; production lifespan
     # starts the optional background refresher without blocking API startup.

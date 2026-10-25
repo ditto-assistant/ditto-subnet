@@ -15290,6 +15290,13 @@ export interface components {
             current: components["schemas"]["ValidatorSlotSettingsRevision"][];
             default: components["schemas"]["ValidatorSlotSettings"];
             effective: components["schemas"]["EffectiveValidatorSlotSettings"];
+            /** Fleet */
+            fleet?: components["schemas"]["ValidatorSlotAllocation"][];
+            /**
+             * Generator Round Reservation Active
+             * @default false
+             */
+            generator_round_reservation_active: boolean;
             /** History */
             history: components["schemas"]["ValidatorSlotSettingsRevision"][];
         };
@@ -31116,6 +31123,12 @@ export interface components {
              */
             reported_at: string;
             /**
+             * Reserved Round Slots
+             * @description How many of `allowed_slots` are held back for generator-competition round runs: canonical and continual-retest work may hold at most `allowed_slots - reserved_round_slots` leases. Zero while validator rounds are disabled, when this validator does not advertise round support, or when only one slot is allowed.
+             * @default 0
+             */
+            reserved_round_slots: number;
+            /**
              * Scorer Liveness
              * @description Whether the validator's scorer answered its `/v1/capabilities` probe: `serving`, `degraded` (answered, part of the reply rejected), `not_serving` (no usable answer), or `unreported` (no probe evidence on this heartbeat). Requires heartbeat protocol 15; older validators always read `unreported`.
              * @default unreported
@@ -38877,6 +38890,12 @@ export interface components {
             /** Issuance Paused */
             issuance_paused: boolean;
             /**
+             * Reserved Round Slots
+             * @description Of the allowed slots, how many are held back for generator-round runs: canonical and retest work cannot take them. Zero while validator rounds are disabled or the validator does not advertise round support.
+             * @default 0
+             */
+            reserved_round_slots: number;
+            /**
              * Seen At
              * Format: date-time
              */
@@ -39099,6 +39118,69 @@ export interface components {
             seen_at: string;
         };
         /**
+         * ValidatorSlotAllocation
+         * @description How the slot policy resolves for one validator right now.
+         *
+         *     Built with the same functions ticket issue calls, so what an operator reads
+         *     here is what dispatch enforces: the per-validator cap, the resource
+         *     ceilings, the pause list, and the generator-round reservation, beside the
+         *     hardware the validator announced so each host can be sized on evidence.
+         */
+        ValidatorSlotAllocation: {
+            /** Advertised Slots */
+            advertised_slots: number;
+            /** Allowed Slots */
+            allowed_slots: number;
+            /** Configured Reserved Round Slots */
+            configured_reserved_round_slots: number;
+            /** Cpu Percent */
+            cpu_percent: number | null;
+            /** Disk Percent */
+            disk_percent: number | null;
+            /** Healthy Slots */
+            healthy_slots: number;
+            host_specs: components["schemas"]["HostSpecs"] | null;
+            /** Issuance Paused */
+            issuance_paused: boolean;
+            /** Live Leases By Purpose */
+            live_leases_by_purpose: {
+                [key: string]: number;
+            };
+            /** Max Concurrent Slots */
+            max_concurrent_slots: number;
+            /** Memory Percent */
+            memory_percent: number | null;
+            /** Non Round Slot Budget */
+            non_round_slot_budget: number;
+            /** Online */
+            online: boolean;
+            override: components["schemas"]["ValidatorSlotOverride"] | null;
+            /** Reserved Round Slots */
+            reserved_round_slots: number;
+            /** Round Capable */
+            round_capable: boolean;
+            /** Seen At */
+            seen_at: string | null;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * ValidatorSlotOverride
+         * @description One validator's departure from the subnet-wide slot policy.
+         *
+         *     Validators differ widely in CPU, memory and disk (their heartbeats carry
+         *     ``host_specs``), so one uniform cap either starves the big hosts or
+         *     overloads the small ones. Each field is ``None`` to inherit the global
+         *     value; an override never widens anything past what the validator itself
+         *     advertises, and the resource ceilings and the pause list still apply.
+         */
+        ValidatorSlotOverride: {
+            /** Generator Round Reserved Slots */
+            generator_round_reserved_slots?: number | null;
+            /** Max Concurrent Slots */
+            max_concurrent_slots?: number | null;
+        };
+        /**
          * ValidatorSlotSettings
          * @description The full, hot-swappable validator-slot policy.
          *
@@ -39133,6 +39215,11 @@ export interface components {
              */
             disk_percent_ceiling: number;
             /**
+             * Generator Round Reserved Slots
+             * @default 1
+             */
+            generator_round_reserved_slots: number;
+            /**
              * Max Concurrent Slots
              * @default 2
              */
@@ -39144,6 +39231,10 @@ export interface components {
             memory_percent_ceiling: number;
             /** Paused Validator Hotkeys */
             paused_validator_hotkeys?: string[];
+            /** Per Validator */
+            per_validator?: {
+                [key: string]: components["schemas"]["ValidatorSlotOverride"];
+            };
             /**
              * Resource Block Percent Ceiling
              * @default 95

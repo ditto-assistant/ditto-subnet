@@ -3419,6 +3419,121 @@ describe('validator slot settings schemas', () => {
     expect(parsed.current[0].actor).toBe('peyton@omniaura.ai')
   })
 
+  describe('per-validator overrides and the round reservation', () => {
+    const bigHost = '5' + 'B'.repeat(47)
+    const smallHost = '5' + 'C'.repeat(47)
+    const withOverrides = {
+      ...settings,
+      generator_round_reserved_slots: 1,
+      per_validator: {
+        [bigHost]: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+        [smallHost]: { max_concurrent_slots: 1, generator_round_reserved_slots: null },
+      },
+    }
+
+    it('accepts and round-trips overrides through the write schema', () => {
+      const parsed = setValidatorSlotSettingsInputSchema.parse(
+        input({ settings: withOverrides, confirmation: validatorSlotConfirmation(2) }),
+      )
+      expect(parsed.settings).toEqual(withOverrides)
+      // The body Backroom forwards is exactly what it parsed: nothing stripped.
+      expect(JSON.parse(JSON.stringify(parsed.settings))).toEqual(withOverrides)
+    })
+
+    it('still parses a policy from a platform that predates the new fields', () => {
+      expect(validatorSlotSettingsSchema.parse(settings)).toEqual(settings)
+    })
+
+    it('rejects out-of-range, empty and mis-keyed overrides', () => {
+      const bad = (perValidator: unknown, reserved: unknown = 1) =>
+        validatorSlotSettingsSchema.safeParse({
+          ...settings,
+          generator_round_reserved_slots: reserved,
+          per_validator: perValidator,
+        }).success
+      expect(bad({}, 9)).toBe(false)
+      expect(bad({}, -1)).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 0 } })).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 9 } })).toBe(false)
+      expect(bad({ [bigHost]: { generator_round_reserved_slots: 9 } })).toBe(false)
+      expect(bad({ [bigHost]: {} })).toBe(false)
+      expect(bad({ 'not-a-hotkey': { max_concurrent_slots: 2 } })).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 4 } })).toBe(true)
+    })
+
+    it('caps the override map at 256 validators', () => {
+      const overrides = (count: number) =>
+        Object.fromEntries(
+          Array.from({ length: count }, (_, index) => [
+            '5' + index.toString().padStart(47, 'A').replace(/0/g, 'z'),
+            { max_concurrent_slots: 2 },
+          ]),
+        )
+      expect(
+        validatorSlotSettingsSchema.safeParse({ ...settings, per_validator: overrides(256) })
+          .success,
+      ).toBe(true)
+      expect(
+        validatorSlotSettingsSchema.safeParse({ ...settings, per_validator: overrides(257) })
+          .success,
+      ).toBe(false)
+    })
+
+    it('reads the per-validator fleet sizing view', () => {
+      const parsed = validatorSlotSettingsControlSchema.parse({
+        current: [],
+        history: [],
+        default: settings,
+        effective: {
+          revision: 0,
+          scope: '*',
+          settings: withOverrides,
+          checksum: '',
+          source: 'default',
+          hard_slot_ceiling: 8,
+          disk_restricted_slots: 1,
+          max_age_seconds: 5.0,
+        },
+        generator_round_reservation_active: true,
+        fleet: [
+          {
+            validator_hotkey: bigHost,
+            seen_at: '2026-10-25T00:00:00Z',
+            online: true,
+            issuance_paused: false,
+            round_capable: true,
+            override: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+            advertised_slots: 8,
+            healthy_slots: 8,
+            max_concurrent_slots: 6,
+            allowed_slots: 6,
+            configured_reserved_round_slots: 2,
+            reserved_round_slots: 2,
+            non_round_slot_budget: 4,
+            live_leases_by_purpose: { canonical_quorum: 3, generator_round: 1 },
+            host_specs: {
+              cpu_count: 32,
+              cpu_physical_cores: 16,
+              memory_total_mib: 131072,
+              disk_total_gib: 2000,
+              architecture: 'x86_64',
+            },
+            cpu_percent: 60,
+            memory_percent: 20,
+            disk_percent: 40,
+          },
+        ],
+      })
+      expect(parsed.generator_round_reservation_active).toBe(true)
+      expect(parsed.fleet?.[0]).toMatchObject({
+        allowed_slots: 6,
+        reserved_round_slots: 2,
+        non_round_slot_budget: 4,
+      })
+      expect(parsed.effective.settings.per_validator).toEqual(withOverrides.per_validator)
+    })
+  })
+
   // The empty-default failure class: the platform 422s a partial body, but a
   // client that defaults its knobs pre-fills the omission into a full body and
   // the operator silently ships a default they never chose. Every knob is

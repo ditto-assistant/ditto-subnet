@@ -32,6 +32,7 @@ from pydantic import ValidationError
 
 from ditto.api_models.validator_slot_settings import (
     CEILING_DISABLED,
+    HARD_SLOT_CEILING,
     EffectiveValidatorSlotSettings,
     ValidatorSlotSettings,
 )
@@ -158,11 +159,58 @@ def validator_issuance_paused(
     return validator_hotkey in settings.paused_validator_hotkeys
 
 
+def effective_max_concurrent_slots(
+    settings: ValidatorSlotSettings, *, validator_hotkey: str | None
+) -> int:
+    """The policy cap for one validator: its override, else the global cap."""
+    if validator_hotkey is not None:
+        override = settings.per_validator.get(validator_hotkey)
+        if override is not None and override.max_concurrent_slots is not None:
+            return override.max_concurrent_slots
+    return settings.max_concurrent_slots
+
+
+def configured_reserved_round_slots(
+    settings: ValidatorSlotSettings, *, validator_hotkey: str | None
+) -> int:
+    """The round reservation one validator is configured with, unclamped."""
+    if validator_hotkey is not None:
+        override = settings.per_validator.get(validator_hotkey)
+        if override is not None and override.generator_round_reserved_slots is not None:
+            return override.generator_round_reserved_slots
+    return settings.generator_round_reserved_slots
+
+
+def reserved_round_slots(
+    settings: ValidatorSlotSettings,
+    *,
+    validator_hotkey: str | None,
+    allowed_slots: int,
+    rounds_active: bool,
+) -> int:
+    """Slots on this validator held back for generator-competition round work.
+
+    ``min(R, allowed - 1)`` while rounds are enabled, where ``R`` is the
+    validator's override or the global default, and 0 otherwise. Callers fold
+    the validator's own round capability into ``rounds_active``: a validator
+    that can never take a round lease must not hold a slot for one. The ``- 1``
+    keeps at least one slot for canonical and retest work, so a one-slot
+    validator reserves nothing and rounds can never starve the quorum lane.
+    """
+    if not rounds_active or allowed_slots <= 1:
+        return 0
+    return min(
+        configured_reserved_round_slots(settings, validator_hotkey=validator_hotkey),
+        allowed_slots - 1,
+    )
+
+
 def allowed_slot_count(
     settings: ValidatorSlotSettings,
     *,
     advertised_slots: int,
     sample: HostResourceSample,
+    validator_hotkey: str | None = None,
 ) -> int:
     """How many slots this validator may hold live tickets for right now.
 
@@ -177,10 +225,18 @@ def allowed_slot_count(
     the caller compares the result against the validator's current live-lease
     count instead. A validator that crosses a ceiling mid-benchmark therefore
     still finishes and reports the work it already holds.
+
+    ``validator_hotkey`` selects that validator's ``per_validator`` cap, when it
+    has one. Every caller that knows the hotkey must pass it, so the fleet
+    views and every issuance path agree; ``None`` reads the global cap.
     """
     if blocked_resources(settings, sample):
         return 0
-    allowed = min(max(advertised_slots, 0), settings.max_concurrent_slots)
+    allowed = min(
+        max(advertised_slots, 0),
+        effective_max_concurrent_slots(settings, validator_hotkey=validator_hotkey),
+        HARD_SLOT_CEILING,
+    )
     if throttled_resources(settings, sample):
         return min(allowed, DISK_RESTRICTED_SLOTS)
     return allowed

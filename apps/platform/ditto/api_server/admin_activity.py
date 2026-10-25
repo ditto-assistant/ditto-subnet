@@ -111,9 +111,11 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
             (
                 "cpu_percent_ceiling",
                 "disk_percent_ceiling",
+                "generator_round_reserved_slots",
                 "max_concurrent_slots",
                 "memory_percent_ceiling",
                 "paused_validator_hotkeys",
+                "per_validator",
                 "resource_block_percent_ceiling",
             )
         ),

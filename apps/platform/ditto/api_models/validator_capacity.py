@@ -82,6 +82,18 @@ class ValidatorCapacityEntry(BaseModel):
             ),
         ),
     ]
+    reserved_round_slots: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Of the allowed slots, how many are held back for generator-"
+                "round runs: canonical and retest work cannot take them. Zero "
+                "while validator rounds are disabled or the validator does not "
+                "advertise round support."
+            ),
+        ),
+    ] = 0
     claimed_slots: Annotated[
         int,
         Field(

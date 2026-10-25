@@ -12,36 +12,58 @@ confirmation string + an actor/reason audit trail.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.benchmark_capacity import BenchmarkCapacity
+from ditto.api_models.system_health import HostSpecs
 from ditto.api_models.validator_slot_settings import (
     AdminValidatorSlotSettingsRequest,
     AdminValidatorSlotSettingsResponse,
+    ValidatorSlotAllocation,
     ValidatorSlotSettings,
     ValidatorSlotSettingsRevision,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.endpoints.validator import _heartbeat_resource_sample
+from ditto.api_server.generator_round_reservation import (
+    round_reservation_active,
+    validator_advertises_rounds,
+)
 from ditto.api_server.validator_slot_settings import (
     DEFAULT_SETTINGS,
     ValidatorSlotSettingsResolver,
+    allowed_slot_count,
+    configured_reserved_round_slots,
+    effective_max_concurrent_slots,
     effective_view,
+    reserved_round_slots,
+    settings_from_row,
+    validator_issuance_paused,
 )
+from ditto.db.models import ValidatorHeartbeat
 from ditto.db.models import ValidatorSlotSettingsRevision as RevisionRow
+from ditto.db.queries.heartbeats import list_validator_heartbeats
 from ditto.db.queries.validator_slot_settings import (
     GLOBAL_SCOPE,
     insert_validator_slot_settings_revision,
     latest_validator_slot_settings_revision,
     list_validator_slot_settings_revisions,
+    live_lease_purpose_counts,
 )
 
 router = APIRouter(prefix="/admin/validator-slot-settings", tags=["admin"])
+ONLINE_WINDOW = timedelta(minutes=5)
+"""The public fleet view's online window, so "online" means the same thing."""
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 
@@ -99,6 +121,94 @@ def _revision(row: RevisionRow) -> ValidatorSlotSettingsRevision:
     )
 
 
+def _heartbeat_capacity(row: ValidatorHeartbeat) -> BenchmarkCapacity | None:
+    if row.protocol_version < 10:
+        return None
+    with contextlib.suppress(ValidationError):
+        return BenchmarkCapacity.model_validate(row.benchmark_capacity)
+    return None
+
+
+def _heartbeat_host_specs(row: ValidatorHeartbeat) -> HostSpecs | None:
+    if row.protocol_version < 32 or not isinstance(row.host_specs, dict):
+        return None
+    with contextlib.suppress(ValidationError):
+        return HostSpecs.model_validate(row.host_specs)
+    return None
+
+
+def _allocation(
+    settings: ValidatorSlotSettings,
+    *,
+    hotkey: str,
+    heartbeat: ValidatorHeartbeat | None,
+    leases: dict[str, int],
+    rounds_active: bool,
+    now: datetime,
+) -> ValidatorSlotAllocation:
+    """Resolve one validator exactly as ticket issue does.
+
+    The canonical job path reads the advertised ``configured_slots``, the
+    latest resource sample, the pause list and the per-validator overrides;
+    this is the same arithmetic over the same stored heartbeat.
+    """
+    capacity = _heartbeat_capacity(heartbeat) if heartbeat is not None else None
+    if heartbeat is None:
+        advertised, healthy = 0, 0
+    elif capacity is None:
+        advertised, healthy = 1, 1
+    else:
+        advertised, healthy = capacity.configured_slots, len(capacity.healthy_slots)
+    sample = _heartbeat_resource_sample(heartbeat)
+    paused = validator_issuance_paused(settings, validator_hotkey=hotkey)
+    allowed = (
+        0
+        if paused
+        else allowed_slot_count(
+            settings,
+            advertised_slots=advertised,
+            sample=sample,
+            validator_hotkey=hotkey,
+        )
+    )
+    round_capable = validator_advertises_rounds(heartbeat)
+    reserved = reserved_round_slots(
+        settings,
+        validator_hotkey=hotkey,
+        allowed_slots=allowed,
+        rounds_active=rounds_active and round_capable,
+    )
+    seen_at = heartbeat.seen_at if heartbeat is not None else None
+    if seen_at is not None and seen_at.tzinfo is None:
+        seen_at = seen_at.replace(tzinfo=UTC)
+    return ValidatorSlotAllocation(
+        validator_hotkey=hotkey,
+        seen_at=seen_at,
+        online=seen_at is not None and seen_at >= now - ONLINE_WINDOW,
+        issuance_paused=paused,
+        round_capable=round_capable,
+        override=settings.per_validator.get(hotkey),
+        advertised_slots=advertised,
+        healthy_slots=healthy,
+        max_concurrent_slots=effective_max_concurrent_slots(
+            settings, validator_hotkey=hotkey
+        ),
+        allowed_slots=allowed,
+        configured_reserved_round_slots=configured_reserved_round_slots(
+            settings, validator_hotkey=hotkey
+        ),
+        reserved_round_slots=reserved,
+        non_round_slot_budget=allowed - reserved,
+        live_leases_by_purpose=dict(sorted(leases.items())),
+        host_specs=(
+            _heartbeat_host_specs(heartbeat) if heartbeat is not None else None
+        ),
+        cpu_percent=sample.cpu_percent,
+        memory_percent=sample.memory_percent,
+        disk_percent=sample.disk_percent,
+    )
+
+
 def _resolver(request: Request) -> ValidatorSlotSettingsResolver:
     resolver = getattr(request.app.state, "validator_slot_settings", None)
     if resolver is None:  # pragma: no cover - always wired in create_api_server
@@ -117,13 +227,35 @@ async def get_settings(
     """Current policy, append-only history, the module default, and the settings
     actually in force right now (built from a fresh read, not the TTL cache)."""
     resolver = _resolver(request)
+    now = datetime.now(UTC)
     latest = await latest_validator_slot_settings_revision(session)
     history = await list_validator_slot_settings_revisions(session)
+    # The fleet is resolved against the fresh row, like ``effective``, so an
+    # operator sees the policy just written rather than the TTL cache's copy.
+    settings = settings_from_row(latest)
+    rounds_active = await round_reservation_active(request.app.state, session)
+    heartbeats = {
+        row.validator_hotkey: row for row in await list_validator_heartbeats(session)
+    }
+    leases = await live_lease_purpose_counts(session, now=now)
+    hotkeys = sorted(set(heartbeats) | set(settings.per_validator))
     return AdminValidatorSlotSettingsResponse(
         current=[_revision(latest)] if latest is not None else [],
         history=[_revision(row) for row in history],
         default=DEFAULT_SETTINGS,
         effective=effective_view(latest, ttl_seconds=resolver.ttl_seconds),
+        generator_round_reservation_active=rounds_active,
+        fleet=[
+            _allocation(
+                settings,
+                hotkey=hotkey,
+                heartbeat=heartbeats.get(hotkey),
+                leases=leases.get(hotkey, {}),
+                rounds_active=rounds_active,
+                now=now,
+            )
+            for hotkey in hotkeys
+        ],
     )
 
 
@@ -171,6 +303,25 @@ async def create_settings_revision(
                 "pauses are active; refresh before applying"
             ),
         )
+    # Same rule for the per-validator overrides and the round reservation: a
+    # client that does not know them would otherwise reset them to the shipped
+    # defaults on an unrelated edit.
+    for field, still_default in (
+        ("per_validator", not current_settings.per_validator),
+        (
+            "generator_round_reserved_slots",
+            current_settings.generator_round_reserved_slots
+            == DEFAULT_SETTINGS.generator_round_reserved_slots,
+        ),
+    ):
+        if field not in payload.settings.model_fields_set and not still_default:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{field} is required while the current policy sets it; "
+                    "refresh before applying"
+                ),
+            )
     expected_confirmation = confirmation_for(payload.settings, current=current_settings)
     if payload.confirmation != expected_confirmation:
         raise HTTPException(

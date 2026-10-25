@@ -4945,6 +4945,21 @@ class PublicValidatorHeartbeat(BaseModel):
             ),
         ),
     ] = 1
+    reserved_round_slots: Annotated[
+        int,
+        Field(
+            ge=0,
+            le=8,
+            description=(
+                "How many of `allowed_slots` are held back for generator-"
+                "competition round runs: canonical and continual-retest work "
+                "may hold at most `allowed_slots - reserved_round_slots` leases. "
+                "Zero while validator rounds are disabled, when this validator "
+                "does not advertise round support, or when only one slot is "
+                "allowed."
+            ),
+        ),
+    ] = 0
     issuance_paused: Annotated[
         bool,
         Field(

@@ -170,6 +170,8 @@ class TestDefaultsAndRoundTrip:
             "cpu_percent_ceiling": 0,
             "resource_block_percent_ceiling": 95,
             "paused_validator_hotkeys": [],
+            "generator_round_reserved_slots": 1,
+            "per_validator": {},
         }
         assert body["effective"]["source"] == "default"
         assert body["effective"]["revision"] == 0
@@ -227,6 +229,8 @@ class TestDefaultsAndRoundTrip:
             "cpu_percent_ceiling": 95,
             "resource_block_percent_ceiling": 100,
             "paused_validator_hotkeys": [],
+            "generator_round_reserved_slots": 1,
+            "per_validator": {},
         }
 
     async def test_an_omitted_ceiling_falls_back_to_its_shipped_default(
@@ -266,6 +270,8 @@ class TestDefaultsAndRoundTrip:
             "cpu_percent_ceiling": 0,
             "resource_block_percent_ceiling": 95,
             "paused_validator_hotkeys": [],
+            "generator_round_reserved_slots": 1,
+            "per_validator": {},
         }
 
     async def test_kill_switch_to_one_slot(
