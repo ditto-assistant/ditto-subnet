@@ -196,16 +196,26 @@ async def request_generator_round_job(
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
         if not _round_capable(heartbeat, now=now):
             return _no_work()
-        # Read the chain head for the lease cutoff after the cheap rejections
-        # and before the round row is locked, so no row lock spans the RPC.
-        # It is read here, on whichever process serves the request, because
-        # the round loop runs on one role only and its last read can be
-        # stale. An unreadable chain declines the lease; the validator polls
-        # again.
-        try:
-            head = await chain.read_epoch_schedule(config.chain.netuid)
-        except Exception as exc:  # noqa: BLE001 - any read failure declines
-            logger.warning("generator round lease: chain head unreadable: %s", exc)
+    # The nonce is consumed and committed above. Read the chain head for the
+    # lease cutoff only for a request that passed the cheap rejections, and
+    # outside any transaction, so neither a row lock nor a pooled connection
+    # spans the RPC. It is read on whichever process serves the request
+    # because the round loop runs on one role only and its last read can be
+    # stale. An unreadable chain declines the lease; the validator polls again.
+    try:
+        head = await chain.read_epoch_schedule(config.chain.netuid)
+    except Exception as exc:  # noqa: BLE001 - any read failure declines
+        logger.warning("generator round lease: chain head unreadable: %s", exc)
+        return _no_work()
+    async with session.begin():
+        # Re-read under this transaction: the heartbeat feeds slot selection,
+        # and the settings may have changed while the chain was being read.
+        resolved = await load_settings(session)
+        settings = resolved.settings
+        if settings.mode == "off" or not settings.validator_rounds_enabled:
+            return _no_work()
+        heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
+        if not _round_capable(heartbeat, now=now):
             return _no_work()
         # Locked so concurrent polls pick pending agents one at a time: the
         # second sees the first's committed attempt instead of leasing the
