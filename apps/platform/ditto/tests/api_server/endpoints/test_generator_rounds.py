@@ -43,7 +43,6 @@ from ditto.api_models.generator_round_validator import (
 from ditto.api_models.generator_rounds import (
     REGISTER_DEFAULT_GENERATOR_CONFIRMATION,
     RELEASE_ROUND_LEASE_CONFIRMATION,
-    GeneratorRoundSchedule,
     onchain_commitment_payload,
     void_round_confirmation,
 )
@@ -118,6 +117,13 @@ def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> MagicMock
         ]
     )
     chain.set_commitment = AsyncMock()
+    # The lease endpoint reads the head at lease time; block 0 leaves every
+    # test round its whole window. Tests that drive the loop override this.
+    chain.read_epoch_schedule = AsyncMock(
+        return_value=SimpleNamespace(
+            subnet_epoch_index=0, last_epoch_block=0, tempo=360, block=0
+        )
+    )
 
     async def _chain() -> MagicMock:
         return chain
@@ -480,7 +486,7 @@ class TestRoundLifecycle:
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        _install(app, session_maker)
+        chain = _install(app, session_maker)
         await _apply_settings(client, validator_rounds_enabled=True)
         agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
         _patch_panel(monkeypatch, agents)
@@ -554,29 +560,24 @@ class TestRoundLifecycle:
 
         # No lease too close to the round's close: closing revokes the run's
         # inference grant mid-seed, so the run could only fault every case.
+        # The head is read at lease time; an unreadable chain declines too.
         async with session_maker() as session:
             row = await get_round(session, 3)
             assert row is not None and row.open_block is not None
             close_block = row.open_block + row.epochs_per_round * 360
-        app.state.generator_round_loop = SimpleNamespace(
-            schedule=GeneratorRoundSchedule(
-                mode="shadow",
-                epochs_per_round=row.epochs_per_round,
-                tempo=360,
-                block=close_block - 10,
-                observed_at=datetime.now(UTC),
+        for read in (
+            AsyncMock(return_value=SimpleNamespace(block=close_block - 10, tempo=360)),
+            AsyncMock(side_effect=RuntimeError("rpc down")),
+        ):
+            chain.read_epoch_schedule = read
+            declined = await client.post(
+                "/api/v1/validator/generator-round-job",
+                headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
+                json=_signed_job(),
             )
-        )
-        closing = await client.post(
-            "/api/v1/validator/generator-round-job",
-            headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
-            json=_signed_job(),
-        )
-        assert closing.status_code == 204, closing.text
-        app.state.generator_round_loop.schedule = (
-            app.state.generator_round_loop.schedule.model_copy(
-                update={"block": row.open_block + 5}
-            )
+            assert declined.status_code == 204, declined.text
+        chain.read_epoch_schedule = AsyncMock(
+            return_value=SimpleNamespace(block=row.open_block + 5, tempo=360)
         )
 
         # Validators run every panel agent on round tickets.
@@ -1325,22 +1326,14 @@ def test_round_capability_does_not_need_the_private_v13_transport() -> None:
 
 
 def test_round_seconds_left_tracks_the_closing_boundary() -> None:
-    now = datetime(2026, 10, 25, 18, 0, tzinfo=UTC)
     row = GeneratorRound(round_index=7, epochs_per_round=1, open_block=9_000)
     cutoff = ROUND_LEASE_CUTOFF.total_seconds()
-
-    def schedule(block: int) -> GeneratorRoundSchedule:
-        return GeneratorRoundSchedule(
-            mode="shadow", epochs_per_round=1, tempo=360, block=block, observed_at=now
-        )
-
-    # 60 blocks of 12 s remain, minus the minute since the loop read the chain.
-    closing = round_seconds_left(row, schedule(9_300), now=now + timedelta(minutes=1))
-    assert closing == 60 * 12 - 60
+    closing = round_seconds_left(row, block=9_300, tempo=360)
+    assert closing == 60 * 12
     assert closing < cutoff
-    opened = round_seconds_left(row, schedule(9_005), now=now)
+    opened = round_seconds_left(row, block=9_005, tempo=360)
     assert opened is not None and opened > cutoff
-    # No position read yet: the caller does not gate on a guess.
-    assert round_seconds_left(row, None, now=now) is None
+    row.epochs_per_round = 4
+    assert round_seconds_left(row, block=9_300, tempo=360) == (4 * 360 - 300) * 12
     row.open_block = None
-    assert round_seconds_left(row, schedule(9_300), now=now) is None
+    assert round_seconds_left(row, block=9_300, tempo=360) is None

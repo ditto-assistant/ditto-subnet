@@ -202,10 +202,6 @@ async def request_generator_round_job(
         row = await running_round(session, for_update=True)
         if row is None or row.dataset_sha256 is None:
             return _no_work()
-        loop = getattr(request.app.state, "generator_round_loop", None)
-        left = round_seconds_left(row, getattr(loop, "schedule", None), now=now)
-        if left is not None and left < ROUND_LEASE_CUTOFF.total_seconds():
-            return _no_work()
         slot = await v._idle_retest_slot(
             session,
             heartbeat=heartbeat,
@@ -215,6 +211,17 @@ async def request_generator_round_job(
             requested_slot_id=payload.slot_id,
         )
         if slot is None:
+            return _no_work()
+        # Read the head now, on whichever process serves this request: the
+        # round loop runs on one role only, and its last read can be stale. An
+        # unreadable chain declines the lease; the validator polls again.
+        try:
+            schedule = await chain.read_epoch_schedule(config.chain.netuid)
+        except Exception as exc:  # noqa: BLE001 - any read failure declines
+            logger.warning("generator round lease: chain head unreadable: %s", exc)
+            return _no_work()
+        left = round_seconds_left(row, block=schedule.block, tempo=schedule.tempo)
+        if left is not None and left < ROUND_LEASE_CUTOFF.total_seconds():
             return _no_work()
         ticket: ValidatorTicket | None = None
         for agent_id in await pending_panel_agents(session, row, now=now):
