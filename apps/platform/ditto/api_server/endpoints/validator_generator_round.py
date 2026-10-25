@@ -40,11 +40,13 @@ from ditto.api_models.validator import ValidatorCapabilities
 from ditto.api_server.endpoints import validator as v
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import (
+    ROUND_LEASE_CUTOFF,
     RoundSubmissionRejected,
     pending_panel_agents,
     record_panel_result,
     round_case_ids,
     round_for_dataset,
+    round_seconds_left,
     running_round,
     validate_round_results,
 )
@@ -199,6 +201,10 @@ async def request_generator_round_job(
         # same panel agent.
         row = await running_round(session, for_update=True)
         if row is None or row.dataset_sha256 is None:
+            return _no_work()
+        loop = getattr(request.app.state, "generator_round_loop", None)
+        left = round_seconds_left(row, getattr(loop, "schedule", None), now=now)
+        if left is not None and left < ROUND_LEASE_CUTOFF.total_seconds():
             return _no_work()
         slot = await v._idle_retest_slot(
             session,

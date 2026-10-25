@@ -43,6 +43,7 @@ from ditto.api_models.generator_round_validator import (
 from ditto.api_models.generator_rounds import (
     REGISTER_DEFAULT_GENERATOR_CONFIRMATION,
     RELEASE_ROUND_LEASE_CONFIRMATION,
+    GeneratorRoundSchedule,
     onchain_commitment_payload,
     void_round_confirmation,
 )
@@ -52,18 +53,21 @@ from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import (
+    ROUND_LEASE_CUTOFF,
     ChainPosition,
     GeneratorRoundLoop,
     advance_rounds,
     get_round,
     round_column_seed,
     round_commitment,
+    round_seconds_left,
     round_seed,
 )
 from ditto.chain.models import NeuronInfo
 from ditto.db.models import (
     Agent,
     GeneratorOperatorAction,
+    GeneratorRound,
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
@@ -547,6 +551,33 @@ class TestRoundLifecycle:
             "/api/v1/generator-scorer/round-results", headers=_SCORER, json=generated
         )
         assert replay.status_code == 409
+
+        # No lease too close to the round's close: closing revokes the run's
+        # inference grant mid-seed, so the run could only fault every case.
+        async with session_maker() as session:
+            row = await get_round(session, 3)
+            assert row is not None and row.open_block is not None
+            close_block = row.open_block + row.epochs_per_round * 360
+        app.state.generator_round_loop = SimpleNamespace(
+            schedule=GeneratorRoundSchedule(
+                mode="shadow",
+                epochs_per_round=row.epochs_per_round,
+                tempo=360,
+                block=close_block - 10,
+                observed_at=datetime.now(UTC),
+            )
+        )
+        closing = await client.post(
+            "/api/v1/validator/generator-round-job",
+            headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
+            json=_signed_job(),
+        )
+        assert closing.status_code == 204, closing.text
+        app.state.generator_round_loop.schedule = (
+            app.state.generator_round_loop.schedule.model_copy(
+                update={"block": row.open_block + 5}
+            )
+        )
 
         # Validators run every panel agent on round tickets.
         case_ids: list[str] = []
@@ -1291,3 +1322,25 @@ def test_round_capability_does_not_need_the_private_v13_transport() -> None:
     assert lane_mod._round_capable(heartbeat, now=now)
     scorer["generator_rounds"] = False
     assert not lane_mod._round_capable(heartbeat, now=now)
+
+
+def test_round_seconds_left_tracks_the_closing_boundary() -> None:
+    now = datetime(2026, 10, 25, 18, 0, tzinfo=UTC)
+    row = GeneratorRound(round_index=7, epochs_per_round=1, open_block=9_000)
+    cutoff = ROUND_LEASE_CUTOFF.total_seconds()
+
+    def schedule(block: int) -> GeneratorRoundSchedule:
+        return GeneratorRoundSchedule(
+            mode="shadow", epochs_per_round=1, tempo=360, block=block, observed_at=now
+        )
+
+    # 60 blocks of 12 s remain, minus the minute since the loop read the chain.
+    closing = round_seconds_left(row, schedule(9_300), now=now + timedelta(minutes=1))
+    assert closing == 60 * 12 - 60
+    assert closing < cutoff
+    opened = round_seconds_left(row, schedule(9_005), now=now)
+    assert opened is not None and opened > cutoff
+    # No position read yet: the caller does not gate on a guess.
+    assert round_seconds_left(row, None, now=now) is None
+    row.open_block = None
+    assert round_seconds_left(row, schedule(9_300), now=now) is None

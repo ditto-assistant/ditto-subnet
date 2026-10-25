@@ -871,6 +871,43 @@ async def record_round_score(
 # --- validator panel runs ---------------------------------------------------
 
 
+# A panel run must finish before its round closes: closing expires the round's
+# tickets and revokes their inference grants, so a run leased minutes before
+# the boundary loses inference mid-seed and faults every case. No lease is
+# issued once less than this remains.
+ROUND_LEASE_CUTOFF = timedelta(minutes=20)
+CHAIN_BLOCK_SECONDS = 12
+
+
+def round_seconds_left(
+    row: GeneratorRound,
+    schedule: GeneratorRoundSchedule | None,
+    *,
+    now: datetime,
+) -> float | None:
+    """Estimated seconds until ``row`` closes, from the loop's last chain read.
+
+    A round opens on its first epoch's boundary block (``open_block``) and
+    closes at the first boundary of the next round, ``epochs_per_round`` epochs
+    of ``tempo`` blocks later. None when the schedule or the round lacks a
+    position, so the caller can decline to gate rather than guess.
+    """
+    if (
+        schedule is None
+        or schedule.tempo is None
+        or schedule.block is None
+        or schedule.observed_at is None
+        or row.open_block is None
+    ):
+        return None
+    observed_at = schedule.observed_at
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=UTC)
+    close_block = row.open_block + row.epochs_per_round * schedule.tempo
+    blocks_left = close_block - schedule.block
+    return blocks_left * CHAIN_BLOCK_SECONDS - (now - observed_at).total_seconds()
+
+
 async def running_round(
     session: AsyncSession, *, for_update: bool = False
 ) -> GeneratorRound | None:
