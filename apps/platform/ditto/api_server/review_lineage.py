@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -228,7 +229,11 @@ def dockerfile_build_surface_changed(
     )
 
     def read_by_run(name: str) -> bool:
-        return f"${name}" in run_text or "${" + name in run_text
+        # "$NAME", "${NAME}", "${NAME:-x}"; never "$NAMES" or "$NAME_SUFFIX".
+        return (
+            re.search(r"\$\{?" + re.escape(name) + r"(?![A-Za-z0-9_])", run_text)
+            is not None
+        )
 
     changed = set(before).symmetric_difference(after)
     return any(

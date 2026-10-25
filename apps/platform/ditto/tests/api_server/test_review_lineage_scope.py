@@ -108,6 +108,18 @@ def test_an_env_a_run_step_reads_is_build_surface() -> None:
     )
 
 
+def test_run_reference_matches_whole_names_only() -> None:
+    # RUN reads $EXTRAS; a changed ENV EXTRA (a prefix of it) is not read.
+    base = _RUN_READS_ENV.replace("ENV EXTRAS=\n", "ENV EXTRAS=\nENV EXTRA=\n")
+    assert not dockerfile_build_surface_changed(
+        base, base.replace("ENV EXTRA=\n", "ENV EXTRA=dev\n")
+    )
+    braces = _RUN_READS_ENV.replace("${EXTRAS}", "${EXTRAS:-none}")
+    assert dockerfile_build_surface_changed(
+        braces, braces.replace("ENV EXTRAS=\n", "ENV EXTRAS=dev\n")
+    )
+
+
 _AGENT, _ATTEMPT, _PARENT = uuid4(), uuid4(), uuid4()
 
 
