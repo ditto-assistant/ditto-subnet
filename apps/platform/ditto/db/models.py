@@ -604,7 +604,7 @@ class ScreeningAttempt(Base):
         ForeignKeyConstraint(
             ["lineage_parent_agent_id"],
             ["agents.agent_id"],
-            ondelete="SET NULL",
+            ondelete="RESTRICT",
             name="screening_attempts_lineage_parent_fkey",
         ),
         CheckConstraint(

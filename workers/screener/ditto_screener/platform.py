@@ -555,7 +555,12 @@ class PlatformClient:
             raise PlatformError(
                 f"lineage packet rejected ({resp.status_code}): {resp.text[:200]}"
             )
-        packet = ReviewLineagePacket.model_validate(resp.json())
+        try:
+            packet = ReviewLineagePacket.model_validate(resp.json())
+        except (ValueError, ValidationError) as error:
+            # json.JSONDecodeError is a ValueError; the worker's lineage
+            # fallback keys on PlatformError.
+            raise PlatformError("lineage packet response is invalid") from error
         if (
             packet.agent_id != agent_id
             or packet.attempt_id != attempt_id

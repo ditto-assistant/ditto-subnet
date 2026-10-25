@@ -134,6 +134,25 @@ async def test_platform_client_refuses_a_packet_for_another_attempt(
             )
 
 
+async def test_platform_client_turns_a_malformed_packet_into_platform_error(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    # json.JSONDecodeError is a ValueError; the worker's fallback to a full
+    # review keys on PlatformError, so the client must convert it.
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200, content=b"{not json", headers={"content-type": "application/json"}
+        )
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError, match="invalid"):
+            await client.get_review_lineage(
+                _AGENT, attempt_id=uuid4(), artifact_sha256="de" * 32
+            )
+
+
 class _LineagePlatform(_FakePlatform):
     def __init__(self, packet: ReviewLineagePacket | Exception | None) -> None:
         super().__init__([])

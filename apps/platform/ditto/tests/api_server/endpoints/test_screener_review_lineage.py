@@ -334,6 +334,75 @@ class TestReviewLineage:
         assert response.status_code == 200, response.text
         assert response.json()["full_review_reasons"] == ["no-review-history"]
 
+    async def test_a_parent_from_another_lineage_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # A parent id that is not an earlier version of this hotkey's agent
+        # would put a foreign artifact and unrelated findings in the packet.
+        _install_db(app, session_maker)
+        _install_chain(app)
+        _, child_id = await _lineage(
+            session_maker,
+            app,
+            parent_files={"src/main.rs": _MAIN_V1},
+            child_files={"src/main.rs": _MAIN_V2},
+        )
+        stranger = await _seed_agent(
+            session_maker,
+            status=AgentStatus.REJECTED,
+            name="lineage-agent",
+            version=1,
+            miner_hotkey="5Stranger" + "x" * 39,
+            sha256="ab" * 32,
+            created_at=datetime.now(UTC) - timedelta(days=2),
+        )
+        item = (await client.post(_CLAIM_URL, headers=_AUTH_HEADER)).json()["items"][0]
+        async with session_maker() as session, session.begin():
+            attempt = await session.get(ScreeningAttempt, UUID(item["attempt_id"]))
+            assert attempt is not None
+            attempt.lineage_parent_agent_id = stranger
+        response = await client.post(
+            f"/api/v1/screener/agent/{child_id}/review-lineage",
+            headers=_AUTH_HEADER,
+            params={"attempt_id": item["attempt_id"]},
+        )
+        # The error envelope keeps the specific reason in the log; the worker
+        # only needs the 409 to fall back to an ordinary full review.
+        assert response.status_code == 409, response.text
+
+    async def test_admin_read_needs_a_bound_packet(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # The worker binds the digest only once it holds a packet; an attempt
+        # that never fetched one has no reviewed lineage context to show.
+        _install_db(app, session_maker)
+        _install_chain(app)
+        await _lineage(
+            session_maker,
+            app,
+            parent_files={"src/main.rs": _MAIN_V1},
+            child_files={"src/main.rs": _MAIN_V2},
+        )
+        item = (await client.post(_CLAIM_URL, headers=_AUTH_HEADER)).json()["items"][0]
+        assert item["lineage_parent_agent_id"] is not None
+        app.state.config = replace(app.state.config, admin_api_token=_ADMIN_TOKEN)
+        admin = {
+            "Authorization": f"Bearer {_ADMIN_TOKEN}",
+            "X-Admin-Actor": "tester",
+        }
+        response = await client.get(
+            f"/api/v1/admin/screening-attempts/{item['attempt_id']}/review-lineage",
+            headers=admin,
+        )
+        assert response.status_code == 409, response.text
+        assert "never bound" in response.text
+
     async def test_a_first_version_has_no_lineage(
         self,
         app: FastAPI,

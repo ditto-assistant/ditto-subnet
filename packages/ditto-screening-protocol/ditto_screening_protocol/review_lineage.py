@@ -146,8 +146,16 @@ class ReviewLineagePacketBody(BaseModel):
             raise ValueError("a full lineage scope must name its reasons, and only it")
         if self.parent.agent_id == self.agent_id:
             raise ValueError("a submission cannot be its own lineage parent")
-        if self.history and self.history[0].agent_id != self.parent.agent_id:
+        if not self.history or self.history[0].agent_id != self.parent.agent_id:
             raise ValueError("lineage history must start at the parent")
+        if (
+            self.scope == ReviewLineageScope.DIFF
+            and not self.rulings
+            and not self.findings
+        ):
+            # Platform names NO_REVIEW_HISTORY for this; a diff scope with
+            # nothing to carry forward is not a packet it would seal.
+            raise ValueError("a diff lineage scope requires rulings or findings")
         return self
 
 

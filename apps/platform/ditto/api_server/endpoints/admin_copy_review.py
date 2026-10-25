@@ -1849,8 +1849,8 @@ async def get_lineage_source_diff_file(
         404: {"description": "No attempt with this id."},
         409: {
             "description": (
-                "The attempt has no lineage parent, or its bound packet can no "
-                "longer be rebuilt identically."
+                "The attempt has no lineage parent or bound packet, or the "
+                "packet can no longer be rebuilt identically."
             )
         },
     },
@@ -1885,10 +1885,14 @@ async def get_screening_review_lineage(
         )
     except ReviewLineageUnavailableError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    if (
-        attempt.lineage_packet_sha256 is not None
-        and attempt.lineage_packet_sha256 != packet.packet_sha256
-    ):
+    if attempt.lineage_packet_sha256 is None:
+        # The worker binds the digest only once it holds a packet; without one
+        # the reviewer saw no lineage context, so a rebuilt packet is not what
+        # was reviewed.
+        raise HTTPException(
+            status_code=409, detail="the attempt never bound a lineage packet"
+        )
+    if attempt.lineage_packet_sha256 != packet.packet_sha256:
         raise HTTPException(
             status_code=409,
             detail="the bound packet changed after review; history has moved",

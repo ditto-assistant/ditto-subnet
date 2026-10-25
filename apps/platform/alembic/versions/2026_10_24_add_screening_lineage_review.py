@@ -3,7 +3,9 @@
 A same-owner resubmission is reviewed against its prior version: the attempt
 records which prior agent supplied the diff base and history, the scope the
 packet selected (``diff`` or ``full``), and the digest of the exact packet the
-worker received. All three are NULL for an ordinary full review.
+worker received. All three are NULL for an ordinary full review. The parent
+key is RESTRICT: a bound attempt keeps its scope and digest, so the agent it
+was reviewed against cannot be deleted from under it.
 
 Revision ID: b7e4c2a9d1f3
 Revises: 3d7a9c1e5b24
@@ -40,7 +42,7 @@ def upgrade() -> None:
         "agents",
         ["lineage_parent_agent_id"],
         ["agent_id"],
-        ondelete="SET NULL",
+        ondelete="RESTRICT",
     )
     op.create_check_constraint(
         "screening_attempts_lineage_binding_check",

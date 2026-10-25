@@ -25,6 +25,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -229,7 +230,15 @@ def _clip(value: object, limit: int = MAX_LINEAGE_TEXT) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-async def _open(agent: Agent, storage: S3StorageClient) -> TarSourceInspector:
+@dataclass(frozen=True)
+class _ArtifactRef:
+    """What opening an artifact needs, detached from the ORM row."""
+
+    agent_id: UUID
+    sha256: str
+
+
+async def _open(agent: _ArtifactRef, storage: S3StorageClient) -> TarSourceInspector:
     try:
         tar_bytes = await storage.get_object(
             key=f"{agent.agent_id}/agent.tar.gz", max_bytes=MAX_TARBALL_BYTES
@@ -379,6 +388,8 @@ async def _rulings(
                 == ScreeningQuarantineResolution.quarantine_id,
             )
             .where(ScreeningQuarantine.agent_id.in_(ids))
+            .order_by(ScreeningQuarantineResolution.created_at.desc())
+            .limit(MAX_LINEAGE_RULINGS)
         )
     ).all():
         rows.append(
@@ -398,6 +409,8 @@ async def _rulings(
             select(AthReviewAction, AthReview)
             .join(AthReview, AthReview.review_id == AthReviewAction.review_id)
             .where(AthReview.agent_id.in_(ids))
+            .order_by(AthReviewAction.created_at.desc())
+            .limit(MAX_LINEAGE_RULINGS)
         )
     ).all():
         batch = (action.evidence or {}).get("batch_ruling") or {}
@@ -418,11 +431,14 @@ async def _rulings(
         )
     for dispute in (
         await session.scalars(
-            select(ScreeningDispute).where(
+            select(ScreeningDispute)
+            .where(
                 ScreeningDispute.agent_id.in_(ids),
                 ScreeningDispute.resolution.is_not(None),
                 ScreeningDispute.resolved_at.is_not(None),
             )
+            .order_by(ScreeningDispute.resolved_at.desc())
+            .limit(MAX_LINEAGE_RULINGS)
         )
     ).all():
         rows.append(
@@ -439,6 +455,8 @@ async def _rulings(
                 "decided_at": dispute.resolved_at,
             }
         )
+    # Each source is already its newest MAX_LINEAGE_RULINGS; the global newest
+    # MAX_LINEAGE_RULINGS are among them.
     rows.sort(key=lambda item: item["decided_at"], reverse=True)
     return rows[:MAX_LINEAGE_RULINGS]
 
@@ -495,19 +513,48 @@ async def _findings(session: AsyncSession, parent: Agent) -> list[dict[str, Any]
     ]
 
 
-async def build_review_lineage_packet(
-    session: AsyncSession,
-    storage: S3StorageClient,
-    *,
-    agent: Agent,
-    attempt: ScreeningAttempt,
-) -> ReviewLineagePacket:
-    """Assemble and seal the packet for an attempt that names a lineage parent."""
+@dataclass(frozen=True)
+class ReviewLineageContext:
+    """Everything the packet needs from the database, read in one transaction.
+
+    The artifact reads and the diff (``assemble_review_lineage_packet``) run
+    on this detached snapshot so no database connection is held across
+    storage I/O and archive parsing.
+    """
+
+    agent_id: UUID
+    attempt_id: UUID
+    artifact_sha256: str
+    policy_version: int
+    candidate: _ArtifactRef
+    parent: _ArtifactRef
+    parent_row: dict[str, Any]
+    history: list[dict[str, Any]]
+    rulings: list[dict[str, Any]]
+    findings: list[dict[str, Any]]
+
+
+async def load_review_lineage(
+    session: AsyncSession, *, agent: Agent, attempt: ScreeningAttempt
+) -> ReviewLineageContext:
+    """Read the lineage parent, history, rulings and findings for an attempt."""
     if attempt.lineage_parent_agent_id is None:
         raise ReviewLineageUnavailableError("attempt has no lineage parent")
     parent = await session.get(Agent, attempt.lineage_parent_agent_id)
-    if parent is None or parent.version is None:
-        raise ReviewLineageUnavailableError("lineage parent no longer exists")
+    # A parent must be an earlier version of this same hotkey's agent; any other
+    # row would put unrelated review context and a foreign artifact in the
+    # packet.
+    if (
+        parent is None
+        or parent.version is None
+        or agent.version is None
+        or parent.miner_hotkey != agent.miner_hotkey
+        or parent.name != agent.name
+        or parent.version >= agent.version
+    ):
+        raise ReviewLineageUnavailableError(
+            "lineage parent is not a prior version of this agent"
+        )
     history = (
         await session.scalars(
             select(Agent)
@@ -522,18 +569,34 @@ async def build_review_lineage_packet(
         )
     ).all()
     versions = {row.agent_id: int(row.version or 0) for row in history}
-    rulings = await _rulings(session, versions)
-    findings = await _findings(session, parent)
+    return ReviewLineageContext(
+        agent_id=agent.agent_id,
+        attempt_id=attempt.attempt_id,
+        artifact_sha256=agent.sha256,
+        policy_version=attempt.policy_version,
+        candidate=_ArtifactRef(agent.agent_id, agent.sha256),
+        parent=_ArtifactRef(parent.agent_id, parent.sha256),
+        parent_row=_history_row(parent),
+        history=[_history_row(row) for row in history],
+        rulings=await _rulings(session, versions),
+        findings=await _findings(session, parent),
+    )
 
-    candidate = await _open(agent, storage)
-    reference = await _open(parent, storage)
+
+async def assemble_review_lineage_packet(
+    context: ReviewLineageContext, storage: S3StorageClient
+) -> ReviewLineagePacket:
+    """Open both artifacts, diff them and seal the packet. No database."""
+    candidate = await _open(context.candidate, storage)
+    reference = await _open(context.parent, storage)
     diff = await asyncio.to_thread(_diff, candidate, reference)
 
     reasons = set(diff.reasons)
-    if not rulings and not findings:
+    if not context.rulings and not context.findings:
         reasons.add(ReviewLineageFullReviewReason.NO_REVIEW_HISTORY)
     elif not any(
-        row["policy_version"] == attempt.policy_version for row in (*rulings, *findings)
+        row["policy_version"] == context.policy_version
+        for row in (*context.rulings, *context.findings)
     ):
         # History under an older policy is still context, but it cannot settle
         # unchanged code against the policy this attempt enforces.
@@ -541,29 +604,48 @@ async def build_review_lineage_packet(
 
     return seal_review_lineage_packet(
         {
-            "agent_id": agent.agent_id,
-            "attempt_id": attempt.attempt_id,
-            "artifact_sha256": agent.sha256,
-            "policy_version": attempt.policy_version,
-            "parent": _history_row(parent),
-            "history": [_history_row(row) for row in history],
+            "agent_id": context.agent_id,
+            "attempt_id": context.attempt_id,
+            "artifact_sha256": context.artifact_sha256,
+            "policy_version": context.policy_version,
+            "parent": context.parent_row,
+            "history": context.history,
             "scope": (ReviewLineageScope.FULL if reasons else ReviewLineageScope.DIFF),
             "full_review_reasons": sorted(reasons),
             "changes": diff.changes,
             "changed_file_count": diff.changed_file_count,
             "unchanged_file_count": diff.unchanged_file_count,
             "changed_line_count": diff.changed_line_count,
-            "rulings": rulings,
-            "findings": findings,
+            "rulings": context.rulings,
+            "findings": context.findings,
         }
     )
 
 
+async def build_review_lineage_packet(
+    session: AsyncSession,
+    storage: S3StorageClient,
+    *,
+    agent: Agent,
+    attempt: ScreeningAttempt,
+) -> ReviewLineagePacket:
+    """Assemble and seal the packet for an attempt that names a lineage parent.
+
+    Callers that hold a transaction should ``load_review_lineage`` inside it
+    and ``assemble_review_lineage_packet`` after it ends.
+    """
+    context = await load_review_lineage(session, agent=agent, attempt=attempt)
+    return await assemble_review_lineage_packet(context, storage)
+
+
 __all__ = [
     "MAX_SCOPED_CHANGED_LINES",
+    "ReviewLineageContext",
     "ReviewLineageUnavailableError",
+    "assemble_review_lineage_packet",
     "build_review_lineage_packet",
     "dockerfile_build_surface_changed",
     "is_build_surface",
     "is_dockerfile",
+    "load_review_lineage",
 ]

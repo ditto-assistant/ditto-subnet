@@ -160,7 +160,8 @@ from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
 from ditto.api_server.review_lineage import (
     ReviewLineageUnavailableError,
-    build_review_lineage_packet,
+    assemble_review_lineage_packet,
+    load_review_lineage,
 )
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
@@ -4158,13 +4159,18 @@ async def agent_review_lineage(
             raise AgentNotFoundError(f"no agent with id={agent_id}")
         attempt = _active(await get_screening_attempt(session, attempt_id=attempt_id))
         try:
-            packet = await build_review_lineage_packet(
-                session, storage, agent=agent, attempt=attempt
-            )
+            context = await load_review_lineage(session, agent=agent, attempt=attempt)
         except ReviewLineageUnavailableError as error:
             raise AgentNotScreenableError(
                 f"lineage packet unavailable: {error}"
             ) from error
+        agent_sha256 = agent.sha256
+    # Artifact reads and the diff run with no transaction open: storage and
+    # archive parsing must not hold a database connection.
+    try:
+        packet = await assemble_review_lineage_packet(context, storage)
+    except ReviewLineageUnavailableError as error:
+        raise AgentNotScreenableError(f"lineage packet unavailable: {error}") from error
     async with session.begin():
         attempt = _active(
             await get_screening_attempt(session, attempt_id=attempt_id, for_update=True)
@@ -4198,7 +4204,7 @@ async def agent_review_lineage(
             requester_instance_id=instance_id,
             lease_id=attempt_id,
             artifact_sha256=(
-                agent.sha256 if audited == agent_id else packet.parent.artifact_sha256
+                agent_sha256 if audited == agent_id else packet.parent.artifact_sha256
             ),
             source_ip=client_ip(request),
             detail=request_detail(request),
