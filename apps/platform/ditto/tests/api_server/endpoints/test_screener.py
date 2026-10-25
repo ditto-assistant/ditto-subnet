@@ -2650,6 +2650,7 @@ class TestProbeBattery:
                 "completion_tokens": 2_000,
                 "cost_usd": 0.09,
                 "review_ms": 35_000,
+                "error": None,
             },
         }
         url = f"/api/v1/screener/agent/{agent_id}/probe-battery"
@@ -2661,7 +2662,10 @@ class TestProbeBattery:
         assert (await client.post(url, json=payload)).status_code == 200
         review = payload["review"]
         assert isinstance(review, dict)
-        other_review = {**payload, "review": {**review, "verified": False}}
+        other_review = {
+            **payload,
+            "review": {**review, "verified": False, "error": "review:KeyError"},
+        }
         assert (await client.post(url, json=other_review)).status_code == 409
         async with session_maker() as session:
             row = await session.get(ScreenerProbeBattery, attempt_id)

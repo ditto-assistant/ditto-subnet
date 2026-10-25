@@ -12327,6 +12327,8 @@ export interface components {
              * @default 0
              */
             cost_usd: number;
+            /** Error */
+            error?: string | null;
             /**
              * Findings
              * @default []
@@ -26123,6 +26125,8 @@ export interface components {
              * @default 0
              */
             cost_usd: number;
+            /** Error */
+            error?: string | null;
             /**
              * Findings
              * @default []

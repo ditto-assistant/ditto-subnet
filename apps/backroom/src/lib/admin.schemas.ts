@@ -471,6 +471,7 @@ export const probeBatteryObservationSchema = z.object({
       completion_tokens: z.number().int().nonnegative().default(0),
       cost_usd: z.number().nonnegative().default(0),
       review_ms: z.number().int().nonnegative().default(0),
+      error: z.string().nullish().default(null),
     })
     .nullish()
     .default(null),

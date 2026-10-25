@@ -119,6 +119,8 @@ class ProbeReviewSummary(BaseModel):
     completion_tokens: Annotated[int, Field(ge=0, le=5_000_000)] = 0
     cost_usd: Annotated[float, Field(ge=0, le=50, allow_inf_nan=False)] = 0.0
     review_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+    # Content-free failure label: stage, exception class and HTTP status.
+    error: Annotated[str, Field(pattern=r"^[A-Za-z0-9_:]{1,80}$")] | None = None
 
     @model_validator(mode="after")
     def validate_bounds(self) -> ProbeReviewSummary:

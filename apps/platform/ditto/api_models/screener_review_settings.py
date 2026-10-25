@@ -382,6 +382,7 @@ class AdminProbeReview(BaseModel):
     completion_tokens: int = 0
     cost_usd: float = 0.0
     review_ms: int = 0
+    error: str | None = None
 
 
 class AdminProbeBatteryObservation(BaseModel):

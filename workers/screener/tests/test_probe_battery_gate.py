@@ -558,3 +558,18 @@ def test_error_label_is_bounded_and_carries_http_status() -> None:
     error = httpx.HTTPStatusError("secret detail", request=request, response=response)
     assert _error_label("review", error) == "review:HTTPStatusError:402"
     assert _error_label("prepare", KeyError("x")) == "prepare:KeyError"
+
+
+def test_review_error_label_survives_the_wire_model() -> None:
+    from pydantic import ValidationError
+
+    from ditto_screener.review_settings import ProbeReviewSummary
+
+    kept = ProbeReviewSummary.model_validate(
+        {"status": "error", "error": "review:HTTPStatusError:402"}, strict=False
+    )
+    assert kept.error == "review:HTTPStatusError:402"
+    with pytest.raises(ValidationError):
+        ProbeReviewSummary.model_validate(
+            {"status": "error", "error": "review: leaked text"}, strict=False
+        )
