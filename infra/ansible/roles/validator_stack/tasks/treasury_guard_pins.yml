@@ -7,6 +7,15 @@
     follow: false
   register: validator_stack_existing_env
 
+- name: Refuse an environment path that cannot be read as the rendered file
+  ansible.builtin.assert:
+    that:
+      - not (validator_stack_existing_env.stat.exists | default(false))
+        or (validator_stack_existing_env.stat.isreg | default(false))
+    fail_msg: >-
+      The validator environment must be a regular file. A symlink or other
+      entry could hide an armed Gamma guard from this check.
+
 - name: Read the existing validator environment
   ansible.builtin.slurp:
     src: "{{ validator_stack_env_file }}"

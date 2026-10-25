@@ -93,6 +93,30 @@
             that:
               - ansible_failed_result.msg is search('arms the Gamma treasury guard')
 
+    - name: Link to the armed environment
+      ansible.builtin.file:
+        src: "{{ scratch.path }}/armed.env"
+        dest: "{{ scratch.path }}/linked.env"
+        state: link
+
+    - name: A symlinked environment is refused, not skipped
+      block:
+        - name: Converge with the generic defaults through a symlink
+          ansible.builtin.include_tasks: ../roles/validator_stack/tasks/treasury_guard_pins.yml
+          vars:
+            validator_stack_env_file: "{{ scratch.path }}/linked.env"
+            validator_stack_treasury_guard_enabled: false
+            validator_stack_treasury_policy_digest: ""
+            validator_stack_treasury_collector_policy_digest: ""
+        - name: A symlink must not have bypassed the check
+          ansible.builtin.fail:
+            msg: a symlinked environment skipped the guard check
+      rescue:
+        - name: Require the regular-file refusal, not the sentinel
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('must be a regular file')
+
     - name: Remove the scratch directory
       ansible.builtin.file:
         path: "{{ scratch.path }}"
