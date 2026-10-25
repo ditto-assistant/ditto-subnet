@@ -49,6 +49,7 @@ from ditto.validator.update_control import (
     write_update_state,
 )
 from ditto.validator.worker import (
+    PlatformGeneratorLedgerSource,
     PlatformRouterLedgerSource,
     ValidatorWorker,
 )
@@ -183,6 +184,13 @@ async def _amain() -> int:
                     if config.router_ledger_read_enabled
                     else None
                 )
+                # Generator-competition track: same default-off read seam. The
+                # track is SHADOW at 0 bps, so reading changes no chain output.
+                generator_ledger_source = (
+                    PlatformGeneratorLedgerSource(read=platform.get_generator_ledger)
+                    if config.generator_ledger_read_enabled
+                    else None
+                )
                 worker = ValidatorWorker(
                     config=config,
                     platform=platform,
@@ -196,6 +204,7 @@ async def _amain() -> int:
                         coding_canary.offer if coding_canary is not None else None
                     ),
                     router_ledger_source=router_ledger_source,
+                    generator_ledger_source=generator_ledger_source,
                 )
                 async with AsyncExitStack() as coding_resources:
                     coding_worker = await _create_coding_shadow_worker(

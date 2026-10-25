@@ -7,4 +7,8 @@ validator_stack_hotkey: "{{ lookup('env', 'VALIDATOR_PROD_HOTKEY') | default('',
 validator_stack_hotkey_secret: validator-prod-hotkey-mnemonic
 validator_stack_hotkey_secret_version: "{{ lookup('env', 'VALIDATOR_PROD_HOTKEY_SECRET_VERSION') | default('', true) }}"
 validator_stack_benchmark_capacity: 8
+# Paid Finney provider (same as Platform's SUBTENSOR_ARCHIVE_RPC_URL); its key is
+# platform-subtensor-archive-rpc-api-key. The public entrypoint 429s under load.
+validator_stack_subtensor_rpc_url: wss://api-bittensor-mainnet.n.dwellir.com
+validator_stack_subtensor_rpc_auth_mode: path
 validator_stack_longmem_capacity: 4

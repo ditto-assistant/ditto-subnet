@@ -45,6 +45,11 @@ const defaults: ScreenerReviewSettings = {
   fanout_shadow_daily_cost_usd: 20,
   fanout_shadow_global_concurrency: 1,
   fanout_shadow_reserved_targon_slots: 1,
+  probe_battery_mode: 'off',
+  probe_battery_timeout_seconds: 120,
+  probe_review_mode: 'off',
+  probe_review_timeout_seconds: 420,
+  probe_review_max_cost_usd: 1,
   source_review_reasoning_effort: 'high',
   source_review_model: 'openai/gpt-5.6-luna',
   source_review_timeout_seconds: 1_800,
@@ -685,6 +690,41 @@ export function ScreenerReviewControlPanel({
                   <option value="enforce">enforce</option>
                 </select>
               </label>
+              <label className="block text-xs text-[var(--muted)]">
+                Probe battery (zero-token, report-only)
+                <select
+                  value={settings.probe_battery_mode}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      probe_battery_mode: event.target.value as ScreenerReviewSettings['probe_battery_mode'],
+                    }))
+                  }
+                  className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
+                >
+                  <option value="off">off</option>
+                  <option value="shadow">shadow (record leads only)</option>
+                </select>
+              </label>
+              <NumericField label="Probe battery timeout (s)" value={settings.probe_battery_timeout_seconds} onChange={(value) => setSettings((current) => ({ ...current, probe_battery_timeout_seconds: value }))} />
+              <label className="block text-xs text-[var(--muted)]">
+                Probe reviewer agent (report-only, spends Router tokens)
+                <select
+                  value={settings.probe_review_mode}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      probe_review_mode: event.target.value as ScreenerReviewSettings['probe_review_mode'],
+                    }))
+                  }
+                  className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
+                >
+                  <option value="off">off</option>
+                  <option value="shadow">shadow (record verdicts only)</option>
+                </select>
+              </label>
+              <NumericField label="Probe reviewer timeout (s)" value={settings.probe_review_timeout_seconds} onChange={(value) => setSettings((current) => ({ ...current, probe_review_timeout_seconds: value }))} />
+              <NumericField label="Probe reviewer max $ per artifact" step={0.05} value={settings.probe_review_max_cost_usd} onChange={(value) => setSettings((current) => ({ ...current, probe_review_max_cost_usd: value }))} />
               <NumericField label="Adjudicator steps" value={settings.adjudicator_max_steps} onChange={(value) => setSettings((current) => ({ ...current, adjudicator_max_steps: value }))} />
               <NumericField label="Adjudicator timeout (s)" value={settings.adjudicator_timeout_seconds} onChange={(value) => setSettings((current) => ({ ...current, adjudicator_timeout_seconds: value }))} />
               <label className="block text-xs text-[var(--muted)]">
@@ -914,6 +954,41 @@ export function ScreenerReviewControlPanel({
             </tbody>
           </table>
           {state.shadow_observations.length === 0 ? <p className="px-5 py-8 text-xs text-[var(--muted)]">No shadow observations yet. Enable shadow on one exact worker to begin calibration.</p> : null}
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
+        <div className="border-b border-[var(--line)] px-4 py-4 sm:px-5">
+          <h2 className="text-sm font-semibold">Recent probe batteries</h2>
+          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">
+            Zero-token black-box probes run on the screened image after the decision. A lead is unverified and never changes a submission outcome.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[48rem] text-left text-xs">
+            <thead className="text-[var(--muted)]">
+              <tr className="border-b border-[var(--line)]">
+                <th className="px-5 py-3 font-medium">Observed</th><th className="px-3 py-3 font-medium">Agent</th><th className="px-3 py-3 font-medium">Status</th><th className="px-3 py-3 font-medium">Leads</th><th className="px-3 py-3 font-medium">Reviewer</th><th className="px-5 py-3 font-medium">Probes / time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.probe_battery_observations.map((item) => (
+                <tr key={item.attempt_id} className="border-b border-[var(--line)] align-top last:border-0">
+                  <td className="px-5 py-3 text-[var(--muted)]">{new Date(item.created_at).toLocaleString()}</td>
+                  <td className="px-3 py-3 font-mono" title={item.agent_id}>{item.agent_id.slice(0, 8)}…</td>
+                  <td className="px-3 py-3 font-medium">{item.status.replace('_', ' ')}</td>
+                  <td className="px-3 py-3 text-[var(--muted-strong)]">{item.leads.map((lead) => `${lead.invariant} ${lead.item_id}`).join(', ') || 'None'}</td>
+                  <td className="px-3 py-3 text-[var(--muted-strong)]">
+                    {item.review
+                      ? `${item.review.verified ? `verified ${item.review.invariants.join('/')}` : item.review.status.replace('_', ' ')} · $${item.review.cost_usd.toFixed(2)}`
+                      : 'Off'}
+                  </td>
+                  <td className="px-5 py-3 text-[var(--muted)]">{item.probe_count} · {(item.battery_ms / 1000).toFixed(0)}s</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {state.probe_battery_observations.length === 0 ? <p className="px-5 py-8 text-xs text-[var(--muted)]">No probe batteries yet. Set the battery to shadow on one exact worker to begin.</p> : null}
         </div>
       </section>
     </div>

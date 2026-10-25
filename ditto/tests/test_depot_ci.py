@@ -42,14 +42,24 @@ def test_depot_keeps_the_current_executable_jobs(name: str) -> None:
     assert depot_jobs == github_jobs
 
 
-@pytest.mark.parametrize("name", ENTRYPOINTS + ("preview.yml",))
-def test_standalone_checks_are_operator_dispatched_on_both_providers(
+@pytest.mark.parametrize("name", ENTRYPOINTS)
+def test_github_runs_standalone_checks_on_prs_and_depot_stays_manual(
     name: str,
 ) -> None:
-    # Cost control (SN-120): release.yml and its reusable verifiers own the
-    # gates; standalone PR checks run only when an operator dispatches them.
+    # The GitHub entrypoints run on pull requests again (they catch what the
+    # release gates would otherwise find only after merge). The Depot mirror is
+    # the manual fallback, so it never doubles automatic PR spend (SN-120).
     github = load(".github", name)
     depot = load(".depot", name)
+    assert set(github["on"]) == {"workflow_dispatch", "pull_request"}
+    assert set(depot["on"]) == {"workflow_dispatch"}
+    for job in github["jobs"].values():
+        assert "head.repo.full_name != github.repository" not in job.get("if", "")
+
+
+def test_previews_stay_operator_dispatched_on_both_providers() -> None:
+    github = load(".github", "preview.yml")
+    depot = load(".depot", "preview.yml")
     assert set(github["on"]) == {"workflow_dispatch"}
     assert set(depot["on"]) == {"workflow_dispatch"}
     for job in github["jobs"].values():

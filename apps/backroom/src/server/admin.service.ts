@@ -5,10 +5,56 @@ import {
   githubRevocationReadInputSchema, githubRevocationWriteInputSchema, githubRevocationControlSchema,
 } from '../lib/contributor.schemas'
 import '@tanstack/react-start/server-only'
-import { manualControlSchema } from '../lib/treasury-manual.schemas'
+import {
+  alphaRao, manualControlSchema, manualPreviewInputSchema, manualPreviewSchema, manualRequestId,
+  manualSubmitSchema, manualTransferConfirmation, manualTransferSchema,
+} from '../lib/treasury-manual.schemas'
 
 export async function fetchTreasuryManualTransfers() {
   return manualControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual'))
+}
+
+/**
+ * MCP twin of previewManualTransfer: same Platform body and actor. Accepts
+ * exactly one of integer `amount_rao` or decimal `amount_alpha`, and returns
+ * the exact confirmation phrase the Transfer once button asks the operator
+ * to type. Preview grants no spending authority (`not_queued`).
+ */
+export async function previewTreasuryManualTransfer(rawInput: {
+  bucket_id: string
+  amount_rao?: number
+  amount_alpha?: string
+  retained_alpha_rao: number
+  reason: string
+  request_id?: string
+}, actor: string) {
+  const { amount_rao: amountRao, amount_alpha: amountAlpha, request_id: requestId, ...rest } = rawInput
+  if ((amountRao === undefined) === (amountAlpha === undefined)) {
+    throw new Error('Provide exactly one of amount_rao or amount_alpha')
+  }
+  const amount = amountRao ?? alphaRao(amountAlpha!.trim())
+  if (amount === null) {
+    throw new Error('amount_alpha must be a positive decimal alpha amount with at most 9 fractional digits')
+  }
+  const body = manualPreviewInputSchema.parse({
+    ...rest, amount_rao: amount, request_id: requestId ?? manualRequestId(),
+  })
+  const preview = manualPreviewSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual/preview', {
+    method: 'POST', body, actor,
+  }))
+  return { ...preview, confirmation: manualTransferConfirmation(preview.envelope) }
+}
+
+/**
+ * MCP twin of queueManualTransfer. manualSubmitSchema refuses any
+ * confirmation other than the exact amount-and-destination phrase before a
+ * Platform request; the Platform wire literal is then supplied server-side.
+ */
+export async function queueTreasuryManualTransfer(rawInput: unknown, actor: string) {
+  const data = manualSubmitSchema.parse(rawInput)
+  return manualTransferSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual', {
+    method: 'POST', body: { ...data, confirmation: 'TRANSFER SN118 ALPHA ONCE' }, actor,
+  }))
 }
 import { z } from 'zod'
 import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema, treasuryReceiptPreflightInputSchema, treasuryReceiptPreflightSchema } from '../lib/treasury-receipts.schemas'
@@ -178,12 +224,9 @@ import {
   listV13BenignApprovalsInputSchema,
   v13BenignApprovalLookupInputSchema,
   v13BenignApprovalSchema,
-  v13BenignApprovalWriteInputSchema,
   v13PrivateStatisticsSchema,
   v13ReplayGroupSchema,
-  v13ReplayGroupWriteInputSchema,
   v13ReplayPackageSchema,
-  v13ReplayPackageWriteInputSchema,
   v13ReplayPrivateLookupInputSchema,
   v13ReplayPrivateReceiptSchema,
 } from '../lib/v13-private.schemas'
@@ -366,29 +409,6 @@ import {
   batchRetryValidationResponseSchema,
   agentScoringReadinessInputSchema,
   agentScoringReadinessSchema,
-  agentCodingCertificationInputSchema,
-  agentCodingCertificationStatusSchema,
-  codingCatalogControlSchema,
-  codingPrivateV2ReleasesSchema,
-  codingNativeControlStatusSchema,
-  getCodingCatalogInputSchema,
-  registerCodingPrivateV2ReleaseInputSchema,
-  transitionCodingPrivateV2ReleaseInputSchema,
-  reconcileCodingShadowInputSchema,
-  codingShadowReconciliationResponseSchema,
-  issueCodingShadowTicketSetInputSchema,
-  codingShadowTicketSetResponseSchema,
-  registerCodingCatalogInputSchema,
-  retireCodingCatalogInputSchema,
-  supersedeCodingCatalogInputSchema,
-  agentCodingShadowEvaluationInputSchema,
-  agentCodingShadowEvaluationStatusSchema,
-  agentCoreQualificationInputSchema,
-  agentCoreQualificationStatusSchema,
-  coreQualificationPolicyControlSchema,
-  getCoreQualificationPolicyInputSchema,
-  refreshAgentCoreQualificationInputSchema,
-  setCoreQualificationPolicyInputSchema,
   benchmarkContractRefreshLookupInputSchema,
   benchmarkContractRefreshDetailSchema,
   refreshBenchmarkContractInputSchema,
@@ -558,7 +578,6 @@ import {
   updateSubmissionDepositAddressInputSchema,
 } from '../lib/submission-deposit-address'
 import { deriveRequestId } from '../lib/idempotency'
-
 
 /**
  * Longer than the platform's own read budget for this endpoint, on purpose.
@@ -2766,27 +2785,6 @@ export async function fetchV13BenignApproval(rawInput: unknown) {
   return v13BenignApprovalSchema.parse(payload)
 }
 
-export async function recordV13BenignApproval(actor: string, rawInput: unknown) {
-  const input = v13BenignApprovalWriteInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    '/api/v1/admin/v13-private-generation/known-benign-approvals',
-    {
-      method: 'POST',
-      actor,
-      body: {
-        agent_id: input.agentId,
-        attempt_id: input.attemptId,
-        artifact_sha256: input.artifactSha256,
-        image_sha256: input.imageSha256,
-        profile_sha256: input.profileSha256,
-        review_evidence_sha256: input.reviewEvidenceSha256,
-        reason: input.reason,
-      },
-    },
-  )
-  return v13BenignApprovalSchema.parse(payload)
-}
-
 export async function fetchV13ReplayPrivateGroup(rawInput: unknown) {
   const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
   const base = `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}`
@@ -2796,43 +2794,6 @@ export async function fetchV13ReplayPrivateGroup(rawInput: unknown) {
   return input.role
     ? v13ReplayPackageSchema.parse(payload)
     : v13ReplayGroupSchema.parse(payload)
-}
-
-export async function recordV13ReplayPrivateGroup(actor: string, rawInput: unknown) {
-  const input = v13ReplayGroupWriteInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}/group`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        target_agent_id: input.targetAgentId,
-        target_attempt_id: input.targetAttemptId,
-        target_artifact_sha256: input.targetArtifactSha256,
-        target_image_sha256: input.targetImageSha256,
-        approval_id: input.approvalId,
-        profile_sha256: input.profileSha256,
-      },
-    },
-  )
-  return v13ReplayGroupSchema.parse(payload)
-}
-
-export async function registerV13ReplayPrivatePackage(actor: string, rawInput: unknown) {
-  const input = v13ReplayPackageWriteInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}/packages/${encodeURIComponent(input.role)}`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        generation_receipt_sha256: input.generationReceiptSha256,
-        manifest_sha256: input.manifestSha256,
-        pair_inventory_sha256: input.pairInventorySha256,
-      },
-    },
-  )
-  return v13ReplayPackageSchema.parse(payload)
 }
 
 export async function fetchV13ReplayPrivateReceipt(rawInput: unknown) {
@@ -3205,238 +3166,6 @@ export async function fetchAgentScoringReadiness(rawInput: unknown) {
     `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/scoring-readiness`,
   )
   return agentScoringReadinessSchema.parse(payload)
-}
-
-export async function fetchAgentCodingCertifications(rawInput: unknown) {
-  const input = agentCodingCertificationInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/coding-certifications?limit=${input.limit}`,
-  )
-  return agentCodingCertificationStatusSchema.parse(payload)
-}
-
-export async function fetchCodingCatalogReleases(rawInput: unknown) {
-  const input = getCodingCatalogInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/coding-catalog/releases?limit=${input.limit}`,
-  )
-  return codingCatalogControlSchema.parse(payload)
-}
-
-export async function fetchCodingPrivateV2Releases(rawInput: unknown) {
-  const input = getCodingCatalogInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/coding-private-v2-releases?limit=${input.limit}`,
-  )
-  type NativeResponse = PlatformOperations['get_private_v2_releases_api_v1_admin_coding_private_v2_releases_get']['responses'][200]['content']['application/json']
-  return codingPrivateV2ReleasesSchema.parse(payload) satisfies NativeResponse
-}
-
-export async function fetchCodingControlPlane(rawInput: unknown) {
-  const input = getCodingCatalogInputSchema.parse(rawInput)
-  type NativeControl = PlatformOperations['get_coding_control_plane_api_v1_admin_coding_control_plane_get']['responses'][200]['content']['application/json']
-  const [catalog, privateV2, native] = await Promise.all([
-    fetchCodingCatalogReleases(input),
-    fetchCodingPrivateV2Releases(input),
-    platformAdminRequest(`/api/v1/admin/coding-control-plane?limit=${input.limit}`)
-      .then((payload) => codingNativeControlStatusSchema.parse(payload) satisfies NativeControl),
-  ])
-  return {
-    catalog,
-    private_v2: privateV2,
-    native,
-    shadow_only: true as const,
-    weight_eligible: false as const,
-  }
-}
-
-export async function registerCodingPrivateV2Release(rawInput: unknown, actor: string) {
-  const input = registerCodingPrivateV2ReleaseInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/coding-private-v2-releases/register', {
-    method: 'POST',
-    actor,
-    body: {
-      registration: input.registration,
-      publication_receipt: input.publicationReceipt,
-      curator_public_key_pem: input.curatorPublicKeyPem,
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return codingPrivateV2ReleasesSchema.parse(payload)
-}
-
-async function transitionCodingPrivateV2Release(
-  action: 'quarantine' | 'retire',
-  rawInput: unknown,
-  actor: string,
-) {
-  const input = transitionCodingPrivateV2ReleaseInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/coding-private-v2-releases/${action}`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        corpus_release_id: input.corpusReleaseId,
-        expected_registration_sha256: input.expectedRegistrationSha256,
-        reason: input.reason,
-        actor,
-        confirmation: input.confirmation,
-      },
-    },
-  )
-  return codingPrivateV2ReleasesSchema.parse(payload)
-}
-
-export function quarantineCodingPrivateV2Release(rawInput: unknown, actor: string) {
-  return transitionCodingPrivateV2Release('quarantine', rawInput, actor)
-}
-
-export function retireCodingPrivateV2Release(rawInput: unknown, actor: string) {
-  return transitionCodingPrivateV2Release('retire', rawInput, actor)
-}
-
-export async function reconcileCodingShadowArtifact(rawInput: unknown, actor: string) {
-  const input = reconcileCodingShadowInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/coding-shadow/reconcile', {
-    method: 'POST',
-    actor,
-    body: {
-      agent_id: input.agentId,
-      bench_version: input.benchVersion,
-      coding_run_id: input.codingRunId,
-      corpus_release_id: input.corpusReleaseId,
-      reason: input.reason,
-      confirmation: input.confirmation,
-    },
-  })
-  return codingShadowReconciliationResponseSchema.parse(payload)
-}
-
-export async function issueCodingShadowTicketSet(rawInput: unknown, actor: string) {
-  const input = issueCodingShadowTicketSetInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/coding-shadow/ticket-sets', {
-    method: 'POST',
-    actor,
-    body: {
-      run_row_id: input.runRowId,
-      ticket_set_id: input.ticketSetId,
-      validator_hotkeys: input.validatorHotkeys,
-      reason: input.reason,
-      confirmation: input.confirmation,
-    },
-  })
-  return codingShadowTicketSetResponseSchema.parse(payload)
-}
-
-export async function registerCodingCatalogRelease(rawInput: unknown, actor: string) {
-  const input = registerCodingCatalogInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/coding-catalog/releases', {
-    method: 'POST',
-    actor,
-    body: {
-      commitment: input.commitment,
-      signature: input.signature,
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return codingCatalogControlSchema.parse(payload)
-}
-
-export async function retireCodingCatalogRelease(rawInput: unknown, actor: string) {
-  const input = retireCodingCatalogInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/coding-catalog/retire', {
-    method: 'POST',
-    actor,
-    body: {
-      corpus_release_id: input.corpusReleaseId,
-      expected_commitment_sha256: input.expectedCommitmentSha256,
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return codingCatalogControlSchema.parse(payload)
-}
-
-export async function supersedeCodingCatalogRelease(rawInput: unknown, actor: string) {
-  const input = supersedeCodingCatalogInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/coding-catalog/supersede', {
-    method: 'POST',
-    actor,
-    body: {
-      previous_corpus_release_id: input.previousCorpusReleaseId,
-      expected_previous_commitment_sha256: input.expectedPreviousCommitmentSha256,
-      replacement_commitment: input.replacementCommitment,
-      replacement_signature: input.replacementSignature,
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return codingCatalogControlSchema.parse(payload)
-}
-
-export async function fetchAgentCodingShadowEvaluations(rawInput: unknown) {
-  const input = agentCodingShadowEvaluationInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/coding-shadow-evaluations?limit=${input.limit}`,
-  )
-  return agentCodingShadowEvaluationStatusSchema.parse(payload)
-}
-
-export async function fetchCoreQualificationPolicy(rawInput: unknown) {
-  const input = getCoreQualificationPolicyInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/core-qualification/policy?bench_version=${input.benchVersion}&history_limit=${input.historyLimit}`,
-  )
-  return coreQualificationPolicyControlSchema.parse(payload)
-}
-
-export async function setCoreQualificationPolicy(rawInput: unknown, actor: string) {
-  const input = setCoreQualificationPolicyInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/core-qualification/policy', {
-    method: 'POST',
-    actor,
-    body: {
-      expected_revision: input.expectedRevision,
-      policy: input.policy,
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return coreQualificationPolicyControlSchema.parse(payload)
-}
-
-export async function fetchAgentCoreQualification(rawInput: unknown) {
-  const input = agentCoreQualificationInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/core-qualification?bench_version=${input.benchVersion}&limit=${input.limit}`,
-  )
-  return agentCoreQualificationStatusSchema.parse(payload)
-}
-
-export async function refreshAgentCoreQualification(rawInput: unknown, actor: string) {
-  const input = refreshAgentCoreQualificationInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/core-qualification/refresh`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        bench_version: input.benchVersion,
-        reason: input.reason,
-        actor,
-        confirmation: input.confirmation,
-      },
-    },
-  )
-  return agentCoreQualificationStatusSchema.parse(payload)
 }
 
 export async function fetchValidatorScoreReplacement(rawInput: unknown) {

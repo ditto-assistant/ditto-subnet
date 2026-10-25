@@ -1710,6 +1710,7 @@ async def issue_rollout_ticket(
     _ = artifact_mode
     from ditto.db.queries.tickets import (
         expire_overdue_tickets,
+        release_generator_round_dataset_pin,
         retry_budget_spent,
         ticket_attempt_cap,
     )
@@ -1981,6 +1982,7 @@ async def issue_rollout_ticket(
             ticket.seed_block_hash = None
             ticket.provider_outage_epoch = None
             ticket.provider_outage_attempted_epoch = None
+        release_generator_round_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
@@ -2029,11 +2031,16 @@ async def _terminal_exhausted_rollout_tail(
     ):
         return set()
 
+    from ditto.db.queries.tickets import generator_round_free_ticket, ticket_attempt_cap
+
     tickets = list(
         await session.scalars(
             select(ValidatorTicket).where(
                 ValidatorTicket.agent_id.in_(incomplete_ids),
                 ValidatorTicket.bench_version == rollout.desired_version,
+                # A live round lease or a round-only row is not a canonical
+                # lease, so it neither proves nor refutes exhaustion.
+                generator_round_free_ticket(),
             )
         )
     )
@@ -2042,8 +2049,6 @@ async def _terminal_exhausted_rollout_tail(
     }
     for ticket in tickets:
         tickets_by_agent[ticket.agent_id].append(ticket)
-
-    from ditto.db.queries.tickets import ticket_attempt_cap
 
     for agent_tickets in tickets_by_agent.values():
         if len(agent_tickets) < SCORING_QUORUM or any(

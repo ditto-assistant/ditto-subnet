@@ -271,7 +271,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v16-policy-v13"
+        return "adjudicator-v18-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
 

@@ -264,6 +264,18 @@ type InferenceProxyConfig struct {
 	TimeoutSeconds    int   // DITTO_INFERENCE_TIMEOUT_SECONDS, default 90, range [1,120]
 	MaxOutputTokens   int   // DITTO_INFERENCE_MAX_OUTPUT_TOKENS, default 32768, max 65536
 
+	// ConfirmationBackpressureRetry lets a confirmation lane re-dispatch a
+	// provably receipt-free provider rejection once, instead of parking the
+	// whole bundle for an operator retry.
+	//
+	// It is default-off and deliberately a gate rather than a fix: the
+	// confirmation lane is single-shot by design, because re-dispatching a
+	// frozen scored request changes what the shadow evidence attests. The
+	// retry cannot duplicate provider work or billing -- that is enforced by
+	// the receipt-free proof -- but whether a scored run may silently absorb a
+	// provider 429 at all is an owner decision, not a relay default.
+	ConfirmationBackpressureRetry bool
+
 	// Coding inference is a separate, shadow-only capability. It never
 	// inherits ordinary aggregate routing merely because the normal proxy is
 	// enabled. Activation requires both this explicit gate and the reviewed
@@ -560,6 +572,8 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		ResponseBodyBytes: r.int64val("DITTO_INFERENCE_RESPONSE_BODY_BYTES", 2*1024*1024),
 		TimeoutSeconds:    r.intval("DITTO_INFERENCE_TIMEOUT_SECONDS", 90),
 		MaxOutputTokens:   r.intval("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", 32768),
+
+		ConfirmationBackpressureRetry: r.boolval("DITTO_CONFIRMATION_BACKPRESSURE_RETRY", false),
 
 		CodingEnabled: r.boolval("DITTO_CODING_INFERENCE_ENABLED", false),
 		CodingAccountGuardrail: r.str(

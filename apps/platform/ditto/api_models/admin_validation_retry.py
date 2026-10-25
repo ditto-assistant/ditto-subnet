@@ -85,6 +85,7 @@ class AdminValidationTicket(BaseModel):
         "canonical_quorum",
         "continual_retest",
         "benchmark_canary",
+        "generator_round",
     ] = "legacy_unclassified"
     """Why this lease was issued. Continual-retest tickets on already-scored
     agents occupy a slot the same way a canonical quorum ticket does.

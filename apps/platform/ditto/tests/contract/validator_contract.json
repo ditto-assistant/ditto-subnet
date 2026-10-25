@@ -7859,6 +7859,10 @@
             "default": false,
             "type": "boolean"
           },
+          "generator_rounds": {
+            "default": false,
+            "type": "boolean"
+          },
           "observed_at": {
             "anyOf": [
               {

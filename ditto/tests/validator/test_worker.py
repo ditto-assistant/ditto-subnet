@@ -882,6 +882,9 @@ def _config() -> MagicMock:
     cfg.router_track_state = "shadow"
     cfg.router_weight_eligible = False
     cfg.router_rank_shares = (0.65, 0.14, 0.10, 0.07, 0.04)
+    cfg.generator_track_state = "shadow"
+    cfg.generator_weight_eligible = False
+    cfg.generator_rank_shares = (0.40, 0.25, 0.15, 0.12, 0.08)
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600

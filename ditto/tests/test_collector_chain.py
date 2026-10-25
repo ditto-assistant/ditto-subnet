@@ -1247,19 +1247,21 @@ def test_v473_historical_receipt_does_not_require_new_consensus_storage():
     )
 
 
-@pytest.mark.parametrize("release", ["v478", "v479", "v481"])
-def test_old_runtime_is_read_only_under_new_v482_policy(release):
+@pytest.mark.parametrize("release", ["v478", "v479", "v481", "v482"])
+def test_old_runtime_is_read_only_under_new_v483_policy(release):
     from ditto_screening_protocol.collector_receipts import (
         AUDITED_COLLECTOR_RECEIPT_HASHES,
         V478_COLLECTOR_CODE_HASH,
         V479_READONLY_CODE_HASH,
         V481_COLLECTOR_CODE_HASH,
+        V482_COLLECTOR_CODE_HASH,
     )
 
     code = {
         "v478": V478_COLLECTOR_CODE_HASH,
         "v479": V479_READONLY_CODE_HASH,
         "v481": V481_COLLECTOR_CODE_HASH,
+        "v482": V482_COLLECTOR_CODE_HASH,
     }[release]
     c, filters = runtime_adapter(code)
     with pytest.raises(ValueError, match="runtime changed"):
@@ -1287,10 +1289,10 @@ def test_old_runtime_is_read_only_under_new_v482_policy(release):
     assert V479_READONLY_CODE_HASH not in AUDITED_COLLECTOR_RECEIPT_HASHES
 
 
-def test_v482_is_the_exact_current_published_artifact():
-    # docs/audits/collector-finney-v482: official compressed WASM blake2b-256.
+def test_v483_is_the_exact_current_published_artifact():
+    # docs/audits/collector-finney-v483: official compressed WASM blake2b-256.
     assert AUDITED_CODE_HASH == (
-        "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62"
+        "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2"
     )
     c, _ = runtime_adapter(AUDITED_CODE_HASH)
     assert c.guard_runtime(policy(), "current") == AUDITED_CODE_HASH
@@ -1426,3 +1428,126 @@ def test_upgrade_consensus_still_validates_exact_native_filter_inventory():
     )
     with pytest.raises(ValueError, match="scope"):
         c.guard_runtime(policy(), "b100", historical=True)
+
+
+def surface_adapter(
+    live, digests, *, reference=None, reference_code=None, live_version=(484, 1)
+):
+    """Live runtime ``live``; ``digests`` maps metadata block -> surface digest."""
+    from ditto.treasury import collector_chain
+    from ditto_screening_protocol.collector_receipts import (
+        AUDITED_COLLECTOR_REFERENCE_BLOCK,
+    )
+
+    number, pinned = AUDITED_COLLECTOR_REFERENCE_BLOCK
+    c, filters = runtime_adapter(AUDITED_CODE_HASH)
+    reads = []
+
+    def rpc(method, params):
+        if method == "state_getRuntimeVersion":
+            spec, tx = (483, 1) if params[0] == pinned else live_version
+            return {"result": {"specVersion": spec, "transactionVersion": tx}}
+        at = params[1]
+        return {
+            "result": (reference_code or AUDITED_CODE_HASH) if at == pinned else live
+        }
+
+    def metadata(at):
+        reads.append(at)
+        if isinstance(digests[at], Exception):
+            raise digests[at]
+        return digests[at]
+
+    c.substrate.rpc_request = rpc
+    c.substrate.get_block_hash = lambda n: (
+        (reference or pinned) if n == number else FINNEY_GENESIS
+    )
+    c._metadata = metadata
+    collector_chain.SIGNER_SURFACE_VERDICTS.clear()
+    return c, pinned, reads
+
+
+@pytest.fixture(name="fingerprint")
+def _fingerprint(monkeypatch):
+    from ditto.treasury import collector_chain
+
+    monkeypatch.setattr(
+        collector_chain,
+        "runtime_interface",
+        lambda metadata, _surface: SimpleNamespace(digest=metadata),
+    )
+    yield
+    collector_chain.SIGNER_SURFACE_VERDICTS.clear()
+
+
+@pytest.mark.usefixtures("fingerprint")
+@pytest.mark.parametrize("historical", [False, True])
+def test_unchanged_signer_surface_signs_as_the_cold_signed_runtime(historical):
+    live = "0x" + "bb" * 32
+    c, pinned, reads = surface_adapter(live, {"pinned": "same", "head": "same"})
+    c._metadata = lambda at: reads.append(at) or "same"
+    p = policy(runtime_code_hash=AUDITED_CODE_HASH)
+    # Effective runtime is the signed one, so receipt ordering and the
+    # pow_register filter shape follow the audited runtime.
+    assert c.guard_runtime(p, "head", historical=historical) == AUDITED_CODE_HASH
+    assert reads == [pinned, "head"]
+    assert c.guard_runtime(p, "head", historical=historical) == AUDITED_CODE_HASH
+    assert reads == [pinned, "head"]  # cached per (signed, live) code pair
+
+
+@pytest.mark.usefixtures("fingerprint")
+@pytest.mark.parametrize("historical", [False, True])
+def test_changed_signer_surface_still_stops_for_audit(historical):
+    from ditto.treasury.collector_chain import CollectorRuntimeRefused
+
+    live = "0x" + "cc" * 32
+    c, pinned, _ = surface_adapter(live, {})
+    c._metadata = lambda at: "signed" if at == pinned else "moved"
+    with pytest.raises(CollectorRuntimeRefused, match="runtime changed") as refused:
+        c.guard_runtime(
+            policy(runtime_code_hash=AUDITED_CODE_HASH), "head", historical=historical
+        )
+    assert (refused.value.code, refused.value.observed) == ("runtime_changed", live)
+
+
+@pytest.mark.usefixtures("fingerprint")
+@pytest.mark.parametrize(
+    "reference,reference_code",
+    [("0x" + "dd" * 32, None), (None, "0x" + "ee" * 32)],
+)
+def test_unverifiable_reference_refuses_without_caching(reference, reference_code):
+    from ditto.treasury import collector_chain
+
+    c, _, reads = surface_adapter(
+        "0x" + "bb" * 32, {}, reference=reference, reference_code=reference_code
+    )
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(policy(runtime_code_hash=AUDITED_CODE_HASH), "head")
+    assert reads == []
+    assert collector_chain.SIGNER_SURFACE_VERDICTS == {}
+
+
+def test_unreadable_live_surface_refuses(monkeypatch):
+    from ditto.treasury import collector_chain
+
+    def interface(metadata, _surface):
+        if metadata == "broken":
+            raise ValueError("runtime lacks consumed interface")
+        return SimpleNamespace(digest=metadata)
+
+    monkeypatch.setattr(collector_chain, "runtime_interface", interface)
+    c, pinned, _ = surface_adapter("0x" + "bb" * 32, {})
+    c._metadata = lambda at: "signed" if at == pinned else "broken"
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(policy(runtime_code_hash=AUDITED_CODE_HASH), "head")
+    collector_chain.SIGNER_SURFACE_VERDICTS.clear()
+
+
+@pytest.mark.usefixtures("fingerprint")
+@pytest.mark.parametrize("live_version", [(484, 2), (482, 1), (484, True)])
+def test_transaction_version_bump_or_downgrade_stops_for_audit(live_version):
+    c, pinned, reads = surface_adapter("0x" + "bb" * 32, {}, live_version=live_version)
+    c._metadata = lambda at: reads.append(at) or "same"
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(policy(runtime_code_hash=AUDITED_CODE_HASH), "head")
+    assert reads == []  # refused before any surface is fingerprinted

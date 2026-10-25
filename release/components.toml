@@ -113,6 +113,8 @@ paths = [
   "ditto/api_models/confirmation_progress.py",
   "ditto/api_models/inference.py",
   "ditto/api_models/private_dataset.py",
+  "ditto/api_models/generator_ledger.py",
+  "ditto/api_models/generator_round_validator.py",
   "ditto/api_models/router_ledger.py",
   "ditto/api_models/router_harness.py",
   "ditto/api_models/stack_health.py",
@@ -198,6 +200,13 @@ paths = [
   "packages/dittobench-coding-contract/**",
 ]
 
+[components.dittobench_generator_starter_kit]
+description = "Shadow-only generator-competition reference challenge-pack generator"
+depends_on = ["dittobench_datagen"]
+paths = [
+  "miners/dittobench-generator-starter-kit/**",
+]
+
 [components.dittobench_router_starter_kit]
 description = "Shadow-only router reference harness and local practice client"
 paths = [
@@ -247,7 +256,6 @@ paths = [
   "packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json",
   "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json",
   "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
-  "packages/dittobench-coding-contract/generate_execution_delivery_vectors.py",
   "ditto/api_models/coding_harness.py",
   "ditto/api_models/coding_claims.py",
   "ditto/api_models/coding_certification_leases.py",

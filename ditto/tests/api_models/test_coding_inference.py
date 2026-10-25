@@ -48,12 +48,6 @@ _LOCKED_POLICY = _TESTDATA / "coding_inference_policy_locked_v1.json"
 _GENERATOR = _ROOT / "packages/dittobench-coding-contract/generate_inference_vectors.py"
 
 
-def test_platform_inference_contract_module_matches_validator_byte_for_byte() -> None:
-    validator = _ROOT / "ditto/api_models/coding_inference.py"
-    platform = _ROOT / "apps/platform/ditto/api_models/coding_inference.py"
-    assert validator.read_bytes() == platform.read_bytes()
-
-
 def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 

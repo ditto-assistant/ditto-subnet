@@ -12,14 +12,14 @@ from pydantic import ValidationError
 from ditto_screening_protocol.v13_private_clean_control import (
     V13MatchedCleanControlCommitment,
 )
-from ditto_screening_protocol.v13_private_execute import (
-    PrivateExecutionResult,
-    PrivatePairCounts,
-)
 from ditto_screening_protocol.v13_private_package import V13PrivateRunSummary
 from ditto_screening_protocol.v13_private_receipt import (
     V13ReplayPrivateReceipt,
     authentic_replay_private_receipt,
+)
+from ditto_screening_protocol.v13_private_result import (
+    PrivateExecutionResult,
+    PrivatePairCounts,
 )
 from ditto_screening_protocol.v13_private_statistics import (
     analyze_v13_private_receipt,

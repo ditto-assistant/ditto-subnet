@@ -22,11 +22,13 @@ from ditto.api_models import validator_confirmation
 from ditto.api_models.agent_status import AgentStatus
 from ditto.tests.contract._schema import (
     CONFIRMATION_MODELS,
+    GENERATOR_ROUND_MODELS,
     ROUTER_MODELS,
     SHARED_MODELS,
     compute_bench_versions,
     compute_confirmation_contract,
     compute_contract,
+    compute_generator_round_contract,
     compute_miner_contract,
     compute_router_contract,
 )
@@ -41,6 +43,7 @@ _GOLDEN = Path(__file__).parent / "validator_contract.json"
 _MINER_GOLDEN = Path(__file__).parent / "miner_contract.json"
 _CONFIRMATION_GOLDEN = Path(__file__).parent / "confirmation_contract.json"
 _ROUTER_GOLDEN = Path(__file__).parent / "router_contract.json"
+_GENERATOR_ROUND_GOLDEN = Path(__file__).parent / "generator_round_contract.json"
 
 _BENCH_VERSIONS_GOLDEN = Path(__file__).parent / "bench_versions.json"
 _PLATFORM_CONTRACT_DIR = (
@@ -194,6 +197,24 @@ def test_router_models_match_platform_contract() -> None:
         f"If intended, regenerate ditto/tests/contract/router_contract.json from "
         f"ditto-platform via scripts/gen_validator_contract.py and commit it "
         f"with the change.{stale_install_hint()}"
+    )
+
+
+def test_generator_round_models_match_platform_contract() -> None:
+    """Guard: the generator-round lane models match the platform's contract."""
+    golden = json.loads(_GENERATOR_ROUND_GOLDEN.read_text())
+    actual = compute_generator_round_contract()
+    assert set(actual) == set(golden) == set(GENERATOR_ROUND_MODELS), (
+        "shared generator-round model set changed; update GENERATOR_ROUND_MODELS "
+        "+ golden"
+    )
+    mismatched = [
+        name for name in GENERATOR_ROUND_MODELS if actual[name] != golden[name]
+    ]
+    assert not mismatched, (
+        f"generator-round wire model(s) {mismatched} drifted from the platform "
+        "contract. If intended, regenerate generator_round_contract.json from "
+        f"apps/platform via scripts/gen_validator_contract.py.{stale_install_hint()}"
     )
 
 

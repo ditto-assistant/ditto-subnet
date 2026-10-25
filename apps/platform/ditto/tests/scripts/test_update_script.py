@@ -154,6 +154,9 @@ def _run_update(
     scripts.mkdir(parents=True)
     fake_bin.mkdir()
     shutil.copy2(ROOT / "scripts" / "update.sh", scripts / "update.sh")
+    shutil.copy2(
+        ROOT / "scripts" / "chain-transport.sh", scripts / "chain-transport.sh"
+    )
     # The deploy plan and the app definition it diffs against are part of the
     # start/reload path, so the fake repo needs both.
     shutil.copy2(

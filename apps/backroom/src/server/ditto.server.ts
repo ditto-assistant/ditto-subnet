@@ -2,6 +2,7 @@ import '@tanstack/react-start/server-only'
 
 import { setResponseHeader } from '@tanstack/react-start/server'
 
+import { athRulingsReadbackFailureSchema } from '../lib/admin.schemas'
 import { parseJsonPreservingLargeIntegers } from '../lib/json-large-integers'
 
 /**
@@ -302,7 +303,14 @@ export async function platformAdminRequest(
     const payload = decodeResponseBody(text)
     if (response.ok) return payload
     if (response.status >= 500 && attempt++ < retries) continue
-    const message = errorMessage(payload, response.status)
+    let message = errorMessage(payload, response.status)
+    if (method === 'POST' && path === '/api/v1/admin/ath-rulings/batch-execute' && response.status === 503) {
+      const detail = payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : null
+      const retained = athRulingsReadbackFailureSchema.safeParse(detail)
+      if (retained.success) {
+        message = `Board read failed after ruling processing; inspect all item outcomes before any retry. Retained outcomes: ${JSON.stringify(retained.data)}`
+      }
+    }
     if (response.status === 401 || response.status === 403) {
       throw new PlatformAdminError('auth', message, response.status)
     }

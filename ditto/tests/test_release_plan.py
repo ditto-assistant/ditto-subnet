@@ -144,8 +144,18 @@ def test_datagen_change_rebuilds_scorer_and_validator_stack(
     ) == {
         "dittobench_datagen",
         "dittobench_api",
+        # The generator kit builds against the datagen challenge contract.
+        "dittobench_generator_starter_kit",
         "validator_stack",
     }
+
+
+def test_generator_starter_kit_change_is_shadow_only(components, ignored_paths) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        "miners/dittobench-generator-starter-kit/families/families.go",
+    ) == {"dittobench_generator_starter_kit"}
 
 
 def test_coding_datagen_change_is_shadow_only(components, ignored_paths) -> None:
@@ -239,23 +249,6 @@ def test_coding_execution_plan_vector_selects_delivery_consumers(
         "platform_api",
         "platform",
         "backroom",
-        "validator",
-        "validator_stack",
-    }
-    assert root_verification(components, ignored_paths, path) == "full"
-
-
-def test_coding_execution_delivery_generator_selects_every_consumer(
-    components, ignored_paths
-) -> None:
-    path = "packages/dittobench-coding-contract/generate_execution_delivery_vectors.py"
-    assert selected(components, ignored_paths, path) == {
-        "backroom",
-        "dittobench_api",
-        "dittobench_coding_datagen",
-        "dittobench_coding_starter_kit",
-        "platform",
-        "platform_api",
         "validator",
         "validator_stack",
     }

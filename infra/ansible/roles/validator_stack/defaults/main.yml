@@ -26,6 +26,12 @@ validator_stack_longmem_capacity: 4
 
 validator_stack_platform_api_url: https://platform-api.heyditto.ai/
 validator_stack_subtensor_network: finney
+# Optional paid provider for that chain (the public entrypoint 429s under load).
+# Empty keeps the public entrypoint. The key is read from Secret Manager and
+# attached as platform ChainClient._configured_archive_url does (path|query|none).
+validator_stack_subtensor_rpc_url: ""
+validator_stack_subtensor_rpc_auth_mode: path
+validator_stack_subtensor_rpc_secret: platform-subtensor-archive-rpc-api-key
 validator_stack_disk_percent_ceiling: 90
 validator_stack_memory_percent_ceiling: 90
 validator_stack_cpu_percent_ceiling: 0

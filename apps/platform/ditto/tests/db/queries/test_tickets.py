@@ -38,11 +38,14 @@ from ditto.db.queries.tickets import (
     EMISSION_CONTENDER_COUNT,
     MAX_ATTEMPTS_PER_VERSION,
     PROVISIONAL_CONTENDER_LANE_SIZE,
+    counts_toward_scoring_retry,
     expire_overdue_tickets,
     get_open_ticket,
     issue_confirmation_ticket,
     issue_ticket,
     mark_ticket_scored,
+    scoring_retry_ticket,
+    ticket_retry_budget_spent,
 )
 from ditto.tests.legacy_era import retired_era_writes_allowed
 
@@ -4273,3 +4276,193 @@ class TestTicketLifecycle:
             )
         assert ticket is not None
         assert ticket.bench_version == _BENCH
+
+
+# SN-334: a generator round's lease shares the canonical ticket row. The round
+# lane creates that row with no scoring lease on it; a scoring lane that reuses
+# it must start from the first attempt and run its own dataset.
+
+
+async def _seed_round_only_row(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    validator_hotkey: str,
+    live: bool = False,
+) -> None:
+    """A round-created row: finished by default, or with its lease still live."""
+    async with session.begin():
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey=validator_hotkey,
+                slot_id="slot-3",
+                status=TicketStatus.ISSUED if live else TicketStatus.EXPIRED,
+                purpose=TicketPurpose.GENERATOR_ROUND,
+                purpose_revision=2,
+                issued_at=_NOW - timedelta(hours=2),
+                deadline=(
+                    _NOW + timedelta(hours=1) if live else _NOW - timedelta(minutes=30)
+                ),
+                bench_version=_BENCH,
+                seed=987654321,
+                dataset_sha256="ef" * 32,
+                attempt_count=0,
+                manual_retry_grants=0,
+                retry_after=None,
+                legacy_completion_allowed=False,
+            )
+        )
+
+
+async def test_round_only_row_reused_for_canonical_scoring_starts_fresh(
+    session: AsyncSession,
+) -> None:
+    agent_id = await _seed_evaluating(session, name="round-then-canonical")
+    await _seed_round_only_row(
+        session, agent_id=agent_id, validator_hotkey="5RoundThenCanonical"
+    )
+    async with session.begin():
+        row = await session.get(
+            ValidatorTicket, (agent_id, _BENCH, "5RoundThenCanonical")
+        )
+        assert row is not None
+        assert not counts_toward_scoring_retry(row)
+        assert not ticket_retry_budget_spent(row)
+
+    async with session.begin():
+        ticket = await issue_ticket(
+            session,
+            validator_hotkey="5RoundThenCanonical",
+            now=_NOW,
+            ttl=_TTL,
+            bench_version=_BENCH,
+            artifact_mode="screened_only",
+        )
+        assert ticket is not None and ticket.agent_id == agent_id
+        assert ticket.purpose == TicketPurpose.CANONICAL_QUORUM
+        # The round run did not consume this validator's one attempt.
+        assert ticket.attempt_count == 1
+        # The round's dataset pin is dropped so job time re-derives the
+        # validator-identity seed instead of refusing the mismatch.
+        assert (ticket.seed, ticket.dataset_sha256) == (None, None)
+        ticket.status = TicketStatus.EXPIRED
+
+    async with session.begin():
+        row = await session.get(
+            ValidatorTicket, (agent_id, _BENCH, "5RoundThenCanonical")
+        )
+        assert row is not None
+        # The scoring attempt itself still spends the budget exactly once.
+        assert ticket_retry_budget_spent(row)
+        assert (
+            await issue_ticket(
+                session,
+                validator_hotkey="5RoundThenCanonical",
+                now=_AFTER_COOLDOWN,
+                ttl=_TTL,
+                bench_version=_BENCH,
+                artifact_mode="screened_only",
+            )
+            is None
+        )
+
+
+async def test_live_round_leases_do_not_occupy_quorum_slots(
+    session: AsyncSession,
+) -> None:
+    agent_id = await _seed_evaluating(session, name="round-quorum")
+    for index in range(SCORING_QUORUM):
+        await _seed_round_only_row(
+            session,
+            agent_id=agent_id,
+            validator_hotkey=f"5RoundQuorum{index}",
+            live=True,
+        )
+    async with session.begin():
+        # Live round leases will never produce quorum scores: another validator
+        # still gets the agent.
+        ticket = await issue_ticket(
+            session,
+            validator_hotkey="5FreshQuorumValidator",
+            now=_NOW,
+            ttl=_TTL,
+            bench_version=_BENCH,
+            artifact_mode="screened_only",
+        )
+        assert ticket is not None and ticket.agent_id == agent_id
+
+
+async def test_round_only_row_reused_for_continual_retest_starts_fresh(
+    session: AsyncSession,
+) -> None:
+    agent_id = await _seed_scored(session)
+    await _seed_round_only_row(
+        session, agent_id=agent_id, validator_hotkey="5RoundThenRetest"
+    )
+    async with session.begin():
+        ticket = await issue_confirmation_ticket(
+            session,
+            agent_id=agent_id,
+            validator_hotkey="5RoundThenRetest",
+            now=_NOW,
+            ttl=_TTL,
+            bench_version=_BENCH,
+            seed=123,
+            dataset_sha256="ab" * 32,
+            slot_id="slot-0",
+        )
+        assert ticket is not None
+        assert ticket.purpose == TicketPurpose.CONTINUAL_RETEST
+        assert ticket.attempt_count == 1
+        assert (ticket.seed, ticket.dataset_sha256) == (123, "ab" * 32)
+
+
+async def test_scoring_retry_ticket_sql_matches_python(
+    session: AsyncSession,
+) -> None:
+    agent_id = await _seed_evaluating(session, name="round-predicate")
+    cases = {
+        # (purpose, status, attempt_count): counts toward scoring retries
+        "5PredCanonical": (TicketPurpose.CANONICAL_QUORUM, TicketStatus.EXPIRED, 1),
+        "5PredRetest": (TicketPurpose.CONTINUAL_RETEST, TicketStatus.SCORED, 1),
+        "5PredCanary": (TicketPurpose.BENCHMARK_CANARY, TicketStatus.EXPIRED, 1),
+        "5PredRoundLive": (TicketPurpose.GENERATOR_ROUND, TicketStatus.ISSUED, 1),
+        "5PredRoundOnly": (TicketPurpose.GENERATOR_ROUND, TicketStatus.EXPIRED, 0),
+        "5PredRoundHistory": (TicketPurpose.GENERATOR_ROUND, TicketStatus.SCORED, 1),
+    }
+    async with session.begin():
+        for slot, (hotkey, (purpose, status, attempts)) in enumerate(cases.items()):
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    validator_hotkey=hotkey,
+                    slot_id=f"slot-{slot}",
+                    status=status,
+                    purpose=purpose,
+                    purpose_revision=1,
+                    issued_at=_NOW,
+                    deadline=_NOW + _TTL,
+                    bench_version=_BENCH,
+                    attempt_count=attempts,
+                    manual_retry_grants=0,
+                    legacy_completion_allowed=False,
+                )
+            )
+    async with session.begin():
+        rows = list(
+            await session.scalars(
+                select(ValidatorTicket).where(ValidatorTicket.agent_id == agent_id)
+            )
+        )
+        in_sql = set(
+            await session.scalars(
+                select(ValidatorTicket.validator_hotkey).where(
+                    ValidatorTicket.agent_id == agent_id, scoring_retry_ticket()
+                )
+            )
+        )
+    assert {r.validator_hotkey for r in rows if counts_toward_scoring_retry(r)} == (
+        in_sql
+    )
+    assert in_sql == {"5PredCanonical", "5PredRetest", "5PredRoundHistory"}

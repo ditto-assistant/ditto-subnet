@@ -3,6 +3,7 @@ import {
   claPolicyWriteInputSchema, claPublishInputSchema,
   githubRevocationReadInputSchema, githubRevocationWriteInputSchema,
 } from '../lib/contributor.schemas'
+import { fetchAgentSourceReleaseEvidence } from './source-release-evidence.service'
 import {
   fetchMinerGithubLink, fetchGithubContributor, fetchMinerClaStatus, fetchClaPolicy,
   updateClaPolicy, publishClaVersion,
@@ -12,20 +13,15 @@ import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.s
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
-  officialControlsInputSchema, officialControlLookupSchema, officialControlStageSchema,
-  officialControlVerifySchema, officialControlApprovalSchema,
+  officialControlsInputSchema, officialControlLookupSchema,
 } from '../lib/v13-official-control.schemas'
 import {
-  fetchOfficialV13Controls, fetchOfficialV13ControlApprovals, fetchOfficialV13ControlArtifact, stageOfficialV13ControlImage,
-  verifyOfficialV13ControlImage, recordOfficialV13ControlApproval,
+  fetchOfficialV13Controls, fetchOfficialV13ControlApprovals, fetchOfficialV13ControlArtifact,
 } from './v13-official-control.service'
 import {
   listV13BenignApprovalsInputSchema,
   v13BenignApprovalLookupInputSchema,
-  v13BenignApprovalWriteInputSchema,
   v13ReplayPrivateLookupInputSchema,
-  v13ReplayGroupWriteInputSchema,
-  v13ReplayPackageWriteInputSchema,
 } from '../lib/v13-private.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import { bountyBoardInputSchema, bountyCatalogInputs, bountyQueueInputSchema } from '../lib/bounty.schemas'
@@ -51,13 +47,56 @@ import {
   setBountyClaimsPaused,
   setBountyPayoutPolicy,
 } from './bounty.service'
+import {
+  fetchGeneratorBoard,
+  fetchGeneratorProbe,
+  fetchGeneratorPromotionCandidates,
+  fetchGeneratorRun,
+  fetchGeneratorSettings,
+  fetchGeneratorSubmission,
+  listGeneratorSubmissions,
+  rejectGenerator,
+  rescoreGenerator,
+  rotateGeneratorProbe,
+  setGeneratorSettings,
+  closeGeneratorRound,
+  fetchGeneratorRound,
+  fetchGeneratorRoundDataset,
+  fetchGeneratorRoundLoop,
+  fetchGeneratorRoundPreview,
+  listGeneratorRounds,
+  registerDefaultGenerator,
+  createDefaultGeneratorUpload,
+  releaseGeneratorRoundLease,
+  republishGeneratorRoundCommitment,
+  tickGeneratorRounds,
+  voidGeneratorRound,
+} from './generator-competition.service'
+import {
+  closeGeneratorRoundInputSchema,
+  tickGeneratorRoundsInputSchema,
+  generatorRoundIndexInputSchema,
+  listGeneratorRoundsInputSchema,
+  registerDefaultGeneratorInputSchema,
+  releaseRoundLeaseInputSchema,
+  republishRoundCommitmentInputSchema,
+  voidGeneratorRoundInputSchema,
+  generatorPromotionInputSchema,
+  generatorRunIdInputSchema,
+  generatorSubmissionIdInputSchema,
+  listGeneratorSubmissionsInputSchema,
+  rejectGeneratorInputSchema,
+  rescoreGeneratorInputSchema,
+  rotateGeneratorProbeInputSchema,
+  setGeneratorSettingsInputSchema,
+} from '../lib/generator-competition.schemas'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 import { observerGrant } from './treasury-observer-access.server'
 import { createTreasuryObserverServer } from './treasury-observer-mcp.server'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
-import { fetchTreasuryLedger, fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers } from './admin.service'
+import { fetchTreasuryLedger, fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers, previewTreasuryManualTransfer, queueTreasuryManualTransfer } from './admin.service'
 import { fetchTreasuryActivationPreflight, fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 import { fetchRuntimeInterfaceReport, fetchTreasuryRuntime, recordTreasuryRuntime } from './admin.service'
 import { runtimeInterfaceReportInputSchema } from '../lib/runtime-interface.schemas'
@@ -136,21 +175,7 @@ import {
   listLeaseRevocationsInputSchema,
   batchRetryValidationInputSchema,
   agentScoringReadinessInputSchema,
-  agentCodingCertificationInputSchema,
-  getCodingCatalogInputSchema,
-  registerCodingPrivateV2ReleaseMcpInputSchema,
-  transitionCodingPrivateV2ReleaseInputSchema,
-  reconcileCodingShadowInputSchema,
-  issueCodingShadowTicketSetInputSchema,
-  registerCodingCatalogMcpInputSchema,
-  retireCodingCatalogInputSchema,
-  supersedeCodingCatalogInputSchema,
-  agentCodingShadowEvaluationInputSchema,
-  agentCoreQualificationInputSchema,
   claimProvenanceCasesInputSchema,
-  getCoreQualificationPolicyInputSchema,
-  refreshAgentCoreQualificationInputSchema,
-  setCoreQualificationPolicyMcpInputSchema,
   agentScoresLookupInputSchema,
   continualRetestDiagnosticInputSchema,
   scoreLeaderboardInputSchema,
@@ -233,10 +258,7 @@ import {
   fetchV13GenerationGroup,
   listV13BenignApprovals,
   fetchV13BenignApproval,
-  recordV13BenignApproval,
   fetchV13ReplayPrivateGroup,
-  recordV13ReplayPrivateGroup,
-  registerV13ReplayPrivatePackage,
   fetchV13ReplayPrivateReceipt,
   fetchV13ReplayPrivateStatistics,
   fetchScreeningReviewDeadline,
@@ -263,23 +285,6 @@ import {
   fetchLeaseRevocations,
   batchRetryValidation,
   fetchAgentScoringReadiness,
-  fetchAgentCodingCertifications,
-  fetchCodingCatalogReleases,
-  fetchCodingPrivateV2Releases,
-  fetchCodingControlPlane,
-  registerCodingPrivateV2Release,
-  quarantineCodingPrivateV2Release,
-  retireCodingPrivateV2Release,
-  reconcileCodingShadowArtifact,
-  issueCodingShadowTicketSet,
-  registerCodingCatalogRelease,
-  retireCodingCatalogRelease,
-  supersedeCodingCatalogRelease,
-  fetchAgentCodingShadowEvaluations,
-  fetchAgentCoreQualification,
-  fetchCoreQualificationPolicy,
-  refreshAgentCoreQualification,
-  setCoreQualificationPolicy,
   fetchBenchmarkContractRefresh,
   fetchBenchmarkContractMigration,
   migrateBenchmarkContract,
@@ -441,16 +446,25 @@ export type BackroomEnv = {
 }
 
 export const WRITE_TOOL_NAMES = new Set([
+  'set_generator_competition_settings',
+  'rotate_generator_probe_seed',
+  'rescore_generator_submission',
+  'reject_generator_submission',
+  'tick_generator_rounds',
+  'void_generator_round',
+  'close_generator_round',
+  'republish_generator_round_commitment',
+  'release_generator_round_lease',
+  'register_default_generator',
+  'create_default_generator_upload',
   'advance_scored_policy_rescreen',
   'record_treasury_settings',
   'record_treasury_runtime',
   'record_treasury_receipt',
-  'record_v13_benign_approval',
-  'stage_v13_official_control_image',
-  'verify_v13_official_control_image',
-  'record_v13_official_control_approval',
-  'record_v13_replay_private_group',
-  'register_v13_replay_private_package',
+  // Both mirror the Transfer once panel, whose preview and queue server
+  // functions already require a write-level session.
+  'preview_treasury_manual_transfer',
+  'queue_treasury_manual_transfer',
   'schedule_l2_report_canary',
   'register_canonical_starter_fixture',
   'review_canonical_starter_fixture',
@@ -461,14 +475,6 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_screener_node_replay_capacity',
   'register_screener_replay_process_key',
   'revoke_screener_replay_process_key',
-  'register_coding_catalog_release',
-  'supersede_coding_catalog_release',
-  'retire_coding_catalog_release',
-  'register_coding_private_v2_release',
-  'quarantine_coding_private_v2_release',
-  'retire_coding_private_v2_release',
-  'reconcile_coding_shadow_artifact',
-  'issue_coding_shadow_ticket_set',
   'resolve_screening_quarantine',
   'release_verified_v13_court_clear',
   'resolve_screening_dispute',
@@ -499,8 +505,6 @@ export const WRITE_TOOL_NAMES = new Set([
   'cancel_benchmark_canary',
   'set_efficiency_bonus_settings',
   'set_continual_retest_settings',
-  'set_core_qualification_policy',
-  'refresh_agent_core_qualification',
   'set_queue_policy_settings',
   'apply_screener_review_settings',
   'rotate_screener_policy_manifest',
@@ -543,8 +547,12 @@ export const WRITE_TOOL_NAMES = new Set([
 ])
 
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
+  ['get_agent_source_release_evidence', BACKROOM_READ_SCOPE],
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
+  // A closed round's dataset is every column's generated cases: private
+  // benchmark content, gated like other private artifacts.
+  ['get_generator_round_dataset', BACKROOM_ARTIFACT_SCOPE],
   ['get_v13_official_control_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_verification_readiness', BACKROOM_ARTIFACT_SCOPE],
@@ -777,8 +785,6 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read finalized vTrust, revealed weights and pending timelock/reveal blocks. No submission.',
   agent_scoring_readiness:
     'Read one submission\'s scoring blockers: dataset, screened image, policy version, status, and lease eligibility.',
-  get_agent_coding_certifications:
-    'Artifact-bound coding certifications; weight_eligible is always false. Requires backroom:read.',
   get_screener_capacity:
     'Read screener capacity, routing and recent jobs before retry.',
   get_database_backup_status:
@@ -797,40 +803,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Pin one node-2 worker public key only while replay capacity is zero. Exact confirmation and operator audit required.',
   revoke_screener_replay_process_key:
     'Revoke one exact node-2 process key, including during an active canary. Exact fingerprint, confirmation and audit required.',
-  get_coding_catalog_releases:
-    'Read signed shadow catalog commitments, retirement, and exposure counts.',
-  get_coding_private_v2_releases:
-    'Read native v2 registrations; never launches.',
-  get_coding_control_plane:
-    'Read unified Coding authority state.',
-  register_coding_private_v2_release:
-    'Register signed, non-selectable native v2.',
-  quarantine_coding_private_v2_release:
-    'Quarantine exact native v2.',
-  retire_coding_private_v2_release:
-    'Retire one exact native v2 release.',
-  reconcile_coding_shadow_artifact:
-    'Prepare one exact weight-zero Coding run.',
-  issue_coding_shadow_ticket_set:
-    'Issue fixed k=3 weight-zero Coding tickets.',
-  register_coding_catalog_release:
-    'Register one curator-signed, weight-zero catalog commitment.',
-  supersede_coding_catalog_release:
-    'Atomically append a replacement catalog and tombstone its predecessor.',
-  retire_coding_catalog_release:
-    'Irreversibly retire a shadow catalog commitment after review.',
-  get_agent_coding_shadow_evaluations:
-    'Read future-height assignments, finalized issuances and weight-zero Coding runs/leases/repairs.',
   create_screener_bootstrap_grant:
     'Mint one short-lived, single-use, controller-fenced node enrollment grant. Returns the only token copy.',
-  get_core_qualification_policy:
-    'Read the benchmark-scoped shadow core qualification policy.',
-  set_core_qualification_policy:
-    'Apply an append-only shadow policy. Never changes admission or weights.',
-  get_agent_core_qualification:
-    'Read one artifact-bound shadow qualification history.',
-  refresh_agent_core_qualification:
-    'Idempotently observe one current score snapshot. No scoring effect.',
   get_screener_review_settings:
     'Read L1/L2/L3 review settings and worker adoption; bypass is in queue policy.',
   get_conversation_assessments:
@@ -868,12 +842,6 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read immutable official-image review claims; not certification.',
   get_v13_official_control_artifact:
     'Download sealed candidate image for independent review; no verdict.',
-  stage_v13_official_control_image:
-    'Registrar stages an exact official image for review; no miner row.',
-  verify_v13_official_control_image:
-    'Hash and seal official image bytes; no execution or verdict authority.',
-  record_v13_official_control_approval:
-    'Authenticated fixture reviewer records exact-image evidence; one account may perform all steps.',
   register_canonical_starter_fixture:
     'Stage exact released starter: operator fixture, no miner submission.',
   review_canonical_starter_fixture:
@@ -915,7 +883,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_outlier_escalation_dry_run:
     'Replay outlier escalation on the scored ledger: rows it would hold.',
   get_inference_failure_taxonomy:
-    'Read inference outcome groups and report-only 429 bursts; unknown routes retained.',
+    'Read hosted-inference outcome groups, report-only 429 bursts, and confirmation-lane (reader/judge) failures; unknown routes retained.',
   start_runtime_profile:
     'Capture bounded private relay pprof.',
   download_runtime_profile:
@@ -932,6 +900,29 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   set_cla_policy: 'Set CLA mode with revision and confirmation. Write; see help.',
   publish_cla_version: 'Publish approved pinned CLA; no activation. Write; see help.',
   get_bounty_board: 'List build bounties: terms, slots, pause, awards.',
+  get_generator_competition_settings: 'Read generator competition policy, mode and optional history.',
+  set_generator_competition_settings: 'Write complete generator policy with CAS and APPLY GENERATOR COMPETITION {MODE}.',
+  list_generator_submissions: 'Page generator submissions with latest run; filter hotkey/status.',
+  get_generator_submission: 'Read one generator submission, lease and every run (never source).',
+  get_generator_run: 'Read one qualification run: evaluation and outcome; seeds once finished.',
+  get_generator_probe: 'Read probe epochs and probed counts; the probe seed is never served.',
+  rotate_generator_probe_seed: 'Retire the probe seed; every active generator re-qualifies.',
+  list_generator_promotion_candidates: 'Discriminating round cases, highest credit first.',
+  get_generator_board: 'Read the shadow generator ledger (weight_eligible=false).',
+  list_generator_rounds: 'Page chain-epoch generator rounds with schedule and counts by status.',
+  get_generator_round: 'Read one round: columns, panel, generation, leases, results, pending agents, matrix.',
+  preview_generator_round: 'What a round opened now would freeze, and every blocker.',
+  get_generator_round_loop: 'Read the round driver\'s last tick, actions, errors and chain position.',
+  tick_generator_rounds: 'Run one idempotent round-driver tick now.',
+  get_generator_round_dataset: 'Download a closed round\'s exact dataset to reproduce it. Artifact scope.',
+  void_generator_round: 'Void a round with VOID GENERATOR ROUND {n}; expires its live leases.',
+  close_generator_round: 'Close a running round now with CLOSE GENERATOR ROUND {n}; scores what it has.',
+  republish_generator_round_commitment: 'Retry a failed on-chain commitment for a committed round.',
+  release_generator_round_lease: 'Release one validator\'s stuck round lease so the agent re-leases.',
+  register_default_generator: 'Register the public default generator (uploadKey or sourceBase64) that fills empty counted columns.',
+  create_default_generator_upload: 'Presigned five-minute PUT for one default-generator archive under this operator\'s prefix.',
+  rescore_generator_submission: 'Re-qualify an active generator now on fresh seeds.',
+  reject_generator_submission: 'Reject a generator by ruling; abandons its live run, drops it from the ledger.',
   get_bounty: 'Operator view of one bounty: claims, appeals, full private audit.',
   get_bounty_claim: 'Read one bounty claim: submissions, obligations, facts.',
   get_bounty_queue: 'Review queue (overdue first), settlement queue with approvers, or pending appeals.',
@@ -1029,6 +1020,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read rank, score, eligibility and registration; current benchmark default.',
   get_source_release_policy:
     'Read disclosure gate and receipts; history default 0.',
+  get_agent_source_release_evidence:
+    'Exact-SHA public handoffs versus candidate upload; derived eligibility is not publication proof. Missing audit is unknown, not private. See tool help.',
   set_burn_settings:
     'Change burn weights with CAS/reason/confirmation. MOVES TAO. See tool help.',
   get_burn_settings:
@@ -1046,6 +1039,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_treasury_receipts: 'Read treasury receipt history/publication.',
   get_treasury_ledger: 'Read per-epoch Gamma earnings, balance, lock and unreceipted outflow.',
   get_treasury_manual_transfers: 'Read manual custody readiness, requests and public receipts; no funds.',
+  preview_treasury_manual_transfer: 'Preview one Gamma collector transfer: envelope, digest and the exact confirmation to echo. not_queued; nothing moves.',
+  queue_treasury_manual_transfer: "Queues a real on-chain SN118 alpha transfer from the Gamma collector to the named bucket's holding coldkey. Call preview first; exact confirmation. Custody re-verifies everything; one unresolved claim blocks another.",
   get_treasury_receipt_preflight: 'Read exact receipt readiness/archive checkpoint; no writes.',
   record_treasury_receipt: 'Ingest finalized receipt; no signing/provider credit.',
   quote_treasury_topup: 'Quote GM routes/impact; no execution.',
@@ -1443,7 +1438,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Execute ATH rulings batch',
       description:
-        'Apply exactly the rulings a current preview token describes; confirmation must be "APPLY ATH RULINGS BATCH". The Platform verifies the token (operator, digest, TTL), re-downloads the uploaded document (or requires the identical inline `rulings`), RE-READS THE BOARD, and re-previews every item before touching it. Each ruling is then applied independently through the same open_ath_review / resolve_ath_review code path -- a reject on a scored agent opens the hold and resolves it in one item, and an ["attest"] clear writes a resolved-clear review for an unheld scored or live agent without changing its status -- with the board re-read from Postgres after every ruling that lands, so item i is judged against the real board after items < i (not the preview\'s simulation); each is separately audited: the AthReview provenance and the clear/reject action rows carry batch_id, index, evidence_references, the rulings digest, the upload key, and the board fingerprint. Rows come back as applied / already_applied / failed with the refusal reason, so a partial batch is safe to preview and re-run. An applied row with `annotated: false` LANDED -- only the batch_id / evidence_references annotation on its audit rows failed; never re-run it. An item is refused when its guards moved, or when its crown outcome differs from the preview (would_change_crown flipped, or the champion / raw leader changed and the item touches the crown) -- preview again and read the new `board`. board_before and board_after report the crown around the batch. Requires backroom:write.',
+        'Apply exactly the rulings a current preview token describes; confirmation must be "APPLY ATH RULINGS BATCH". The Platform verifies the token (operator, digest, TTL), re-downloads the uploaded document (or requires the identical inline `rulings`), RE-READS THE BOARD, and re-previews every item before touching it. Each ruling is then applied independently through the same open_ath_review / resolve_ath_review code path -- a reject on a scored agent opens the hold and resolves it in one item, and an ["attest"] clear writes a resolved-clear review for an unheld scored or live agent without changing its status -- with the board re-read from Postgres after every ruling that lands, so item i is judged against the real board after items < i (not the preview\'s simulation); each is separately audited: the AthReview provenance and the clear/reject action rows carry batch_id, index, evidence_references, the rulings digest, the upload key, and the board fingerprint. Rows come back as applied / already_applied / failed with the refusal reason. A failed item with write_outcome_unknown=true may have committed before a follow-up read failed: read its current agent/review before any retry. would_change_crown=null means its current crown effect was unavailable; later items are refused after a board failure. An applied row with `annotated: false` LANDED -- only the batch_id / evidence_references annotation on its audit rows failed; never re-run it. An item is refused when its guards moved, or when its crown outcome differs from the preview (would_change_crown flipped, or the champion / raw leader changed and the item touches the crown) -- preview again and read the new `board`. board_before and board_after report the crown around the batch. Requires backroom:write.',
       inputSchema: executeAthRulingsBatchInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -1648,7 +1643,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening verification readiness',
       description:
-        'Read exact V13 attempt receipts and private prerequisites. Missing or recorded_unverified is not a pass; mechanically_verified covers only archive/image identity. Never authorizes CLEAR. Artifact scope.',
+        'Read exact V13 receipts, retained source-review finding/digest and historical private metadata. Private-audit activation is retired. Source observation binding checks and a stored clearance_certified assertion are not accepted source admission or health proof. Missing records do not prove review never ran. A private challenge is not universally required for source admission. mechanically_verified covers only archive/image identity. Never authorizes CLEAR. Artifact scope.',
       inputSchema: screeningFailureDiagnosticInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1693,17 +1688,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
-    'record_v13_benign_approval',
-    {
-      title: 'Record V13 known benign approval',
-      description: 'Append an exact control artifact and image approval with review evidence digest. Records provenance only; it cannot clear or reject an agent.',
-      inputSchema: v13BenignApprovalWriteInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => recordV13BenignApproval(props.session.email, input)),
-  )
-
-  registerTool(
     'get_v13_replay_private_group',
     {
       title: 'Get V13 replay private group',
@@ -1712,28 +1696,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchV13ReplayPrivateGroup(input)),
-  )
-
-  registerTool(
-    'record_v13_replay_private_group',
-    {
-      title: 'Record V13 replay private group',
-      description: 'Append replay-bound target and known benign commitments before private generation. No case generation or terminal decision is performed.',
-      inputSchema: v13ReplayGroupWriteInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => recordV13ReplayPrivateGroup(props.session.email, input)),
-  )
-
-  registerTool(
-    'register_v13_replay_private_package',
-    {
-      title: 'Register V13 replay private package',
-      description: 'Append a role-specific sealed package digest for one replay. Registration is recorded unverified and does not clear a hold.',
-      inputSchema: v13ReplayPackageWriteInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => registerV13ReplayPrivatePackage(props.session.email, input)),
   )
 
   registerTool(
@@ -1757,7 +1719,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) => result(await fetchV13ReplayPrivateStatistics(input)),
   )
-
 
   registerTool('get_github_link_revocation_preflight', {
     title: 'Inspect GitHub link',
@@ -1808,6 +1769,145 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     // The service still parses effectiveAt strictly; the catalog needs only its format.
     inputSchema: claPublishInputSchema.extend({ effectiveAt: z.string().meta({ format: 'date-time' }) }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => publishClaVersion(props.session.email, input)))
+
+  registerTool('get_generator_competition_settings', {
+    title: 'Get generator competition settings',
+    description: 'Read the shadow DittoBench generator competition policy: mode (off refuses uploads, leases nothing and opens no rounds; shadow runs the lane at zero emission); the score (panel_size top agent owners, min_panel, min_solver_owners, solve_threshold, champion_bonus); qualification (seeds_per_run secret seeds of exactly cases_per_seed cases, copy_overlap_threshold on the probe, upload cooldown, lease TTL, max_attempts, retry backoff); rounds (epochs_per_round chain epochs per round, counted_columns, challenger_columns, reference_agent_ids added to every panel as independent solvers, privacy_window_rounds before a round is revealed, onchain_commitment, validator_rounds_enabled which lets validators run panel agents); and window_days for the ledger. Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
+    inputSchema: MCP_SETTINGS_HISTORY_INPUT, annotations: toolAnnotations('read'),
+  }, async ({ historyLimit, historyOffset }) =>
+    result(compacted(pageRevisionHistory(await fetchGeneratorSettings(), historyLimit, historyOffset), REVISION_LISTS)))
+
+  registerTool('set_generator_competition_settings', {
+    title: 'Set generator competition settings',
+    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel, min_panel above the round panel (panel_size plus reference agents), duplicate reference agents, and more than 8 columns. To start rounds: mode=shadow, a registered and qualified default generator (register_default_generator), then validator_rounds_enabled=true; check preview_generator_round first. Returns the revision this write created. There is no enforcing mode: every ledger entry stays weight_eligible=false and the validator track stays SHADOW. Requires backroom:write.',
+    inputSchema: setGeneratorSettingsInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => setGeneratorSettings(input, props.session.email)))
+
+  registerTool('list_generator_submissions', {
+    title: 'List generator submissions',
+    description: 'Newest-first generator submissions with identity (source and tree SHA-256, Go module and version, file count, size), status (active is the hotkey\'s one leased generator; superseded by a newer upload; rejected with status_reason naming build_failed, generation_failed, invalid_pack, invalid_probe, nondeterministic, behavioral_copy or an operator ruling), next_run_at, and the latest non-abandoned run with case status counts. counts_by_status covers every submission. Filter by hotkey or status. Source is never returned. Requires backroom:read.',
+    inputSchema: listGeneratorSubmissionsInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listGeneratorSubmissions(input)))
+
+  registerTool('get_generator_submission', {
+    title: 'Get generator submission',
+    description: 'One generator submission: its summary, owner key, consecutive lease attempts, the in-flight run and its lease expiry, and every run newest first (abandoned runs are expired leases whose seeds were retired). Use get_generator_run for a run\'s evaluation and verdicts. Source is never returned. Requires backroom:read.',
+    inputSchema: generatorSubmissionIdInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGeneratorSubmission(input)))
+
+  registerTool('get_generator_run', {
+    title: 'Get generator run',
+    description: 'One qualification run: status (qualified, invalid, copy, abandoned) and outcome, settings revision, scorer version, the stored evaluation (sandbox, build result and binary SHA-256, per-seed pack SHA-256, validation summary with up to 50 issues, generation errors, durations, determinism, and the probe result without its seed), and the outcome summary (case and probe counts, or copy_of/overlap for a behavioral copy). seeds is null while the run is leased and the exact seeds once it finished, so an operator can regenerate the packs with `challenge rehearse`. Round results live on get_generator_round. Requires backroom:read.',
+    inputSchema: generatorRunIdInputSchema.extend({ runId: sourceAgentId() }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGeneratorRun(input)))
+
+  registerTool('get_generator_probe', {
+    title: 'Get generator probe epochs',
+    description: 'Probe epochs newest first. Every run also generates a pack on the current epoch\'s secret probe seed; a new submission reproducing at least copy_overlap_threshold of an earlier other-owner submission\'s probe fingerprints in the same epoch is rejected as a behavioral copy. Each epoch reports its reason, actor, creation and retirement, and how many submissions it has probed. The seed itself is never served. Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchGeneratorProbe()))
+
+  registerTool('rotate_generator_probe_seed', {
+    title: 'Rotate generator probe seed',
+    description: 'Retire the current probe epoch and start one with a fresh secret seed, for example after a suspected leak. Copy detection compares submissions probed in the same epoch only, so every active generator loses its qualification and re-qualifies (and re-probes) before its next round column. Needs a reason and the confirmation ROTATE GENERATOR PROBE SEED. Requires backroom:write.',
+    inputSchema: rotateGeneratorProbeInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rotateGeneratorProbe(input, props.session.email)))
+
+  registerTool('list_generator_promotion_candidates', {
+    title: 'List generator promotion candidates',
+    description: 'Discriminating cases from scored rounds of non-rejected generators (the public default included), highest credit first: round, column, submission, hotkey, case id, fingerprint, mean panel score, solver owners and whether the champion failed. Promotion into a private benchmark pool is an operator decision; read a case from the closed round\'s dataset (get_generator_round_dataset). Requires backroom:read.',
+    inputSchema: generatorPromotionInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGeneratorPromotionCandidates(input)))
+
+  registerTool('get_generator_board', {
+    title: 'Get generator board',
+    description: 'The shadow generator ledger validators fold: each hotkey\'s latest scored round column score inside window_days, best first, with submission id, round index and discriminating case count. The public default generator and rejected generators never appear. Every entry is weight_eligible=false and mode=off serves an empty ledger. Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchGeneratorBoard()))
+
+  registerTool('rescore_generator_submission', {
+    title: 'Rescore generator submission',
+    description: 'Re-qualify an active generator now on fresh secret seeds (build, every pack valid, determinism, probe copy check). It holds no new round column until it passes again; a column in a round already generated keeps running. An in-flight qualification run is left to finish. Refused unless the submission is active. Needs a reason. Requires backroom:write.',
+    inputSchema: rescoreGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => rescoreGenerator(input, props.session.email)))
+
+  registerTool('reject_generator_submission', {
+    title: 'Reject generator submission',
+    description: 'Reject one generator by operator ruling, for example a copy the probe missed or abuse. It leaves the ledger at once, an in-flight qualification run is abandoned (its result will be refused), and it never holds another round column; the miner can still upload a new generator. expectedStatus must match the current status, and the confirmation is REJECT GENERATOR SUBMISSION. The reason is stored as the miner-visible status_reason. Requires backroom:write.',
+    inputSchema: rejectGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rejectGenerator(input, props.session.email)))
+
+  registerTool('list_generator_rounds', {
+    title: 'List generator rounds',
+    description: 'Newest-first generator rounds and the chain schedule. A round is keyed on the chain epoch counter (round = SubnetEpochIndex // epochs_per_round). Each round reports status (committed: secret drawn and commitment published one round ahead; generating: columns and panel frozen, seed derived from the committed secret and the block the round opened at, waiting for the scorer to build the dataset; running: validators are running panel agents on it; scoring; scored; void with void_reason), commitment and its on-chain publication state, open epoch and block, column count, panel size, results received, and once past privacy_window_rounds the revealed secret and seed. schedule shows the observed SubnetEpochIndex, current round, and the epoch the next round opens at. Requires backroom:read.',
+    inputSchema: listGeneratorRoundsInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listGeneratorRounds(input)))
+
+  registerTool('get_generator_round', {
+    title: 'Get generator round',
+    description: 'Everything about one round for running or debugging it: the frozen columns (submission, hotkey, owner key, source SHA-256, counted or challenger, public default), the panel (agents, owner keys, champion, reference agents), the settings revision and cases per column, per-column generation results (ok, error, build and generate durations, scorer version), case counts per column and dataset size, the scorer lease and its attempts, commitment publication and error, every validator lease attempt (validator, slot, deadline, status, detail), every accepted result (validator, run id, answered, faulted, mean score), the panel agents still pending, and once scored the per-column scores and pairwise-neutral agent standings. The seed and secret are withheld until the round is revealed; get_generator_round_dataset (backroom:artifact:read) returns the seed with the dataset. Requires backroom:read.',
+    inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchGeneratorRound(input)))
+
+  registerTool('preview_generator_round', {
+    title: 'Preview generator round',
+    description: 'What a round opened right now would freeze: counted columns (best qualified generators by latest round score, then never-scored ones, then the public default generator filling the rest) and challenger columns, and the panel (top ledger owners plus reference agents). Lists every blocker: mode off, invalid settings, no counted columns (no qualified generator and no registered or qualified default), a panel below min_panel, skipped reference agents, and validator_rounds_enabled=false. Use it before switching the lane on. Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchGeneratorRoundPreview()))
+
+  registerTool('get_generator_round_loop', {
+    title: 'Get generator round loop',
+    description: 'The round driver\'s last tick on the Platform process that runs it: tick and success times, the last error (chain read failures leave rounds untouched), the actions the last tick took (commit, open, close, void, reveal), the tick count, and the observed chain schedule. available=false means this process does not run the driver. Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchGeneratorRoundLoop()))
+
+  registerTool('tick_generator_rounds', {
+    title: 'Tick generator rounds',
+    description: 'Run one round-driver tick now instead of waiting up to a minute: read the epoch schedule at a finalized head and apply every transition already due (commit the next round, open the current one, close or void earlier ones, reveal past the privacy window), then publish pending on-chain commitments. Idempotent: at the same chain position a second tick changes nothing. Needs a reason. Returns the actions taken or the error. Requires backroom:write.',
+    inputSchema: tickGeneratorRoundsInputSchema, annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => tickGeneratorRounds(input, props.session.email)))
+
+  registerTool('get_generator_round_dataset', {
+    title: 'Get generator round dataset',
+    description: 'Download a closed (scoring, scored or void) round\'s exact dataset bytes as base64 with its SHA-256 and seed, to reproduce the round: decode it with challenge.DecodeRoundDataset or rerun each column generator on challenge.RoundColumnSeed(seed, column). Refused while the round runs. Requires the dedicated backroom:artifact:read scope because the cases are private benchmark content.',
+    inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => artifact(() => fetchGeneratorRoundDataset(input)))
+
+  registerTool('void_generator_round', {
+    title: 'Void generator round',
+    description: 'Void one round by operator ruling (a bad dataset, a compromised secret). Live validator round leases are expired and no column score from it is ever credited. expectedStatus must match the round\'s current status; scored and void rounds are final. Confirmation: VOID GENERATOR ROUND {roundIndex}. Requires backroom:write.',
+    inputSchema: voidGeneratorRoundInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => voidGeneratorRound(input, props.session.email)))
+
+  registerTool('close_generator_round', {
+    title: 'Close generator round',
+    description: 'Close a running round now and send it to scoring with the results it has, for a round that will not complete (a panel agent no validator can run). Live leases are expired; fewer than min_panel results voids the round instead. Confirmation: CLOSE GENERATOR ROUND {roundIndex}. Requires backroom:write.',
+    inputSchema: closeGeneratorRoundInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => closeGeneratorRound(input, props.session.email)))
+
+  registerTool('republish_generator_round_commitment', {
+    title: 'Republish generator round commitment',
+    description: 'Retry the on-chain publication (Commitments set_commitment from Platform\'s Pylon identity, payload dgr1:{round}:{commitment}) of a committed round whose publication failed or was disabled. Only before the round opens: a commitment published after the open proves nothing. Confirmation: REPUBLISH GENERATOR ROUND COMMITMENT. Requires backroom:write.',
+    inputSchema: republishRoundCommitmentInputSchema, annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => republishGeneratorRoundCommitment(input, props.session.email)))
+
+  registerTool('release_generator_round_lease', {
+    title: 'Release generator round lease',
+    description: 'Release one validator\'s live round lease for one panel agent so another validator can take it, for a validator that went quiet mid-run. The ticket returns to rest without charging the agent anything, the attempt is recorded failed with your reason, and an audit entry is written. Confirmation: RELEASE GENERATOR ROUND LEASE. Requires backroom:write.',
+    inputSchema: releaseRoundLeaseInputSchema.extend({ agentId: sourceAgentId(), validatorHotkey: z.string() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => releaseGeneratorRoundLease(input, props.session.email)))
+
+  registerTool('create_default_generator_upload', {
+    title: 'Create default generator upload',
+    description: 'Issue a five-minute presigned PUT URL for one default-generator source archive (the gzip tar `ditto generator package` or `challenge pack` writes; at most max_bytes, 4 MiB). The object lands under this operator\'s own prefix (generator-default/v1/<actor>/...) of the private trace bucket. Upload it with `curl -X PUT -H "Content-Type: application/gzip" --data-binary @generator.tar.gz "<url>"`, then call register_default_generator with uploadKey set to the returned key. Requires backroom:write; answers 503 when upload storage is not configured (send sourceBase64 instead).',
+    annotations: toolAnnotations('write', false),
+  }, async () => write(() => createDefaultGeneratorUpload(props.session.email)))
+
+  registerTool('register_default_generator', {
+    title: 'Register default generator',
+    description: 'Register (or replace) the public default generator: a gzip tar of a Go generator module (for example `ditto generator package` of miners/dittobench-generator-starter-kit) with its SHA-256 and the hotkey its packs echo. Send exactly one of uploadKey (from create_default_generator_upload; use this for anything with vendored dependencies, which is too large to inline) or sourceBase64. It is checked like any upload, qualified by the scorer like any generator, owned by nobody, never on the ledger, and fills every counted column no qualified miner generator holds, each on its own column seed. A new registration supersedes the previous default. Confirmation: REGISTER DEFAULT GENERATOR. Requires backroom:write.',
+    inputSchema: registerDefaultGeneratorInputSchema.extend({ minerHotkey: z.string(), sourceSha256: z.string(), sourceBase64: z.string().optional(), uploadKey: z.string().optional() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => registerDefaultGenerator(input, props.session.email)))
 
   registerTool('get_bounty_board', {
     title: 'List build bounties',
@@ -2255,218 +2355,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
-    'get_agent_coding_certifications',
-    {
-      title: 'Inspect agent coding certifications',
-      description:
-        'Shadow coding-capability receipts for one agent UUID. weight_eligible is always false; never feeds ranking or Tool+Memory scores. Requires backroom:read.',
-      inputSchema: agentCodingCertificationInputSchema,
-      annotations: toolAnnotations('read'),
-    },
-    async (input) => result(await fetchAgentCodingCertifications(input)),
-  )
-
-  registerTool(
-    'get_coding_catalog_releases',
-    {
-      title: 'Get shadow coding catalogs',
-      description:
-        'Read signed coding catalog commitments, retirement state, and bounded exposure/run counts. This never returns private task identities, repository bytes, memory mappings, hidden tests, or reference patches.',
-      inputSchema: getCodingCatalogInputSchema,
-      annotations: toolAnnotations('read'),
-    },
-    async (input) => result(await fetchCodingCatalogReleases(input)),
-  )
-
-  registerTool(
-    'get_coding_private_v2_releases',
-    {
-      title: 'Get native private Coding v2 registrations',
-      description:
-        'Read Platform-owned native private-v2 release registrations, publication/key/probe digest commitments, and quarantine/retirement audit metadata. Separate from get_coding_catalog_releases, which reads the older contract-v1 catalog. Returns at most limit rows (default 50, maximum 100) and the untruncated total. No private source, object URLs/keys, wrapped keys, credentials or full publication receipts are returned. Registration remains selectable=false, shadow_only=true, weight_eligible=false and is not evidence of current Hippius access, key custody, native host qualification, canary completion or rollout approval. Requires backroom:read; no mutation is performed.',
-      inputSchema: getCodingCatalogInputSchema,
-      annotations: toolAnnotations('read'),
-    },
-    async (input) => result(await fetchCodingPrivateV2Releases(input)),
-  )
-
-  registerTool(
-    'get_coding_control_plane',
-    {
-      title: 'Get unified Coding control-plane state',
-      description:
-        'Read the contract-v1 catalog and distinct native private-v2 registry in one bounded snapshot. Reports permanent shadow and weight-zero flags. It does not establish fresh provider access, key custody, host qualification, canary completion or rollout approval and performs no mutation.',
-      inputSchema: getCodingCatalogInputSchema,
-      annotations: toolAnnotations('read'),
-    },
-    async (input) => result(await fetchCodingControlPlane(input)),
-  )
-
-  registerTool(
-    'register_coding_private_v2_release',
-    {
-      title: 'Register native private Coding v2 release',
-      description:
-        'Verify and append one native private-v2 registration from a complete Hippius receipt and external Ed25519 public key. Confirm the exact release, registration and curator-key digests. Never accepts private keys or credentials; remains non-selectable and weight-zero.',
-      inputSchema: registerCodingPrivateV2ReleaseMcpInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => registerCodingPrivateV2Release(input, props.session.email)),
-  )
-
-  registerTool(
-    'quarantine_coding_private_v2_release',
-    {
-      title: 'Quarantine native private Coding v2 release',
-      description:
-        'Append a quarantine event to one exact private-v2 registration. Confirm its release ID and current registration digest; immutable publication evidence remains retained.',
-      inputSchema: transitionCodingPrivateV2ReleaseInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => quarantineCodingPrivateV2Release(input, props.session.email)),
-  )
-
-  registerTool(
-    'retire_coding_private_v2_release',
-    {
-      title: 'Retire native private Coding v2 release',
-      description:
-        'Append terminal retirement to one exact private-v2 registration. Confirm its release ID and current registration digest; no stored evidence is deleted.',
-      inputSchema: transitionCodingPrivateV2ReleaseInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => retireCodingPrivateV2Release(input, props.session.email)),
-  )
-
-  registerTool(
-    'reconcile_coding_shadow_artifact',
-    {
-      title: 'Prepare exact artifact for shadow Coding',
-      description:
-        'Create or recover one future-height contract-v1 assignment for the exact agent, benchmark, active release and run ID. Performs no ticket issuance, container launch, score or weight change. Requires the exact RECONCILE SHADOW CODING confirmation.',
-      inputSchema: reconcileCodingShadowInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => reconcileCodingShadowArtifact(input, props.session.email)),
-  )
-
-  registerTool(
-    'issue_coding_shadow_ticket_set',
-    {
-      title: 'Launch fixed k=3 shadow Coding ticket set',
-      description:
-        'Issue one sorted, unique k=3 validator ticket set for an existing contract-v1 shadow run. Validators remain certified and claim independently; this does not execute a container. Requires the exact ISSUE SHADOW CODING TICKET SET confirmation and remains weight-zero.',
-      inputSchema: issueCodingShadowTicketSetInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => issueCodingShadowTicketSet(input, props.session.email)),
-  )
-
-  registerTool(
-    'register_coding_catalog_release',
-    {
-      title: 'Register shadow coding catalog',
-      description:
-        'Append one curator-signed coding contract v1 catalog commitment after offline review. Requires reason and REGISTER SHADOW CODING CATALOG {corpus_release_id}. The commitment remains weight-ineligible and contains no private task bytes.',
-      inputSchema: registerCodingCatalogMcpInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => registerCodingCatalogRelease(input, props.session.email)),
-  )
-
-  registerTool(
-    'retire_coding_catalog_release',
-    {
-      title: 'Retire shadow coding catalog',
-      description:
-        'Irreversibly stop new runs, exposures, and tickets for one exact catalog commitment. Existing immutable evidence stays readable and issued work may settle. Requires reason and RETIRE SHADOW CODING CATALOG {corpus_release_id}.',
-      inputSchema: retireCodingCatalogInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => retireCodingCatalogRelease(input, props.session.email)),
-  )
-
-  registerTool(
-    'supersede_coding_catalog_release',
-    {
-      title: 'Supersede shadow coding catalog',
-      description:
-        'Atomically advance the append-only coding-catalog WAL: verify and append one new curator-signed release, then append a retirement tombstone for the exact predecessor. No row or private problem object is mutated. Requires reason and SUPERSEDE SHADOW CODING CATALOG {old} WITH {new}.',
-      inputSchema: supersedeCodingCatalogInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => supersedeCodingCatalogRelease(input, props.session.email)),
-  )
-
-  registerTool(
-    'get_agent_coding_shadow_evaluations',
-    {
-      title: 'Inspect shadow coding evaluations',
-      description:
-        'Read one agent\'s exact-artifact future-height assignments, shadow coding runs, validator-specific certified leases, bounded signed result summaries, and k=3 repair median. Active task identities and full evidence remain private. These ledgers are separate from core scores and permanently weight-ineligible.',
-      inputSchema: agentCodingShadowEvaluationInputSchema,
-      annotations: toolAnnotations('read'),
-    },
-    async (input) => result(await fetchAgentCodingShadowEvaluations(input)),
-  )
-
-  registerTool(
-    'get_core_qualification_policy',
-    {
-      title: 'Get shadow core qualification policy',
-      description:
-        'Read one benchmark-scoped append-only shadow policy. No policy exists by default. Entry requires every composite/tool/memory floor for enter_observations distinct full-score snapshots; an already-qualified artifact exits only after exit_observations snapshots below any lower exit floor. This never changes admission, rank, scores, weights, or emissions.',
-      inputSchema: getCoreQualificationPolicyInputSchema,
-      annotations: toolAnnotations('read'),
-    },
-    async (input) => result(await fetchCoreQualificationPolicy(input)),
-  )
-
-  registerTool(
-    'set_core_qualification_policy',
-    {
-      title: 'Set shadow core qualification policy',
-      description:
-        'Write one complete append-only shadow policy after reading the current revision. policy must carry schema, weight_eligible=false, bench_version, all six entry/exit floors, and both observation streaks; exit floors cannot exceed entry floors. Confirm APPLY SHADOW CORE QUALIFICATION V{bench_version}. This starts observation only and never activates coding admission or weights.',
-      inputSchema: setCoreQualificationPolicyMcpInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => setCoreQualificationPolicy(input, props.session.email)),
-  )
-
-  registerTool(
-    'get_agent_core_qualification',
-    {
-      title: 'Inspect agent core qualification',
-      description:
-        'Read exact-artifact, exact-screened-image, benchmark-version, and policy-bound shadow qualification history. current_observation is null after any binding changes until fresh score evidence arrives. Qualification remains diagnostic and weight-ineligible.',
-      inputSchema: agentCoreQualificationInputSchema,
-      annotations: toolAnnotations('read'),
-    },
-    async (input) => result(await fetchAgentCoreQualification(input)),
-  )
-
-  registerTool(
-    'refresh_agent_core_qualification',
-    {
-      title: 'Refresh agent core qualification',
-      description:
-        'Idempotently backfill or recover one agent from its current accepted quorum scores. Requires reason and REFRESH SHADOW CORE QUALIFICATION V{bench_version}. This writes only the shadow observation ledger and cannot re-score, admit coding, rank, or change weights.',
-      inputSchema: refreshAgentCoreQualificationInputSchema,
-      annotations: toolAnnotations('write', false),
-    },
-    async (input) =>
-      write(() => refreshAgentCoreQualification(input, props.session.email)),
-  )
-
-  registerTool(
     'get_agent_scores',
     {
       title: 'Get authoritative agent scores',
@@ -2597,6 +2485,13 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         ),
       ),
   )
+
+  registerTool('get_agent_source_release_evidence', {
+    title: 'Get exact-agent public source-release evidence',
+    description: 'Read publication timing for one exact source artifact. Supply candidateAgentId to compare against that submission upload under the policy effective then; omit it for a current snapshot. Returns source SHA, policy revision, completed-emission confirmation, derived eligibility time, and the count/earliest timestamp of exact-SHA unauthenticated public handoffs. Derived eligibility can be backdated by late emission proof and never establishes historical availability; publication_proven_by_reference_time uses only a recorded public handoff before that time. An actual public handoff remains publication after an embargo increase or status change. Private reads do not count. The audit is fail-open: missing rows or a false publication_proven_by_reference_time mean publication was not proved, never that the source was private or copying occurred. Earlier shorter eligibility windows may be omitted without a recorded handoff. No artifact URL, IP, requester identity or source bytes are returned. Requires backroom:read and changes nothing.',
+    inputSchema: { agentId: sourceAgentId(), candidateAgentId: sourceAgentId().optional() },
+    annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchAgentSourceReleaseEvidence(input)))
 
   registerTool(
     'set_source_release_policy',
@@ -2953,24 +2848,6 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Read append-only authenticated operator attestations for a controlId. Each binds the official fixture, exact image, profile and review evidence. recorded_unverified is not a semantic pass or terminal authorization. Requires backroom:read.',
     inputSchema: officialControlLookupSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchOfficialV13ControlApprovals(input)))
-
-  registerTool('stage_v13_official_control_image', {
-    title: 'Stage official V13 control image',
-    description: 'The signed-in fixture registrar pins requestId, fixtureId, image tar SHA, config image ID and byte size. May stage before independent source review so the operator can inspect sealed image bytes first; one account may register and record review evidence. Once reviewed, the source fixture image ID must match. Returns a short-lived constrained PUT and headers. Creates no miner or attempt and cannot clear anything. Same exact requestId may remint an unverified upload; conflicts refuse. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlStageSchema.extend({ requestId: officialControlCatalogId(), fixtureId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => stageOfficialV13ControlImage(input, props.session.email)))
-
-  registerTool('verify_v13_official_control_image', {
-    title: 'Verify official V13 control archive',
-    description: 'The registrar hashes the staged tar, copies it to a distinct protected key and hashes again before pinning immutable archive identity. Claimed Docker image ID remains unverified until the private runner loads it. No source, semantic or admission pass. May take up to three minutes; reread after ambiguous delivery before retrying. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlVerifySchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => verifyOfficialV13ControlImage(input, props.session.email)))
-
-  registerTool('record_v13_official_control_approval', {
-    title: 'Record official control approval',
-    description: 'The authenticated fixture reviewer records the exact verified archive, image ID, profile and evidence digest; this may be the same account that registered and built it. Independent agent review evidence is not a second human identity or an automated semantic pass. The append-only recorded_unverified receipt must predate private generation and does not establish semantic benignness, execution or a policy verdict. No miner or attempt is fabricated. Requires backroom:write and exact confirmation.',
-    inputSchema: officialControlApprovalSchema.extend({ controlId: officialControlCatalogId() }), annotations: toolAnnotations('write', true),
-  }, async (input) => write(() => recordOfficialV13ControlApproval(input, props.session.email)))
 
   registerTool('get_v13_official_control_artifact', {
     title: 'Download official V13 control candidate',
@@ -3716,7 +3593,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         'Split the last 1, 5, 15, and 60 minutes of SETTLED hosted chat and embedding calls by model, lane, gateway, upstream route, and terminal error code. get_inference_runtime_metrics can say "209 of 903 chat calls failed" and cannot say which model, route, or code; this can. Per lane: calls, settled, completed, failed, canceled, in_flight, timed_out, failure_share, rate_limited_failures (exactly upstream_http_429), and groups_total / groups_returned / groups_truncated. Per group: the same counts plus upstream_http_status, openrouter_attempts_max (>1 means OpenRouter tried backup providers inside one request) and share_of_settled_calls. ' +
         'READ route_basis BEFORE BELIEVING upstream_route. Only confirmed_selected means that upstream served the call, and it exists only on completed chat rows. last_attempted is the final upstream a FAILED chat row was sent to -- evidence, not a route. configured is the relay\'s pinned embedding provider, stamped before the call. router_internal, unknown and unrecognized always carry upstream_route null: the Ditto Router did not say, the ledger column was NULL (the usual case for a failure whose provider returned no metadata), or the stored value was not a plain identifier and was refused. A lane of unknown routes is a metadata gap, NOT a healthy route. ' +
         'rate_limit_bursts is a REPORT-ONLY five-minute signal per lane: rate_limited_failures (upstream_http_429 started in the last 300 s), a provisional threshold pending measurement, and peak_global_concurrency (the same 300 s peak get_inference_runtime_metrics reports) against global_concurrency_limit. active means count >= threshold AND peak < limit: the upstream pool, not Ditto admission, was the bottleneck. tickets (most 429s first, capped; tickets_total / tickets_truncated) name agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline and that ticket\'s 429 count. active enforces, reroutes, and retries nothing. ' +
-        'In-flight requests are excluded from the groups on purpose (no route and no code yet) and counted as in_flight instead, so failure_share is failed over settled. Counts and identifiers only: no prompts, responses, keys, headers, or trace bodies. This changes nothing and admits nothing -- route admission and provider-fallback policy are not controlled here.',
+        'In-flight requests are excluded from the groups on purpose (no route and no code yet) and counted as in_flight instead, so failure_share is failed over settled. Counts and identifiers only: no prompts, responses, keys, headers, or trace bodies. This changes nothing and admits nothing -- route admission and provider-fallback policy are not controlled here. ' +
+        'confirmation_lanes and confirmation_groups cover the LongMem confirmation grants, which lanes/groups above DO NOT and never did: those read inference_requests, and a confirmation call writes confirmation_inference_requests instead. Through 2026-10 that lane lost 83% of its bundles to provider rejections while this tool reported rate_limited_failures 0 and rate_limit_bursts.active false in every window, so a zero here is not evidence about confirmation. Its windows are confirmation_window_seconds (1 hour / 1 day / 7 days) because a bundle runs a few times a day, not thousands of times an hour. ' +
+        'NO TERMINAL ERROR CODE IS REPORTED FOR CONFIRMATION, because none is stored: confirmation_inference_requests has no terminal_error_code or upstream_http_status column, so the 429-versus-timeout split exists only in the trace archive (list_inference_traces / peek_inference_trace). Read it from what is stored instead -- failed_without_provider equal to failed at a sub-second failed_p50_duration_ms is a pre-provider rejection that was never billed, while a failed_p50_duration_ms at the configured inference timeout is a hang. bundles_with_failure counts distinct bundles that saw a failure, and a bundle dies on its first one. Every (window, lane) pair is reported even when idle, so an absent lane is a bug, not a quiet one.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchInferenceFailureTaxonomy()),
@@ -3881,6 +3760,37 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_treasury_manual_transfers',
     { title: 'Read manual collector transfer controls', description: 'Read the manual bridge enablement, fresh signer observation, approved destinations, blocking reason and latest 20 requests with finality and independent public receipt state. Recurring transfers remain off. A signer report is not chain proof. No signing, transfer, settings mutation or provider credit authority. Requires backroom:read.', annotations: toolAnnotations('read') },
     async () => result(await fetchTreasuryManualTransfers()),
+  )
+  registerTool(
+    'preview_treasury_manual_transfer',
+    {
+      title: 'Preview a manual Gamma collector transfer',
+      description: 'Preview one manual transfer of SN118 alpha from the Gamma collector to an approved bucket\'s holding wallet, exactly like the Backroom Preview manual transfer button. Give bucket_id, exactly one of amount_rao (integer rao) or amount_alpha (decimal alpha, at most 9 fractional digits), retained_alpha_rao (minimum stake that must stay staked) and an 8-240 char audit reason; request_id is generated when omitted. Platform checks the destination, entitlement, signed ceiling and reserve and returns the immutable envelope, confirmation_digest and `confirmation`, the exact phrase queue_treasury_manual_transfer requires. spending_authority is not_queued: nothing is queued, signed or moved. Requires backroom:write.',
+      inputSchema: {
+        bucket_id: z.string().min(2).max(48),
+        amount_rao: z.number().int().positive().optional(),
+        amount_alpha: z.string().max(32).optional(),
+        retained_alpha_rao: z.number().int().positive(),
+        reason: z.string().min(8).max(240),
+        request_id: z.string().meta({ format: 'uuid' }).optional(),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => write(() => previewTreasuryManualTransfer(input, props.session.email)),
+  )
+  registerTool(
+    'queue_treasury_manual_transfer',
+    {
+      title: 'Queue a manual Gamma collector transfer',
+      description: 'DESTRUCTIVE: queues a real on-chain transfer of SN118 alpha from the Gamma collector to the named bucket\'s holding coldkey, exactly like the Backroom Transfer once button. Call preview_treasury_manual_transfer first and pass its envelope and confirmation_digest unchanged plus `confirmation` equal to its exact TRANSFER <amount> ALPHA TO <BUCKET> <destination> phrase; any other text is refused before Platform. The signed-in operator is the audit actor. Custody re-verifies everything before signing. One unresolved claim blocks another; never resend an unresolved request. Requires backroom:write.',
+      inputSchema: {
+        envelope: z.record(z.string(), z.unknown()),
+        confirmation_digest: z.string().max(64),
+        confirmation: z.string().max(200),
+      },
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => queueTreasuryManualTransfer(input, props.session.email)),
   )
   registerTool(
     'get_treasury_receipt_preflight',
@@ -4066,9 +3976,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'get_benchmark_contract_migration',
     {
-      title: 'Inspect zero-score v2-to-v3 migration',
+      title: 'Inspect zero-score legacy bench-2 migration',
       description:
-        'Inspect whether one zero-score legacy v2 submission can be safely migrated to v3 without replacing its artifact or history. Returns score, dataset, screening, and active-validator guards. Requires backroom:read and does not change production.',
+        'Inspect whether one zero-score legacy bench-2 submission can be safely migrated onto the open rollout target contract without replacing its artifact or history. The source contract is pinned to bench_version 2; the target is whatever the open rollout desires, so this reports blocked when no rollout is open. Returns score, dataset, screening, and active-validator guards. Requires backroom:read and does not change production.',
       inputSchema: benchmarkContractMigrationLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -4078,9 +3988,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'migrate_zero_score_benchmark_contract',
     {
-      title: 'Migrate zero-score v2 submission to v3',
+      title: 'Migrate zero-score legacy bench-2 submission',
       description:
-        'Preserve one exact zero-score v2 submission and its history while expiring unscored legacy tickets, pinning a v3 dataset, clearing stale screened-image metadata, and queuing rescreening before fresh v3 ticket issuance. Requires backroom:write.',
+        'Preserve one exact zero-score bench-2 submission and its history while expiring unscored legacy tickets, pinning a dataset for the open rollout target contract, clearing stale screened-image metadata, and queuing rescreening before fresh ticket issuance. The source is pinned to bench_version 2; the target follows the open rollout, not a fixed version. Requires backroom:write.',
       inputSchema: migrateBenchmarkContractInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -4160,7 +4070,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Inspect scored benchmark rollout qualification',
       description:
-        'Inspect whether one scored or live current-hybrid-top-five submission can be safely enrolled for the active v2-to-v3 rollout. Returns immutable artifact, rollout, score-count, dataset, screening, and validator-run guards. Requires backroom:read and does not change production.',
+        'Inspect whether one scored or live current-hybrid-top-five submission can be safely enrolled for the open benchmark rollout. The rollout target is read live rather than fixed to any version pair. Returns immutable artifact, rollout, score-count, dataset, screening, and validator-run guards. Requires backroom:read and does not change production.',
       inputSchema: benchmarkRolloutQualificationLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -4172,7 +4082,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Qualify scored submission for benchmark rollout',
       description:
-        'Enroll one exact scored or live current-hybrid-top-five submission into the active v2-to-v3 rollout and queue its required policy rescreen without deleting accepted scores or attempt history. Requires current artifact, rollout, and score-count guards from get_benchmark_rollout_qualification. Requires backroom:write.',
+        'Enroll one exact scored or live current-hybrid-top-five submission into the open benchmark rollout and queue its required policy rescreen without deleting accepted scores or attempt history. The rollout target is read live rather than fixed to any version pair. Requires current artifact, rollout, and score-count guards from get_benchmark_rollout_qualification. Requires backroom:write.',
       inputSchema: qualifyBenchmarkRolloutInputSchema,
       annotations: toolAnnotations('write', true),
     },

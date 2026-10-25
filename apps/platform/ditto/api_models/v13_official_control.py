@@ -12,16 +12,6 @@ Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ImageId = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 
 
-class OfficialControlImageRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    request_id: UUID
-    fixture_id: UUID
-    image_sha256: Sha256
-    image_id: ImageId
-    size_bytes: Annotated[int, Field(gt=0, le=8 * 1024 * 1024 * 1024)]
-
-
 class OfficialControlImageView(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -36,26 +26,10 @@ class OfficialControlImageView(BaseModel):
     producer: str
     created_at: datetime
     verified_at: datetime | None
-    # Storage hashing is not execution or semantic verification. The private
-    # runner must load the tar and verify the claimed image ID before use.
+    # Historical archive verification never established executed image identity
+    # or semantic verification. Retirement does not upgrade that evidence.
     image_identity_execution_verified: Literal[False] = False
     policy_verification_complete: Literal[False] = False
-
-
-class OfficialControlImageVerifyRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    image_sha256: Sha256
-    image_id: ImageId
-
-
-class OfficialControlImageUpload(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    control: OfficialControlImageView
-    upload_url: str
-    required_headers: dict[str, str]
-    expires_at: datetime
 
 
 class OfficialControlImageArtifact(BaseModel):

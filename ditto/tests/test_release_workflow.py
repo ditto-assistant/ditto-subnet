@@ -33,6 +33,10 @@ RELEASE_OWNED_COMPONENT_WORKFLOWS = (
     "starter-kit-ci.yml",
 )
 
+MANUAL_ONLY_COMPONENT_WORKFLOWS = frozenset(
+    {"coding-datagen-ci.yml", "coding-starter-kit-ci.yml", "datagen-ci.yml"}
+)
+
 
 def _step(steps: list[dict], name: str) -> dict:
     return next(step for step in steps if step.get("name") == name)
@@ -48,7 +52,10 @@ def test_release_is_the_single_post_merge_component_orchestrator() -> None:
             (WORKFLOW_DIR / workflow_name).read_text(), Loader=yaml.BaseLoader
         )
         triggers = workflow["on"]
-        assert "pull_request" not in triggers, workflow_name
+        # Coding-competition and research CI stay operator-dispatched
+        # (SN-120); the other component checks run on their PRs again.
+        manual_only = workflow_name in MANUAL_ONLY_COMPONENT_WORKFLOWS
+        assert ("pull_request" in triggers) is not manual_only, workflow_name
         assert "workflow_dispatch" in triggers, workflow_name
         assert "push" not in triggers, workflow_name
 

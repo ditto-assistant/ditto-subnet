@@ -1,0 +1,12 @@
+{
+  "archive_base64": "H4sIAAAAAAAC/+zVz0rEMBDH8ZzzFAEvekl/6Z/d5wntbCg2mWXbyoL47qKLKLnowUbcnc+luZXAfDMHH8dppLnyNrDaBgDs2lbhIv8Ctfs8AwrOdc1OGagC1nnxJwX8xiW/Xu6fOPr+0QcyH3OglbglgW3kYdt/fNt/i6x/NOik/xIiD+tEhs4+HieyPccqUNI6sHG2buQ5uHLRj2m7zf/D/psu77/tZP8X3f9vc6D1YU39+/H+wTy/SPzX74nSwKfqsgZmu5yXP+gf+6z/eu8g/ZdwZxInktKFEOLWvA4AaStozwAUAAA=",
+  "expected": {
+    "sha256": "8d30749c5a002b516720dedee02b646f3e0e9c8bc26e23d9c7beda9fa2046c7a",
+    "tree_sha256": "25a8a35d50bdd8e538b849159ac1f068bbc4bcda4751f6372a65dc14d84d50d5",
+    "module": "example.com/gen",
+    "go_version": "1.23",
+    "files": 4,
+    "bytes": 85,
+    "vendored": true
+  }
+}

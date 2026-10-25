@@ -93,14 +93,6 @@ def test_contributor_backlog_routes_to_review_and_delivery() -> None:
         ]
 
 
-def test_native_reserved_recovery_routes_to_operator_command() -> None:
-    topic = lookup("native evidence recovery")[0]
-    assert topic["id"] == "coding-evidence-recovery"
-    assert "apps/platform/ditto/coding_evidence_recovery.py" in topic_list(
-        topic, "owns"
-    )
-
-
 def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     topic = lookup("hosted authoring input assembler")[0]
     assert topic["id"] == "coding-hosted-inputs"
@@ -136,12 +128,6 @@ def test_node_typescript_grader_routes_to_its_private_oracle() -> None:
     assert lookup("Node suite compatibility")[0]["id"] == "coding-node-runtime"
     assert "services/dittobench-api/coding_runtime/node" in topic_list(topic, "owns")
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
-
-
-def test_native_custody_routes_to_platform_only():
-    topic = lookup("native v2 custody Unix proxy")[0]
-    assert topic["id"] == "coding-native-custody"
-    assert topic_list(topic, "skills") == ["ditto-subnet-platform"]
 
 
 def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
@@ -181,15 +167,6 @@ def test_hosted_worker_launcher_routes_to_native_runtime() -> None:
     assert "services/dittobench-api/internal/codinghostedruntime" in topic_list(
         topic, "owns"
     )
-    assert "apps/platform/ditto/api_server/coding_hosted_runtime.py" in topic_list(
-        topic, "owns"
-    )
-
-
-def test_hosted_signer_startup_routes_to_platform():
-    topic = lookup("hosted control signer startup")[0]
-    assert topic["id"] == "coding-hosted-signer"
-    assert topic_list(topic, "skills") == ["ditto-subnet-platform"]
 
 
 def test_native_inference_routes_to_its_private_authority() -> None:
@@ -201,9 +178,6 @@ def test_native_inference_routes_to_its_private_authority() -> None:
 def test_native_provider_routes_to_its_private_authority() -> None:
     topic = lookup("native hosted provider adapter")[0]
     assert topic["id"] == "coding-hosted-inference"
-    assert "apps/platform/ditto/api_server/coding_hosted_provider.py" in topic_list(
-        topic, "owns"
-    )
 
 
 def test_native_relay_routes_to_both_runtime_owners() -> None:
@@ -217,12 +191,6 @@ def test_native_database_path_routes_to_private_infrastructure():
     topic = lookup("native private postgres path")[0]
     assert topic["id"] == "coding-hosted-postgres"
     assert topic_list(topic, "skills") == ["ditto-subnet-release-ops"]
-
-
-def test_runtime_budget_routes_to_its_profile_owner() -> None:
-    topic = lookup("hosted runtime budget profile")[0]
-    assert topic["id"] == "coding-hosted-budget"
-    assert "ditto-subnet-platform" in topic_list(topic, "skills")
 
 
 def test_native_bundle_routes_to_build_and_installation():

@@ -34,6 +34,7 @@ from ditto.api_models.admin_copy_review import (
     AdminSourceDiffFileDetail,
     AdminSourceDiffManifest,
 )
+from ditto.api_models.source_release_evidence import SourceReleaseEvidence
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.anti_copy_comparison import compare_anti_copy_pair
 from ditto.api_server.artifact_audit import client_ip, request_detail
@@ -62,6 +63,8 @@ from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
 from ditto.db.models import (
     Agent,
     AgentStatus,
+    ArtifactFetchAudit,
+    ArtifactReleaseSettingsRevision,
     AthReview,
     AthReviewAction,
     Score,
@@ -74,13 +77,17 @@ from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_ADMIN_LINEAGE_DIFF,
     ENDPOINT_ADMIN_LINEAGE_DIFF_FILE,
     ENDPOINT_ADMIN_REVIEW_LINEAGE,
+    ENDPOINT_PUBLIC_ARTIFACT,
     record_artifact_fetch,
 )
+from ditto.db.queries.artifact_release import list_eligible_source_releases
+from ditto.db.queries.artifact_release_settings import artifact_release_policy_as_of
 from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
     open_rollout,
     preserve_desired_authority,
 )
+from ditto.db.queries.king_reign import get_king_reveal
 from ditto.db.queries.lease_liveness import (
     ACTION_FORCE_EXPIRED,
     expire_issued_tickets,
@@ -91,6 +98,7 @@ from ditto.db.queries.payments import (
 )
 from ditto.db.queries.scores import (
     MIN_ELIGIBLE_CASES,
+    SCORING_QUORUM,
     LedgerRow,
     list_scores_for_agent,
 )
@@ -106,6 +114,68 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
 AdminDep = Annotated[None, Depends(require_admin)]
+
+
+@router.get(
+    "/agents/{agent_id}/source-release-evidence",
+    response_model=SourceReleaseEvidence,
+)
+async def get_agent_source_release_evidence(
+    agent_id: UUID,
+    _admin: AdminDep,
+    session: SessionDep,
+    candidate_agent_id: UUID | None = None,
+) -> SourceReleaseEvidence:
+    """Read publication proof without source URLs or fetcher information."""
+    agent = await session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    reference_time = datetime.now(UTC)
+    if candidate_agent_id is not None:
+        candidate = await session.get(Agent, candidate_agent_id)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="candidate agent not found")
+        reference_time = candidate.created_at
+    policy = await artifact_release_policy_as_of(session, at=reference_time)
+    revision = await session.scalar(
+        select(ArtifactReleaseSettingsRevision.revision)
+        .where(ArtifactReleaseSettingsRevision.created_at <= reference_time)
+        .order_by(ArtifactReleaseSettingsRevision.revision.desc())
+        .limit(1)
+    )
+    eligibility = await list_eligible_source_releases(
+        session, agent_ids=[agent_id], quorum=SCORING_QUORUM, policy=policy
+    )
+    count, earliest = (
+        await session.execute(
+            select(func.count(), func.min(ArtifactFetchAudit.fetched_at)).where(
+                ArtifactFetchAudit.agent_id == agent_id,
+                ArtifactFetchAudit.artifact_sha256 == agent.sha256,
+                ArtifactFetchAudit.endpoint == ENDPOINT_PUBLIC_ARTIFACT,
+                ArtifactFetchAudit.requester_kind == "public",
+                ArtifactFetchAudit.requester_id.is_(None),
+            )
+        )
+    ).one()
+    reveals = await get_king_reveal(session, agent_ids=[agent_id])
+    reveal = reveals.get(agent_id)
+    return SourceReleaseEvidence(
+        agent_id=agent_id,
+        artifact_sha256=agent.sha256,
+        candidate_agent_id=candidate_agent_id,
+        reference_time=reference_time,
+        policy_revision=revision or 0,
+        disclosure=policy.disclosure,
+        embargo_hours=policy.embargo_hours,
+        emission_confirmed_at=(reveal.emission_confirmed_at if reveal else None),
+        derived_eligibility_at=eligibility.get(agent_id),
+        publication_evidence_at=earliest,
+        publication_proven_by_reference_time=(
+            earliest is not None and earliest <= reference_time
+        ),
+        exact_sha_public_handoff_count=count,
+        earliest_exact_sha_public_handoff_at=earliest,
+    )
 
 
 def _fingerprint_versions(evidence: dict) -> dict[str, int | str | None]:

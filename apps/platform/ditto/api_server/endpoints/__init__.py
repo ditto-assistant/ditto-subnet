@@ -23,27 +23,6 @@ from ditto.api_server.endpoints.admin_burn_settings import (
 from ditto.api_server.endpoints.admin_claim_provenance import (
     router as admin_claim_provenance_router,
 )
-from ditto.api_server.endpoints.admin_coding_catalog import (
-    router as admin_coding_catalog_router,
-)
-from ditto.api_server.endpoints.admin_coding_certifications import (
-    router as admin_coding_certifications_router,
-)
-from ditto.api_server.endpoints.admin_coding_control_plane import (
-    router as admin_coding_control_plane_router,
-)
-from ditto.api_server.endpoints.admin_coding_evaluations import (
-    router as admin_coding_evaluations_router,
-)
-from ditto.api_server.endpoints.admin_coding_private_v2_releases import (
-    router as admin_coding_private_v2_releases_router,
-)
-from ditto.api_server.endpoints.admin_coding_reconciliation import (
-    router as admin_coding_reconciliation_router,
-)
-from ditto.api_server.endpoints.admin_coding_ticket_sets import (
-    router as admin_coding_ticket_sets_router,
-)
 from ditto.api_server.endpoints.admin_confirmation_bundles import (
     router as admin_confirmation_bundles_router,
 )
@@ -59,9 +38,6 @@ from ditto.api_server.endpoints.admin_copy_court import (
 from ditto.api_server.endpoints.admin_copy_review import (
     router as admin_copy_review_router,
 )
-from ditto.api_server.endpoints.admin_core_qualification import (
-    router as admin_core_qualification_router,
-)
 from ditto.api_server.endpoints.admin_database_backup import (
     router as admin_database_backup_router,
 )
@@ -70,6 +46,12 @@ from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
 )
 from ditto.api_server.endpoints.admin_emission_eligibility import (
     router as admin_emission_eligibility_router,
+)
+from ditto.api_server.endpoints.admin_generator_competition import (
+    router as admin_generator_competition_router,
+)
+from ditto.api_server.endpoints.admin_generator_rounds import (
+    router as admin_generator_rounds_router,
 )
 from ditto.api_server.endpoints.admin_hotkey_bans import (
     router as admin_hotkey_bans_router,
@@ -178,6 +160,10 @@ from ditto.api_server.endpoints.ditto_callback_challenge import (
     router as ditto_callback_challenge_router,
 )
 from ditto.api_server.endpoints.feedback_track import router as feedback_track_router
+from ditto.api_server.endpoints.generator import router as generator_router
+from ditto.api_server.endpoints.generator_scorer import (
+    router as generator_scorer_router,
+)
 from ditto.api_server.endpoints.health import router as health_router
 from ditto.api_server.endpoints.inference import router as inference_router
 from ditto.api_server.endpoints.l2_report_canary import (
@@ -201,33 +187,6 @@ from ditto.api_server.endpoints.scoring import router as scoring_router
 from ditto.api_server.endpoints.screener import router as screener_router
 from ditto.api_server.endpoints.upload import router as upload_router
 from ditto.api_server.endpoints.validator import router as validator_router
-from ditto.api_server.endpoints.validator_coding_certification import (
-    router as validator_coding_certification_router,
-)
-from ditto.api_server.endpoints.validator_coding_certification_leases import (
-    router as validator_coding_certification_leases_router,
-)
-from ditto.api_server.endpoints.validator_coding_claims import (
-    router as validator_coding_claims_router,
-)
-from ditto.api_server.endpoints.validator_coding_delivery import (
-    router as validator_coding_delivery_router,
-)
-from ditto.api_server.endpoints.validator_coding_evaluation import (
-    router as validator_coding_evaluation_router,
-)
-from ditto.api_server.endpoints.validator_coding_freezes import (
-    router as validator_coding_freezes_router,
-)
-from ditto.api_server.endpoints.validator_coding_grading import (
-    router as validator_coding_grading_router,
-)
-from ditto.api_server.endpoints.validator_coding_harness import (
-    router as validator_coding_harness_router,
-)
-from ditto.api_server.endpoints.validator_coding_inference import (
-    router as validator_coding_inference_router,
-)
 from ditto.api_server.endpoints.validator_confirmation import (
     router as validator_confirmation_router,
 )
@@ -250,7 +209,11 @@ __all__ = [
     "admin_inference_admission_router",
     "admin_inference_concurrency_settings_router",
     "admin_inference_observability_router",
+    "admin_generator_competition_router",
+    "admin_generator_rounds_router",
     "admin_scoring_lease_settings_router",
+    "generator_router",
+    "generator_scorer_router",
     "admin_traces_router",
     "admin_queue_policy_settings_router",
     "admin_efficiency_bonus_settings_router",
@@ -262,17 +225,9 @@ __all__ = [
     "admin_confirmation_seed_anchors_router",
     "admin_copy_court_router",
     "admin_copy_review_router",
-    "admin_coding_certifications_router",
-    "admin_coding_control_plane_router",
     "admin_claim_provenance_router",
-    "admin_coding_catalog_router",
-    "admin_coding_private_v2_releases_router",
-    "admin_coding_evaluations_router",
-    "admin_coding_reconciliation_router",
-    "admin_coding_ticket_sets_router",
     "admin_confirmation_bundles_router",
     "admin_continual_retest_settings_router",
-    "admin_core_qualification_router",
     "admin_miner_fees_router",
     "admin_outlier_escalation_router",
     "admin_owner_router",
@@ -315,15 +270,6 @@ __all__ = [
     "name_claims_router",
     "upload_router",
     "validator_router",
-    "validator_coding_certification_router",
-    "validator_coding_certification_leases_router",
-    "validator_coding_claims_router",
-    "validator_coding_delivery_router",
-    "validator_coding_freezes_router",
-    "validator_coding_grading_router",
-    "validator_coding_inference_router",
-    "validator_coding_harness_router",
-    "validator_coding_evaluation_router",
     "validator_confirmation_router",
 ]
 

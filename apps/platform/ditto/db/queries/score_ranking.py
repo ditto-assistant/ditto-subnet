@@ -64,6 +64,7 @@ from ditto.score_order import (
 
 if TYPE_CHECKING:
     from ditto.api_server.config import EfficiencyBonusConfig
+    from ditto.api_server.efficiency_projection import EfficiencyAssignment
 
 __all__ = [
     "CONTINUAL_MEAN_PROTOCOL",
@@ -554,6 +555,7 @@ async def resolve_efficiency_adjustments(
     now: datetime | None = None,
     requesting_validator_hotkey: str | None = None,
     factor_fleet_ready: bool | None = None,
+    diagnostic_assignments: Mapping[UUID, EfficiencyAssignment] | None = None,
 ) -> tuple[dict[UUID, float], dict[UUID, float], dict[UUID, int]]:
     """Resolve the fleet-safe adjustments shared by every official fold.
 
@@ -577,7 +579,11 @@ async def resolve_efficiency_adjustments(
         epoch_index_for,
     )
     from ditto.api_server.efficiency_settings import effective_config, settings_from_row
-    from ditto.db.models import EfficiencyCohortSnapshot, ValidatorHeartbeat
+    from ditto.db.models import (
+        EfficiencyBonus,
+        EfficiencyCohortSnapshot,
+        ValidatorHeartbeat,
+    )
     from ditto.db.queries.efficiency import get_bonus_rows
     from ditto.db.queries.efficiency_settings import (
         latest_efficiency_settings_revision,
@@ -594,11 +600,17 @@ async def resolve_efficiency_adjustments(
         return {}, {}, {}
 
     resolved_now = now or datetime.now(UTC)
-    assignments = await get_bonus_rows(
-        session,
-        [row.agent_id for row in rows],
-        bench_versions={row.agent_id: row.bench_version for row in rows},
-        epoch_index=epoch_index_for(resolved_now, efficiency_config.epoch_hours),
+    if diagnostic_assignments is not None and requesting_validator_hotkey is not None:
+        raise ValueError("diagnostic efficiency assignments cannot serve a validator")
+    assignments: Mapping[UUID, EfficiencyBonus | EfficiencyAssignment] = (
+        diagnostic_assignments
+        if diagnostic_assignments is not None
+        else await get_bonus_rows(
+            session,
+            [row.agent_id for row in rows],
+            bench_versions={row.agent_id: row.bench_version for row in rows},
+            epoch_index=epoch_index_for(resolved_now, efficiency_config.epoch_hours),
+        )
     )
     by_id = {row.agent_id: row for row in rows}
     bonuses = {

@@ -1,9 +1,11 @@
 name: Starter kit CI
 
-# Cost control: standalone verification is operator-dispatched; release gates
-# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - miners/dittobench-starter-kit/**
+      - .github/workflows/starter-kit-ci.yml
 permissions:
   contents: read
 

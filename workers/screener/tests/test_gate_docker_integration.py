@@ -145,7 +145,7 @@ def _provider_selector_harness(expected_provider: str) -> bytes:
     ).encode()
     dockerfile = (
         b"FROM python:3.12-alpine@sha256:"
-        b"6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df\n"
+        b"b658b05ce9c4eb97ec6fc19424818a1f31993659c2b505a532f470e83807815d\n"
         b"WORKDIR /app\n"
         b"COPY server.py /app/server.py\n"
         b"USER 65532:65532\n"
@@ -647,7 +647,7 @@ async def test_hardcoded_openrouter_https_reaches_isolated_gateway(
     ).encode()
     dockerfile = (
         b"FROM python:3.12-alpine@sha256:"
-        b"6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df\n"
+        b"b658b05ce9c4eb97ec6fc19424818a1f31993659c2b505a532f470e83807815d\n"
         b"WORKDIR /app\n"
         b"COPY server.py /app/server.py\n"
         b"USER 65532:65532\n"

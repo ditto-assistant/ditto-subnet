@@ -58,10 +58,6 @@ ENDPOINT_MINER_ARTIFACT = "miner_me.my_artifact"
 ENDPOINT_MINER_MCP_ARTIFACT = "miner_mcp.get_my_submission_artifact"
 ENDPOINT_PUBLIC_ARTIFACT = "public.agent_artifact"
 ENDPOINT_VALIDATOR_ARTIFACT = "validator.agent_artifact"
-ENDPOINT_VALIDATOR_CODING_HARNESS = "validator.coding_harness_launch"
-ENDPOINT_VALIDATOR_CODING_CERTIFICATION_HARNESS = (
-    "validator.coding_certification_harness_launch"
-)
 ENDPOINT_SCREENER_ARTIFACT = "screener.agent_artifact"
 ENDPOINT_SCREENER_REVIEW_LINEAGE = "screener.review_lineage"
 ENDPOINT_ADMIN_SCREENING_ARTIFACT = "admin.get_screening_artifact"

@@ -45,6 +45,7 @@ from ditto.api_models.continual_retest_settings import (
     ContinualRetestSettings,
 )
 from ditto.api_models.emission_eligibility import AgentEmissionEligibility
+from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.upload import _SS58_PATTERN
 from ditto.api_models.validator import (
@@ -62,6 +63,11 @@ from ditto.api_server.continual_retest_settings import (
     tie_weighting_is_active,
 )
 from ditto.api_server.efficiency import ensure_current_efficiency_state
+from ditto.api_server.efficiency_projection import (
+    EfficiencyProjectionUnavailable,
+    FrozenEfficiencyProjection,
+    project_frozen_efficiency,
+)
 from ditto.api_server.emission_eligibility import (
     DEFAULT_POLICY,
     ResolvedEligibilityPolicy,
@@ -75,6 +81,12 @@ from ditto.api_server.endpoints.validator import (
     ValidatorAuthError,
     _assert_validator_permitted,
     _verify_signature,
+)
+from ditto.api_server.generator_competition import (
+    build_ledger as build_generator_ledger,
+)
+from ditto.api_server.generator_competition import (
+    load_settings as load_generator_settings,
 )
 from ditto.api_server.treasury_read_diagnostics import treasury_read_failure_kind
 from ditto.chain.errors import (
@@ -104,8 +116,10 @@ from ditto.db.queries.score_ranking import (
     resolve_efficiency_adjustments,
 )
 from ditto.db.queries.scores import (
+    SCORING_QUORUM,
     LedgerRow,
     LedgerScoreProofRow,
+    get_score_counts,
     list_eligible_ledger,
     quorum_composites,
     quorum_ledger_proof_rows,
@@ -238,6 +252,8 @@ class _LedgerSnapshot:
     fleet_readiness: dict[str, bool] | None = None
     treasury_pin: TreasuryPin | None = None
     """Default-off; populated only by a future reviewed finalized producer."""
+    efficiency_context: str | None = None
+    efficiency_values_digest: str | None = None
     confirmation_seed_anchors: tuple[ConfirmationSeedAnchorPin, ...] = ()
     """Pinned finalized-block anchors of the active version's seed families.
 
@@ -706,6 +722,7 @@ async def _ledger_entries(
     requesting_validator_hotkey: str | None,
     emit: Callable[[LedgerRow], bool] | None = None,
     registered_hotkeys: AbstractSet[str] | None = None,
+    efficiency_projection: FrozenEfficiencyProjection | None = None,
 ) -> tuple[list[LedgerRow], list[LedgerEntry]]:
     """Build the fold's ``LedgerEntry`` list from materialized rows.
 
@@ -762,6 +779,11 @@ async def _ledger_entries(
         efficiency_config=efficiency_config,
         now=now,
         requesting_validator_hotkey=requesting_validator_hotkey,
+        diagnostic_assignments=(
+            efficiency_projection.assignments
+            if efficiency_projection is not None
+            else None
+        ),
     )
     ranking_scores = official_composites(
         rows,
@@ -908,6 +930,9 @@ async def materialize_ledger_snapshot(
     context: _LedgerContext,
     now: datetime,
     requesting_validator_hotkey: str | None,
+    diagnostic_read_only: bool = False,
+    diagnostic_scored_agent_ids: frozenset[UUID] = frozenset(),
+    diagnostic_excluded_agent_ids: frozenset[UUID] = frozenset(),
 ) -> _LedgerSnapshot:
     """Build the ledger the validator fold consumes, at this instant.
 
@@ -917,9 +942,22 @@ async def materialize_ledger_snapshot(
     identical for every validator that reads the pin. Raises
     :class:`EfficiencyFactorRequesterNotReady` and ``SQLAlchemyError`` to the
     caller, which owns the HTTP or retry semantics.
+
+    The court's diagnostic mode uses existing state only, never rolls back
+    the caller or writes efficiency/rehearsal rows. Membership overrides are
+    available only in that mode; its output is never stored as an authority
+    snapshot or epoch pin.
     """
     ledger_context = context
-    if session.in_transaction():
+    if diagnostic_read_only and (session.new or session.dirty or session.deleted):
+        raise ValueError("diagnostic ledger requires a clean read-only session")
+    if (
+        diagnostic_scored_agent_ids or diagnostic_excluded_agent_ids
+    ) and not diagnostic_read_only:
+        raise ValueError(
+            "hypothetical ledger membership requires diagnostic read-only mode"
+        )
+    if not diagnostic_read_only and session.in_transaction():
         await session.rollback()
     # The validator ledger is an authority path, not a dependent of the
     # public leaderboard. Materialize this epoch before reading either the
@@ -928,7 +966,7 @@ async def materialize_ledger_snapshot(
     # its independent session and the nonce transaction above is complete,
     # leaving this session clean for ensure_efficiency_state's transaction.
     efficiency_config = ledger_context.policy.efficiency
-    if efficiency_config.enabled:
+    if efficiency_config.enabled and not diagnostic_read_only:
         await ensure_current_efficiency_state(
             app_state, session, efficiency_config, now=now
         )
@@ -941,7 +979,35 @@ async def materialize_ledger_snapshot(
             "confirmation_seeds",
         ),
         dedupe_owners=False,
+        active_version=(
+            ledger_context.active_bench_version if diagnostic_read_only else None
+        ),
+        diagnostic_scored_agent_ids=diagnostic_scored_agent_ids,
+        diagnostic_excluded_agent_ids=diagnostic_excluded_agent_ids,
     )
+    if diagnostic_read_only:
+        # Match the public finalized pool before computing shared seed windows.
+        # Unranked finalized histories still inform that window; exclude their
+        # entries only after _ledger_entries has derived the common inputs.
+        counts = await get_score_counts(
+            session,
+            [row.agent_id for row in rows],
+            bench_versions={row.agent_id: row.bench_version for row in rows},
+        )
+        rows = [row for row in rows if counts.get(row.agent_id, 0) >= SCORING_QUORUM]
+    efficiency_projection = None
+    if diagnostic_read_only:
+        try:
+            efficiency_projection = await project_frozen_efficiency(
+                session,
+                config=efficiency_config,
+                rows=rows,
+                bench_version=ledger_context.active_bench_version,
+                now=now,
+                restored_ids=diagnostic_scored_agent_ids,
+            )
+        except EfficiencyProjectionUnavailable as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
     v9_confirmation_mode: Literal["enforce"] | None = (
         "enforce" if await v9_confirmation_enforcement_active(session) else None
     )
@@ -956,6 +1022,11 @@ async def materialize_ledger_snapshot(
         configured_policy,
         fleet_ready=ledger_context.reward_eligibility_fleet_ready,
     )
+    if diagnostic_scored_agent_ids and eligibility_policy.enforcing:
+        raise HTTPException(
+            status_code=409,
+            detail="court restoration unsupported with enforcing reward eligibility",
+        )
     if eligibility_policy is not configured_policy:
         logger.warning(
             "emission eligibility revision %d is set to enforce, but the live "
@@ -991,8 +1062,9 @@ async def materialize_ledger_snapshot(
                     f"{record.agent_id}:{record.state}" for record in withheld[:10]
                 ),
             )
-        await _record_eligibility_rehearsal(app_state, eligibility)
-        rows = eligibility.filter_rows(rows)
+        if not diagnostic_read_only:
+            await _record_eligibility_rehearsal(app_state, eligibility)
+            rows = eligibility.filter_rows(rows)
     fleet_protocol_ready = ledger_context.continual_fleet_ready
     continual_settings = ledger_context.policy.continual_retest
     burn_settings = ledger_context.policy.burn
@@ -1033,6 +1105,18 @@ async def materialize_ledger_snapshot(
         now=now,
         requesting_validator_hotkey=requesting_validator_hotkey,
         registered_hotkeys=registered_hotkeys,
+        efficiency_projection=efficiency_projection,
+        emit=(
+            lambda row: (
+                row.eligible
+                and row.composite > 0.0
+                and not (
+                    eligibility_policy.enforcing and eligibility.withholds(row.agent_id)
+                )
+            )
+        )
+        if diagnostic_read_only
+        else None,
     )
     generated_at = datetime.now(UTC)
     crown_mode: Literal["incumbent"] | None = (
@@ -1066,10 +1150,20 @@ async def materialize_ledger_snapshot(
             efficiency_config=efficiency_config,
             now=now,
             requesting_validator_hotkey=requesting_validator_hotkey,
-            emit=lambda row: eligibility.withholds(row.agent_id),
+            emit=lambda row: (
+                eligibility.withholds(row.agent_id)
+                and (not diagnostic_read_only or (row.eligible and row.composite > 0.0))
+            ),
             registered_hotkeys=registered_hotkeys,
+            efficiency_projection=efficiency_projection,
         )
     return _LedgerSnapshot(
+        efficiency_context=(
+            efficiency_projection.context if efficiency_projection else None
+        ),
+        efficiency_values_digest=(
+            efficiency_projection.values_digest if efficiency_projection else None
+        ),
         entries=entries,
         generated_at=generated_at,
         active_bench_version=canonical_version,
@@ -1500,6 +1594,49 @@ async def _authorize_ledger_request(
                 detail="scoring ledger authorization temporarily unavailable",
             ) from exc
     return auth_now
+
+
+@router.get(
+    "/generator-ledger",
+    response_model=GeneratorLedgerResponse,
+    responses={
+        401: {"description": "Missing/invalid validator auth."},
+        409: {"description": "Stale or replayed ledger request proof."},
+        503: {"description": "Chain unavailable, or nonce store unavailable."},
+    },
+)
+async def generator_ledger(
+    request: Request,
+    response: Response,
+    chain: ChainDep,
+    session: SessionDep,
+    x_validator_hotkey: Annotated[str | None, Header()] = None,
+    x_validator_ledger_nonce: Annotated[UUID | None, Header()] = None,
+    x_validator_ledger_requested_at: Annotated[datetime | None, Header()] = None,
+    x_validator_ledger_signature: Annotated[str | None, Header()] = None,
+) -> GeneratorLedgerResponse:
+    """The shadow generator-track ledger, behind the memory ledger's proof.
+
+    Platform is the generator competition's system of record, so unlike the
+    router relay this is a direct read: each hotkey's latest run scored within
+    the freshness window. Every entry is ``weight_eligible=False`` and the
+    validator registers the track in ``SHADOW``, so a served ledger contributes
+    zero emission. ``mode=off`` serves an empty ledger.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    await _authorize_ledger_request(
+        request,
+        chain,
+        session,
+        x_validator_hotkey=x_validator_hotkey,
+        x_validator_ledger_nonce=x_validator_ledger_nonce,
+        x_validator_ledger_requested_at=x_validator_ledger_requested_at,
+        x_validator_ledger_signature=x_validator_ledger_signature,
+    )
+    resolved = await load_generator_settings(session)
+    return await build_generator_ledger(
+        session, resolved=resolved, now=datetime.now(UTC)
+    )
 
 
 @router.get(

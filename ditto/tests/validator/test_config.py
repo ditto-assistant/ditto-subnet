@@ -487,6 +487,17 @@ class TestRouterRankSharesValidation:
             replace(cfg, router_rank_shares=bad)
 
 
+class TestGeneratorEligibilityRequiresTheLedger:
+    def test_eligibility_without_the_ledger_read_fails_at_boot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        with pytest.raises(ValidatorConfigError, match="generator_ledger_read_enabled"):
+            replace(cfg, generator_weight_eligible=True)
+        replace(cfg, generator_weight_eligible=True, generator_ledger_read_enabled=True)
+
+
 class TestRouterLedgerReadFlag:
     def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)

@@ -988,6 +988,33 @@ describe('admin API schemas', () => {
       ).toThrow()
     }
   })
+
+  it('parses a live generator-round lease on a row with no scoring attempt yet', () => {
+    // SN-334: a round lease is not a scoring attempt, so the row it created
+    // reports zero, and the panel must not drop the whole list over it.
+    const parsed = validatorAssignmentListSchema.parse({
+      count: 1,
+      generation: 'active',
+      active_bench_version: 13,
+      items: [
+        {
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          agent_name: 'memory-agent',
+          miner_hotkey: '5Miner',
+          validator_hotkey: '5Validator',
+          issued_at: '2026-10-24T07:00:00Z',
+          deadline: '2026-10-24T08:30:00Z',
+          bench_version: 13,
+          attempt_count: 0,
+          score_count: 3,
+          provisional_composite: 0.9,
+          purpose: 'generator_round',
+        },
+      ],
+    })
+    expect(parsed.items[0].purpose).toBe('generator_round')
+    expect(parsed.items[0].attempt_count).toBe(0)
+  })
 })
 
 const confirmationDigest = 'a'.repeat(64)
@@ -2060,6 +2087,21 @@ describe('source review causal evidence schema', () => {
     const parsed = sourceReviewFindingSchema.parse(generatedFinding)
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
   })
+
+  it.each(['final_text', 'answer', 'abstain', 'tool_calls',
+    'validator_observed_trajectory', 'graded_outcome'] as const)(
+    'preserves the published I8 authority transition for %s', (effect) => {
+      const finding = {
+        ...generatedFinding,
+        causal_evidence: {
+          ...generatedFinding.causal_evidence,
+          authority_transition: 'evaluation_identity_authoritative',
+          scorer_visible_effect: effect,
+        },
+      } satisfies GeneratedSourceReviewFinding
+      expect(sourceReviewFindingSchema.parse(finding).causal_evidence).toEqual(finding.causal_evidence)
+    },
+  )
 
   it('retains signed v3 I5 proof and rejects an unbound assumption', () => {
     const proof = {

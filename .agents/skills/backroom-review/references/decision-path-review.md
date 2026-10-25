@@ -118,8 +118,23 @@ routed notes is not a second factor; resolve such I5 leads as refuted, not
 unresolved. Reject only on an independent ground: host parsing of benchmark
 text into operands, steps, ordering or answers served in place of the model's
 reading (I5), a host-written, edited or overriding answer (I3, I4), tool
-removal, hiding or forcing (I7), withheld needed records (W3), or
-benchmark-private content in the guidance.
+removal, hiding or forcing (I7), evidence stripped after a model received it
+(W3), or benchmark-private content in the guidance.
+
+W3 record-selection safe harbor. Choosing which retrieved records reach the
+deciding input is not by itself a finding under W3, I2 or any other condition.
+That includes a size budget (dropping, excerpting, opening lines, an ID or
+pointer), deduplication or collapsing of similar records even when it drops a
+later distinct record, identifier pinning, event projections, field projections
+that strip a field such as saved timestamps from every record, and top-k
+selection. It holds when the rule does not single out corrections or updates
+because of what they say and the model still authors the graded value or call.
+This is retrieval quality for the benchmark to penalize, not an integrity
+finding; resolve such I2/W3 leads as refuted, not unresolved. Reject only on an
+independent ground: evidence a deciding or critic model already received
+stripped by a later stage whose output ships (W3), a host-written, edited or
+overriding answer or host-derived authoritative state (I3, I4), fabricated
+execution (I6), tool removal or forcing (I7), or a benchmark recipe (I5).
 
 For every finding cite the current reachable caller-to-consequence chain and
 defeat applicable safe harbors. Distinguish static proof from observed runtime

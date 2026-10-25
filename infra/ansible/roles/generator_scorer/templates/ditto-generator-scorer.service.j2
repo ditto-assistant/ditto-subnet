@@ -1,0 +1,31 @@
+# Managed by Ansible (generator_scorer role).
+[Unit]
+Description=Ditto generator competition scorer (challenge-scorer serve)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User={{ generator_scorer_owner }}
+Group={{ generator_scorer_group }}
+SupplementaryGroups=docker
+EnvironmentFile={{ generator_scorer_config_dir }}/scorer.env
+# Sandbox build and output directories are bind-mounted into containers, so
+# they must live on a host path dockerd can see (not a PrivateTmp namespace)
+# and stay readable by the unprivileged container user.
+Environment=TMPDIR={{ generator_scorer_state_dir }}/tmp
+Environment=DOCKER_CONFIG={{ generator_scorer_state_dir }}/docker
+ExecStart={{ generator_scorer_binary }} serve \
+  -platform {{ generator_scorer_platform_url }} \
+  -interval {{ generator_scorer_interval }}
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ generator_scorer_state_dir }}
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

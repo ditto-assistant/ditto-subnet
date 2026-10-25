@@ -13,6 +13,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from ditto_screening_protocol.runtime_interface import RuntimeSurface
+
 FINNEY_GENESIS = "0x2f0555cc76fc2840a25a6ea3b9637146806f1f44b090c175ffde2a7e5ab36c03"
 # Exact hashes, never version-only acceptance. Historical v472 evidence remains
 # readable; new signing requires the current hash and a new cold approval.
@@ -43,10 +45,13 @@ V479_READONLY_CODE_HASH = (
 V481_COLLECTOR_CODE_HASH = (
     "0x5fb504c1c793a3ddb5456f189ddef98b5146853aea6ff998501f1b6c6eb720bc"
 )
-AUDITED_COLLECTOR_CODE_HASH = (
+V482_COLLECTOR_CODE_HASH = (
     "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62"
 )
-# Official current artifact/source: docs/audits/collector-finney-v482.
+AUDITED_COLLECTOR_CODE_HASH = (
+    "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2"
+)
+# Official current artifact/source: docs/audits/collector-finney-v483.
 # No v474/v480 fingerprint is inferred; unknown/reverse states still refuse.
 COLLECTOR_RUNTIME_ORDER = (
     HISTORICAL_COLLECTOR_CODE_HASH,
@@ -57,6 +62,7 @@ COLLECTOR_RUNTIME_ORDER = (
     V478_COLLECTOR_CODE_HASH,
     V479_READONLY_CODE_HASH,
     V481_COLLECTOR_CODE_HASH,
+    V482_COLLECTOR_CODE_HASH,
     AUDITED_COLLECTOR_CODE_HASH,
 )
 COLLECTOR_READABLE_RUNTIME_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER)
@@ -68,9 +74,61 @@ AUDITED_COLLECTOR_RECEIPT_HASHES = COLLECTOR_READABLE_RUNTIME_HASHES - {
 # Native filter shape for exact historical observations, NOT signing authority.
 # The observed v479 Registration filter includes pow_register and its consensus
 # is Yuma (v481 audit manifest); omitting it would expect the wrong 3-call filter.
-# guard_runtime independently requires an audited v482 policy and, for current
-# signing, the exact same v482 chain hash before consulting this shape set.
+# guard_runtime independently requires an audited v483 policy and, for current
+# signing, the exact same v483 chain hash before consulting this shape set.
 COLLECTOR_POW_REGISTRATION_HASHES = frozenset(COLLECTOR_RUNTIME_ORDER[2:])
+
+# A finalized Finney block whose stored :code is AUDITED_COLLECTOR_CODE_HASH
+# (the v483 metadata pin in docs/audits/collector-finney-v483). Custody
+# fingerprints COLLECTOR_SIGNER_SURFACE here and at the live block; an upgrade
+# that leaves that surface identical keeps signing under the existing cold-
+# signed policy, and any change still stops for an audit and a new signature.
+AUDITED_COLLECTOR_REFERENCE_BLOCK = (
+    9346596,
+    "0x340d9c7e2ddd903873527ae6ff699dad3d58028ae6ef6b566938799c9db02dfa",
+)
+# Everything ditto.treasury.collector_chain reads, decodes or signs, plus what
+# it matches by number: SubtensorModule's pallet index and AmountTooLow's
+# error index in the retry proof, and the signed extensions it encodes.
+# Runtime API results are validated field by field where they are read.
+COLLECTOR_SIGNER_SURFACE = RuntimeSurface(
+    "collector_signer",
+    storage=(
+        ("Proxy", "Proxies"),
+        ("Proxy", "RealPaysFeeConsentV1"),
+        ("SubtensorModule", "AutoStakeDestination"),
+        ("SubtensorModule", "Burn"),
+        ("SubtensorModule", "Keys"),
+        ("SubtensorModule", "LastMechansimStepBlock"),
+        ("SubtensorModule", "MinerCollateral"),
+        ("SubtensorModule", "Owner"),
+        ("SubtensorModule", "SubnetEpochConsensus"),
+        ("SubtensorModule", "SubnetOwner"),
+        ("SubtensorModule", "Tempo"),
+        ("SubtensorModule", "Uids"),
+        ("System", "Account"),
+    ),
+    events=(
+        ("Proxy", "ProxyExecuted"),
+        ("SubtensorModule", "AutoStakeAdded"),
+        ("SubtensorModule", "IncentiveAlphaEmittedToMiners"),
+        ("SubtensorModule", "NeuronRegistered"),
+        ("SubtensorModule", "StakeAdded"),
+        ("SubtensorModule", "StakeRemoved"),
+        ("System", "ExtrinsicFailed"),
+        ("System", "ExtrinsicSuccess"),
+        ("TransactionPayment", "TransactionFeePaid"),
+    ),
+    calls=(
+        ("Proxy", "proxy"),
+        ("SubtensorModule", "register_limit"),
+        ("SubtensorModule", "transfer_stake"),
+    ),
+    errors=(("SubtensorModule", "AmountTooLow"),),
+    constants=(("SubtensorModule", "InitialMinTransfer"),),
+    pallet_indices=("Balances", "Proxy", "SubtensorModule", "System"),
+    signed_extensions=True,
+)
 
 
 def collector_receipt_runtime(parent: str, post: str) -> str:

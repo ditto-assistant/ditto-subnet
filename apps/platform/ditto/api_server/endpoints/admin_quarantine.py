@@ -93,7 +93,6 @@ from ditto.api_models.admin_quarantine import (
     AdminSourceSearchResult,
     AdminStarterKitProvenance,
     AdminV13PrivatePackageReadiness,
-    AdminV13PrivatePackageRegisterRequest,
     AdminV13PrivatePrerequisite,
     AdminValidatorAssignment,
     AdminValidatorAssignmentList,
@@ -145,6 +144,7 @@ from ditto.api_server.source_inspect import (
     SourceInspectError,
     TarSourceInspector,
 )
+from ditto.api_server.source_review_evidence import stored_source_review_evidence
 from ditto.api_server.starter_kit import (
     is_stock_kit_text,
     starter_kit_head_text,
@@ -3142,96 +3142,6 @@ async def get_screening_review_deadline(
     )
 
 
-@router.post(
-    "/screening-submissions/{agent_id}/attempts/{attempt_id}/private-package-registration",
-    response_model=None,
-    status_code=204,
-)
-async def register_v13_private_package(
-    agent_id: UUID,
-    attempt_id: UUID,
-    payload: AdminV13PrivatePackageRegisterRequest,
-    _admin: AdminDep,
-    session: SessionDep,
-    x_admin_actor: Annotated[str | None, Header()] = None,
-) -> None:
-    """Persist exact digests only; this cannot verify cases or clear a hold."""
-    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
-        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
-    async with session.begin():
-        agent = await session.get(Agent, agent_id, with_for_update=True)
-        attempt = await session.get(ScreeningAttempt, attempt_id, with_for_update=True)
-        clean_agent = await session.get(Agent, payload.clean_agent_id)
-        clean_attempt = await session.get(ScreeningAttempt, payload.clean_attempt_id)
-        if (
-            agent is None
-            or attempt is None
-            or attempt.agent_id != agent_id
-            or clean_agent is None
-            or clean_attempt is None
-            or clean_attempt.agent_id != payload.clean_agent_id
-        ):
-            raise HTTPException(
-                status_code=404, detail="private package identity not found"
-            )
-        if (
-            attempt.policy_version != 13
-            or attempt.status not in {"quarantined", "passed"}
-            or agent.status
-            not in {AgentStatus.QUARANTINED, AgentStatus.ATH_PENDING_REVIEW}
-            or attempt.artifact_sha256 is None
-            or attempt.artifact_sha256.lower() != agent.sha256.lower()
-            or payload.artifact_sha256 != agent.sha256.lower()
-            or payload.profile_sha256 != V13_PRIVATE_PROFILE_SHA256
-            or payload.clean_agent_id == agent_id
-            or clean_attempt.artifact_sha256 is None
-            or clean_attempt.artifact_sha256.lower() != clean_agent.sha256.lower()
-            or payload.clean_artifact_sha256 != clean_agent.sha256.lower()
-            or clean_agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
-        ):
-            raise HTTPException(
-                status_code=409, detail="private package guard mismatch"
-            )
-        for bound_agent, bound_attempt, bound_hotkey, image_sha in (
-            (agent_id, attempt_id, attempt.screener_hotkey, payload.image_sha256),
-            (
-                payload.clean_agent_id,
-                payload.clean_attempt_id,
-                clean_attempt.screener_hotkey,
-                payload.clean_image_sha256,
-            ),
-        ):
-            image = await session.scalar(
-                select(ScreenedImageUpload.image_upload_id).where(
-                    ScreenedImageUpload.agent_id == bound_agent,
-                    ScreenedImageUpload.attempt_id == bound_attempt,
-                    ScreenedImageUpload.screener_hotkey == bound_hotkey,
-                    ScreenedImageUpload.sha256 == image_sha,
-                    ScreenedImageUpload.status == "verified",
-                )
-            )
-            if image is None:
-                raise HTTPException(
-                    status_code=409, detail="private package image not verified"
-                )
-        existing = await session.get(ScreeningPrivatePackageRegistration, attempt_id)
-        fields = payload.model_dump(mode="python")
-        if existing is not None:
-            if any(getattr(existing, key) != value for key, value in fields.items()):
-                raise HTTPException(
-                    status_code=409, detail="private package registration conflicts"
-                )
-            return
-        session.add(
-            ScreeningPrivatePackageRegistration(
-                attempt_id=attempt_id,
-                agent_id=agent_id,
-                registrar_actor=x_admin_actor,
-                **fields,
-            )
-        )
-
-
 @router.get(
     "/screening-submissions/{agent_id}/attempts/{attempt_id}/verification-readiness",
     response_model=AdminScreeningVerificationReadiness,
@@ -3414,6 +3324,9 @@ async def get_screening_verification_readiness(
         attempt_id=attempt_id,
         policy_version=attempt.policy_version,
         attempt_status=attempt.status,
+        source_review=await stored_source_review_evidence(
+            session, agent=agent, attempt=attempt
+        ),
         verified_image_sha256s=exact_verified_image_sha256s[:16],
         verified_image_count=len(exact_verified_image_sha256s),
         verified_images_truncated=len(exact_verified_image_sha256s) > 16,

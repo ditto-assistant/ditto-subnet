@@ -840,6 +840,78 @@ class TestFinalizedBlocks:
             with pytest.raises(ChainTimeoutError, match="finalized"):
                 await client.get_finalized_block()
 
+    async def test_live_reads_prefer_the_paid_provider(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_chain_finalised_head.return_value = "0xfinal"
+        install_substrate_module.get_block_number.return_value = 456
+        config = make_chain_config(
+            archive_rpc_url="wss://paid.example/rpc",
+            archive_rpc_api_key="k",
+            archive_rpc_auth_mode="path",
+        )
+
+        async with ChainClient(config) as client:
+            assert client._live_substrate_urls() == (
+                "wss://paid.example/rpc/k",
+                "wss://entrypoint-finney.opentensor.ai:443",
+            )
+            await client.get_finalized_block()
+
+        substrate_module = sys.modules["async_substrate_interface"]
+        substrate_module.AsyncSubstrateInterface.assert_called_once_with(
+            url="wss://paid.example/rpc/k"
+        )
+
+    async def test_live_reads_fall_back_to_the_entrypoint(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_chain_finalised_head.side_effect = [
+            RuntimeError("paid provider down"),
+            "0xfinal",
+        ]
+        install_substrate_module.get_block_number.return_value = 456
+        install_substrate_module.get_block_hash.return_value = "0xABCD"
+        config = make_chain_config(archive_rpc_url="wss://paid.example/rpc")
+
+        async with ChainClient(config) as client:
+            assert await client.get_finalized_block_hash(123) == "0xabcd"
+
+        substrate_module = sys.modules["async_substrate_interface"]
+        urls = [
+            call.kwargs["url"]
+            for call in substrate_module.AsyncSubstrateInterface.call_args_list
+        ]
+        assert urls == [
+            "wss://paid.example/rpc",
+            "wss://entrypoint-finney.opentensor.ai:443",
+        ]
+
+    async def test_lagging_provider_falls_through_on_not_finalized(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_chain_finalised_head.return_value = "0xfinal"
+        install_substrate_module.get_block_number.side_effect = [456, 460]
+        install_substrate_module.get_block_hash.return_value = "0xABCD"
+        config = make_chain_config(archive_rpc_url="wss://paid.example/rpc")
+
+        async with ChainClient(config) as client:
+            assert await client.get_finalized_block_hash(457) == "0xabcd"
+
+    async def test_not_finalized_everywhere_raises_not_found(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_chain_finalised_head.return_value = "0xfinal"
+        install_substrate_module.get_block_number.return_value = 456
+        config = make_chain_config(archive_rpc_url="wss://paid.example/rpc")
+
+        async with ChainClient(config) as client:
+            with pytest.raises(ExtrinsicNotFoundError, match="not finalized"):
+                await client.get_finalized_block_hash(457)
+
+        substrate_module = sys.modules["async_substrate_interface"]
+        assert substrate_module.AsyncSubstrateInterface.call_count == 2
+
 
 @pytest.mark.usefixtures("install_pylon_module")
 class TestCheckExtrinsicSuccess:

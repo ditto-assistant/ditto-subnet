@@ -1,9 +1,17 @@
 name: Model Relay
 
-# Cost control: standalone verification is operator-dispatched; release gates
-# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - services/model-relay/**
+      - .github/workflows/model-relay.yml
+      # The relay's db/schema.sql is a generated mirror of the Alembic chain;
+      # a migration must re-run the drift guard below.
+      - apps/platform/alembic/**
+      # schema_test.go asserts the request-field fates against this table.
+      - docs/inference-request-fields.json
+
 concurrency:
   group: model-relay-${{ github.ref }}
   cancel-in-progress: true
@@ -43,7 +51,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.27.3"
           cache: true
           cache-dependency-path: services/model-relay/go.sum
       - name: gofmt
@@ -83,7 +91,7 @@ jobs:
           enable-cache: true
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.27.3"
           cache: true
           cache-dependency-path: services/model-relay/go.sum
       - name: Regenerate db/schema.sql from the real Alembic chain
@@ -114,7 +122,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.27.3"
           cache: true
           cache-dependency-path: services/model-relay/go.sum
       # Mirrors build-relay-release.sh's artifact build and --version smoke

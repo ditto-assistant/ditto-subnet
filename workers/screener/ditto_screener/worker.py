@@ -57,6 +57,7 @@ from ditto_screener.policy import (
 from ditto_screener.review_settings import (
     MAX_SHADOW_PROVIDER_STAGES,
     EffectiveReviewSettings,
+    ProbeBatteryObservationRequest,
     ShadowReviewObservationRequest,
     ShadowReviewUsage,
     bootstrap_review_settings,
@@ -1039,6 +1040,22 @@ class ScreenerWorker:
                     attempt_id,
                     type(error).__name__,
                 )
+            try:
+                battery = self._gate.pop_probe_battery(attempt_id)
+                if battery is not None:
+                    await self._submit_probe_battery(
+                        agent_id=agent_id,
+                        attempt_id=attempt_id,
+                        artifact_sha256=item.sha256.lower(),
+                        summary=battery,
+                    )
+            except Exception as error:
+                # Same rule as the shadow review: report-only telemetry.
+                logger.warning(
+                    "probe battery telemetry failed attempt_id=%s error_type=%s",
+                    attempt_id,
+                    type(error).__name__,
+                )
             if screened_image is not None:
                 await self._emit_router_source_screen(
                     agent_id=agent_id,
@@ -1516,6 +1533,40 @@ class ScreenerWorker:
             reason_code,
             response.status,
         )
+
+    async def _submit_probe_battery(
+        self,
+        *,
+        agent_id: UUID,
+        attempt_id: UUID,
+        artifact_sha256: str,
+        summary: dict[str, Any],
+    ) -> None:
+        """Best-effort report-only battery leads; never part of the verdict.
+
+        The gate stamps the summary with the revision it ran under; the worker's
+        current status may already name a later revision.
+        """
+        revision = summary.get("settings_revision")
+        if not isinstance(revision, int) or revision < 1:
+            logger.warning("discarding probe battery without an applied revision")
+            return
+        try:
+            request = ProbeBatteryObservationRequest.model_validate(
+                {
+                    **summary,
+                    "attempt_id": attempt_id,
+                    "artifact_sha256": artifact_sha256,
+                },
+                strict=False,
+            )
+            await self._platform.submit_probe_battery(agent_id, request)
+        except (ValidationError, ValueError, PlatformError) as error:
+            logger.warning(
+                "probe battery telemetry was not persisted attempt_id=%s error_type=%s",
+                attempt_id,
+                type(error).__name__,
+            )
 
     async def _submit_shadow_review(
         self,

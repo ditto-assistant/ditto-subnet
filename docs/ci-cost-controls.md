@@ -1,29 +1,43 @@
 # CI cost controls (SN-120)
 
-Standalone component CI and preview creation are manual-only. Their jobs and
-verification steps remain available for an explicit operator dispatch after
-re-enabling the workflow in GitHub Actions settings. They do not run on PRs,
-main pushes, or daily preview schedules.
+Release remains the automatic affected-component verifier, build and
+deployment pipeline on main. Its reusable root and Platform verification
+workflows are unchanged. Required migration-order/merge-result, independent PR
+approval, thread resolution, operational recovery/backup, and preview cleanup
+remain.
 
-GitHub workflow settings additionally disable the 24 standalone workflows
-listed in SN-120. One retired reranker workflow exists only in GitHub metadata;
-there is no current source file to change. Preview publishing is reusable and
-its only automatic caller is now manual-only.
+## Pull-request checks (restored 2026-10-23)
 
-Release remains the automatic affected-component verifier/build/deployment
-pipeline on main. Its reusable root and Platform verification workflows are
-unchanged. Required migration-order/merge-result, independent PR approval,
-thread resolution, operational recovery/backup, and preview cleanup remain.
+Main had gone red on trivial breaks (an unformatted test, a catalog-size
+budget) that no PR check caught, which held a release. These path-filtered
+standalone workflows run on pull requests again:
 
-Tradeoff: standalone pre-merge test feedback is no longer automatic. Explicit
-verification remains available; release verification must succeed before its
-artifacts can publish or deploy. This does not claim every standalone test is
-duplicated by a release job.
+| Workflow | Typical PR runtime |
+|---|---|
+| `conventional-pr.yml` (drives semantic release) | < 1 min |
+| `ci.yml` (root validator, compose, root verify) | 2 min |
+| `platform-ci.yml` (coding-contract paths removed) | 13 min |
+| `platform-dashboard-ci.yml` | 1 min |
+| `screener-ci.yml` | 2 min |
+| `backroom-ci.yml` | 1 min |
+| `starter-kit-ci.yml` | 1 min |
+| `router-starter-kit-ci.yml` (only on its own kit) | 2 min |
+| `dittobench.yml` (coding-driver jobs skip on PRs) | 4 min |
+| `model-relay.yml` | 3 min |
+| `collector-custody.yml` | < 1 min |
 
-To restore automatic CI, review a change restoring the event triggers and
-re-enable the corresponding workflow through GitHub Actions settings.
+## Still operator-dispatched
 
-Screener deployment contract tests assert the manual-only trigger and retained
-lint/type/provenance collection plus the exact-merge release gate. For a
-starter-kit-only change, explicitly dispatch the screener workflow to check
-starter provenance; automatic PR path triggers remain disabled.
+- **Coding competition:** `coding-datagen-ci.yml`, `coding-hosted-image.yml`,
+  `coding-hosted-runtime.yml`, `coding-starter-kit-ci.yml`, and the eight
+  coding-driver jobs inside `dittobench.yml`. (`coding-native-release.yml`
+  keeps its narrow, coding-file-only PR trigger.)
+- **Heavy or research CI:** `datagen-ci.yml` (about 20 min) and `infra-ci.yml`
+  (infrastructure goes through protected Terraform plan/apply; past PR runs
+  hung for hours).
+- **Previews:** `preview*.yml` creation stays manual; `pylon-epoch-schedule.yml`
+  stays off; `reranker-ci.yml` is retired.
+
+Each restored workflow also has to be re-enabled in GitHub Actions settings
+(`gh workflow enable <file>`); a trigger in source does nothing while the
+workflow is disabled there.

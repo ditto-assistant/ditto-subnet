@@ -21,7 +21,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 import httpx
@@ -71,6 +71,10 @@ if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
 
 logger = logging.getLogger(__name__)
+
+# Dataset modes /v2/score accepts with private bytes: the Platform-private
+# benchmark artifact and a generator-competition round dataset.
+_PRIVATE_DATASET_MODES = frozenset({"platform-private-v1", "generator-round-v1"})
 
 # Terminal job states reported by dittobench-api's store.
 _DONE = "done"
@@ -1187,6 +1191,11 @@ class DittobenchClient:
                     and isinstance(payload.get("features"), list)
                     and "platform-private-v1" in payload["features"]
                 ),
+                generator_rounds=(
+                    13 in observed_versions
+                    and isinstance(payload.get("features"), list)
+                    and "generator-round-v1" in payload["features"]
+                ),
                 supported_bench_versions=observed_versions,
                 observed_at=observed_at,
                 software_version=software_version,
@@ -1378,6 +1387,72 @@ class DittobenchClient:
             ticket_deadline=ticket_deadline,
         )
 
+    async def run_generator_round(
+        self,
+        *,
+        tarball_url: str,
+        tarball_sha256: str,
+        dataset_bytes: bytes,
+        dataset_sha256: str,
+        seed: int,
+        screened_image_url: str | None,
+        screened_image_sha256: str | None,
+        screened_image_size_bytes: int | None,
+        screened_image_id: str | None,
+        screened_image_ref: str | None,
+        inference_session_id: str | None,
+        inference_grant_id: UUID | None,
+        inference_agent_id: UUID | None,
+        inference_slot_id: str | None,
+        inference_ticket_deadline: datetime | None,
+        ticket_deadline: datetime,
+        benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Run a generator-round dataset against one screened image.
+
+        Returns the scorer run id and the raw per-case results (case ids are
+        ``column/case``; faults carry the ``generator_round_fault`` category).
+        """
+        if self._config.dittobench_mock:
+            raise DittobenchError("generator rounds cannot use mock scoring")
+        run_id = await self._submit(
+            tarball_url=tarball_url,
+            tarball_sha256=tarball_sha256,
+            seed=seed,
+            dataset_sha256=dataset_sha256,
+            private_dataset_mode="generator-round-v1",
+            private_dataset_bytes=dataset_bytes,
+            run_size="full",
+            bench_version=13,
+            screened_image_url=screened_image_url,
+            screened_image_sha256=screened_image_sha256,
+            screened_image_size_bytes=screened_image_size_bytes,
+            screened_image_id=screened_image_id,
+            screened_image_ref=screened_image_ref,
+            inference_session_id=inference_session_id,
+            inference_grant_id=inference_grant_id,
+            inference_agent_id=inference_agent_id,
+            inference_slot_id=inference_slot_id,
+            inference_ticket_deadline=inference_ticket_deadline,
+            ticket_deadline=ticket_deadline,
+            benchmark_runtime=benchmark_runtime,
+        )
+        report = await self._poll_run(
+            run_id,
+            progress_callback=progress_callback,
+            expected_bench_version=13,
+            ticket_deadline=ticket_deadline,
+            raw=True,
+        )
+        assert isinstance(report, dict)
+        per_case = report.get("per_case")
+        if not isinstance(per_case, list) or not all(
+            isinstance(case, dict) for case in per_case
+        ):
+            raise DittobenchError("round report carries no per-case results")
+        return str(report.get("run_id") or run_id), per_case
+
     def _mock_report(self) -> ScoreReport:
         """Canned report for ``VALIDATOR_DITTOBENCH_MOCK`` (local plumbing tests)."""
         logger.info("dittobench mock enabled: returning canned ScoreReport")
@@ -1500,7 +1575,7 @@ class DittobenchClient:
         body["dataset_sha256"] = dataset_sha256
         if private_dataset_mode is not None or private_dataset_bytes is not None:
             if (
-                private_dataset_mode != "platform-private-v1"
+                private_dataset_mode not in _PRIVATE_DATASET_MODES
                 or bench_version != 13
                 or not private_dataset_bytes
                 or len(private_dataset_bytes) > 32 << 20
@@ -1551,6 +1626,25 @@ class DittobenchClient:
         expected_bench_version: int | None = None,
         ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
+        result = await self._poll_run(
+            run_id,
+            progress_callback=progress_callback,
+            expected_bench_version=expected_bench_version,
+            ticket_deadline=ticket_deadline,
+            raw=False,
+        )
+        assert isinstance(result, ScoreReport)
+        return result
+
+    async def _poll_run(
+        self,
+        run_id: str,
+        *,
+        progress_callback: ProgressCallback | None,
+        expected_bench_version: int | None,
+        ticket_deadline: datetime | None,
+        raw: bool,
+    ) -> ScoreReport | dict[str, Any]:
         if (
             expected_bench_version is None
             or expected_bench_version not in SUPPORTED_BENCH_VERSIONS
@@ -1635,6 +1729,13 @@ class DittobenchClient:
                             f"ticket={expected_bench_version!r} "
                             f"job={job_version!r} report={reported_version!r}"
                         )
+                    if raw:
+                        # Generator-round runs carry no transcript or v9 base
+                        # evidence: their per-case results go to the round
+                        # matrix, never into a signed agent score.
+                        if not isinstance(rep, dict):
+                            raise DittobenchError("round report was not an object")
+                        return rep
                     # Offline reproducibility: fetch the run's transcript
                     # artifact and bind its digest into the report details, so
                     # the score signature covers it and the worker can publish

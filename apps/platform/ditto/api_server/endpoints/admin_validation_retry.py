@@ -135,7 +135,11 @@ from ditto.db.queries.score_retests import (
     score_retest_queue_positions,
 )
 from ditto.db.queries.scores import SCORING_QUORUM
-from ditto.db.queries.tickets import ticket_attempt_cap
+from ditto.db.queries.tickets import (
+    release_generator_round_dataset_pin,
+    scoring_retry_ticket,
+    ticket_attempt_cap,
+)
 from ditto_screening_protocol.bench_v9 import (
     V9_SCORE_CONTRACT_MANIFEST_SHA256,
     V9_SCORE_CONTRACT_REVISION,
@@ -486,7 +490,7 @@ async def _load(
         select(ValidatorTicket)
         .where(
             ValidatorTicket.agent_id == agent_id,
-            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+            scoring_retry_ticket(),
         )
         .order_by(
             ValidatorTicket.deadline.asc(), ValidatorTicket.validator_hotkey.asc()
@@ -1680,7 +1684,7 @@ async def _finalized_quorum_state(
             select(ValidatorTicket)
             .where(
                 ValidatorTicket.agent_id.in_(finalized_ids),
-                ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+                scoring_retry_ticket(),
             )
             .order_by(
                 ValidatorTicket.deadline.asc(),
@@ -1889,7 +1893,7 @@ async def list_v9_contract_retests(
                 .where(
                     ValidatorTicket.agent_id.in_(agent_ids),
                     ValidatorTicket.bench_version == 9,
-                    ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+                    scoring_retry_ticket(),
                 )
                 .order_by(
                     ValidatorTicket.deadline.asc(),
@@ -2360,6 +2364,7 @@ async def replace_validator_score_after_infrastructure_failure(
         assert target is not None and ticket is not None
         now = datetime.now(UTC)
         deadline = now + replacement_ttl
+        release_generator_round_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1

@@ -164,6 +164,18 @@ which simply sees a few more tools and richer schemas.
 
 ## Dataset
 
+### Generator-round datasets
+
+`generator-round-v1` is advertised and admitted whenever the scorer runs in
+trusted screened-image mode (`DITTOBENCH_ALLOW_SCREENED_IMAGES=1`, which every
+validator stack sets). It is independent of the private V13 transport below:
+round tickets are issued only by Platform, and only while the generator
+competition's `validator_rounds_enabled` setting is on, so that setting is the
+operator kill switch. A round request carries the exact round dataset bytes
+(at most `challenge.MaxRoundDatasetBytes` decoded) and their canonical SHA-256.
+Its report goes to Platform's round endpoint and never enters the agent score
+ledger.
+
 ### Private V13 control-plane transport (default off)
 
 `DITTOBENCH_ALLOW_PRIVATE_DATASETS=1` enables the `platform-private-v1`

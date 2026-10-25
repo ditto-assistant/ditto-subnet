@@ -17,16 +17,16 @@ from ditto.treasury.service_allocation import ServiceDestination
 class Migration(unittest.TestCase):
     def test_v478_to_v481_reapproval_cannot_change_financial_authority(self):
         from ditto_screening_protocol.collector_receipts import (
-            AUDITED_COLLECTOR_CODE_HASH,
             V478_COLLECTOR_CODE_HASH,
             V479_READONLY_CODE_HASH,
+            V482_COLLECTOR_CODE_HASH,
         )
 
         old = replace(self.new, runtime_code_hash=V478_COLLECTOR_CODE_HASH)
         new = replace(
             old,
             revision=old.revision + 1,
-            runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH,
+            runtime_code_hash=V482_COLLECTOR_CODE_HASH,
         )
         m.policy_transition(old, new)
         for changed in (
@@ -41,12 +41,43 @@ class Migration(unittest.TestCase):
 
     def test_v481_to_v482_reapproval_cannot_change_financial_authority(self):
         from ditto_screening_protocol.collector_receipts import (
-            AUDITED_COLLECTOR_CODE_HASH,
             V479_READONLY_CODE_HASH,
             V481_COLLECTOR_CODE_HASH,
+            V482_COLLECTOR_CODE_HASH,
         )
 
         old = replace(self.new, runtime_code_hash=V481_COLLECTOR_CODE_HASH)
+        new = replace(
+            old,
+            revision=old.revision + 1,
+            runtime_code_hash=V482_COLLECTOR_CODE_HASH,
+        )
+        m.policy_transition(old, new)
+        for changed in (
+            replace(new, max_distribution_rao=2_500_000_000_000),
+            replace(new, max_fee_rao=new.max_fee_rao + 1),
+            replace(new, runtime_code_hash=V479_READONLY_CODE_HASH),
+            replace(new, revision=old.revision),
+            replace(new, revision=old.revision + 2),
+            replace(new, start_block=old.start_block + 1),
+        ):
+            with self.assertRaises(ValueError):
+                m.policy_transition(old, changed)
+        # Reverse and same-runtime transitions stay refused.
+        with self.assertRaises(ValueError):
+            m.policy_transition(
+                new,
+                replace(old, revision=new.revision + 1),
+            )
+
+    def test_v482_to_v483_reapproval_cannot_change_financial_authority(self):
+        from ditto_screening_protocol.collector_receipts import (
+            AUDITED_COLLECTOR_CODE_HASH,
+            V479_READONLY_CODE_HASH,
+            V482_COLLECTOR_CODE_HASH,
+        )
+
+        old = replace(self.new, runtime_code_hash=V482_COLLECTOR_CODE_HASH)
         new = replace(
             old,
             revision=old.revision + 1,
@@ -69,6 +100,25 @@ class Migration(unittest.TestCase):
                 new,
                 replace(old, revision=new.revision + 1),
             )
+
+    def test_old_runtimes_cannot_skip_to_v483(self):
+        from ditto_screening_protocol.collector_receipts import (
+            AUDITED_COLLECTOR_CODE_HASH,
+            V478_COLLECTOR_CODE_HASH,
+            V481_COLLECTOR_CODE_HASH,
+        )
+
+        for code in (V478_COLLECTOR_CODE_HASH, V481_COLLECTOR_CODE_HASH):
+            old = replace(self.new, runtime_code_hash=code)
+            with self.assertRaises(ValueError):
+                m.policy_transition(
+                    old,
+                    replace(
+                        old,
+                        revision=old.revision + 1,
+                        runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH,
+                    ),
+                )
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -166,8 +216,8 @@ class Migration(unittest.TestCase):
 
     def test_runtime_reapproval_preserves_already_migrated_custody_and_spend(self):
         from ditto_screening_protocol.collector_receipts import (
-            AUDITED_COLLECTOR_CODE_HASH,
             HISTORICAL_COLLECTOR_CODE_HASH,
+            V482_COLLECTOR_CODE_HASH,
         )
 
         old = replace(self.old, runtime_code_hash=HISTORICAL_COLLECTOR_CODE_HASH)
@@ -181,9 +231,7 @@ class Migration(unittest.TestCase):
         first = m.manifest(self.source, old, isolated, "registration", sha)
         current = self.root / "policy4.db"
         m.migrate(self.source, current, old, isolated, first, self.signed(first))
-        new = replace(
-            isolated, revision=5, runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH
-        )
+        new = replace(isolated, revision=5, runtime_code_hash=V482_COLLECTOR_CODE_HASH)
         current_sha = hashlib.sha256(current.read_bytes()).hexdigest()
         approval = m.manifest(current, isolated, new, "registration", current_sha)
         target = self.root / "policy5.db"
