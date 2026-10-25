@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -360,6 +361,9 @@ class AdminProbeBatteryLead(BaseModel):
     invariant: str
 
 
+_PROBE_REVIEW_ERROR = re.compile(r"[A-Za-z0-9_:]{1,80}")
+
+
 class AdminProbeReviewFinding(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -382,7 +386,16 @@ class AdminProbeReview(BaseModel):
     completion_tokens: int = 0
     cost_usd: float = 0.0
     review_ms: int = 0
+    # Content-free label (stage:ExceptionClass[:status]). A stored value that
+    # is not one is dropped rather than echoed, and never fails the whole read.
     error: str | None = None
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def drop_unbounded_error(cls, value: object) -> str | None:
+        if isinstance(value, str) and _PROBE_REVIEW_ERROR.fullmatch(value):
+            return value
+        return None
 
 
 class AdminProbeBatteryObservation(BaseModel):

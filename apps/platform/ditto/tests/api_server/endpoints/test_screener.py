@@ -247,6 +247,19 @@ def test_probe_review_is_bound_only_when_enabled_and_needs_the_battery() -> None
         ScreenerReviewSettings(probe_review_mode="shadow")
 
 
+def test_admin_probe_review_drops_an_unbounded_error_label() -> None:
+    from ditto.api_models.screener_review_settings import AdminProbeReview
+
+    kept = AdminProbeReview.model_validate(
+        {"status": "error", "error": "review:HTTPStatusError:402"}
+    )
+    assert kept.error == "review:HTTPStatusError:402"
+    dropped = AdminProbeReview.model_validate(
+        {"status": "error", "error": "Traceback: secret probe text"}
+    )
+    assert dropped.error is None
+
+
 def test_explicit_l4_cap_changes_checksum_without_changing_l2() -> None:
     inherited = ScreenerReviewSettings(max_completion_tokens=16_000)
     bounded = inherited.model_copy(update={"adjudicator_max_completion_tokens": 4_000})
