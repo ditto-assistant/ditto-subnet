@@ -43,16 +43,22 @@ The operator also authorized a separately reconciled
 [historical loss-only scope](october-25-historical-loss-withdrawal.md): 17 older
 ATH rows and one screening-only Paragon v18 row, in its own manifest. The
 51-row manifest above remains unchanged. This extension is a current dated
-withdrawal, not a claim that historical policy text was rewritten or that
-either court's pending restorations are complete.
+withdrawal, not a claim that historical policy text was rewritten. Those
+historical corrections remain pending other-invariant review; the separate
+51-row restoration readback below does not cover them.
 
-The operator's withdrawal is effective precedent guidance; live restoration
-requires fresh court guards, an audited reopen/clear action and readback of
-each exact row. This repository change does not perform those writes or claim
-all 51 have landed. Preserve prior reasons and `reject -> reopen -> clear`
-history. A current native court read determines current eligibility. Historical
-rejects may remain searchable and must not be reused as active fallback-only
-precedent.
+Live restoration requires fresh court guards, an audited reopen/clear action
+and readback of each exact row. The operator's final native readback on
+2026-10-25 at 18:46 UTC confirmed all 51 listed rows `clear`/`scored`, each with
+the new withdrawal reason. All 153 accepted scores, seeds and transcript
+commitments matched the before/after records. This is a dated restoration
+readback, not a new runtime certification or a claim of an observed scored
+fallback incident. This repository change did not perform those writes.
+
+Preserve prior reasons and `reject -> reopen -> clear` history. A current
+native court read determines current eligibility; any later independent ground
+needs its own exact-artifact proof. Historical rejects may remain searchable
+and must not be reused as active fallback-only precedent.
 
 Primary public assurance: [Peyton's corrective SN118 channel message, October 25
 at 18:19 UTC / 14:19 America/New_York](https://discord.com/channels/799672011265015819/1499448472246419608/1563980263422173295).

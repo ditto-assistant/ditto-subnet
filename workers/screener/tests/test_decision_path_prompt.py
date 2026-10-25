@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from ditto_screener import adjudicator, l2_review, source_review
 from ditto_screener.adjudicator import _system_prompt
 from ditto_screener.decision_path_prompt import (
     DECISION_PATH_GUIDANCE,
@@ -133,6 +134,47 @@ def test_v13_recovery_does_not_reintroduce_a_raw_history_reject(render) -> None:
     ):
         assert obsolete not in current
     assert "W3 recovery and context safe harbor (2026-10-25)" not in render(12)
+
+
+@pytest.mark.parametrize(
+    "render", [_source_review_system_prompt, _l2_review_system_prompt, _system_prompt]
+)
+def test_v13_context_permission_keeps_i4_advisory_and_final_field_guards(
+    render,
+) -> None:
+    prompt = render(13)
+    flattened = " ".join(prompt.split())
+    assert "selected/summarized context under W3" in flattened
+    assert "non-authoritative" in prompt or "untrusted/advisory" in prompt
+    assert "correctness gate" in prompt
+    assert "no correctness gate" in prompt
+    assert "I4 / W8: trace every finalized field" in prompt
+    assert "host-written, edited or overriding answer" in prompt
+    assert (
+        "first valid designated final result ships without host semantic selection"
+        in flattened
+    )
+
+
+@pytest.mark.parametrize(
+    "module,attribute,render",
+    [
+        (source_review, "_POLICY_TAILS", _source_review_system_prompt),
+        (l2_review, "_L2_POLICY_TAILS", _l2_review_system_prompt),
+        (adjudicator, "_POLICY_V13_PROMPT_TAIL", _system_prompt),
+    ],
+)
+def test_v13_context_rewrites_leave_unrelated_wording_intact(
+    monkeypatch, module, attribute, render
+) -> None:
+    """A future unrelated use must not be rewritten by a blanket substitution."""
+    sentinel = "Unrelated audit phrase: complete records / complete raw records."
+    original = getattr(module, attribute)
+    if isinstance(original, dict):
+        monkeypatch.setitem(original, 13, original[13] + "\n" + sentinel)
+    else:
+        monkeypatch.setattr(module, attribute, original + "\n" + sentinel)
+    assert sentinel in render(13)
 
 
 def test_policy_and_probe_do_not_charge_a_fallback_only_witness() -> None:

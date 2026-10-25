@@ -1408,6 +1408,8 @@ def _l2_review_system_prompt(policy_version: int) -> str:
         ) from None
     prompt = _L2_SYSTEM_PROMPT_HEAD + tail + _L2_SYSTEM_PROMPT_TAIL
     if policy_version >= 13:
+        # Change the legacy I2/I4 context clauses, never arbitrary occurrences
+        # elsewhere in the assembled prompt or their authority safeguards.
         prompt = prompt.replace(
             "I2 requires complete applicable current-user records on the deciding\n"
             "turn, while allowing a clearly non-authoritative "
@@ -1415,7 +1417,17 @@ def _l2_review_system_prompt(policy_version: int) -> str:
             "I2 protects applicable trusted instructions and authorization, with "
             "material consequence proof; W3 permits selected/summarized context "
             "and fresh fallback without mandatory raw receipt/history retention.",
-        ).replace("complete records", "selected evidence/context under W3")
+        ).replace(
+            "I4 is stricter than the legacy derive-as-prompt allowance. "
+            "A local value passes\nonly as an explicitly untrusted candidate "
+            "beside complete records, with records\npreferred on disagreement "
+            "and no accept gate.",
+            "I4 is stricter than the legacy derive-as-prompt allowance. "
+            "It protects model authority over a local candidate: it must stay "
+            "explicitly\nuntrusted/advisory, with no correctness gate and "
+            "freedom to disagree. Selected\nor summarized evidence/context "
+            "is permitted under W3; missing raw support alone is not I4.",
+        )
         prompt = (
             prompt.replace("every I1-I7 invariant", "every I1-I8 invariant")
             .replace("replaces I1-I7.", "replaces I1-I8.")

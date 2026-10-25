@@ -4129,7 +4129,7 @@ def test_prompt_keeps_versioned_false_positive_valves(policy_version) -> None:
     }
 
     required.add(
-        "selected evidence/context under W3 remain"
+        "selected/summarized context is permitted"
         if policy_version == 13
         else "complete records remain"
     )

@@ -702,11 +702,32 @@ def _system_prompt(policy_version: int) -> str:
             f"{_POLICY_V12_PROMPT_TAIL}"
         )
     if policy_version == 13:
+        # W3 permits summarized context in these specific legacy clauses;
+        # I4's advisory/authority and finalized-field boundaries still apply.
         return (
-            f"{_POLICY_V13_BASE_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
-            f"{_POLICY_V12_PROMPT_TAIL}\n\n{_POLICY_V13_PROMPT_TAIL}\n\n"
-            f"{DECISION_PATH_GUIDANCE}"
-        ).replace("complete records", "selected evidence/context under W3")
+            (
+                f"{_POLICY_V13_BASE_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
+                f"{_POLICY_V12_PROMPT_TAIL}\n\n{_POLICY_V13_PROMPT_TAIL}\n\n"
+                f"{DECISION_PATH_GUIDANCE}"
+            )
+            .replace(
+                "An explicitly\n  untrusted candidate offered beside the complete "
+                "records, with disagreement\n  accepted and no correctness "
+                "gate, passes.",
+                "An explicitly\n  untrusted/advisory candidate may use "
+                "selected/summarized context under W3;\n  disagreement must remain "
+                "accepted and no correctness gate may select the\n  final answer. "
+                "Missing raw support alone does not prove I4; an authoritative\n  "
+                "host-derived value or finalized-field rewrite still does.",
+            )
+            .replace(
+                "that carries complete records, no derived value, and no conversion\n"
+                "recipe, and ships whatever parseable result the model returns.",
+                "that uses selected/summarized context under W3, no derived value "
+                "and no conversion\nrecipe, and ships whatever parseable result "
+                "the model returns.",
+            )
+        )
     raise AssertionError("validated policy was not rendered")
 
 

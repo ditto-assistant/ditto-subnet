@@ -19,9 +19,9 @@ Only public-safe commitments are included, not private dossiers or long prior
 allegations. This is the identified authorized scope, not a claim that every
 older rejected submission was independently reviewed or should be restored.
 
-The retained reasons supplied no independently proven ground beyond losing or
-selecting evidence/history, or an unresolved allegation accompanying that
-loss. An unresolved allegation is not a proven independent breach. The current
+The classification concerns the old loss-only rationale or unresolved
+allegation in the retained ruling, not the absence of another source violation.
+An unresolved allegation is not a proven independent breach. The current
 holding treats retrieval, summaries, compaction, checkpoints, retries and
 fresh fallback loss alone as quality/reliability. Any different prohibited
 mechanism still needs its own complete current proof and material consequence.

@@ -2138,6 +2138,8 @@ def _source_review_system_prompt(policy_version: int) -> str:
     )
     prompt = _SYSTEM_PROMPT_HEAD + tail + batch_guidance
     if policy_version >= 13:
+        # W3 also scopes I4's evidence-context condition. Rewrite only named
+        # legacy clauses, retaining advisory, dissent and final-field guards.
         prompt = (
             prompt.replace(
                 "I2 EVIDENCE RETENTION. Every deciding completion must receive the "
@@ -2154,8 +2156,38 @@ def _source_review_system_prompt(policy_version: int) -> str:
                 "full_records_on_deciding_turn is a pass label, "
                 "not a raw-retention rule.",
             )
-            .replace("complete records", "selected evidence/context under W3")
-            .replace("complete raw records", "selected evidence/context under W3")
+            .replace(
+                "untrusted candidate beside the complete raw records on the "
+                "deciding turn, with\nuntrusted labeling, the model free to "
+                "choose a different value, and no\nexact-value acceptance "
+                "gate rejecting disagreement.",
+                "untrusted candidate with selected/summarized context under W3. "
+                "The candidate\nmust stay labelled non-authoritative, the model "
+                "must be free to choose a\ndifferent value, and no exact-value "
+                "acceptance gate may reject disagreement.",
+            )
+            .replace(
+                "untrusted_candidate_channel pass: complete records remain, "
+                "the candidate is\n  labelled non-authoritative, disagreement "
+                "is accepted, and no correctness gate\n  selects the model draft.",
+                "untrusted_candidate_channel pass: selected/summarized context "
+                "is permitted\n  under W3; the candidate is labelled "
+                "non-authoritative, disagreement is accepted,\n  and no "
+                "correctness gate selects the model draft.",
+            )
+            .replace(
+                "beside complete records with disagreement accepted (I4 pass), "
+                "from injecting",
+                "with selected/summarized context under W3 and disagreement "
+                "accepted (I4 pass),\n  from injecting",
+            )
+            .replace(
+                "carries the complete records and no derived value or conversion "
+                "recipe, and\nships whatever parseable result the model returns",
+                "uses selected/summarized context under W3, no derived value or "
+                "conversion\nrecipe, and ships whatever parseable result the "
+                "model returns",
+            )
             .replace(
                 "Fail retention or dissent is benchmark_emulation.",
                 "Host suppression of a valid designated dissent needs "
