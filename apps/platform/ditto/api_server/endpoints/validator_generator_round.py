@@ -51,6 +51,7 @@ from ditto.api_server.generator_rounds import (
     validate_round_results,
 )
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
+from ditto.chain.models import EpochSchedule
 from ditto.db.models import (
     Agent,
     GeneratorRound,
@@ -168,6 +169,17 @@ async def request_generator_round_job(
         getattr(request.app.state, "session_maker", None)
     )
     slot_settings = await v._validator_slot_settings(request)
+    # Read the chain head before any row lock: the lease cutoff needs it, and
+    # an RPC must never hold the round row while concurrent polls wait. It is
+    # read here, on whichever process serves the request, because the round
+    # loop runs on one role only and its last read can be stale. An
+    # unreadable chain declines the lease; the validator polls again.
+    head: EpochSchedule | None
+    try:
+        head = await chain.read_epoch_schedule(config.chain.netuid)
+    except Exception as exc:  # noqa: BLE001 - any read failure declines
+        logger.warning("generator round lease: chain head unreadable: %s", exc)
+        head = None
     async with session.begin():
         await v._assert_validator_compatible(
             session,
@@ -212,15 +224,9 @@ async def request_generator_round_job(
         )
         if slot is None:
             return _no_work()
-        # Read the head now, on whichever process serves this request: the
-        # round loop runs on one role only, and its last read can be stale. An
-        # unreadable chain declines the lease; the validator polls again.
-        try:
-            schedule = await chain.read_epoch_schedule(config.chain.netuid)
-        except Exception as exc:  # noqa: BLE001 - any read failure declines
-            logger.warning("generator round lease: chain head unreadable: %s", exc)
+        if head is None:
             return _no_work()
-        left = round_seconds_left(row, block=schedule.block, tempo=schedule.tempo)
+        left = round_seconds_left(row, block=head.block, tempo=head.tempo)
         if left is not None and left < ROUND_LEASE_CUTOFF.total_seconds():
             return _no_work()
         ticket: ValidatorTicket | None = None
