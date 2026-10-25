@@ -848,3 +848,33 @@ def test_caught_up_worker_publishes_readiness_then_stops_redundant_chunks(
     assert all(r["status"] == "readiness" for r in mailbox.reports)
     assert pulls == [True] and len(c.sent) == 1 and not journal.db.in_transaction
     journal.close()
+
+
+def test_archive_refusal_during_catchup_still_publishes_readiness_and_pulls(
+    tmp_path, monkeypatch, capsys
+):
+    import runpy
+    from pathlib import Path
+
+    module = runpy.run_path(
+        str(Path(__file__).resolve().parents[2] / "scripts/treasury_manual_worker.py")
+    )
+    consume = module["consume_iteration"]
+    p, c, journal, _, mailbox = setup(tmp_path)
+    cursor = journal.db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
+
+    def refused(*_, **__):
+        raise RuntimeError("Historical work rate limit exceeded")
+
+    monkeypatch.setitem(consume.__globals__, "observe_earnings", refused)
+    pulled = []
+    mailbox.pull = lambda: pulled.append(True)
+    consume(mailbox, journal, p, c)
+    assert [r["status"] for r in mailbox.reports] == ["readiness"]
+    assert pulled == [True]
+    assert journal.db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0] == (
+        cursor
+    )
+    log = capsys.readouterr().out
+    assert "earnings_catchup_unavailable" in log and "rate limit" not in log
+    journal.close()

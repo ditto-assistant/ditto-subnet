@@ -58,7 +58,23 @@ def consume_iteration(mailbox, journal, policy, chain):
     for _ in range(4):
         cursor = journal.db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
         chunk = min(8, remaining)
-        observe_earnings(journal, policy, chain, max_blocks=chunk)
+        try:
+            observe_earnings(journal, policy, chain, max_blocks=chunk)
+        except Exception as error:
+            # Catch-up rolls back and only adds proved sources later. An
+            # archive refusal (e.g. its historical rate limit) must not hide
+            # current readiness or strand an already queued request.
+            print(
+                json.dumps(
+                    {
+                        "status": "earnings_catchup_unavailable",
+                        "error_type": type(error).__name__,
+                    }
+                ),
+                flush=True,
+            )
+            publish_current_readiness(mailbox, journal, policy, chain)
+            break
         remaining -= chunk
         publish_current_readiness(mailbox, journal, policy, chain)
         if (
