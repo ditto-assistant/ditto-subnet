@@ -19,6 +19,14 @@ operationalizes existing v13 safeguards for every effective engine and deciding
 call. The v14 draft remains prospective; do not infer activation from its
 presence. These govern over the historical examples below:
 
+- The [October 25 recovery withdrawal](precedents/october-25-fallback-recovery-withdrawal.md)
+  supersedes evidence-retention-only examples, including loss after a model
+  already consumed a receipt. Summaries, compaction, checkpoints, retries and
+  fresh fallbacks alone are quality/reliability issues. A reject needs a
+  separate prohibited mechanism and material consequence; applicable trusted
+  instructions and authorization remain protected. Reconcile exact prior
+  CLEARs and miner assurances before ruling; unread code is not proof.
+
 - Evaluate I1–I8 and S1–S3 independently, with exact-artifact evidence and all
   applicable safe harbors and mandatory verification requirements.
 - I8 can independently reject substantive evaluation-dependent retrieval,

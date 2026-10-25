@@ -206,6 +206,19 @@ live and local disagree under the same policy, the live holding wins for that
 exact pattern; say so. Historical precedent cannot override the applicable
 published policy or transfer a finding to another artifact.
 
+Before proposing a reject or overturning a CLEAR, check recent withdrawals
+and the scoped miner DM/channel assurances in the existing precedent store.
+Read the exact prior reason and decisive current source yourself. Preserve the
+assurance's actual mechanism and limits; do not dismiss unchanged code as an
+ancestor or turn unread source, incidental evidence loss or an illustrative
+fault sequence into proof. The
+[2026-10-25 recovery withdrawal](references/precedents/october-25-fallback-recovery-withdrawal.md)
+covers retrieval, summaries, compaction, checkpoints, retries and fresh
+fallbacks, including receipts a successful model already consumed. Loss alone
+is quality/reliability, not rejection. Require a separate prohibited mechanism
+and material consequence; applicable trusted instructions and authorization
+remain protected. Historical rejected rows can still appear in live search.
+
 1. Call `get_leaderboard` (current bench) and `get_screening_review_queue`.
 2. Resolve every target. Include every emission recipient and every scored
    row at about composite ≥ 0.70 that has no resolved ATH on this UUID.
@@ -300,6 +313,9 @@ A reject that turns out to rest on an unsupported ground is withdrawn on the
 record, never by un-banning through some other path. One example is a ground
 the operator later ruled insufficient on its own, such as the benign 6000-char
 tool-result cut with no independent second factor (ditto-subnet#3081).
+Another is the October 25 withdrawal of 51 fallback-only rulings, linked above.
+Use the exact UUID/SHA scope; a separate proven I3 or other ground is not
+silently withdrawn, and a policy correction is not proof restoration landed.
 
 1. Confirm on `get_ath_review` that this exact UUID's review is
    `resolved` / `reject`, and re-read the SHA and score count with

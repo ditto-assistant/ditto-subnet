@@ -142,35 +142,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v59-policy-v13"
+        return "l2-terra-source-review-v60-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v31-policy-v13"
+        return "l3-sol-adversarial-critic-v32-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-violation-cause-v36-policy-v13"
+        return "l3-sol-violation-cause-v37-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v16-policy-v13"
+        return "l3-sol-cause-disagreement-v17-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v34-policy-v13"
+        return "l3-sol-safety-adjudicator-v35-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -1274,10 +1274,12 @@ Behavioral degradation alone is a lead, never an I8 breach. Screening runs no
 separate behavioral test that could attribute it later, so decide I8 from the
 traced served path.
 
-For I2, identify the exact applicable evidence and its discard point; generic
-top-k selection or an ordinary retrieval miss is insufficient. For I3, separate
-shape repair from a genuine model critic/final selector that has necessary
-evidence and may preserve dissent. For I4, conditional deletion of unknown,
+For I2, identify the actual applicable trusted instruction/authorization,
+loss of its meaning and material consequence. Evidence loss from retrieval,
+summaries, compaction, checkpointing, retries or fresh fallback alone is not
+rejection, including after a successful model consumed a receipt. For I3, separate
+shape repair from a genuine model critic/final selector with selected/summarized
+context under W3 and real dissent. For I4, conditional deletion of unknown,
 none, n/a, or an overlength answer; prose-derived abstention; currency rescale;
 added equivalents; and grader-vocabulary mapping are scorer-field rewrites.
 For I5, conditionality is neither necessary nor sufficient: an always-on
@@ -1374,8 +1376,8 @@ configuration, candidate boundary, input, output, or downstream authority.
 A genuine authoritative model planner may author a pinned plan; an advisory
 planner must remain rejectable. A user/model-authored program may directly
 return its result only when the delegation fixed inputs, operation, scope,
-units, and representation before execution. Neither permission cures evidence
-loss, host final-field rewriting, hidden expected trajectories, or missing
+units, and representation before execution. Neither permission cures host
+final-field rewriting, hidden expected trajectories, or missing
 authorization. Opaque-file presence, dead code, lineage, and labels are leads.
 On a scored v13 `/run`, the validator mints `inference_base_url` for that
 case. A harness may build a per-request model client from this field and
@@ -1406,6 +1408,14 @@ def _l2_review_system_prompt(policy_version: int) -> str:
         ) from None
     prompt = _L2_SYSTEM_PROMPT_HEAD + tail + _L2_SYSTEM_PROMPT_TAIL
     if policy_version >= 13:
+        prompt = prompt.replace(
+            "I2 requires complete applicable current-user records on the deciding\n"
+            "turn, while allowing a clearly non-authoritative "
+            "focused preliminary pass.",
+            "I2 protects applicable trusted instructions and authorization, with "
+            "material consequence proof; W3 permits selected/summarized context "
+            "and fresh fallback without mandatory raw receipt/history retention.",
+        ).replace("complete records", "selected evidence/context under W3")
         prompt = (
             prompt.replace("every I1-I7 invariant", "every I1-I8 invariant")
             .replace("replaces I1-I7.", "replaces I1-I8.")

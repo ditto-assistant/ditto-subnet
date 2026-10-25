@@ -1,0 +1,210 @@
+{
+  "date": "2026-10-25",
+  "scope": "operator-authorized fallback-only withdrawal; live restoration requires court readback",
+  "items": [
+    {
+      "agent_id": "87848266-4db4-4013-9b7d-9ada6cbad83e",
+      "artifact_sha256": "3a30e8c389ae8f93d206b9cb34d388034a811b86fdda43d49572637d026586b4"
+    },
+    {
+      "agent_id": "90d50419-f405-49c8-badf-4745d26d4213",
+      "artifact_sha256": "6fb9721bdc98135dd2f8eb8f8d6e34cc7f45805371ff804f4c868d209117fef7"
+    },
+    {
+      "agent_id": "3c6d46ba-c3e1-4cea-ac85-d8da057bbb70",
+      "artifact_sha256": "071f34949b15742847be4473a34299bef8a1bb0b4fcfe45ea4bc20e3df76b51e"
+    },
+    {
+      "agent_id": "ecf5a1a2-5292-4374-a831-60cc9a612cd8",
+      "artifact_sha256": "f0fceb0c9e922a377ca9101ee7612ecdd62ce1bf51efea28da8a443b6261eb83"
+    },
+    {
+      "agent_id": "3124520a-ed31-418e-be3f-2a7373053420",
+      "artifact_sha256": "f3a17d1255a123a696fb94cffdf0a4fc714e873123ccfb15ed510944833e1916"
+    },
+    {
+      "agent_id": "3ff7d95a-bf7a-482c-bc53-e969e9337130",
+      "artifact_sha256": "b86131af281f9f6d7f58d5d0144c86c11c3a7f9620c3f3e2aa66429e178cfddb"
+    },
+    {
+      "agent_id": "e6638d76-f48c-41c5-9752-d1ddfa9d7355",
+      "artifact_sha256": "2c42cb08fd2ad1779d0115f60c8e1dd67c4682b2556592ad69ce1acc701b733b"
+    },
+    {
+      "agent_id": "b76af05f-6489-49af-83c0-fa05c7e5ed03",
+      "artifact_sha256": "db6306258bb64d7967f737b63057047d2cd72a41f03429c1f0aef30f0253d945"
+    },
+    {
+      "agent_id": "24715be5-08c7-4cef-ac88-f18aceedd9a8",
+      "artifact_sha256": "a1f2e4daf843bec9d111b83532194daed3c3634778265a110a428649c7dee396"
+    },
+    {
+      "agent_id": "aeacd961-6863-4e76-b5e1-7db3cd233364",
+      "artifact_sha256": "e8d150ef9a0b76a2bd44c07f1b3a834baa243f3bf05643fec9e1738148d785ab"
+    },
+    {
+      "agent_id": "7192aba8-1cb4-4134-b182-d97e1528fca5",
+      "artifact_sha256": "ce7df59ab935fa2948495926f29f0ad558368d3c45ea232bf17bb0083fe48430"
+    },
+    {
+      "agent_id": "6f881f4f-28f9-4b62-9953-962981f35994",
+      "artifact_sha256": "68ba363b3b34b38d8abc35f545ec9437491d85666d4ee49688b2526d5085fd37"
+    },
+    {
+      "agent_id": "7edd00e3-f861-48ca-9ee2-1830f67cace0",
+      "artifact_sha256": "c3fc0eeac60b6f54fbaa59462fc2876e9d3f224f0a964571e7387b91e12f91cc"
+    },
+    {
+      "agent_id": "b68ffb20-aaab-4201-9177-4825dc4019db",
+      "artifact_sha256": "c1a5e2865d3c29dd223f6d99a8ae2918c420ada4ae4da887cf92d3376627ee07"
+    },
+    {
+      "agent_id": "eb685188-ee4c-4bc1-9369-55e6db9cb2d6",
+      "artifact_sha256": "896a5b5c309cf58b10548bc9128b6e64fbf847605a2a620cd09f655041c6116b"
+    },
+    {
+      "agent_id": "4a263689-b9b7-4dfe-bb23-f5e640e2672d",
+      "artifact_sha256": "41580979d891fb7bc925bf8ae732d61ecb905cf5c4b9d14e420ba11444c788fc"
+    },
+    {
+      "agent_id": "aae8bd63-4cf2-48fd-8e01-bcbf2cdea339",
+      "artifact_sha256": "c0c01c2ae11920c1f24cfb83be5880efd08a98d0122ec0cc93679b46b97798a3"
+    },
+    {
+      "agent_id": "4bbca8a0-51da-434a-bf90-92325acada8a",
+      "artifact_sha256": "0b96c0f2ad9e8e8d516c4f43bbe9a78bb828dd7c70ceb358c49e2413e483a11c"
+    },
+    {
+      "agent_id": "a4f58af9-7055-4437-92b8-b09ca70e9dde",
+      "artifact_sha256": "66571132932bf3d359f89a6190f987ce376fa97a4994cc32a66b67300be0a0f3"
+    },
+    {
+      "agent_id": "50a2692d-9f57-465a-bb73-dc47b9e3e5e2",
+      "artifact_sha256": "aded3a766b4ba373202dd7b520161a5dbe7e6bf9bbc4b066a3ade66bbcf18313"
+    },
+    {
+      "agent_id": "6922e311-b731-4f3c-bb2b-df2ed0dab963",
+      "artifact_sha256": "02cc1fa5e45421067aeeaecbc8702b291144964f5c205a533b2aaeb412af32bf"
+    },
+    {
+      "agent_id": "4ca04673-847e-4796-827e-74f12df9e641",
+      "artifact_sha256": "11f7551c65e94a9474d9988a40a3b38e9989d0b893f7e71ae953ddd90376b14a"
+    },
+    {
+      "agent_id": "a704e694-ab36-41f5-8e0e-190c86d20023",
+      "artifact_sha256": "4c11f01cf5954a891eb7d61afd1db69e3c962776703e3ce6145759bae7d8882f"
+    },
+    {
+      "agent_id": "8e78ae08-4ff9-4131-9f61-b7d2d65c8ccc",
+      "artifact_sha256": "0d2437357cc4cf19e8cefabd8c51a9ddd194b882215c717cdaed78ae093ae633"
+    },
+    {
+      "agent_id": "b9af166a-e66f-4b5d-845f-adb536fefab4",
+      "artifact_sha256": "02fa7663c7a9139b1be18fff05f2a040352f7363139dcf8df50cc3445a1c6d50"
+    },
+    {
+      "agent_id": "8d4c6e5e-7124-48d8-94b4-0b2d5486c57f",
+      "artifact_sha256": "c07c088849fb05107cdcf4cb031c3d47e9eb1a66f35c85a0976c853094cd89fd"
+    },
+    {
+      "agent_id": "3e9fe610-9759-44bb-b6ec-6f221d9d58dc",
+      "artifact_sha256": "79c8e422ffa568fc1fcb3db51567ff1626e7b2572cad609052aedaaa8284833d"
+    },
+    {
+      "agent_id": "55c69c6f-b0e2-4b92-a9bb-9aa3cddbef00",
+      "artifact_sha256": "26d2672351eb69216b862da252758a9aecb3b5e076c8b3a7e487a155d6f02cde"
+    },
+    {
+      "agent_id": "f169e0d7-87a0-41e7-9cf6-2073e31619f0",
+      "artifact_sha256": "c17f3711da189cace61e0db0ed5d0a45e168fcaa58cb2e92036038fc5686806e"
+    },
+    {
+      "agent_id": "c48ed8b0-de49-4341-8082-efb19b3a4134",
+      "artifact_sha256": "812abbc3df34ebe461472578c51be4be451cb737ef5ad0fd9e04d54dc42c79ea"
+    },
+    {
+      "agent_id": "3ab895c9-ec58-4b0c-97c6-3a7c70f96962",
+      "artifact_sha256": "0cb2631763823456bd65e4be643bfea4c754ae4b21811b3952bbca9e77434766"
+    },
+    {
+      "agent_id": "7eff55ff-a13b-4ead-a9cb-f81a4e452026",
+      "artifact_sha256": "e245f41477b2eb130a5f741b9c6d9174307352c526ee88a324977ecd1f188837"
+    },
+    {
+      "agent_id": "4a78b342-7311-44d0-a372-f32bb5ab2453",
+      "artifact_sha256": "3f2c238086c3e301f18264d0a5074432329312a317a911849855f687daa13395"
+    },
+    {
+      "agent_id": "0128419f-f2d8-4595-bc70-920f52f9e7af",
+      "artifact_sha256": "20299902daa3a58d518e13608b7a32ca2828b09be2613c38c21eea6fe1dbf629"
+    },
+    {
+      "agent_id": "39d6abd4-bd10-4602-8c16-f2d553040276",
+      "artifact_sha256": "8be31ca01eabf09f78ec0c13018e4e588257ca06ef278a495e80b561fb49b17c"
+    },
+    {
+      "agent_id": "82172ff9-fbaa-4d09-92b4-cf9ad8c7bbc0",
+      "artifact_sha256": "40c4d54b5130eee593560c1695bb6bb691110f10342b4f4d3b4006698b82bd51"
+    },
+    {
+      "agent_id": "dc2a8f4f-a877-4ea0-ae44-a1dd6118666a",
+      "artifact_sha256": "bdcf36ff2a1d2608f86e66942996a91b144d07b7278f6cad5f811891c0901c00"
+    },
+    {
+      "agent_id": "b73f9846-e122-4f01-9010-99ce6680582b",
+      "artifact_sha256": "2cb0d2bce771c7c409acc319bd807664ac997aed58c67b524f8be52eec46c5bf"
+    },
+    {
+      "agent_id": "d639ec53-33b0-47fe-ae0b-bc00a13fa566",
+      "artifact_sha256": "1ac14de3c6ecc9f0b7d2f35f78bed4dd82756593367c39a318e54b37fe74ce43"
+    },
+    {
+      "agent_id": "9a8777b8-758c-4cde-9cdc-4a5db888352f",
+      "artifact_sha256": "02835c9e38d851635542fb87c8ba2bfcdab14f61bbafacc3ef4c0a2503a20e30"
+    },
+    {
+      "agent_id": "1ea576ea-d317-4da2-9f4b-ce86a5ca4541",
+      "artifact_sha256": "a4a85b45e465c20d1d29b218e9bd1c17e89fb7c5f5f90c206a4b742f1587ff99"
+    },
+    {
+      "agent_id": "cffd0207-1214-43e6-a4e1-f0de8bb7279c",
+      "artifact_sha256": "5222bbd03ad1924343085676c5e22d7800ae55b2d4849a97d044c5bfe4f986a4"
+    },
+    {
+      "agent_id": "aa1f10ad-223a-49c5-94dc-ff93331efce6",
+      "artifact_sha256": "cd9362875df4f3d930df8a8f444e6ba38a7d5e99a6512a21b7e9cc1527d89678"
+    },
+    {
+      "agent_id": "4dd65cbc-f801-4c29-8087-743979e80aba",
+      "artifact_sha256": "d839ed8ac4cd7d267fd111f944f3a36c462fceca579815a44e0b682b9ca9a4b4"
+    },
+    {
+      "agent_id": "3a8542ef-3172-4363-92d4-22f5787eebe7",
+      "artifact_sha256": "9c6f54d3974785e50c4efcb22812b5f6eee0e6976c90f7df9fc48e3c73f79dd8"
+    },
+    {
+      "agent_id": "539d44bd-8113-4b86-90ad-5148fc1cd0e8",
+      "artifact_sha256": "f0a92888ee89606d5a0db2a469fba299c1479e07f90b01cc0706a7e77e4d37b6"
+    },
+    {
+      "agent_id": "1387cf05-5822-4c53-93b5-360d5ce3d67f",
+      "artifact_sha256": "fc74608f16617c64aa6df1da988aa28aaf440f30ea7d3fa643ede58c36033576"
+    },
+    {
+      "agent_id": "3952f8df-6b0b-4aad-91ca-62dc6c8d757a",
+      "artifact_sha256": "dc783480e66ed19e27d508db61cbcc13e2975be66b6552e7657289f9f0f6db23"
+    },
+    {
+      "agent_id": "88113c69-6f8a-4797-96e6-698aff21cf2d",
+      "artifact_sha256": "557ac436146cb74aea36b1163afa0a4146647bbe263fc55f2a790f7b474359bb"
+    },
+    {
+      "agent_id": "64fc234e-f344-4404-8730-b5d6d9e992e2",
+      "artifact_sha256": "7b46a7a0907ca6b2013ec31baca999f1ae19df64900d4d6153b02cbacb9ea59d"
+    },
+    {
+      "agent_id": "4b479aaf-bdbc-4ede-8a7a-927c74c7d75a",
+      "artifact_sha256": "13db6c45b4bd4a78c8f99643a3d2c453ac45a1838fe0c0457b847a9d77428b34"
+    }
+  ]
+}

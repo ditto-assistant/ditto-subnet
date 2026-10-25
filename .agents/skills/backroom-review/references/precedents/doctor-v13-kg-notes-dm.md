@@ -30,7 +30,8 @@ This is permission to reuse released source, not blanket approval of every
 reachable mechanism inherited from it.
 
 Apply the stated conditions to the current exact artifact and policy.
-Keep a proposed independent receipt/evidence-loss finding distinct from the
-withdrawn KG+ theory; it still needs its own complete proof and reconciliation
-with applicable communications. Do not infer a ban, new release, or universal
-exemption from this stored guidance.
+The [October 25 recovery holding](october-25-fallback-recovery-withdrawal.md)
+also withdraws receipt/evidence-loss-only reasoning. A different proposed
+ground needs its own prohibited mechanism, material consequence and
+reconciliation with applicable communications. Do not infer a ban, new
+release, or universal exemption from this stored guidance.

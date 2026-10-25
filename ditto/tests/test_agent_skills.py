@@ -4,6 +4,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
@@ -19,6 +20,47 @@ SPEC = importlib.util.spec_from_file_location("lookup_context", LOOKUP)
 assert SPEC is not None and SPEC.loader is not None
 lookup_context = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(lookup_context)
+
+
+def test_fallback_withdrawal_scope_is_public_safe_and_discoverable() -> None:
+    skill = ROOT / ".agents/skills/backroom-review"
+    manifest = (
+        skill / "references/precedents/october-25-fallback-recovery-withdrawal.json"
+    )
+    data = json.loads(manifest.read_text())
+    assert data["date"] == "2026-10-25"
+    rows = data["items"]
+    assert len(rows) == len({r["agent_id"] for r in rows}) == 51
+    for row in rows:
+        assert set(row) == {"agent_id", "artifact_sha256"}
+        assert str(uuid.UUID(row["agent_id"])) == row["agent_id"]
+        assert len(row["artifact_sha256"]) == 64
+        assert bytes.fromhex(row["artifact_sha256"])
+    assert "13449296-a28e-4849-95c8-6055d50e4784" not in {r["agent_id"] for r in rows}
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(skill / "scripts/search-precedents.py"),
+            "october-25-fallback-recovery-withdrawal",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    found = json.loads(result.stdout)
+    holding = next(
+        row
+        for row in found["items"]
+        if row["id"] == "october-25-fallback-recovery-withdrawal"
+    )
+    assert holding["resolution"] == "guidance"
+    assert "separate prohibited mechanism" in holding["holding"]
+    for entry in (
+        skill / "SKILL.md",
+        ROOT / ".agents/skills/backroom-board-sweep/SKILL.md",
+    ):
+        assert "october-25-fallback-recovery-withdrawal.md" in entry.read_text()
 
 
 def test_vtrust_routes_to_stateful_pylon_and_chain_evidence() -> None:
