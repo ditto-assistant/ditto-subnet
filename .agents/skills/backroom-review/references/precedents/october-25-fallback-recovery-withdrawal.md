@@ -39,6 +39,13 @@ challenge values or long prior allegations. Orsentra v11
 outside this fallback-only manifest; this entry neither confirms nor withdraws
 that independent allegation.
 
+The operator also authorized a separately reconciled
+[historical loss-only scope](october-25-historical-loss-withdrawal.md): 17 older
+ATH rows and one screening-only Paragon v18 row, in its own manifest. The
+51-row manifest above remains unchanged. This extension is a current dated
+withdrawal, not a claim that historical policy text was rewritten or that
+either court's pending restorations are complete.
+
 The operator's withdrawal is effective precedent guidance; live restoration
 requires fresh court guards, an audited reopen/clear action and readback of
 each exact row. This repository change does not perform those writes or claim

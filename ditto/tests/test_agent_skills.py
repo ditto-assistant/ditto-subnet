@@ -71,6 +71,34 @@ def test_vtrust_routes_to_stateful_pylon_and_chain_evidence() -> None:
     assert "services/pylon/README.md" in read
 
 
+def test_historical_loss_withdrawals_preserve_court_and_identity_scope() -> None:
+    precedents = ROOT / ".agents/skills/backroom-review/references/precedents"
+    current = json.loads(
+        (precedents / "october-25-fallback-recovery-withdrawal.json").read_text()
+    )
+    historical = json.loads(
+        (precedents / "october-25-historical-loss-withdrawal.json").read_text()
+    )
+    assert historical["date"] == "2026-10-25"
+    assert len(historical["ath_items"]) == 17
+    assert len(historical["screening_items"]) == 1
+    rows = historical["ath_items"] + historical["screening_items"]
+    assert len({r["agent_id"] for r in rows}) == 18
+    assert not {r["agent_id"] for r in rows} & {r["agent_id"] for r in current["items"]}
+    for row in rows:
+        assert set(row) == {"agent_id", "artifact_sha256"}
+        assert str(uuid.UUID(row["agent_id"])) == row["agent_id"]
+        assert len(row["artifact_sha256"]) == 64
+        assert bytes.fromhex(row["artifact_sha256"])
+    assert historical["screening_items"][0]["agent_id"] == (
+        "1252e986-6ce5-4771-b7e5-39443d27d5d2"
+    )
+    guidance = (precedents / "october-25-historical-loss-withdrawal.md").read_text()
+    assert "Requeue is not CLEAR" in guidance
+    assert "does not claim all" in guidance
+    assert "not claim that the old policy text always said the same thing" in guidance
+
+
 def lookup(query: str, maximum: int = 3) -> list[dict[str, object]]:
     completed = subprocess.run(
         [

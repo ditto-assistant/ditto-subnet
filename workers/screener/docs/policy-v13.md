@@ -211,6 +211,10 @@ with fresh guards and readback; this document neither applies it nor erases
 the historical rejects. A different, independently supported ground remains
 subject to its own exact-artifact review.
 
+The operator's separately recorded historical loss-only withdrawals apply this
+current reconsideration standard without rewriting earlier policy text or
+claiming a screening requeue is an ATH clear.
+
 #### Clarification: over-budget retrieval and record selection (2026-10-23)
 
 Choosing which retrieved records reach the deciding input is retrieval
