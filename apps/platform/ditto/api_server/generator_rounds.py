@@ -888,15 +888,16 @@ def round_seconds_left(row: GeneratorRound, head: EpochSchedule) -> float | None
     ``next_epoch_block``, which honors an owner-scheduled ``PendingEpochAt``
     and the stateful scheduler; each further epoch the round still spans adds
     ``tempo`` blocks. The caller reads ``head`` at lease time,
-    so nothing is extrapolated from a stale snapshot. None when ``head`` is not
-    inside this round.
+    so nothing is extrapolated from a stale snapshot. Zero once the head has
+    reached the closing epoch; None when the head predates the round.
     """
     closing_epoch = (row.round_index + 1) * row.epochs_per_round
     epochs_after_next = closing_epoch - head.subnet_epoch_index - 1
-    if epochs_after_next < 0 or head.subnet_epoch_index < (
-        row.round_index * row.epochs_per_round
-    ):
+    if head.subnet_epoch_index < row.round_index * row.epochs_per_round:
         return None
+    if epochs_after_next < 0:
+        # The chain is already past the round's closing boundary.
+        return 0.0
     close_block = head.next_epoch_block + epochs_after_next * head.tempo
     return (close_block - head.block) * CHAIN_BLOCK_SECONDS
 

@@ -99,6 +99,7 @@ def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> MagicMock
         generator_scorer_token=_SCORER_TOKEN,
     )
     app.state.session_maker = maker
+    _LOOP_EPOCH["epoch"] = 0
 
     async def _session() -> AsyncIterator[AsyncSession]:
         async with maker() as session:
@@ -117,12 +118,11 @@ def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> MagicMock
         ]
     )
     chain.set_commitment = AsyncMock()
-    # The lease endpoint reads the head at lease time; block 0 leaves every
-    # test round its whole window. Tests that drive the loop override this.
+    # The lease endpoint reads the head at lease time. By default it is the
+    # position the test last advanced the round loop to, five blocks into
+    # that epoch, as on chain. Tests that need another head override this.
     chain.read_epoch_schedule = AsyncMock(
-        return_value=SimpleNamespace(
-            subnet_epoch_index=0, last_epoch_block=0, tempo=360, block=0
-        )
+        side_effect=lambda _netuid: _head_at(_LOOP_EPOCH["epoch"])
     )
 
     async def _chain() -> MagicMock:
@@ -236,6 +236,25 @@ async def _qualify_all(maker: async_sessionmaker[AsyncSession]) -> None:
             row.qualified_at = row.qualified_at or datetime.now(UTC)
 
 
+_LOOP_EPOCH = {"epoch": 0}
+
+
+def _head_at(epoch: int) -> EpochSchedule:
+    last = 1000 + epoch * 360
+    return EpochSchedule(
+        netuid=118,
+        subnet_epoch_index=epoch,
+        last_epoch_block=last,
+        pending_epoch_at=0,
+        tempo=360,
+        blocks_since_last_step=5,
+        block=last + 5,
+        block_hash=_BLOCK,
+        block_timestamp=None,
+        next_epoch_block=last + 360,
+    )
+
+
 def _position(epoch: int, *, block_hash: str = _BLOCK) -> ChainPosition:
     return ChainPosition(
         subnet_epoch_index=epoch,
@@ -249,6 +268,7 @@ def _position(epoch: int, *, block_hash: str = _BLOCK) -> ChainPosition:
 async def _advance(
     maker: async_sessionmaker[AsyncSession], epoch: int, **kwargs: Any
 ) -> list[str]:
+    _LOOP_EPOCH["epoch"] = epoch
     async with maker() as session, session.begin():
         resolved = await load_settings(session)
         out = await advance_rounds(
@@ -1371,6 +1391,6 @@ def test_round_seconds_left_tracks_the_closing_boundary() -> None:
     row = GeneratorRound(round_index=7, epochs_per_round=4, open_block=9_000)
     mid = round_seconds_left(row, _head(epoch=29, last_epoch_block=9_360, block=9_400))
     assert mid == ((9_360 + 360 + 2 * 360) - 9_400) * 12
-    # A head outside the round is not estimated.
-    assert round_seconds_left(row, _head(epoch=32, last_epoch_block=0, block=1)) is None
+    # Past the closing epoch no time is left; before the round, no estimate.
+    assert round_seconds_left(row, _head(epoch=32, last_epoch_block=0, block=1)) == 0
     assert round_seconds_left(row, _head(epoch=27, last_epoch_block=0, block=1)) is None
