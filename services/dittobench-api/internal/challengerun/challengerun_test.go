@@ -265,3 +265,42 @@ func TestExecuteAdvertisesToolsAndPerCaseToolEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// A harness that executes a tool through the endpoint but omits it from its
+// response is graded on what the validator observed.
+func TestGradingUsesObservedCalls(t *testing.T) {
+	bait := []protocol.ObservedToolCall{{Name: "send_email"}}
+	hidden := withObservedCalls(protocol.RunResponse{Answer: "x"}, bait)
+	if len(hidden.ToolCalls) != 1 || hidden.ToolCalls[0].Name != "send_email" {
+		t.Fatalf("observed call not restored: %+v", hidden.ToolCalls)
+	}
+	claimed := protocol.RunResponse{ToolCalls: []protocol.ObservedToolCall{{Name: "search_web"}}}
+	if got := withObservedCalls(claimed, nil); len(got.ToolCalls) != 1 || got.ToolCalls[0].Name != "search_web" {
+		t.Fatalf("self-reported call dropped with nothing observed: %+v", got.ToolCalls)
+	}
+
+	p := challenge.ReferencePack(4, testHotkey)
+	h := &fakeHarness{answer: answersByQuestion(p, gold)}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	var mu sync.Mutex
+	asked := map[string]int{}
+	if _, err := Execute(context.Background(), srv.URL, p, Options{
+		ObservedCalls: func(opaqueCaseID string) []protocol.ObservedToolCall {
+			mu.Lock()
+			defer mu.Unlock()
+			asked[opaqueCaseID]++
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != len(p.Cases) {
+		t.Fatalf("observed calls read for %d cases, want %d", len(asked), len(p.Cases))
+	}
+	for _, r := range h.runs {
+		if asked[r.CaseID] != 1 {
+			t.Fatalf("case %s observed %d times; must be read once under its wire ID", r.CaseID, asked[r.CaseID])
+		}
+	}
+}

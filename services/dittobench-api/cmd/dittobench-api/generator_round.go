@@ -188,8 +188,9 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 			InferenceBaseURL: func(opaqueCaseID string) string {
 				return v13CaseInferenceBaseURL(req.BenchVersion, gateway, opaqueCaseID)
 			},
-			Tools:        tools,
-			ToolEndpoint: prepareCase,
+			Tools:         tools,
+			ToolEndpoint:  prepareCase,
+			ObservedCalls: toolSrv.Observed,
 		})
 		if execErr != nil {
 			if errors.Is(execErr, challengerun.ErrHarnessUnavailable) {
