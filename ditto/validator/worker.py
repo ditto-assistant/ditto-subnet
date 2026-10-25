@@ -1305,8 +1305,13 @@ class ValidatorWorker:
                                     # ordinary work before anything else.
                                     continue
                                 async with budget_lock:
+                                    # A sibling may have started the next round
+                                    # dispatch since this one finished.
                                     sibling_work_possible = bool(
-                                        running or pending_claims or retest_dispatching
+                                        running
+                                        or pending_claims
+                                        or retest_dispatching
+                                        or round_dispatching
                                     )
                             if not sibling_work_possible:
                                 # Nothing of this worker's is in flight and the
