@@ -1154,6 +1154,12 @@ class ValidatorWorker:
             retest_dispatching = False
             retest_work_claimed = False
             retests_dispatched = False
+            # Generator rounds have their own dispatcher, independent of the
+            # retest lane: a stream of continual retests must not keep an idle
+            # slot from ever asking for round work. At most one round dispatch
+            # is in flight per host; Platform decides whether a slot may take
+            # it (it reserves round capacity per validator).
+            round_dispatching = False
             # Set whenever a claim resolves or a slot finishes a lease, so a
             # waiting slot re-polls the instant the pool changes instead of
             # sitting out the interval. Cleared and read under ``budget_lock``
@@ -1163,7 +1169,7 @@ class ValidatorWorker:
 
             async def run_slot(slot_id: str) -> tuple[list[ScoredAgentStat], int, int]:
                 nonlocal claimed, pending_claims, retest_dispatching
-                nonlocal retest_work_claimed
+                nonlocal retest_work_claimed, round_dispatching
                 nonlocal retests_dispatched, running
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
@@ -1209,10 +1215,20 @@ class ValidatorWorker:
                                     # before the retest claim resolves.
                                     retest_dispatching = True
                                     retests_dispatched = True
+                                # Any other idle slot may dispatch round work
+                                # while the retest lane is busy elsewhere.
+                                dispatch_round = bool(
+                                    not dispatch_retests
+                                    and not round_dispatching
+                                    and self._scorer_runs_generator_rounds
+                                )
+                                if dispatch_round:
+                                    round_dispatching = True
                                 sibling_work_possible = bool(
                                     siblings_running
                                     or pending_claims
                                     or retest_dispatching
+                                    or round_dispatching
                                 )
                                 if sibling_work_possible:
                                     lease_state_changed.clear()
@@ -1242,15 +1258,25 @@ class ValidatorWorker:
                                         retest_dispatching = False
                                         lease_state_changed.set()
                                 if not retest_claimed:
-                                    # Generator rounds are the lowest-priority
-                                    # lane: only idle capacity left after both
-                                    # canonical work and continual retests.
-                                    retest_claimed = (
-                                        await self._run_generator_round_lane(
-                                            stop_requested=stop_requested,
-                                            drain_requested=drain_requested,
-                                        )
-                                    )
+                                    # No retest: this slot may still ask for
+                                    # round work, so a single-slot host is not
+                                    # left without a round dispatcher.
+                                    async with budget_lock:
+                                        take_round = not round_dispatching
+                                        if take_round:
+                                            round_dispatching = True
+                                    if take_round:
+                                        try:
+                                            retest_claimed = (
+                                                await self._run_generator_round_lane(
+                                                    stop_requested=stop_requested,
+                                                    drain_requested=drain_requested,
+                                                )
+                                            )
+                                        finally:
+                                            async with budget_lock:
+                                                round_dispatching = False
+                                                lease_state_changed.set()
                                 if retest_claimed:
                                     # The dispatcher itself becomes free only
                                     # after its retest work settles. Ask for
@@ -1259,7 +1285,28 @@ class ValidatorWorker:
                                     continue
                                 async with budget_lock:
                                     sibling_work_possible = bool(
-                                        running or pending_claims
+                                        running or pending_claims or round_dispatching
+                                    )
+                            elif dispatch_round:
+                                round_claimed = False
+                                try:
+                                    round_claimed = (
+                                        await self._run_generator_round_lane(
+                                            stop_requested=stop_requested,
+                                            drain_requested=drain_requested,
+                                        )
+                                    )
+                                finally:
+                                    async with budget_lock:
+                                        round_dispatching = False
+                                        lease_state_changed.set()
+                                if round_claimed:
+                                    # The round run has settled; ask for
+                                    # ordinary work before anything else.
+                                    continue
+                                async with budget_lock:
+                                    sibling_work_possible = bool(
+                                        running or pending_claims or retest_dispatching
                                     )
                             if not sibling_work_possible:
                                 # Nothing of this worker's is in flight and the
@@ -1288,6 +1335,7 @@ class ValidatorWorker:
                                     retests_dispatched
                                     and not retest_dispatching
                                     and not retest_work_claimed
+                                    and not round_dispatching
                                     and not running
                                     and not pending_claims
                                 )
