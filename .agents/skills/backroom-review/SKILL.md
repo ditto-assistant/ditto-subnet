@@ -201,10 +201,12 @@ python3 .agents/skills/backroom-review/scripts/search-precedents.py --list
 python3 .agents/skills/backroom-review/scripts/search-precedents.py --resolution reject --tag family-compiler
 ```
 
-Cite the matching file or live `agent_id` in the miner-visible reason. If
-live and local disagree under the same policy, the live holding wins for that
-exact pattern; say so. Historical precedent cannot override the applicable
-published policy or transfer a finding to another artifact.
+Cite the matching file or live `agent_id` in the miner-visible reason. Reconcile
+live and local holdings against the latest applicable published clarification
+or withdrawal: an old live reject cannot override that later reasoning rule.
+The current native court row remains authoritative for live eligibility until
+guarded restoration and readback confirm a change. Historical precedent cannot
+override applicable published policy or transfer a finding to another artifact.
 
 Before proposing a reject or overturning a CLEAR, check recent withdrawals
 and the scoped miner DM/channel assurances in the existing precedent store.
