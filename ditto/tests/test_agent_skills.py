@@ -97,6 +97,8 @@ def test_historical_loss_withdrawals_preserve_court_and_identity_scope() -> None
     assert "Requeue is not CLEAR" in guidance
     assert "does not claim all" in guidance
     assert "not claim that the old policy text always said the same thing" in guidance
+    assert "requires checking each exact artifact for other" in guidance
+    assert "not a completed source CLEAR" in guidance
 
 
 def lookup(query: str, maximum: int = 3) -> list[dict[str, object]]:

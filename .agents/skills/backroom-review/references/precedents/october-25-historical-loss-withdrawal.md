@@ -2,7 +2,7 @@
 id: october-25-historical-loss-withdrawal
 resolution: guidance
 tags: [reversal, historical, i2, evidence-loss, fallback, retrieval, summary, compaction, checkpoint, retry, prior-clear, screening, paragon]
-holding: The operator's October 25 current standard also withdraws older loss-only grounds for 17 exact ATH rows and one screening-only Paragon v18 row. Keep this scope separate from the 51 current fallback-only rulings. Historical policy text and audit reasons are not rewritten; guarded native court actions and readback determine restoration, with no invented ATH action or automatic CLEAR for the screening-only row.
+holding: The operator's October 25 current standard withdraws the identified older loss-only grounds for 17 exact ATH rows and one screening-only Paragon v18 row. This is sole-ground withdrawal, not proof of no other violations: restoration first requires exact-source review of the other applicable invariants and native guards. Keep it separate from the 51 current fallback-only rulings; historical policy text/audit reasons remain and a screening requeue is not CLEAR.
 ---
 
 This is the additional historical scope of the operator's
@@ -27,6 +27,16 @@ fresh fallback loss alone as quality/reliability. Any different prohibited
 mechanism still needs its own complete current proof and material consequence.
 Do not transfer a finding or clearance between artifacts by lineage.
 
+The operator explicitly requires checking each exact artifact for other
+violations before restoration. This manifest records withdrawal of the sole
+identified loss-only ground, not a completed source CLEAR or proof that no
+other breach exists. Review the other applicable I/S conditions on its actual
+served path, defaults, callers, recovery, executors and final writers; unread
+paths remain limitations. Prior coverage may be reused only for verified
+matching bytes and current bindings. Restoration follows that check plus fresh
+native court/admission guards and readback. No universal private audit follows
+from this source-review requirement.
+
 ## Historical law and live eligibility are separate
 
 This is a dated operator withdrawal and current reconsideration instruction;
@@ -47,3 +57,7 @@ It belongs to the screening court: the authorized correction may use
 `rescreen_rejected_submission` with fresh native guards to return it to the
 queue. Requeue is not CLEAR, admission to scoring, or an ATH restoration. Check
 the native screening readback before claiming even that queue transition.
+Native admission readiness currently requires a v13 rescreen and its image
+and dataset gates. Those are live admission requirements, not a rewriting of
+the original policy12 decision; a withdrawn loss-only reason does not establish
+that these separate gates passed or that the queue transition occurred.
