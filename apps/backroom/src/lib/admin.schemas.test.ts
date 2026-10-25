@@ -80,6 +80,7 @@ import {
   setQueuePolicySettingsInputSchema,
   validatorSlotConfirmation,
   validatorIssuanceConfirmation,
+  validatorCapacityEntrySchema,
   validatorSlotSettingsControlSchema,
   validatorSlotSettingsSchema,
   setValidatorIssuancePauseInputSchema,
@@ -3417,6 +3418,21 @@ describe('validator slot settings schemas', () => {
     })
     expect(parsed.effective.source).toBe('revision')
     expect(parsed.current[0].actor).toBe('peyton@omniaura.ai')
+  })
+
+  it('reads capacity from a platform that predates reserved round slots as zero', () => {
+    const parsed = validatorCapacityEntrySchema.parse({
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-10-25T00:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 4,
+      serviceable_slots: 4,
+      claimed_slots: 1,
+      assignments: [],
+    })
+    expect(parsed.reserved_round_slots).toBe(0)
   })
 
   describe('per-validator overrides and the round reservation', () => {

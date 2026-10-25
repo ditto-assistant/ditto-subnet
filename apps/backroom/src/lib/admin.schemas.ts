@@ -9411,7 +9411,7 @@ const validatorCapacityAssignmentSchema = z.object({
   estimated_remaining_slot_minutes: z.number().nonnegative().nullable(),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityAssignment>)
 
-const validatorCapacityEntrySchema = z.object({
+export const validatorCapacityEntrySchema = z.object({
   validator_hotkey: z.string(),
   seen_at: z.string(),
   bench_serviceability: z.enum(['serving', 'scorer_unverified', 'software_obsolete']),
@@ -9419,7 +9419,9 @@ const validatorCapacityEntrySchema = z.object({
   issuance_paused: z.boolean(),
   configured_slots: z.number().int().positive(),
   serviceable_slots: z.number().int().nonnegative(),
-  reserved_round_slots: z.number().int().nonnegative(),
+  // Defaulted so a Backroom deployed ahead of Platform still reads capacity: an
+  // older Platform reserves nothing, so a missing count is exactly zero.
+  reserved_round_slots: z.number().int().nonnegative().default(0),
   claimed_slots: z.number().int().nonnegative(),
   assignments: z.array(validatorCapacityAssignmentSchema),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityEntry>)
