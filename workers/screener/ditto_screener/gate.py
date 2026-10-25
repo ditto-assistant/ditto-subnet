@@ -2207,13 +2207,14 @@ class BuildGate:
                         review_summary = battery.get("review") or {}
                         logger.info(
                             "probe battery agent_id=%s status=%s leads=%d "
-                            "review=%s verified=%s cost_usd=%s",
+                            "review=%s verified=%s cost_usd=%s error=%s",
                             agent_id,
                             battery.get("status"),
                             len(battery.get("leads") or []),
                             review_summary.get("status", "off"),
                             review_summary.get("verified"),
                             review_summary.get("cost_usd"),
+                            review_summary.get("error", "-"),
                         )
                     except Exception:  # noqa: BLE001 - never change a settled decision
                         logger.exception("probe battery shadow unavailable")

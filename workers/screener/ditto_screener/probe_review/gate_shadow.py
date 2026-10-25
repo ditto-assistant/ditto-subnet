@@ -114,6 +114,16 @@ def summarize_review(result: dict[str, Any] | None, *, status: str) -> dict[str,
     }
 
 
+def _error_label(stage: str, error: BaseException) -> str:
+    """A bounded, content-free label such as ``review:HTTPStatusError:402``."""
+    label = f"{stage}:{type(error).__name__}"
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        label += f":{status}"
+    return re.sub(r"[^A-Za-z0-9_:]", "", label)[:80]
+
+
 def _review_status(result: dict[str, Any]) -> str:
     if result.get("untracked_spend"):
         return "untracked_spend"
@@ -191,9 +201,12 @@ def run_gate_battery(
         if left < _MIN_REVIEW_S:
             emit({"review": summarize_review(None, status="skipped")})
             return
+        stage = "prepare"
         try:
             _prepare(session, Path(archive), report, artifact_sha256)
+            stage = "restart"
             session.restart_harness()
+            stage = "review"
             ledger = agent_loop.Ledger(max_cost_usd=review.max_cost_usd)
             with agent_loop.http_completer(
                 review.base_url, review.model, review.key_file, provider="ditto"
@@ -201,8 +214,12 @@ def run_gate_battery(
                 result = agent_loop.review(
                     session, complete=complete, ledger=ledger, deadline_seconds=left
                 )
-        except Exception:  # noqa: BLE001 - report-only; never echo error text
-            emit({"review": summarize_review(None, status="error")})
+        except Exception as error:  # noqa: BLE001 - report-only; never echo error text
+            failed = summarize_review(None, status="error")
+            # Stage and exception class only, plus an HTTP status when there is
+            # one: the message can carry probe content or provider detail.
+            failed["error"] = _error_label(stage, error)
+            emit({"review": failed})
             return
         emit({"review": summarize_review(result, status=_review_status(result))})
     finally:

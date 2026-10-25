@@ -350,6 +350,8 @@ def test_gate_child_review_failure_reports_error_without_text(
         deadline_seconds=900,
     )
     assert lines[1]["review"]["status"] == "error"
+    # Stage and exception class only; the message never leaves the child.
+    assert lines[1]["review"]["error"] == "review:RuntimeError"
     assert "secret" not in json.dumps(lines)
 
 
@@ -544,3 +546,15 @@ def test_extract_source_writes_only_contained_regular_files(tmp_path: Any) -> No
     assert not (tmp_path / "outside").exists()
     # Conflicting file/directory names keep the first and do not abort.
     assert (dest / "clash").is_file() and (dest / "dir" / "file.py").is_file()
+
+
+def test_error_label_is_bounded_and_carries_http_status() -> None:
+    import httpx
+
+    from ditto_screener.probe_review.gate_shadow import _error_label
+
+    request = httpx.Request("POST", "https://router.example/v1/chat/completions")
+    response = httpx.Response(402, request=request, text="secret detail")
+    error = httpx.HTTPStatusError("secret detail", request=request, response=response)
+    assert _error_label("review", error) == "review:HTTPStatusError:402"
+    assert _error_label("prepare", KeyError("x")) == "prepare:KeyError"
