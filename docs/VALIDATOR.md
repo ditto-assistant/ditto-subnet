@@ -807,3 +807,33 @@ Platform only filters a held incumbent out of `entries` after every
 recently-live weight-setting validator reports protocol 28; until then
 `enforce` behaves exactly like `shadow`, because a protocol-27 validator would
 ignore the field and crown and pay the runner-up.
+
+## Treasury allocation and the miner reward denominator
+
+KOTH and track shares divide the competitive miner pool. They do not promise
+that pool receives the full subnet miner emission vector when a signed service
+policy is enforcing.
+
+The enforcing v2 fold reserves `S = service_bps / 10_000` for the verified
+Gamma service collector first. With `B = burn_share` and `P` the paid fraction
+of the competitive miner pool, eligible miners collectively receive
+`(1 - S) * (1 - B) * P`; the rest of the miner remainder burns. An empty
+eligible pool burns that remainder without increasing the service allocation.
+For `S = 0.75`, `B = 0`, and `P = 1`, the split is 75% collector and 25%
+eligible miners. With 25% burn instead, it is 75% collector, 18.75% miners,
+and 6.25% burn. These are conditional examples, not observations of live state.
+
+The service fraction is configurable in the signed epoch policy, not a
+hardcoded 75% default. See [service treasury v2](sn118-service-treasury-v2.md)
+and the [allocation-range change](https://github.com/ditto-assistant/ditto-subnet/pull/2845).
+Gamma names the service allocation/collector here; it does not establish a
+separate token denomination.
+
+To investigate unexpected rewards, use authorized Backroom reads to identify
+the epoch's signed policy and digest, activation epoch, burn setting, consumer
+adoption, submitted vector, and finalized emission receipts. A shadow proposal
+or a public forecast alone does not prove applied on-chain routing. Changing
+an approved allocation requires a replacement signed policy and matching
+validator/Pylon guards for a future epoch; editing a compiled default cannot
+replace an already pinned policy. Collector journals and transfer controls are
+separate from emission allocation.
