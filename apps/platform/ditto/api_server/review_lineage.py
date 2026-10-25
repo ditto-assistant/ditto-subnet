@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -108,6 +109,121 @@ def is_build_surface(path: str) -> bool:
     )
 
 
+def is_dockerfile(path: str) -> bool:
+    name = PurePosixPath(path).name.lower()
+    return name.startswith(("dockerfile", "containerfile")) or name.endswith(
+        ".dockerfile"
+    )
+
+
+# Dockerfile instructions that only set metadata or the served process's
+# environment. A miner that flips feature switches through ``ENV`` on every
+# upload still gets a diff-scoped review: the switch and the code that reads
+# it are both in the diff, and the reviewer reads the changed Dockerfile in
+# full. ``ARG`` stays build surface because ``FROM ${base}`` reads it.
+_DOCKERFILE_RUNTIME_INSTRUCTIONS = frozenset({"env", "label"})
+# ``ENV`` names that steer the build steps themselves (package indexes,
+# compilers, proxies, lookup paths); changing one can change what ``RUN``
+# installs even when no ``RUN`` line moved.
+_BUILD_ENV_PREFIXES = (
+    "pip_",
+    "uv_",
+    "python",
+    "npm_",
+    "node_",
+    "yarn_",
+    "pnpm_",
+    "cargo_",
+    "rust",
+    "go",
+    "cc",
+    "cxx",
+    "cflags",
+    "cppflags",
+    "ldflags",
+    "ld_",
+    "path",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "debian_",
+    "apt_",
+    "pkg_",
+    "make",
+)
+
+
+def _dockerfile_instructions(text: str) -> list[str]:
+    """Logical instructions: comments and blank lines dropped, continuation
+    lines folded, surrounding whitespace collapsed."""
+    out: list[str] = []
+    pending = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        continued = line.endswith("\\")
+        if continued:
+            line = line[:-1].rstrip()
+        pending = f"{pending} {line}".strip() if pending else line
+        if not continued:
+            out.append(" ".join(pending.split()))
+            pending = ""
+    if pending:
+        out.append(" ".join(pending.split()))
+    return out
+
+
+def _env_names(instruction: str) -> list[str]:
+    """Variable names an ``ENV`` instruction sets, in both ``K=V`` and the
+    legacy ``K V`` form."""
+    body = instruction.split(None, 1)[1] if " " in instruction else ""
+    tokens = body.split()
+    if not tokens:
+        return []
+    if "=" not in tokens[0]:
+        return [tokens[0]]
+    return [token.split("=", 1)[0] for token in tokens if "=" in token]
+
+
+def _steers_build(instruction: str) -> bool:
+    return any(
+        name.lower().startswith(_BUILD_ENV_PREFIXES) for name in _env_names(instruction)
+    )
+
+
+def dockerfile_build_surface_changed(
+    reference: str | None, candidate: str | None
+) -> bool:
+    """Whether a Dockerfile change moves the build surface.
+
+    ``False`` only when every changed logical instruction is ``ENV`` or
+    ``LABEL`` and none of the changed ``ENV`` names steers a build tool. A
+    Dockerfile that was added, removed, or cannot be read as text is a build
+    surface change.
+    """
+    if reference is None or candidate is None:
+        return True
+    before = _dockerfile_instructions(reference)
+    after = _dockerfile_instructions(candidate)
+
+    def built(instructions: list[str]) -> list[str]:
+        return [
+            line
+            for line in instructions
+            if line.split(None, 1)[0].lower() not in _DOCKERFILE_RUNTIME_INSTRUCTIONS
+        ]
+
+    if built(before) != built(after):
+        return True
+    changed = set(before).symmetric_difference(after)
+    return any(
+        line.split(None, 1)[0].lower() == "env" and _steers_build(line)
+        for line in changed
+    )
+
+
 def _clip(value: object, limit: int = MAX_LINEAGE_TEXT) -> str:
     text = "" if value is None else str(value)
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -139,6 +255,24 @@ class _DiffResult:
     unchanged_file_count: int
     changed_line_count: int
     reasons: set[ReviewLineageFullReviewReason]
+
+
+def _build_surface_moved(
+    path: str,
+    from_path: str | None,
+    candidate_texts: Mapping[str, str],
+    reference_texts: Mapping[str, str],
+) -> bool:
+    """A changed build-surface file forces a full review, except a Dockerfile
+    kept in place whose only changed instructions are runtime ``ENV``/``LABEL``
+    lines (see ``dockerfile_build_surface_changed``)."""
+    if not any(is_build_surface(p) for p in (path, from_path) if p):
+        return False
+    if from_path or not is_dockerfile(path):
+        return True
+    return dockerfile_build_surface_changed(
+        reference_texts.get(path), candidate_texts.get(path)
+    )
 
 
 def _diff(candidate: TarSourceInspector, reference: TarSourceInspector) -> _DiffResult:
@@ -186,7 +320,9 @@ def _diff(candidate: TarSourceInspector, reference: TarSourceInspector) -> _Diff
     )[:MAX_LINEAGE_CHANGES]:
         path = str(entry.get("to_path") or entry["path"])
         from_path = entry.get("from_path")
-        if any(is_build_surface(p) for p in (path, from_path) if p):
+        if _build_surface_moved(
+            path, from_path, cand_snapshot.texts, ref_snapshot.texts
+        ):
             reasons.add(ReviewLineageFullReviewReason.BUILD_SURFACE_CHANGED)
         limit = min(MAX_FILE_DIFF_LINES, budget)
         detail: dict[str, Any] = (
@@ -427,5 +563,7 @@ __all__ = [
     "MAX_SCOPED_CHANGED_LINES",
     "ReviewLineageUnavailableError",
     "build_review_lineage_packet",
+    "dockerfile_build_surface_changed",
     "is_build_surface",
+    "is_dockerfile",
 ]

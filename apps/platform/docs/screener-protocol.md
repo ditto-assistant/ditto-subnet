@@ -227,7 +227,12 @@ ordinary full review.
 `scope` is `full` when the Dockerfile, a build manifest or an entrypoint
 changed, the diff exceeds 2,500 changed lines or 64 files, an opaque or unread
 file changed (compared by member digest), no ruling or finding exists under the
-attempt's policy, or the lineage has no review history. The L1 opening message
+attempt's policy, or the lineage has no review history. A Dockerfile kept in
+place whose only changed instructions are `ENV` or `LABEL` lines does not count
+as a build-surface change (a miner flipping declared feature switches is still
+reviewed against its lineage), unless a changed `ENV` name steers a build tool
+(`PIP_*`, `UV_*`, `NPM_*`, `CARGO_*`, `PATH`, proxies and the like); `ARG`,
+`FROM`, `RUN`, `COPY`, `ADD`, `CMD` and `ENTRYPOINT` edits always do. The L1 opening message
 and the L2/L3 dossier (`review_lineage` section) carry the packet, and the L2
 result and analyst caches include its digest, so an ordinary review's caches are
 unchanged.

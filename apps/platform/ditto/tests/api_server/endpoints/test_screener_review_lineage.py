@@ -239,7 +239,9 @@ class TestReviewLineage:
             app,
             parent_files={"Dockerfile": _DOCKERFILE, "src/main.rs": _MAIN_V1},
             child_files={
-                "Dockerfile": _DOCKERFILE + "ENV EXTRA=1\n",
+                "Dockerfile": _DOCKERFILE.replace(
+                    "COPY . .", "RUN pip install x\nCOPY . ."
+                ),
                 "src/main.rs": _MAIN_V1,
             },
         )
@@ -252,6 +254,38 @@ class TestReviewLineage:
         assert response.status_code == 200, response.text
         assert response.json()["scope"] == "full"
         assert response.json()["full_review_reasons"] == ["build-surface-changed"]
+
+    async def test_an_env_only_dockerfile_edit_keeps_the_diff_scope(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # A miner that flips feature switches through ENV on every upload is
+        # still reviewed against its lineage: the switch and the code reading
+        # it are in the diff, and the changed Dockerfile is in the packet.
+        _install_db(app, session_maker)
+        _install_chain(app)
+        _, child_id = await _lineage(
+            session_maker,
+            app,
+            parent_files={"Dockerfile": _DOCKERFILE, "src/main.rs": _MAIN_V1},
+            child_files={
+                "Dockerfile": _DOCKERFILE
+                + "ENV HARNESS_EXTRA=1 \\\n    HARNESS_MORE=on\n",
+                "src/main.rs": _MAIN_V2,
+            },
+        )
+        item = (await client.post(_CLAIM_URL, headers=_AUTH_HEADER)).json()["items"][0]
+        response = await client.post(
+            f"/api/v1/screener/agent/{child_id}/review-lineage",
+            headers=_AUTH_HEADER,
+            params={"attempt_id": item["attempt_id"]},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["scope"] == "diff"
+        assert response.json()["full_review_reasons"] == []
+        assert "Dockerfile" in {change["path"] for change in response.json()["changes"]}
 
     async def test_a_changed_opaque_blob_selects_a_full_review(
         self,
