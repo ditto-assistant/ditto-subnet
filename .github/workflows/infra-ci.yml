@@ -133,6 +133,9 @@ jobs:
       - name: Prove the screener checkout migrates only between repositories, without deleting it
         run: python3 tests/test_screener_checkout_migration.py
 
+      - name: Prove the pre-monorepo native validator converge refuses before contacting a host
+        run: uvx --from ansible-core==2.21.2 python3 tests/test_validator_native_legacy_guard.py
+
       - name: Prove the screener role converges in check mode on fresh, legacy, and converged hosts
         run: uvx --from ansible-core==2.21.2 python3 tests/test_screener_worker_check_mode.py
 
