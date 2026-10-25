@@ -71,6 +71,8 @@ MAX_SCOPED_CHANGED_LINES = 2500
 # Per-file cap inside the packet's shared ``MAX_LINEAGE_DIFF_LINES`` budget.
 MAX_FILE_DIFF_LINES = 1500
 MAX_NOTES_PER_FINDING = 16
+# ATH actions that decide an agent (ath_review_state._RESOLUTION_ACTIONS).
+_ATH_RULING_ACTIONS = ("clear", "reject")
 
 # Files whose change rewrites what is built or served, so the decision path
 # itself may have moved. Lockfiles stay out: a dependency bump is in the diff
@@ -419,7 +421,12 @@ async def _rulings(
         await session.execute(
             select(AthReviewAction, AthReview)
             .join(AthReview, AthReview.review_id == AthReviewAction.review_id)
-            .where(AthReview.agent_id.in_(ids))
+            .where(
+                AthReview.agent_id.in_(ids),
+                # open / reopen / attest are lifecycle steps, not rulings; only
+                # a clear or reject decides something the next review carries.
+                AthReviewAction.action.in_(_ATH_RULING_ACTIONS),
+            )
             .order_by(AthReviewAction.created_at.desc())
             .limit(MAX_LINEAGE_RULINGS)
         )

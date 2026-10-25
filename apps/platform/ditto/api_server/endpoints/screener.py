@@ -4180,9 +4180,20 @@ async def agent_review_lineage(
             # lock; re-read the history under the lock and refuse to bind a
             # packet that no longer matches it (the worker retries or falls
             # back to a full review).
-            locked_agent = await get_agent_by_id(session, agent_id=agent_id)
+            locked_agent = await get_agent_by_id(
+                session, agent_id=agent_id, for_update=True
+            )
             if locked_agent is None:
                 raise AgentNotFoundError(f"no agent with id={agent_id}")
+            # The packet was diffed against the candidate read before the
+            # artifact work; bind only if that is still the candidate.
+            if (
+                locked_agent.sha256 != agent_sha256
+                or packet.artifact_sha256 != agent_sha256
+            ):
+                raise AgentNotScreenableError(
+                    "lineage candidate changed while the packet was built"
+                )
             try:
                 fresh = await load_review_lineage(
                     session, agent=locked_agent, attempt=attempt

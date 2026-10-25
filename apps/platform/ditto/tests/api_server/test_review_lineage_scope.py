@@ -128,6 +128,10 @@ def _context(rulings: list[dict[str, object]]) -> ReviewLineageContext:
 
 
 def test_history_digest_moves_with_the_rulings() -> None:
-    ruling = {"court": "quarantine", "resolution": "release", "decided_at": "t1"}
+    ruling: dict[str, object] = {
+        "court": "quarantine",
+        "resolution": "release",
+        "decided_at": "t1",
+    }
     assert _context([ruling]).history_digest() == _context([ruling]).history_digest()
     assert _context([ruling]).history_digest() != _context([]).history_digest()

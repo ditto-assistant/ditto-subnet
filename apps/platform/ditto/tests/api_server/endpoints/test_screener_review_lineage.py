@@ -17,7 +17,13 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.dependencies import get_storage_client
-from ditto.db.models import AgentStatus, ScreeningAttempt, ScreeningReviewEvent
+from ditto.db.models import (
+    AgentStatus,
+    AthReview,
+    AthReviewAction,
+    ScreeningAttempt,
+    ScreeningReviewEvent,
+)
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto.tests.api_server.endpoints.test_screener import (
     _AUTH_HEADER,
@@ -402,6 +408,80 @@ class TestReviewLineage:
         )
         assert response.status_code == 409, response.text
         assert "never bound" in response.text
+
+    async def test_only_clear_and_reject_ath_actions_are_rulings(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # A reopen is a lifecycle step (the hold itself is the review row);
+        # alone it is no review history. The clear that follows is the ruling
+        # the packet carries.
+        _install_db(app, session_maker)
+        _install_chain(app)
+        parent_id, child_id = await _lineage(
+            session_maker,
+            app,
+            parent_files={"src/main.rs": _MAIN_V1},
+            child_files={"src/main.rs": _MAIN_V2},
+            parent_review=False,
+        )
+        policy = effective_screening_policy_version()
+        when = datetime.now(UTC) - timedelta(hours=3)
+        review_id = uuid4()
+
+        async def _action(name: str, offset: int) -> None:
+            async with session_maker() as session, session.begin():
+                session.add(
+                    AthReviewAction(
+                        action_id=uuid4(),
+                        review_id=review_id,
+                        action=name,
+                        reason=f"{name} by the board sweep",
+                        actor="operator:test",
+                        evidence={},
+                        created_at=when + timedelta(minutes=offset),
+                    )
+                )
+
+        async with session_maker() as session, session.begin():
+            session.add(
+                AthReview(
+                    review_id=review_id,
+                    agent_id=parent_id,
+                    status="pending",
+                    opened_at=when,
+                    original_policy_version=policy,
+                    original_evidence={},
+                    algorithm_provenance={},
+                )
+            )
+        await _action("reopen", 1)
+        item = (await client.post(_CLAIM_URL, headers=_AUTH_HEADER)).json()["items"][0]
+        url = f"/api/v1/screener/agent/{child_id}/review-lineage"
+        response = await client.post(
+            url, headers=_AUTH_HEADER, params={"attempt_id": item["attempt_id"]}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["rulings"] == []
+        assert response.json()["full_review_reasons"] == ["no-review-history"]
+
+        # the same lineage, now with a clear: a new attempt sees one ruling
+        await _action("clear", 2)
+        async with session_maker() as session, session.begin():
+            attempt = await session.get(ScreeningAttempt, UUID(item["attempt_id"]))
+            assert attempt is not None
+            attempt.lineage_scope = None
+            attempt.lineage_packet_sha256 = None
+        response = await client.post(
+            url, headers=_AUTH_HEADER, params={"attempt_id": item["attempt_id"]}
+        )
+        assert response.status_code == 200, response.text
+        rulings = response.json()["rulings"]
+        assert [r["resolution"] for r in rulings] == ["clear"]
+        assert rulings[0]["court"] == "ath"
+        assert response.json()["scope"] == "diff"
 
     async def test_a_first_version_has_no_lineage(
         self,
