@@ -45,6 +45,15 @@ type Options struct {
 	// InferenceBaseURL, when set, returns the case-scoped inference URL the
 	// harness should use for one opaque case ID.
 	InferenceBaseURL func(opaqueCaseID string) string
+	// Tools is the tool catalog advertised on every /run, exactly as a scored
+	// memory case advertises the run's catalog. A pack case is a memory
+	// question, but a harness built for the scored path expects the catalog.
+	Tools []protocol.ToolDefinition
+	// ToolEndpoint, when set, returns the observed tool-execution URL for one
+	// case. It is called once per case, before its /run, with the pack case ID
+	// and the opaque case and user IDs the harness will see, so the caller can
+	// register that case's fixture first. An empty result omits tool_endpoint.
+	ToolEndpoint func(packCaseID, opaqueCaseID, opaqueUserID string) string
 }
 
 // CaseOutcome is one graded case: the panel result the scorer submits plus the
@@ -110,12 +119,16 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 
 func runCase(ctx context.Context, harnessURL string, c challenge.Case, proj *projection, opts Options) CaseOutcome {
 	opaqueID := proj.id("case", c.ID)
-	caseOpts := runner.CaseOptions{UserID: proj.id("user", c.UserID), BenchVersion: challenge.GradingBenchVersion}
+	opaqueUser := proj.id("user", c.UserID)
+	caseOpts := runner.CaseOptions{UserID: opaqueUser, BenchVersion: challenge.GradingBenchVersion}
 	if opts.InferenceBaseURL != nil {
 		caseOpts.InferenceBaseURL = opts.InferenceBaseURL(opaqueID)
 	}
+	if opts.ToolEndpoint != nil {
+		caseOpts.ToolEndpoint = opts.ToolEndpoint(c.ID, opaqueID, opaqueUser)
+	}
 	out := CaseOutcome{PanelCaseResult: challenge.PanelCaseResult{CaseID: c.ID}}
-	resp, _, err := runner.RunCaseWithTelemetry(ctx, harnessURL, opaqueID, c.Question, nil, caseOpts)
+	resp, _, err := runner.RunCaseWithTelemetry(ctx, harnessURL, opaqueID, c.Question, opts.Tools, caseOpts)
 	if err != nil {
 		out.Fault = true
 		out.Notes = []string{"no response from harness (error or timeout); excluded as a fault"}

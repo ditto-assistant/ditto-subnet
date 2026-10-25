@@ -11,8 +11,10 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 	"github.com/ditto-assistant/dittobench-api/internal/store"
+	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
 
 // generatorRoundMode runs a generator-competition round dataset against one
@@ -153,6 +155,30 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 		return
 	}
 
+	// A pack case is a memory question, but it reaches the harness exactly as
+	// a scored memory case does: with the run's seeded tool catalog and an
+	// observed tool_endpoint. A harness built for the scored path rejects a
+	// /run without them. Each case's fixture is registered just before its
+	// /run, under the opaque ID the harness sees.
+	tools := catalog.CatalogForSeed(req.BenchVersion, seed)
+	toolSrv := toolexec.NewServer()
+	toolEndpoint, stopToolSrv, err := s.startToolServerForSession(
+		toolSrv, handle.SourceIP, req.BenchVersion, sessionID, concurrency,
+	)
+	if err != nil {
+		s.store.FailWith(runID, "tool endpoint start failed: "+err.Error(), toolEndpointInfrastructureFailure())
+		return
+	}
+	defer stopToolSrv()
+	if !toolEndpoint.available() {
+		s.store.FailWith(runID, "generator round cannot observe tool execution: tool_endpoint unreachable from the harness", toolEndpointInfrastructureFailure())
+		return
+	}
+	prepareCase := func(packCaseID, opaqueCaseID, opaqueUserID string) string {
+		toolSrv.Register(opaqueCaseID, toolexec.BuildFixtureForVersion(seed, protocol.ToolCase{ID: packCaseID}, req.BenchVersion))
+		return toolEndpoint.forCase(opaqueCaseID, opaqueUserID)
+	}
+
 	s.store.SetStage(runID, store.StatusRunning, 0, total)
 	started := time.Now()
 	perCase := make([]protocol.CaseScore, 0, total)
@@ -162,6 +188,8 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 			InferenceBaseURL: func(opaqueCaseID string) string {
 				return v13CaseInferenceBaseURL(req.BenchVersion, gateway, opaqueCaseID)
 			},
+			Tools:        tools,
+			ToolEndpoint: prepareCase,
 		})
 		if execErr != nil {
 			if errors.Is(execErr, challengerun.ErrHarnessUnavailable) {

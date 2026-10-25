@@ -215,3 +215,53 @@ func TestExecuteRejectsInvalidPack(t *testing.T) {
 		t.Fatal("invalid pack executed")
 	}
 }
+
+// Round cases reach the harness with the same /run surface as a scored memory
+// case: the advertised tool catalog and a per-case tool_endpoint. A harness
+// built for the scored path rejects a request missing them, which faulted
+// every case of every panel run.
+func TestExecuteAdvertisesToolsAndPerCaseToolEndpoint(t *testing.T) {
+	p := challenge.ReferencePack(4, testHotkey)
+	h := &fakeHarness{answer: answersByQuestion(p, gold)}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	tools := []protocol.ToolDefinition{{Name: "send_email"}, {Name: "memory_search"}}
+	var mu sync.Mutex
+	prepared := map[string]string{} // opaque case ID -> pack case ID
+	out, err := Execute(context.Background(), srv.URL, p, Options{
+		Tools: tools,
+		ToolEndpoint: func(packCaseID, opaqueCaseID, opaqueUserID string) string {
+			mu.Lock()
+			defer mu.Unlock()
+			prepared[opaqueCaseID] = packCaseID
+			return "http://tools.invalid/" + opaqueCaseID + "/" + opaqueUserID
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range out {
+		if o.Fault {
+			t.Fatalf("case %s faulted", o.CaseID)
+		}
+	}
+	if len(h.runs) != len(p.Cases) || len(prepared) != len(p.Cases) {
+		t.Fatalf("runs=%d prepared=%d cases=%d", len(h.runs), len(prepared), len(p.Cases))
+	}
+	packIDs := map[string]bool{}
+	for _, c := range p.Cases {
+		packIDs[c.ID] = true
+	}
+	for _, r := range h.runs {
+		if len(r.Tools) != len(tools) {
+			t.Fatalf("case %s advertised %d tools, want %d", r.CaseID, len(r.Tools), len(tools))
+		}
+		want := "http://tools.invalid/" + r.CaseID + "/" + r.UserID
+		if r.ToolEndpoint != want {
+			t.Fatalf("case %s tool_endpoint %q, want %q", r.CaseID, r.ToolEndpoint, want)
+		}
+		if !packIDs[prepared[r.CaseID]] {
+			t.Fatalf("opaque case %s was not prepared with its pack case ID", r.CaseID)
+		}
+	}
+}
