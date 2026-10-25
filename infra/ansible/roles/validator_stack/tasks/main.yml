@@ -512,6 +512,10 @@
       {%- endif -%}
   no_log: true
 
+- name: Refuse to silently disarm or repin an armed Gamma guard
+  ansible.builtin.include_tasks: treasury_guard_pins.yml
+  when: not (validator_stack_treasury_allow_guard_change | bool)
+
 - name: Render the production validator environment
   ansible.builtin.template:
     src: validator.env.j2

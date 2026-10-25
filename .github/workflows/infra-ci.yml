@@ -116,6 +116,9 @@ jobs:
       - name: Verify scoped GitHub linking activation and rollback
         run: uvx --from ansible-core==2.21.2 ansible-playbook -i localhost, tests/github-link.yml
 
+      - name: Verify converges cannot disarm or repin the validator Gamma guard
+        run: uvx --from ansible-core==2.21.2 ansible-playbook -i localhost, tests/validator-treasury-guard.yml
+
       - name: Verify Platform environment include boundaries
         run: uvx --from ansible-core==2.21.2 python3 tests/test_platform_env_includes.py
 

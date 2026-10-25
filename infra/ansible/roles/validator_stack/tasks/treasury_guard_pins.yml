@@ -1,0 +1,47 @@
+# Refuse a converge that would disable an armed Gamma guard or change its
+# policy pins. Only the three public guard keys are read from the existing,
+# secret-bearing environment file.
+- name: Inspect the rendered validator environment
+  ansible.builtin.stat:
+    path: "{{ validator_stack_env_file }}"
+    follow: false
+  register: validator_stack_existing_env
+
+- name: Read the existing validator environment
+  ansible.builtin.slurp:
+    src: "{{ validator_stack_env_file }}"
+  register: validator_stack_existing_env_raw
+  when: validator_stack_existing_env.stat.isreg | default(false)
+  no_log: true
+
+- name: Extract only the existing public Gamma guard pins
+  ansible.builtin.set_fact:
+    validator_stack_existing_guard: >-
+      {%- set text = (validator_stack_existing_env_raw.content | default('') | b64decode) -%}
+      {%- set ns = namespace(values={}) -%}
+      {%- for line in text.splitlines() -%}
+      {%- for key in ['DITTO_TREASURY_WEIGHT_ENFORCEMENT', 'DITTO_TREASURY_APPROVED_POLICY_DIGEST', 'DITTO_TREASURY_COLLECTOR_POLICY_DIGEST'] -%}
+      {%- if line.startswith(key ~ '=') -%}
+      {%- set ns.values = ns.values | combine({key: line[(key | length) + 1:] | trim}) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {{ ns.values }}
+  no_log: true
+
+- name: Keep an armed guard and its exact pins
+  ansible.builtin.assert:
+    that:
+      - >-
+        (validator_stack_existing_guard.DITTO_TREASURY_WEIGHT_ENFORCEMENT | default('false')) != 'true'
+        or (
+          (validator_stack_treasury_guard_enabled | bool)
+          and validator_stack_existing_guard.DITTO_TREASURY_APPROVED_POLICY_DIGEST | default('') == validator_stack_treasury_policy_digest
+          and validator_stack_existing_guard.DITTO_TREASURY_COLLECTOR_POLICY_DIGEST | default('') == validator_stack_treasury_collector_policy_digest
+        )
+    fail_msg: >-
+      This host's validator environment arms the Gamma treasury guard, and
+      this converge would disable it or change its policy pins. Platform
+      stops producing enforcing epochs without the managed guard. Supply the
+      guard profile, or set validator_stack_treasury_allow_guard_change=true
+      for a deliberate rotation.

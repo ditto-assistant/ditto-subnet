@@ -12,3 +12,12 @@ validator_stack_benchmark_capacity: 8
 validator_stack_subtensor_rpc_url: wss://api-bittensor-mainnet.n.dwellir.com
 validator_stack_subtensor_rpc_auth_mode: path
 validator_stack_longmem_capacity: 4
+# Managed Gamma guard (runtime revision 20: emission approval rev 11, collector
+# policy rev 9). The role defaults disable it, so these must stay in durable
+# intent or any unrelated converge strips Pylon and the validator of the guard
+# and Platform stops producing enforcing epochs. Stage the matching public
+# approval at the fixed path before converging; changing pins requires
+# validator_stack_treasury_allow_guard_change=true for that one converge.
+validator_stack_treasury_guard_enabled: true
+validator_stack_treasury_policy_digest: fb32519ac263e3388c888d7d654d084d4a8313decf2f194bbe9d5713a11a64f1
+validator_stack_treasury_collector_policy_digest: 3e8d100a252dbf5918feefa3253ebd86af0b0bf974d78c6c981aa3a01cc1ccfd

@@ -2402,3 +2402,53 @@ def test_recover_restores_the_complete_previous_stack_after_crash_phase(
     assert all(container["running"] for container in final["containers"].values())
     assert final["runtime_state"]["state"] == "working"
     assert len([call for call in final["compose_calls"] if "up" in call]) == 2
+
+
+def test_reconfigure_recreates_the_current_release_from_host_environment(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+
+    result = _run_updater(env, "reconfigure")
+
+    assert result.returncode == 0, result.stderr
+    # Same signed release: nothing is staged, swapped or recorded as an update.
+    assert (state_dir / "managed-release.env").read_text() == (
+        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
+    )
+    assert _manifest(state_dir / "current/manifest.env")["STACK_VERSION"] == "0.10.0"
+    assert not (state_dir / "staged").exists()
+    assert not (state_dir / "last-update.env").exists()
+    state = json.loads(state_path.read_text())
+    signals = [call[1] for call in state["calls"] if call[:1] == ["kill"]]
+    assert signals[-2:] == ["--signal=USR1", "--signal=USR2"]
+    up_calls = [call for call in state["compose_calls"] if "up" in call]
+    assert len(up_calls) == 2 and all("--force-recreate" in c for c in up_calls)
+    assert all(Path(call[0]).name == "current" for call in up_calls)
+    assert up_calls[1][-1] == "ditto-subnet"
+    assert state["runtime_state"]["state"] == "working"
+
+
+def test_reconfigure_refuses_an_unadopted_stack_without_draining(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, _, _ = stack_updater_env
+
+    result = _run_updater(env, "reconfigure")
+
+    assert result.returncode != 0
+    assert "not adopted" in result.stderr
+    state = json.loads(state_path.read_text())
+    assert not [call for call in state["calls"] if call[:1] == ["kill"]]
+    assert not [call for call in state["compose_calls"] if "up" in call]
+
+
+def test_reconfigure_rejects_extra_arguments(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, _, _, _ = stack_updater_env
+    result = _run_updater(env, "reconfigure", OLD_STACK_DIGEST)
+    assert result.returncode != 0
+    assert "usage" in result.stderr

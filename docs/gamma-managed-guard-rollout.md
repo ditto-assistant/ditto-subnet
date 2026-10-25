@@ -28,7 +28,16 @@ update so that the updater drains work and recreates both trusted processes from
 the authenticated descriptor. Do not modify the signed Compose bundle or bypass
 its mutation fence with an overlay. Changing `.env` alone does not update running
 containers. If the same descriptor is already current, the normal updater is a
-no-op; a separately reviewed supervised reconfiguration is then required.
+no-op. Then stop the stack timers and run
+`scripts/validator-stack-auto-update.sh reconfigure`: it re-verifies the signed
+current release, drains, recreates every service from it with the new
+environment, and resumes. Re-enable the timers afterwards.
+
+Production keeps this profile in `infra/ansible/host_vars/ditto-validator-prod.yml`.
+The role refuses any converge that would disable an armed guard or change its
+pins unless `validator_stack_treasury_allow_guard_change=true` is set for that
+converge. The role defaults disarm the guard, which is how an unrelated
+paid-RPC converge on 2026-10-24 stalled every validator's weights.
 
 Arming Pylon refuses legacy weight dispatch, including previously queued jobs.
 Inspect/drain the selected managed members' queued epoch work before activation.

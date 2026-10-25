@@ -80,3 +80,6 @@ validator_stack_treasury_guard_enabled: false
 validator_stack_treasury_approval_path: /var/lib/ditto-validator/treasury/emission-approval.json
 validator_stack_treasury_policy_digest: ""
 validator_stack_treasury_collector_policy_digest: ""
+# Refuse a render that would disable an armed guard or change its pins unless
+# the operator states the change explicitly for that converge.
+validator_stack_treasury_allow_guard_change: false

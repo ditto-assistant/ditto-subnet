@@ -1,0 +1,99 @@
+# Exercise the validator role's refusal to disarm or repin an armed Gamma guard.
+# Run: ansible-playbook -i localhost, tests/validator-treasury-guard.yml
+- name: Validator Gamma guard pins survive unrelated converges
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    armed_digest: "{{ 'a' * 64 }}"
+    armed_collector: "{{ 'b' * 64 }}"
+    other_digest: "{{ 'c' * 64 }}"
+  tasks:
+    - name: Create a private scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: scratch
+
+    - name: Write an armed environment that also holds a secret
+      ansible.builtin.copy:
+        dest: "{{ scratch.path }}/armed.env"
+        mode: "0600"
+        content: |
+          WANDB_API_KEY=not-a-real-secret
+          DITTO_TREASURY_WEIGHT_ENFORCEMENT=true
+          DITTO_TREASURY_APPROVED_POLICY_DIGEST={{ armed_digest }}
+          DITTO_TREASURY_COLLECTOR_POLICY_DIGEST={{ armed_collector }}
+
+    - name: Write an unarmed environment
+      ansible.builtin.copy:
+        dest: "{{ scratch.path }}/unarmed.env"
+        mode: "0600"
+        content: |
+          DITTO_TREASURY_WEIGHT_ENFORCEMENT=false
+          DITTO_TREASURY_APPROVED_POLICY_DIGEST=
+          DITTO_TREASURY_COLLECTOR_POLICY_DIGEST=
+
+    - name: Same profile on an armed host passes
+      ansible.builtin.include_tasks: ../roles/validator_stack/tasks/treasury_guard_pins.yml
+      vars:
+        validator_stack_env_file: "{{ scratch.path }}/armed.env"
+        validator_stack_treasury_guard_enabled: true
+        validator_stack_treasury_policy_digest: "{{ armed_digest }}"
+        validator_stack_treasury_collector_policy_digest: "{{ armed_collector }}"
+
+    - name: Unarmed host may stay unarmed
+      ansible.builtin.include_tasks: ../roles/validator_stack/tasks/treasury_guard_pins.yml
+      vars:
+        validator_stack_env_file: "{{ scratch.path }}/unarmed.env"
+        validator_stack_treasury_guard_enabled: false
+        validator_stack_treasury_policy_digest: ""
+        validator_stack_treasury_collector_policy_digest: ""
+
+    - name: First render on a fresh host passes
+      ansible.builtin.include_tasks: ../roles/validator_stack/tasks/treasury_guard_pins.yml
+      vars:
+        validator_stack_env_file: "{{ scratch.path }}/absent.env"
+        validator_stack_treasury_guard_enabled: false
+        validator_stack_treasury_policy_digest: ""
+        validator_stack_treasury_collector_policy_digest: ""
+
+    - name: Role defaults on an armed host are refused
+      block:
+        - name: Converge with the generic defaults
+          ansible.builtin.include_tasks: ../roles/validator_stack/tasks/treasury_guard_pins.yml
+          vars:
+            validator_stack_env_file: "{{ scratch.path }}/armed.env"
+            validator_stack_treasury_guard_enabled: false
+            validator_stack_treasury_policy_digest: ""
+            validator_stack_treasury_collector_policy_digest: ""
+        - name: Disarming must not have been accepted
+          ansible.builtin.fail:
+            msg: an armed guard was silently disabled
+      rescue:
+        - name: Require the guard refusal, not the sentinel
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('arms the Gamma treasury guard')
+
+    - name: A silent repin on an armed host is refused
+      block:
+        - name: Converge with a different approved policy
+          ansible.builtin.include_tasks: ../roles/validator_stack/tasks/treasury_guard_pins.yml
+          vars:
+            validator_stack_env_file: "{{ scratch.path }}/armed.env"
+            validator_stack_treasury_guard_enabled: true
+            validator_stack_treasury_policy_digest: "{{ other_digest }}"
+            validator_stack_treasury_collector_policy_digest: "{{ armed_collector }}"
+        - name: Repinning must not have been accepted
+          ansible.builtin.fail:
+            msg: an armed guard was silently repinned
+      rescue:
+        - name: Require the guard refusal, not the sentinel
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('arms the Gamma treasury guard')
+
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ scratch.path }}"
+        state: absent
