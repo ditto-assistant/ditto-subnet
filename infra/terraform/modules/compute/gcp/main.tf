@@ -26,6 +26,7 @@ resource "google_compute_instance" "this" {
 
   # A machine_type change requires a stop/start rather than failing the apply.
   allow_stopping_for_update = true
+  desired_status            = var.desired_status
 
   boot_disk {
     initialize_params {

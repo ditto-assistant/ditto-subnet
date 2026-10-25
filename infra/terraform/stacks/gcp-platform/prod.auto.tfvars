@@ -8,6 +8,9 @@ enable_datapipeline   = true
 enable_embedder       = true
 enable_validator      = true
 enable_validator_prod = true
+# Permanent dev is stopped to save cost; per-PR previews (preview-stack.yml)
+# replace it. Flip to true to bring ditto-platform-dev/validator-dev back.
+dev_environment_running = false
 # Snapshot metadata only; encrypted-backup custody is in ditto-subnet.
 enable_platform_postgres_snapshot_reader = true
 # Treasury hosts remain physically absent until separately reviewed applies.
