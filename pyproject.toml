@@ -62,6 +62,11 @@ line-length = 88
 target-version = "py312"
 extend-exclude = [
     "apps/platform",
+    # Byte-exact records of the upstream and forked LongMemEval evaluators.
+    # Reformatting or autofixing them would break the recorded SHA-256 digests
+    # and the prompt-identity check in test_judge_evaluator.py that depends on
+    # them, so they are kept exactly as the judge image runs them.
+    "docs/longmemeval-benchmark/judge-evaluator",
     "miners/dittobench-starter-kit",
     "packages/ditto-screening-protocol",
     "services/dittobench-api",
