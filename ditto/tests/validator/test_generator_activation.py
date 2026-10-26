@@ -303,3 +303,13 @@ def test_registry_claimed_shares_use_the_generator_fallback() -> None:
         )
         == _ACTIVATION_SHARES
     )
+
+
+def test_a_zero_share_fallback_never_receives_a_moved_share() -> None:
+    vectors = {TRACK_MEMORY: {"m": 1.0}, TRACK_GENERATOR: {}}
+    shares = {TRACK_MEMORY: 0, TRACK_GENERATOR: 10000}
+    reassigned = reassign_unclaimed_shares(
+        shares, vectors, fallbacks={TRACK_GENERATOR: TRACK_MEMORY}
+    )
+    assert reassigned == {TRACK_GENERATOR: 10000}
+    assert track_allocated_share(reassigned, vectors) == 0.0

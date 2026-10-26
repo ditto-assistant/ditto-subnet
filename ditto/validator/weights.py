@@ -413,8 +413,8 @@ def reassign_unclaimed_shares(
     unclaimed and :func:`track_allocated_share` burns it. A track may instead
     name a fallback (``fallbacks[track_id]``, e.g. ``generator -> memory``):
     when the track produced no positive weight and the fallback is itself a
-    paying track, the track's bps are added to the fallback's and the track
-    drops out of the map. The generator track declares memory so a governed
+    paying track with a positive share, the track's bps are added to the
+    fallback's and the track drops out of the map. The generator track declares memory so a governed
     generator share with no weight-eligible generator (Platform still in
     shadow, an empty round window) pays agent miners rather than burning,
     which also keeps that state byte-identical to the memory-only fold: with
@@ -433,7 +433,9 @@ def reassign_unclaimed_shares(
         if (
             target is None
             or target == track_id
-            or target not in shares_bps
+            # A fallback governance holds at 0 bps is not paying: the share
+            # stays unclaimed and burns rather than funding a zeroed track.
+            or target not in original
             or _has_positive_weight(vectors.get(track_id, {}))
         ):
             continue
