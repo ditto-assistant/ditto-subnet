@@ -30,6 +30,14 @@ _NAME = "ck_generator_runs_generator_runs_cases_check"
 
 
 def _swap(bound: int) -> None:
+    # 2026_10_23_add_generator_competition declared the check as
+    # ``generator_runs_cases_check``; the metadata naming convention renders it
+    # as ``_NAME`` (see services/model-relay/db/schema.sql). Drop the bare name
+    # too, so a database built without the convention cannot keep the old
+    # 8..64 bound alongside the new one.
+    op.execute(
+        f"ALTER TABLE {_TABLE} DROP CONSTRAINT IF EXISTS generator_runs_cases_check"
+    )
     op.execute(f"ALTER TABLE {_TABLE} DROP CONSTRAINT IF EXISTS {_NAME}")
     op.create_check_constraint(
         op.f(_NAME), _TABLE, f"cases_per_seed BETWEEN 8 AND {bound}"
