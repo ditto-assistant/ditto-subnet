@@ -20,7 +20,11 @@ from ditto.miner_cli.errors import (
     MinerCliError,
 )
 from ditto.miner_cli.models import PaymentReceipt
-from ditto.miner_cli.preferences import load_pending_payments_for_hotkey
+from ditto.miner_cli.preferences import (
+    GENERATOR_PAYMENTS_BUCKET,
+    load_pending_payment,
+    load_pending_payments_for_hotkey,
+)
 
 _KEY = bittensor.Keypair.create_from_uri("//Bob")
 _KIT = (
@@ -388,6 +392,54 @@ def test_recovery_flags_reuse_a_proof_without_paying(
     args.payment_block_number = None
     with pytest.raises(MinerCliError, match="together"):
         gen_cmd.run(args)
+
+
+def _saved_generator_proof(archive: Path) -> PaymentReceipt | None:
+    return load_pending_payment(
+        network="local",
+        hotkey=_KEY.ss58_address,
+        name=gen_cmd.PENDING_PAYMENT_NAME,
+        sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        bucket=GENERATOR_PAYMENTS_BUCKET,
+    )
+
+
+@pytest.mark.parametrize("saved_first", [True, False])
+def test_a_recovery_upload_clears_whatever_is_saved_for_the_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    saved_first: bool,
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    calls = _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = dict(_FEE_TERMS)
+    if saved_first:
+        # A first attempt paid (proof _BLOCK, saved) and failed in transit.
+        _FakeClient.reject = ApiResponseError("generator upload failed: HTTP 503")
+        with pytest.raises(ApiResponseError):
+            gen_cmd.run(_upload_args(archive))
+        _FakeClient.reject = None
+        assert _saved_generator_proof(archive) is not None
+    capsys.readouterr()
+    paid = len(calls)
+
+    # The miner then recovers with a different proof passed explicitly.
+    other = "0x" + "aa" * 32
+    args = _upload_args(archive)
+    args.payment_block_hash = other
+    args.payment_block_number = 90
+    args.payment_extrinsic_index = 1
+    assert gen_cmd.run(args) == 0
+    assert len(calls) == paid
+    assert _saved_generator_proof(archive) is None
+    err = capsys.readouterr().err
+    if saved_first:
+        # The removed proof may be unspent, so its flags are printed.
+        assert f"--payment-block-hash {_BLOCK}" in err
+    else:
+        assert "removed a different saved payment proof" not in err
 
 
 def test_the_upload_parser_accepts_recovery_flags() -> None:

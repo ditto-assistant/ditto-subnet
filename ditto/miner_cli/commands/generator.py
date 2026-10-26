@@ -286,15 +286,21 @@ def _pay_fee(
     return receipt
 
 
+def _recovery_flags(receipt: PaymentReceipt) -> str:
+    return (
+        f"--payment-block-hash {receipt.block_hash} "
+        f"--payment-block-number {receipt.block_number} "
+        f"--payment-extrinsic-index {receipt.extrinsic_index}"
+    )
+
+
 def _recovery_hint(receipt: PaymentReceipt) -> str:
     return (
         "\nupload could not be confirmed after payment. The fee is not spent "
         "until an upload is accepted. Within 24 hours, rerunning upload with the "
         "same archive reuses the saved proof; for another archive, or if the "
         "saved proof is gone, rerun with:\n"
-        f"  --payment-block-hash {receipt.block_hash} "
-        f"--payment-block-number {receipt.block_number} "
-        f"--payment-extrinsic-index {receipt.extrinsic_index}\n"
+        f"  {_recovery_flags(receipt)}\n"
         "and no new transfer is sent."
     )
 
@@ -429,8 +435,19 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
         ),
         file=sys.stderr,
     )
-    if receipt is not None:
-        clear_pending_payment(**pending, payment=receipt)
+    # This archive is uploaded, so nothing saved for it is needed any more.
+    # A different saved proof (recovery flags used another one) may be unspent:
+    # say so instead of dropping it silently.
+    saved = load_pending_payment(**pending)
+    if saved is not None:
+        clear_pending_payment(**pending, payment=saved)
+        if saved != receipt:
+            print(
+                "note: removed a different saved payment proof for this archive. "
+                "It may be unspent; within 24 hours of payment you can use it for "
+                "another archive with:\n  " + _recovery_flags(saved),
+                file=sys.stderr,
+            )
     return 0
 
 
