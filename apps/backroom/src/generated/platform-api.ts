@@ -18802,6 +18802,11 @@ export interface components {
         /**
          * CompetitionFeePolicy
          * @description One competition's override. ``null`` inherits.
+         *
+         *     Unknown keys are ignored like every wire model (additive JSON across
+         *     rolling upgrades). A misspelled field therefore reads as "inherit", and
+         *     the confirmation phrase, which echoes only the recognized fields, is
+         *     what catches it before anything is stored.
          */
         CompetitionFeePolicy: {
             /** Fee Amount Rao */
