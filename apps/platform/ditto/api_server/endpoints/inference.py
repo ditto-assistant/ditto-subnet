@@ -2602,7 +2602,9 @@ def _locked_confirmation_chat_payload(
     upstream = dict(without_provider)
     # Same sanitization as the ordinary scoring lane. The reader uses that
     # lane's throughput aggregate; forwarding gpt-oss aliases still hard-400s.
-    # The official judge stays Azure-pinned.
+    # The official judge is pinned to a single ZDR provider (Together);
+    # AtlasCloud and Baidu 404 under the zdr filter, and allow_fallbacks
+    # is false, so a non-ZDR provider would be a dead lane.
     for field in _DROPPED_REQUEST_FIELDS:
         upstream.pop(field, None)
     for field in (

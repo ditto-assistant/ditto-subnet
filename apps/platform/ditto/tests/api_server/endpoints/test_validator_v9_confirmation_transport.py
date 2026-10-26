@@ -664,12 +664,18 @@ def _confirmation_chat_request(
     signer: Ed25519PrivateKey,
     *,
     provider: dict[str, Any] | None = None,
+    max_tokens: int = 10,
 ) -> tuple[bytes, dict[str, str]]:
+    # max_tokens defaults to the upstream evaluator's bound because most
+    # callers here only exercise transport. The judge lane overrides it: its
+    # frozen runtime asks for 8192, sized from the reasoning judge's measured
+    # completion tail. The platform clamps downward against the ticket ceiling
+    # (config.max_output_tokens, 32768), so 8192 passes through intact.
     body = json.dumps(
         {
             "model": offer["model"],
             "messages": [{"role": "user", "content": "Answer yes or no."}],
-            "max_tokens": 10,
+            "max_tokens": max_tokens,
             "n": 1,
             "stream": False,
             "provider": provider
@@ -1709,7 +1715,7 @@ class TestV9ConfirmationChatProxy:
         assert not sleeping.is_set()
         assert calls == 1
 
-    async def test_installed_judge_profile_reaches_zdr_azure_route(
+    async def test_installed_judge_profile_reaches_zdr_together_route(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -1721,7 +1727,7 @@ class TestV9ConfirmationChatProxy:
         offer = next(item for item in offers if item["lane"] == "judge")
         app.state.session_maker = session_maker
         _enable_confirmation_proxy(app)
-        body, headers = _confirmation_chat_request(offer, signer)
+        body, headers = _confirmation_chat_request(offer, signer, max_tokens=8192)
         upstream_calls = 0
 
         async def provider(request: httpx.Request) -> httpx.Response:
@@ -1729,14 +1735,19 @@ class TestV9ConfirmationChatProxy:
             upstream_calls += 1
             payload = json.loads(request.content)
             assert payload["provider"] == {
-                "only": ["azure"],
-                "order": ["azure"],
+                "only": ["together"],
+                "order": ["together"],
                 "allow_fallbacks": False,
                 "require_parameters": True,
                 "data_collection": "deny",
                 "zdr": True,
             }
-            assert payload["max_completion_tokens"] == 10
+            # The frozen judge is a reasoning model, so the bound is sized from
+            # its measured completion tail rather than the upstream evaluator's
+            # 10. At 10 a reasoning judge spends the budget on reasoning tokens
+            # and returns an empty content, which the Go runtime rejects as
+            # malformed and which upstream LongMemEval would score "no".
+            assert payload["max_completion_tokens"] == 8192
             assert "max_tokens" not in payload
             return httpx.Response(
                 200,
@@ -1784,7 +1795,7 @@ class TestV9ConfirmationChatProxy:
             )
             assert request_row is not None
             assert request_row.status == "completed"
-            assert request_row.upstream_provider == "Azure"
+            assert request_row.upstream_provider == "Together"
 
     async def test_installed_reader_profile_reaches_throughput_zdr_route(
         self,
