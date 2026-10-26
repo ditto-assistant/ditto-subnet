@@ -130,7 +130,11 @@ import {
   compactValidatorAssignments,
   compactValidatorFleet,
 } from '../lib/mcp-payloads'
-import { compactListFields, type HoistOptions } from '../lib/mcp-response'
+import {
+  compactListField,
+  compactListFields,
+  type HoistOptions,
+} from '../lib/mcp-response'
 import {
   athReviewQueueInputSchema,
   auditReasonSchema,
@@ -176,6 +180,7 @@ import {
   batchRetryValidationInputSchema,
   agentScoringReadinessInputSchema,
   claimProvenanceCasesInputSchema,
+  agentScoresInputSchema,
   agentScoresLookupInputSchema,
   continualRetestDiagnosticInputSchema,
   scoreLeaderboardInputSchema,
@@ -610,6 +615,29 @@ function compacted(value: unknown, fields: Record<string, HoistOptions>) {
     return value
   }
   return compactListFields(value as Record<string, unknown>, fields)
+}
+
+const AGENT_SCORE_ROWS: HoistOptions = { pin: ['validator_hotkey'] }
+
+/**
+ * Compact get_agent_scores losslessly: the selected version's `scores` and
+ * each `other_bench_versions[i].scores` hoist their invariant fields into a
+ * sibling `scores_shared`. Reconstruct every row as `{ ...scores_shared, ...row }`
+ * within its own group; a field missing from a row is in that group's
+ * `scores_shared`, never null.
+ */
+export function compactAgentScores(detail: Record<string, unknown>) {
+  const top = compactListFields(detail, { scores: AGENT_SCORE_ROWS })
+  const groups = top.other_bench_versions
+  if (!Array.isArray(groups)) return top
+  return {
+    ...top,
+    other_bench_versions: groups.map((group) =>
+      typeof group === 'object' && group !== null && !Array.isArray(group)
+        ? compactListField(group as Record<string, unknown>, 'scores', AGENT_SCORE_ROWS)
+        : group,
+    ),
+  }
 }
 
 const MCP_PAGINATION_INPUT = {
@@ -2367,16 +2395,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get authoritative agent scores',
       description:
-        "Authoritative production scores for one SN118 agent, by agent UUID or miner hotkey (a hotkey resolves to that miner's current leaderboard submission). Returns the finalized median composite, every accepted per-validator score with its per-axis tool/memory means, seed, run id, bench version, and transcript hash, the pinned dataset (seed + sha256 + seed block), the active and desired bench versions, and the agent's leaderboard context: rank, quorum vs provisional state, emission eligibility, and the composite breakdown with the aggregate benchmark-quality gate and token-efficiency penalty multipliers. A submission below quorum answers with `finalized: false` instead of an error: score_count of quorum, the accepted scores that DO exist with their composites and exact seeds, and median_composite null because no canonical aggregate exists yet. Those pre-quorum rows carry `validator_hotkey: null` (also run_id, tool_mean, memory_mean, median_ms, n) because the platform withholds validator identity until quorum — null means not published yet, never that no validator scored it; use list_stuck_submissions or agent_scoring_readiness for per-validator ticket state. Dataset pin fields are null before quorum; each accepted row carries the exact seed it was graded against. Only a genuinely unknown agent UUID errors. Reads the same public score ledger that drives validator weights, never influences it, and exposes no miner source. Seeds are exact decimal strings, not numbers, because a 63-bit seed does not fit a JavaScript number and a rounded seed reproduces a different dataset. v13+ rows add `gate_evidence` (gate posture, gate summaries, flagged_case_count/share, gate_counts; aggregates only). This read does not compare same-owner generations or show continual retest-cohort membership; to explain why a scored agent is not the owner's representative or is absent from shared-seed retests, call get_continual_retest_diagnostic with its exact UUID. Requires backroom:read.",
-      inputSchema: agentScoresLookupInputSchema,
+        "Production scores for one SN118 agent at ONE benchmark version, by agent UUID or miner hotkey (a hotkey resolves to that miner's current leaderboard submission). Composites from different bench versions measure different benchmarks and are never pooled. `benchVersion` selects the version; omitted, it defaults to the board's active bench version. The response names it: `selected_bench_version` with `selected_bench_version_source` (`active` or `requested`). `score_count`, `median_composite`, `selected_quorum_reached` and `scores` cover the selected version only; `total_score_count` counts every version, and `other_bench_versions` keeps every other version's accepted rows whole in its own group (`bench_version`, `score_count`, `quorum_reached`, `median_composite`, `median_composite_authority`, `scores`). `median_composite_authority` says what a median is: `platform_ledger` when Platform itself published that median for exactly that version, `per_benchmark_statistic` when it is the median of that version's rows computed here (follows Platform's finalization rule but is not a ledger value), and null with a null median below quorum in that version. The authoritative ranked composite with gate and token-efficiency multipliers is `leaderboard.composite`, and only when `leaderboard.bench_version` equals the selected version. Each accepted row carries composite, per-axis tool/memory means, exact seed, run id, bench version, signature, transcript hash, and v13+ `gate_evidence` (gate posture, gate summaries, flagged_case_count/share, gate_counts; aggregates only). Rows are compacted losslessly per group: invariant fields move to a sibling `scores_shared` (top level for `scores`, inside each `other_bench_versions` entry for its own `scores`); reconstruct each row as `{ ...scores_shared, ...row }` and never read a field missing from a row as null. Also returns the pinned dataset (seed + sha256 + seed block), the active and desired bench versions, and the agent's leaderboard context: rank, quorum vs provisional state, emission eligibility, and the composite breakdown. A submission below quorum answers with `finalized: false` instead of an error, with the accepted scores that DO exist. Those pre-quorum rows carry `validator_hotkey: null` (also run_id, tool_mean, memory_mean, median_ms, n) because the platform withholds validator identity until quorum — null means not published yet, never that no validator scored it; use list_stuck_submissions or agent_scoring_readiness for per-validator ticket state. Dataset pin fields are null before quorum. Only a genuinely unknown agent UUID errors. Reads the same public score ledger that drives validator weights, never influences it, and exposes no miner source. Seeds are exact decimal strings, not numbers, because a 63-bit seed does not fit a JavaScript number and a rounded seed reproduces a different dataset. For version-over-version deltas use get_score_history. This read does not compare same-owner generations or show continual retest-cohort membership; to explain why a scored agent is not the owner's representative or is absent from shared-seed retests, call get_continual_retest_diagnostic with its exact UUID. Requires backroom:read.",
+      inputSchema: agentScoresInputSchema,
       annotations: toolAnnotations('read'),
     },
-    async (input) =>
-      result(
-        compacted(await fetchAgentScores(input), {
-          scores: { pin: ['validator_hotkey'] },
-        }),
-      ),
+    async (input) => result(compactAgentScores(await fetchAgentScores(input))),
   )
 
   registerTool(

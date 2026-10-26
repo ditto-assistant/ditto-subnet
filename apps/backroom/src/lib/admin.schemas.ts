@@ -8384,20 +8384,37 @@ export type BenchmarkRolloutControl = z.infer<typeof benchmarkRolloutControlSche
 // (case_results, per_category, token_usage) so MCP responses stay compact;
 // zod strips the unlisted keys.
 
+function requireExactlyOneAgentKey(
+  input: { agentId?: string; minerHotkey?: string },
+  context: z.RefinementCtx,
+) {
+  if (Boolean(input.agentId) === Boolean(input.minerHotkey)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['agentId'],
+      message: 'Provide exactly one of agentId or minerHotkey',
+    })
+  }
+}
+
+const agentScoresLookupFields = {
+  agentId: z.string().uuid().optional(),
+  minerHotkey: z.string().trim().min(1).max(64).optional(),
+}
+
 export const agentScoresLookupInputSchema = z
+  .object(agentScoresLookupFields)
+  .superRefine(requireExactlyOneAgentKey)
+
+// get_agent_scores reports one benchmark version at a time: composites from
+// different benchmark versions measure different benchmarks and are never
+// pooled. Omitting benchVersion selects the board's active bench version.
+export const agentScoresInputSchema = z
   .object({
-    agentId: z.string().uuid().optional(),
-    minerHotkey: z.string().trim().min(1).max(64).optional(),
+    ...agentScoresLookupFields,
+    benchVersion: z.number().int().positive().optional(),
   })
-  .superRefine((input, context) => {
-    if (Boolean(input.agentId) === Boolean(input.minerHotkey)) {
-      context.addIssue({
-        code: 'custom',
-        path: ['agentId'],
-        message: 'Provide exactly one of agentId or minerHotkey',
-      })
-    }
-  })
+  .superRefine(requireExactlyOneAgentKey)
 
 export const continualRetestDiagnosticInputSchema = z.object({
   agentId: z.string().uuid(),
@@ -8842,6 +8859,10 @@ export const publicValidatorScoreSchema = z.object({
   memory_over_call: z.number().min(0).max(1).nullable().optional(),
   conversational_sanity: z.number().min(0).max(1).nullable().optional(),
   transcript_sha256: z.string().nullable().optional(),
+  // The validator's sr25519 signature over the score payload, verbatim, so a
+  // row is self-verifying against the published validator key. Null for rows
+  // written before the ledger migration.
+  signature: z.string().nullable().optional(),
   // Null below bench v13 and for a scorer that emitted no gate telemetry.
   gate_evidence: publicGateEvidenceSchema.nullable().optional(),
 })
@@ -8851,7 +8872,13 @@ export const publicAgentScoresSchema = z.object({
   miner_hotkey: z.string(),
   status: z.string(),
   quorum: z.number().int().positive(),
+  // The benchmark version Platform scoped `score_count` and
+  // `median_composite` to. Absent on a Platform that predates SN-348, whose
+  // median and count pooled every version's rows; Backroom never trusts that
+  // pooled aggregate and recomputes per version instead.
+  bench_version: z.number().int().positive().nullable().optional(),
   score_count: z.number().int().nonnegative(),
+  total_score_count: z.number().int().nonnegative().optional(),
   median_composite: z.number().min(0).max(1).nullable(),
   dataset_seed: seedSchema.nullable(),
   dataset_sha256: z.string().nullable(),
@@ -8891,24 +8918,62 @@ export const agentScoreRowSchema = publicValidatorScoreSchema.extend({
   n: z.number().int().nonnegative().nullable(),
 })
 
-export const agentScoresDetailSchema = publicAgentScoresSchema.extend({
-  // False while the submission is below quorum (or held for copy review): the
-  // scores below are accepted and real, but `median_composite` is not yet the
-  // canonical number and the submission holds no finalized rank. Same word,
-  // same meaning as `finalized` on a leaderboard entry.
-  finalized: z.boolean(),
+// Where a per-benchmark median came from. `platform_ledger` is the median
+// Platform itself published for exactly that bench version. Anything else is
+// `per_benchmark_statistic`: the median of that version's accepted rows,
+// computed here. It follows the rule Platform finalizes with, but it is not a
+// value the ledger asserted, and an older Platform's pooled median is never
+// reused. Null when the version holds fewer accepted rows than quorum.
+export const agentScoreMedianAuthoritySchema = z.enum([
+  'platform_ledger',
+  'per_benchmark_statistic',
+])
+
+// Every accepted row for one bench version other than the selected one, kept
+// whole: exact seed strings, signatures, gate evidence, transcript hashes.
+export const agentScoreVersionGroupSchema = z.object({
+  // Null groups legacy scores recorded before benchmark versioning.
+  bench_version: z.number().int().positive().nullable(),
+  score_count: z.number().int().nonnegative(),
+  quorum_reached: z.boolean(),
+  median_composite: z.number().min(0).max(1).nullable(),
+  median_composite_authority: agentScoreMedianAuthoritySchema.nullable(),
   scores: z.array(agentScoreRowSchema),
-  // Null on the pre-quorum surface, which is keyed by agent id and publishes
-  // no miner hotkey; the leaderboard row below carries it when the submission
-  // holds one.
-  miner_hotkey: z.string().nullable(),
-  active_bench_version: z.number().int().positive(),
-  desired_bench_version: z.number().int().positive(),
-  // Null when this exact submission is not the miner's current leaderboard
-  // row (for example a superseded earlier upload): the k=3 record above is
-  // still authoritative for the submission itself.
-  leaderboard: publicLeaderboardEntrySchema.nullable(),
 })
+
+export const agentScoresDetailSchema = publicAgentScoresSchema
+  .omit({ bench_version: true, total_score_count: true })
+  .extend({
+    // False while the submission is below quorum (or held for copy review): the
+    // scores below are accepted and real, but `median_composite` is not yet the
+    // canonical number and the submission holds no finalized rank. Same word,
+    // same meaning as `finalized` on a leaderboard entry.
+    finalized: z.boolean(),
+    // The one bench version `score_count`, `median_composite` and `scores`
+    // describe, and why: `requested` (the benchVersion input) or `active` (the
+    // board's active bench version, the default).
+    selected_bench_version: z.number().int().positive(),
+    selected_bench_version_source: z.enum(['requested', 'active']),
+    // Accepted rows across every bench version; score_count is the selected
+    // version's alone.
+    total_score_count: z.number().int().nonnegative(),
+    selected_quorum_reached: z.boolean(),
+    median_composite_authority: agentScoreMedianAuthoritySchema.nullable(),
+    // Selected-version rows only. Every other version's rows are in
+    // other_bench_versions, never pooled into this median.
+    scores: z.array(agentScoreRowSchema),
+    other_bench_versions: z.array(agentScoreVersionGroupSchema),
+    // Null on the pre-quorum surface, which is keyed by agent id and publishes
+    // no miner hotkey; the leaderboard row below carries it when the submission
+    // holds one.
+    miner_hotkey: z.string().nullable(),
+    active_bench_version: z.number().int().positive(),
+    desired_bench_version: z.number().int().positive(),
+    // Null when this exact submission is not the miner's current leaderboard
+    // row (for example a superseded earlier upload): the k=3 record above is
+    // still authoritative for the submission itself.
+    leaderboard: publicLeaderboardEntrySchema.nullable(),
+  })
 
 /**
  * The pre-quorum view of one submission (`/api/v1/public/agent/{id}/pipeline`).

@@ -530,6 +530,7 @@ import {
   inferenceRoutingPolicyInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
+  agentScoresInputSchema,
   agentScoresLookupInputSchema,
   agentScoresDetailSchema,
   continualRetestDiagnosticInputSchema,
@@ -3711,41 +3712,54 @@ function provisionalAgentScores({
   pipeline,
   board,
   entry,
+  selection,
 }: {
   pipeline: PublicSubmissionPipeline
   board: PublicLeaderboard
   entry: PublicLeaderboardEntry | null
+  selection: BenchVersionSelection
 }) {
+  const rows = pipeline.provisional_scores.map((score) => ({
+    // Withheld before quorum by the platform, not missing here. See
+    // agentScoreRowSchema.
+    validator_hotkey: null,
+    run_id: null,
+    tool_mean: null,
+    memory_mean: null,
+    median_ms: null,
+    n: null,
+    composite: score.composite,
+    raw_composite: score.raw_composite ?? null,
+    composite_breakdown: score.composite_breakdown ?? null,
+    seed: score.seed,
+    bench_version: score.bench_version ?? null,
+    generated_at: score.accepted_at,
+    transcript_sha256: score.transcript_sha256 ?? null,
+  }))
   return agentScoresDetailSchema.parse({
     agent_id: pipeline.agent_id,
     miner_hotkey: entry?.miner_hotkey ?? null,
     status: pipeline.status,
     finalized: false,
     quorum: pipeline.quorum,
-    score_count: pipeline.score_count,
-    median_composite: pipeline.final_composite ?? null,
     dataset_seed: null,
     dataset_sha256: null,
     dataset_run_size: null,
     dataset_seed_block: null,
     dataset_seed_block_hash: null,
-    scores: pipeline.provisional_scores.map((score) => ({
-      // Withheld before quorum by the platform, not missing here. See
-      // agentScoreRowSchema.
-      validator_hotkey: null,
-      run_id: null,
-      tool_mean: null,
-      memory_mean: null,
-      median_ms: null,
-      n: null,
-      composite: score.composite,
-      raw_composite: score.raw_composite ?? null,
-      composite_breakdown: score.composite_breakdown ?? null,
-      seed: score.seed,
-      bench_version: score.bench_version ?? null,
-      generated_at: score.accepted_at,
-      transcript_sha256: score.transcript_sha256 ?? null,
-    })),
+    ...selection,
+    // The pipeline's own aggregate names its era (`score_bench_version`) and
+    // stays null until that era settles, so it is the ledger value for that
+    // one version and nothing else.
+    ...splitScoresByBenchVersion({
+      rows,
+      selected: selection.selected_bench_version,
+      quorum: pipeline.quorum,
+      ledger: {
+        bench_version: pipeline.score_bench_version,
+        median_composite: pipeline.final_composite ?? null,
+      },
+    }),
     generated_at: pipeline.generated_at,
     active_bench_version: board.active_bench_version,
     desired_bench_version: board.desired_bench_version,
@@ -3753,23 +3767,166 @@ function provisionalAgentScores({
   })
 }
 
+type BenchVersionSelection = {
+  selected_bench_version: number
+  selected_bench_version_source: 'requested' | 'active'
+}
+
+/** Accepted score rows that share one bench version, in ledger order. */
+type BenchVersionGroup<Row> = { benchVersion: number | null; rows: Array<Row> }
+
+/**
+ * Split accepted score rows by the bench version each was graded under.
+ *
+ * Legacy (null-version) rows first, then ascending versions, so a reader sees
+ * version-over-version movement. Every row lands in exactly one group, in the
+ * order the ledger published it: nothing is dropped or merged.
+ */
+function groupScoresByBenchVersion<Row extends { bench_version: number | null }>(
+  rows: ReadonlyArray<Row>,
+): Array<BenchVersionGroup<Row>> {
+  const groups = new Map<number | null, Array<Row>>()
+  for (const row of rows) {
+    const group = groups.get(row.bench_version) ?? []
+    group.push(row)
+    groups.set(row.bench_version, group)
+  }
+  return [...groups.keys()]
+    .sort((left, right) => {
+      if (left === null) return -1
+      if (right === null) return 1
+      return left - right
+    })
+    .map((benchVersion) => ({ benchVersion, rows: groups.get(benchVersion)! }))
+}
+
+/** The one per-version aggregate the ledger itself published, if any. */
+type LedgerVersionAggregate = {
+  bench_version: number | null
+  median_composite: number | null
+}
+
+/**
+ * The median of one bench version's accepted rows, and where it came from.
+ *
+ * Platform's own number is used only when Platform scoped it to exactly this
+ * version. Otherwise the median is computed here over this version's rows and
+ * labeled a statistic, and below quorum there is no aggregate at all: a median
+ * of one or two scores is not what any version finalizes on.
+ */
+function benchVersionMedian(
+  rows: ReadonlyArray<{ composite: number }>,
+  benchVersion: number | null,
+  quorum: number,
+  ledger: LedgerVersionAggregate | null,
+) {
+  if (
+    ledger !== null &&
+    ledger.bench_version !== null &&
+    ledger.bench_version === benchVersion &&
+    ledger.median_composite !== null
+  ) {
+    return {
+      median_composite: ledger.median_composite,
+      median_composite_authority: 'platform_ledger' as const,
+    }
+  }
+  if (rows.length < quorum) {
+    return { median_composite: null, median_composite_authority: null }
+  }
+  return {
+    median_composite: median(rows.map((row) => row.composite)),
+    median_composite_authority: 'per_benchmark_statistic' as const,
+  }
+}
+
+/**
+ * Report one selected bench version and keep every other version apart.
+ *
+ * Composites from different bench versions measure different benchmarks, so
+ * the selected version's count and median come from its rows alone and every
+ * other version's rows stay whole in their own group (SN-348: a v12-finalized
+ * agent re-scored at v13 used to read as one pooled six-score median).
+ */
+function splitScoresByBenchVersion<
+  Row extends { bench_version: number | null; composite: number },
+>({
+  rows,
+  selected,
+  quorum,
+  ledger,
+}: {
+  rows: ReadonlyArray<Row>
+  selected: number
+  quorum: number
+  ledger: LedgerVersionAggregate | null
+}) {
+  const groups = groupScoresByBenchVersion(rows)
+  const selectedRows = groups.find((group) => group.benchVersion === selected)?.rows ?? []
+  return {
+    score_count: selectedRows.length,
+    total_score_count: rows.length,
+    selected_quorum_reached: selectedRows.length >= quorum,
+    ...benchVersionMedian(selectedRows, selected, quorum, ledger),
+    scores: selectedRows,
+    other_bench_versions: groups
+      .filter((group) => group.benchVersion !== selected)
+      .map((group) => ({
+        bench_version: group.benchVersion,
+        score_count: group.rows.length,
+        quorum_reached: group.rows.length >= quorum,
+        ...benchVersionMedian(group.rows, group.benchVersion, quorum, ledger),
+        scores: group.rows,
+      })),
+  }
+}
+
 export async function fetchAgentScores(rawInput: unknown) {
-  const input = agentScoresLookupInputSchema.parse(rawInput)
+  const input = agentScoresInputSchema.parse(rawInput)
   // The authoritative board also resolves hotkeys and carries the agent's
   // current rank/eligibility context, so one snapshot serves both purposes.
   const board = await fetchLeaderboardSnapshot()
   const { agentId, entry } = resolveBoardAgent(board, input)
+  const selection: BenchVersionSelection =
+    input.benchVersion === undefined
+      ? {
+          selected_bench_version: board.active_bench_version,
+          selected_bench_version_source: 'active',
+        }
+      : {
+          selected_bench_version: input.benchVersion,
+          selected_bench_version_source: 'requested',
+        }
   const scores = await fetchSettledAgentScores(agentId)
   if (scores === null) {
     return provisionalAgentScores({
       pipeline: await fetchPublicSubmissionPipeline(agentId),
       board,
       entry,
+      selection,
     })
   }
+  const {
+    bench_version: ledgerBenchVersion,
+    median_composite: ledgerMedian,
+    scores: rows,
+    ...record
+  } = scores
   return agentScoresDetailSchema.parse({
-    ...scores,
+    ...record,
     finalized: true,
+    ...selection,
+    ...splitScoresByBenchVersion({
+      rows,
+      selected: selection.selected_bench_version,
+      quorum: record.quorum,
+      // A Platform that predates SN-348 names no version for its aggregate
+      // because it pooled them all; that number is never reused.
+      ledger:
+        ledgerBenchVersion === undefined
+          ? null
+          : { bench_version: ledgerBenchVersion, median_composite: ledgerMedian },
+    }),
     active_bench_version: board.active_bench_version,
     desired_bench_version: board.desired_bench_version,
     leaderboard: entry,
@@ -3860,24 +4017,10 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
   }
   const record = settled
 
-  type ScoreRow = (typeof record.scores)[number]
-  const groups = new Map<number | null, Array<ScoreRow>>()
-  for (const score of record.scores) {
-    const rows = groups.get(score.bench_version) ?? []
-    rows.push(score)
-    groups.set(score.bench_version, rows)
-  }
   // Legacy (null-version) scores first, then ascending bench versions, so
   // composite_delta_vs_previous reads as version-over-version movement.
-  const orderedVersions = [...groups.keys()].sort((left, right) => {
-    if (left === null) return -1
-    if (right === null) return 1
-    return left - right
-  })
-
   let previousMedian: number | null = null
-  const versions = orderedVersions.map((benchVersion) => {
-    const rows = groups.get(benchVersion)!
+  const versions = groupScoresByBenchVersion(record.scores).map(({ benchVersion, rows }) => {
     const composites = rows.map((row) => row.composite)
     const medianComposite = median(composites)
     const generatedAt = rows.map((row) => row.generated_at).sort()
@@ -3914,7 +4057,9 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
     miner_hotkey: record.miner_hotkey,
     status: record.status,
     quorum: record.quorum,
-    total_score_count: record.score_count,
+    // Every version's rows. An SN-348 Platform scopes its own score_count to
+    // one bench version, so the total is counted from the rows themselves.
+    total_score_count: record.scores.length,
     versions,
     generated_at: record.generated_at,
   })

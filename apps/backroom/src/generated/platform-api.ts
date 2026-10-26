@@ -30691,10 +30691,13 @@ export interface components {
          *
          *     Publishes, per agent: which validators scored it, each validator's exact
          *     numbers + signature, and the ``median_composite`` the platform finalized on
-         *     (the canonical score no single validator controls). ``score_count`` reaching
-         *     ``quorum`` is what finalized the agent; a re-scored agent may carry more than
-         *     ``quorum`` rows (older + current runs). The dataset pin (``dataset_seed`` +
-         *     ``dataset_sha256``) identifies the exact bytes all validators scored.
+         *     (the canonical score no single validator controls). ``median_composite`` and
+         *     ``score_count`` are scoped to one ``bench_version``: a re-scored agent
+         *     carries rows from more than one benchmark version (``total_score_count``),
+         *     every row stays in ``scores`` labeled with its own version, and composites
+         *     from different versions are never pooled into one median. The dataset pin
+         *     (``dataset_seed`` + ``dataset_sha256``) identifies the exact bytes all
+         *     validators scored.
          */
         PublicSubmissionScores: {
             /**
@@ -30704,6 +30707,11 @@ export interface components {
              */
             agent_id: string;
             artifact_release: components["schemas"]["PublicArtifactRelease"];
+            /**
+             * Bench Version
+             * @description Benchmark version that score_count and median_composite describe. Composites from different benchmark versions are incomparable, so they are never pooled: this is the active version when the agent holds a scoring quorum there, otherwise the newest version in which it does, otherwise the newest version it has any accepted score in. Null only when the agent has no accepted score.
+             */
+            bench_version?: number | null;
             /**
              * Dataset Run Size
              * @description Generator profile (small|medium|full).
@@ -30737,7 +30745,7 @@ export interface components {
             generated_at: string;
             /**
              * Median Composite
-             * @description Median canonical composite in [0,1].
+             * @description Median composite in [0,1] over the bench_version rows only. Null below the scoring quorum in that version.
              */
             median_composite?: number | null;
             /**
@@ -30752,7 +30760,7 @@ export interface components {
             quorum: number;
             /**
              * Score Count
-             * @description Score rows recorded for this agent.
+             * @description Accepted score rows recorded under bench_version. total_score_count counts every version.
              */
             score_count: number;
             /**
@@ -30765,6 +30773,11 @@ export interface components {
              * @description Public status ("scored" or "live").
              */
             status: string;
+            /**
+             * Total Score Count
+             * @description Accepted score rows recorded for this agent across every benchmark version.
+             */
+            total_score_count: number;
             /** @description Signed evidence root and subject projection used to reproduce the reward-authoritative full v9 composite. */
             v9_confirmation_receipt?: components["schemas"]["V9ConfirmationReceipt"] | null;
             /** V9 Confirmation Status */
@@ -30789,6 +30802,11 @@ export interface components {
             agent_id: string;
             artifact_release: components["schemas"]["PublicArtifactRelease"];
             /**
+             * Bench Version
+             * @description Benchmark version that score_count and median_composite describe. Composites from different benchmark versions are incomparable, so they are never pooled: this is the active version when the agent holds a scoring quorum there, otherwise the newest version in which it does, otherwise the newest version it has any accepted score in. Null only when the agent has no accepted score.
+             */
+            bench_version?: number | null;
+            /**
              * Dataset Seed
              * @description Platform-pinned dataset seed.
              */
@@ -30805,7 +30823,7 @@ export interface components {
             last_scored_at?: string | null;
             /**
              * Median Composite
-             * @description Median canonical composite in [0,1].
+             * @description Median composite in [0,1] over the bench_version rows only. Null below the scoring quorum in that version.
              */
             median_composite?: number | null;
             /**
@@ -30815,7 +30833,7 @@ export interface components {
             miner_hotkey: string;
             /**
              * Score Count
-             * @description Score rows recorded for this agent.
+             * @description Accepted score rows recorded under bench_version. total_score_count counts every version.
              */
             score_count: number;
             /**
@@ -30823,6 +30841,11 @@ export interface components {
              * @description Public status ("scored" or "live").
              */
             status: string;
+            /**
+             * Total Score Count
+             * @description Accepted score rows recorded for this agent across every benchmark version.
+             */
+            total_score_count: number;
         };
         /**
          * PublicSubmissionsResponse

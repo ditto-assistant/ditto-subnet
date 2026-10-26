@@ -8,6 +8,7 @@ import {
   BACKROOM_ARTIFACT_SCOPE,
   BACKROOM_READ_SCOPE,
   BACKROOM_WRITE_SCOPE,
+  compactAgentScores,
   createBackroomMcpServer,
   type McpGrantProps,
   TOOL_SCOPE_REQUIREMENTS,
@@ -10711,12 +10712,42 @@ describe('Backroom MCP tools', () => {
       arguments: { minerHotkey: '5TopMiner' },
     })
     expect(scores.isError).not.toBe(true)
-    expect(readJsonResult(scores)).toMatchObject({
+    const scoresBody = readJsonResult(scores) as {
+      scores: Array<Record<string, unknown>>
+      scores_shared?: Record<string, unknown>
+      other_bench_versions: Array<{
+        bench_version: number | null
+        scores: Array<Record<string, unknown>>
+        scores_shared?: Record<string, unknown>
+      }>
+    }
+    expect(scoresBody).toMatchObject({
       agent_id: agentId,
+      selected_bench_version: 7,
+      score_count: 3,
+      total_score_count: 6,
       median_composite: 0.957,
       active_bench_version: 7,
       leaderboard: { rank: 1, emission_eligible: true },
     })
+    // SN-348: the selected v7 rows and the v6 group each hoist their own
+    // invariants; a field missing from a row lives in its group's shared
+    // object, never reads as null.
+    expect(scoresBody.scores_shared).toMatchObject({ bench_version: 7, seed: '424242' })
+    expect(scoresBody.scores[0]).not.toHaveProperty('bench_version')
+    expect(scoresBody.scores.map((row) => ({ ...scoresBody.scores_shared, ...row }))).toEqual([
+      expect.objectContaining({ validator_hotkey: '5ValA', bench_version: 7, composite: 0.957, run_id: 'run-a7' }),
+      expect.objectContaining({ validator_hotkey: '5ValB', bench_version: 7, composite: 0.955, run_id: 'run-b7' }),
+      expect.objectContaining({ validator_hotkey: '5ValC', bench_version: 7, composite: 0.96, run_id: 'run-c7' }),
+    ])
+    const v6 = scoresBody.other_bench_versions[0]!
+    expect(v6).toMatchObject({ bench_version: 6, score_count: 3, median_composite: 0.91 })
+    expect(v6.scores_shared).toMatchObject({ bench_version: 6, seed: '111' })
+    expect(v6.scores.map((row) => ({ ...v6.scores_shared, ...row }))).toEqual([
+      expect.objectContaining({ validator_hotkey: '5ValA', bench_version: 6, seed: '111', composite: 0.91 }),
+      expect.objectContaining({ validator_hotkey: '5ValB', bench_version: 6, seed: '111', composite: 0.92 }),
+      expect.objectContaining({ validator_hotkey: '5ValC', bench_version: 6, seed: '111', composite: 0.9 }),
+    ])
 
     const board = await client.callTool({
       name: 'get_leaderboard',
@@ -10753,6 +10784,90 @@ describe('Backroom MCP tools', () => {
     await client.close()
     await server.close()
   })
+  it('compacts agent scores losslessly per bench-version group', () => {
+    const row = (overrides: Record<string, unknown>) => ({
+      validator_hotkey: '5ValA',
+      composite: 0.1,
+      tool_mean: 0.2,
+      memory_mean: 0.3,
+      median_ms: 1000,
+      n: 40,
+      bench_version: 13,
+      seed: '8811366100733494301',
+      run_id: 'run-a13',
+      generated_at: '2026-10-20T00:00:00Z',
+      signature: 'd1'.repeat(64),
+      transcript_sha256: null,
+      gate_evidence: null,
+      ...overrides,
+    })
+    const detail = {
+      agent_id: '842c28de-6b6c-445a-8c3f-cf5492422ef6',
+      selected_bench_version: 13,
+      score_count: 3,
+      total_score_count: 5,
+      median_composite: 0.1,
+      scores: [
+        row({}),
+        row({ validator_hotkey: '5ValB', run_id: 'run-b13', signature: 'e1'.repeat(64) }),
+        // A null that differs from the group must survive as a row field.
+        row({ validator_hotkey: '5ValC', run_id: 'run-c13', transcript_sha256: '23'.repeat(32) }),
+      ],
+      other_bench_versions: [
+        {
+          bench_version: 12,
+          score_count: 2,
+          quorum_reached: false,
+          median_composite: null,
+          median_composite_authority: null,
+          scores: [
+            row({ bench_version: 12, seed: '7211616870656561578', composite: 0.79 }),
+            row({ validator_hotkey: '5ValB', bench_version: 12, seed: '7211616870656561578', composite: 0.78 }),
+          ],
+        },
+        {
+          bench_version: null,
+          score_count: 1,
+          quorum_reached: false,
+          median_composite: null,
+          median_composite_authority: null,
+          scores: [row({ bench_version: null, seed: '42' })],
+        },
+      ],
+    }
+
+    type CompactRows = {
+      scores: Array<Record<string, unknown>>
+      scores_shared?: Record<string, unknown>
+    }
+    const compact = compactAgentScores(detail) as unknown as CompactRows & {
+      other_bench_versions: Array<CompactRows & Record<string, unknown>>
+    }
+
+    // Invariant fields hoisted; varying ones stay on the row, including a
+    // null that differs from another row's value.
+    expect(compact.scores_shared).toMatchObject({ bench_version: 13, gate_evidence: null })
+    expect(compact.scores_shared).not.toHaveProperty('transcript_sha256')
+    expect(compact.scores[0]).toMatchObject({ transcript_sha256: null })
+    expect(compact.scores_shared).not.toHaveProperty('validator_hotkey')
+    expect(compact.scores_shared).not.toHaveProperty('signature')
+    expect(compact.scores[2]).toMatchObject({ transcript_sha256: '23'.repeat(32) })
+    expect(compact.scores[0]).not.toHaveProperty('bench_version')
+    // Reconstructing shared + row restores every original row exactly.
+    expect(compact.scores.map((r) => ({ ...compact.scores_shared, ...r }))).toEqual(detail.scores)
+    compact.other_bench_versions.forEach((group, index) => {
+      const original = detail.other_bench_versions[index]!
+      expect(group.scores.map((r) => ({ ...group.scores_shared, ...r }))).toEqual(original.scores)
+      expect({ ...group, scores: undefined, scores_shared: undefined }).toEqual({
+        ...original,
+        scores: undefined,
+        scores_shared: undefined,
+      })
+    })
+    // A single-row group has nothing to hoist and stays whole.
+    expect(compact.other_bench_versions[1]).not.toHaveProperty('scores_shared')
+  })
+
   it('explains an owner-suppressed generation over read scope with the admin token server-side', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     // The #2105 shape: a newer generation whose canonical median beats its

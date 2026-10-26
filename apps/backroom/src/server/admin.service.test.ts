@@ -4526,17 +4526,32 @@ describe('production score reads', () => {
     )
     expect(detail).toMatchObject({
       agent_id: topAgentId,
+      selected_bench_version: 7,
+      selected_bench_version_source: 'active',
+      score_count: 3,
+      total_score_count: 6,
       median_composite: 0.957,
+      // The fixture is an older Platform that names no version for its
+      // aggregate, so the v7 median is recomputed here and labeled as such.
+      median_composite_authority: 'per_benchmark_statistic',
       active_bench_version: 7,
       leaderboard: { rank: 1, emission_eligible: true },
     })
-    expect(detail.scores).toHaveLength(6)
-    expect(detail.scores[3]).toMatchObject({
+    expect(detail.scores).toHaveLength(3)
+    expect(detail.scores[0]).toMatchObject({
       validator_hotkey: '5ValA',
       // Seeds are normalised to exact decimal strings, small ones included, so
       // the field has one type regardless of magnitude.
       seed: '424242',
       bench_version: 7,
+    })
+    expect(detail.other_bench_versions).toHaveLength(1)
+    expect(detail.other_bench_versions[0]).toMatchObject({
+      bench_version: 6,
+      score_count: 3,
+      quorum_reached: true,
+      median_composite: 0.91,
+      median_composite_authority: 'per_benchmark_statistic',
     })
   })
 
@@ -4667,6 +4682,14 @@ describe('production score reads', () => {
     // Leaderboard context still answers "provisional where, exactly".
     expect(detail.leaderboard).toMatchObject({ finalized: false, score_count: 1 })
     expect(detail.active_bench_version).toBe(7)
+    expect(detail).toMatchObject({
+      selected_bench_version: 7,
+      selected_bench_version_source: 'active',
+      selected_quorum_reached: false,
+      median_composite_authority: null,
+      total_score_count: 1,
+      other_bench_versions: [],
+    })
   })
 
   it('marks a settled submission finalized on the same field', async () => {
@@ -4683,7 +4706,7 @@ describe('production score reads', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(detail.finalized).toBe(true)
     expect(detail.median_composite).toBe(0.957)
-    expect(detail.scores[3]).toMatchObject({ validator_hotkey: '5ValA', run_id: 'run-a7' })
+    expect(detail.scores[0]).toMatchObject({ validator_hotkey: '5ValA', run_id: 'run-a7' })
   })
 
   it('reports a below-quorum submission with no accepted score at all', async () => {
@@ -4751,6 +4774,212 @@ describe('production score reads', () => {
     )
     // A 503 is not "still evaluating": no pipeline fallback masks it.
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  // SN-348. Production agent 842c28de (Sniper) on the v13 board: Platform
+  // returned three v12 rows and three v13 rows with one pooled
+  // median_composite 0.5449585 and score_count 6, and get_agent_scores relayed
+  // both beside active_bench_version 13. The real v13 median is 0.133823.
+  // TeaCUP12 741db8fa answered with the same mixed shape.
+  const sniperAgentId = '842c28de-6b6c-445a-8c3f-cf5492422ef6'
+  const v13Board = {
+    ...leaderboard,
+    current_bench_version: 13,
+    active_bench_version: 13,
+    desired_bench_version: 13,
+  }
+  const sniperV12 = [
+    scoreRow({ validator_hotkey: '5ValA', composite: 0.794293, bench_version: 12, seed: '7211616870656561578', run_id: 'run-a12', signature: 'a1'.repeat(64), transcript_sha256: '12'.repeat(32), generated_at: '2026-10-01T00:00:00Z' }),
+    scoreRow({ validator_hotkey: '5ValB', composite: 0.783237, bench_version: 12, seed: '7211616870656561578', run_id: 'run-b12', signature: 'b1'.repeat(64), transcript_sha256: '13'.repeat(32), generated_at: '2026-10-01T01:00:00Z' }),
+    scoreRow({ validator_hotkey: '5ValC', composite: 0.783373, bench_version: 12, seed: '7211616870656561578', run_id: 'run-c12', signature: 'c1'.repeat(64), transcript_sha256: '14'.repeat(32), generated_at: '2026-10-01T02:00:00Z' }),
+  ]
+  const sniperV13 = [
+    scoreRow({ validator_hotkey: '5ValD', composite: 0.133823, bench_version: 13, seed: '8811366100733494301', run_id: 'run-d13', signature: 'd1'.repeat(64), transcript_sha256: '21'.repeat(32), generated_at: '2026-10-20T00:00:00Z', gate_evidence: gateEvidence() }),
+    scoreRow({ validator_hotkey: '5ValE', composite: 0.036255, bench_version: 13, seed: '8811366100733494301', run_id: 'run-e13', signature: 'e1'.repeat(64), transcript_sha256: '22'.repeat(32), generated_at: '2026-10-20T01:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce' }) }),
+    scoreRow({ validator_hotkey: '5ValF', composite: 0.30668, bench_version: 13, seed: '8811366100733494301', run_id: 'run-f13', signature: 'f1'.repeat(64), transcript_sha256: '23'.repeat(32), generated_at: '2026-10-20T02:00:00Z', gate_evidence: null }),
+  ]
+  // What production Platform served before SN-348: no version for its
+  // aggregate, and an aggregate pooled across both versions.
+  const sniperPooled = {
+    ...agentScores,
+    agent_id: sniperAgentId,
+    score_count: 6,
+    median_composite: 0.5449585,
+    scores: [...sniperV12, ...sniperV13],
+  }
+
+  it('keeps a mixed v12/v13 record apart and reports the active v13 median', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(v13Board))
+      .mockResolvedValueOnce(Response.json(sniperPooled))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: sniperAgentId })
+
+    expect(detail).toMatchObject({
+      selected_bench_version: 13,
+      selected_bench_version_source: 'active',
+      active_bench_version: 13,
+      score_count: 3,
+      total_score_count: 6,
+      selected_quorum_reached: true,
+      median_composite: 0.133823,
+      // The pooled 0.5449585 is never reused: it belongs to no benchmark.
+      median_composite_authority: 'per_benchmark_statistic',
+    })
+    expect(detail.scores.map((score) => score.bench_version)).toEqual([13, 13, 13])
+    expect(detail.scores.map((score) => score.run_id)).toEqual(['run-d13', 'run-e13', 'run-f13'])
+    // Every historical row preserved whole in its own group.
+    expect(detail.other_bench_versions).toEqual([
+      expect.objectContaining({
+        bench_version: 12,
+        score_count: 3,
+        quorum_reached: true,
+        median_composite: 0.783373,
+        median_composite_authority: 'per_benchmark_statistic',
+      }),
+    ])
+    const v12 = detail.other_bench_versions[0]!.scores
+    expect(v12.map((score) => score.seed)).toEqual(Array(3).fill('7211616870656561578'))
+    expect(v12.map((score) => score.signature)).toEqual(['a1', 'b1', 'c1'].map((hex) => hex.repeat(64)))
+    expect(v12.map((score) => score.transcript_sha256)).toEqual(['12', '13', '14'].map((hex) => hex.repeat(32)))
+    // The v13 rows keep their exact seeds, signatures, gates and transcripts.
+    expect(detail.scores.map((score) => score.seed)).toEqual(Array(3).fill('8811366100733494301'))
+    expect(detail.scores.map((score) => score.signature)).toEqual(['d1', 'e1', 'f1'].map((hex) => hex.repeat(64)))
+    expect(detail.scores.map((score) => score.gate_evidence?.posture ?? null)).toEqual([
+      'shadow',
+      'enforce',
+      null,
+    ])
+    expect(detail.scores[2]?.transcript_sha256).toBe('23'.repeat(32))
+    expect(detail).not.toHaveProperty('bench_version')
+  })
+
+  it('selects a requested historical bench version and keeps the active one apart', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(v13Board))
+      .mockResolvedValueOnce(Response.json(sniperPooled))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: sniperAgentId, benchVersion: 12 })
+
+    expect(detail).toMatchObject({
+      selected_bench_version: 12,
+      selected_bench_version_source: 'requested',
+      active_bench_version: 13,
+      score_count: 3,
+      total_score_count: 6,
+      median_composite: 0.783373,
+      median_composite_authority: 'per_benchmark_statistic',
+    })
+    expect(detail.other_bench_versions.map((group) => group.bench_version)).toEqual([13])
+    expect(detail.other_bench_versions[0]?.median_composite).toBe(0.133823)
+  })
+
+  it('uses Platform\'s own per-version median only for the version Platform names', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(v13Board))
+      .mockResolvedValueOnce(
+        Response.json({
+          ...sniperPooled,
+          bench_version: 13,
+          score_count: 3,
+          total_score_count: 6,
+          median_composite: 0.133823,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: sniperAgentId })
+
+    expect(detail).toMatchObject({
+      score_count: 3,
+      total_score_count: 6,
+      median_composite: 0.133823,
+      median_composite_authority: 'platform_ledger',
+    })
+    // Platform asserted nothing about v12, so its median stays a statistic.
+    expect(detail.other_bench_versions[0]).toMatchObject({
+      bench_version: 12,
+      median_composite: 0.783373,
+      median_composite_authority: 'per_benchmark_statistic',
+    })
+  })
+
+  it('averages the two middle composites for an even per-version count', async () => {
+    const fourth = scoreRow({ validator_hotkey: '5ValG', composite: 0.2, bench_version: 13, seed: '8811366100733494301', run_id: 'run-g13' })
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(v13Board))
+      .mockResolvedValueOnce(
+        Response.json({ ...sniperPooled, scores: [...sniperPooled.scores, fourth] }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: sniperAgentId })
+
+    // v13 composites 0.036255, 0.133823, 0.2, 0.30668: (0.133823 + 0.2) / 2.
+    expect(detail.score_count).toBe(4)
+    expect(detail.total_score_count).toBe(7)
+    expect(detail.median_composite).toBeCloseTo(0.1669115, 12)
+    expect(detail.median_composite_authority).toBe('per_benchmark_statistic')
+  })
+
+  it('reports no aggregate for a selected version below quorum', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(v13Board))
+      .mockResolvedValueOnce(
+        Response.json({
+          ...sniperPooled,
+          // An SN-348 Platform keeps its aggregate on the finalized v12 era
+          // while v13 is still short of quorum.
+          bench_version: 12,
+          score_count: 3,
+          total_score_count: 5,
+          median_composite: 0.783373,
+          scores: [...sniperV12, ...sniperV13.slice(0, 2)],
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: sniperAgentId })
+
+    expect(detail).toMatchObject({
+      finalized: true,
+      selected_bench_version: 13,
+      score_count: 2,
+      total_score_count: 5,
+      selected_quorum_reached: false,
+      // Two scores are not a v13 median, and v12's is not v13's either.
+      median_composite: null,
+      median_composite_authority: null,
+    })
+    expect(detail.scores).toHaveLength(2)
+    expect(detail.other_bench_versions[0]).toMatchObject({
+      bench_version: 12,
+      quorum_reached: true,
+      median_composite: 0.783373,
+      median_composite_authority: 'platform_ledger',
+    })
+  })
+
+  it('counts every version in score history even when Platform scopes its own count', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ ...sniperPooled, bench_version: 13, score_count: 3, total_score_count: 6, median_composite: 0.133823 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const history = await fetchAgentScoreHistory({ agentId: sniperAgentId })
+
+    expect(history.total_score_count).toBe(6)
+    expect(history.versions.map((version) => [version.bench_version, version.median_composite])).toEqual([
+      [12, 0.783373],
+      [13, 0.133823],
+    ])
   })
 
   it('names the provisional state instead of 404ing a score-history read', async () => {
@@ -4828,7 +5057,9 @@ describe('production score reads', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const detail = await fetchAgentScores({ agentId: topAgentId })
-    const gated = detail.scores.filter((score) => score.bench_version === 13)
+    // Active v7 is selected; the v13 rows stay whole in their own group.
+    const gated =
+      detail.other_bench_versions.find((group) => group.bench_version === 13)?.scores ?? []
     expect(gated).toHaveLength(3)
     expect(gated[0]?.gate_evidence).toMatchObject({
       posture: 'shadow',
