@@ -7,8 +7,12 @@ import argparse
 import collections
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import judge_evaluator  # noqa: E402  (sibling module: the frozen judge identity)
 
 
 AGENTS = [
@@ -53,7 +57,19 @@ AGENTS = [
         "image_id": "sha256:ac4e0eb2f4bf83165d64a83a4774dd93febd9ed8f14fc4f3b95dc8dc8178b31b",
     },
 ]
-JUDGE_MODEL = "gpt-4o-2024-08-06"
+# The judge is an explicit, validated input rather than a module constant.
+#
+# These files were produced by the official gpt-4o judge, and the rows carry
+# that provenance in `autoeval_label.model`. Repointing a constant here at a
+# different judge would make this script reject its own inputs AND stamp the
+# output metadata with a judge that never ran -- falsified provenance, which is
+# worse than a crash. So the expected judge is passed in and checked against
+# what the rows actually say, and the result file is named after it the same
+# way the evaluator names it.
+OFFICIAL_JUDGE_MODEL = judge_evaluator.OFFICIAL_JUDGE_MODEL
+OFFICIAL_JUDGE_SHORT_NAME = judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME
+OFFICIAL_JUDGE_OPENROUTER_MODEL = "openai/gpt-4o-2024-08-06"
+OFFICIAL_JUDGE_PROFILE_REVISION = judge_evaluator.OFFICIAL_JUDGE_PROFILE_REVISION
 
 
 def sha256(path: Path) -> str:
@@ -68,6 +84,7 @@ def summarize_agent(
     hypotheses: list[dict[str, Any]],
     evaluations: list[dict[str, Any]],
     references: dict[str, dict[str, Any]],
+    judge_model: str = OFFICIAL_JUDGE_MODEL,
 ) -> dict[str, Any]:
     expected = set(references)
     hypothesis_ids = [row["question_id"] for row in hypotheses]
@@ -84,8 +101,12 @@ def summarize_agent(
     empty_answers_judged_correct = 0
     for row in evaluations:
         autoeval = row.get("autoeval_label") or {}
-        if autoeval.get("model") != JUDGE_MODEL or not isinstance(autoeval.get("label"), bool):
-            raise ValueError("evaluation is not from the frozen official judge")
+        recorded = autoeval.get("model")
+        if recorded != judge_model or not isinstance(autoeval.get("label"), bool):
+            raise ValueError(
+                f"evaluation for {row.get('question_id')!r} was judged by "
+                f"{recorded!r}, not the declared judge {judge_model!r}"
+            )
         question_id = row["question_id"]
         label = autoeval["label"]
         if question_id in empty_answer_ids and label:
@@ -121,6 +142,22 @@ def main() -> None:
         "--condition",
         default="longmemeval-s-cleaned-native-dittobench-memory-v1",
     )
+    parser.add_argument(
+        "--judge-model",
+        default=OFFICIAL_JUDGE_MODEL,
+        help="judge that produced the evaluations; every row must match it",
+    )
+    parser.add_argument(
+        "--judge-short-name",
+        default=OFFICIAL_JUDGE_SHORT_NAME,
+        help="evaluator short name, which names the .eval-results-* artifacts",
+    )
+    parser.add_argument(
+        "--judge-openrouter-model", default=OFFICIAL_JUDGE_OPENROUTER_MODEL
+    )
+    parser.add_argument(
+        "--judge-profile-revision", default=OFFICIAL_JUDGE_PROFILE_REVISION
+    )
     parser.add_argument("--answer-model-id", default="qwen/qwen3-32b")
     parser.add_argument("--answer-model-provider", default="openrouter")
     parser.add_argument(
@@ -145,8 +182,16 @@ def main() -> None:
     for agent in AGENTS:
         rank = agent["rank"]
         hypothesis_path = results_dir / f"agent-{rank}.jsonl"
-        evaluation_path = results_dir / f"agent-{rank}.jsonl.eval-results-gpt-4o"
-        aggregate = summarize_agent(read_jsonl(hypothesis_path), read_jsonl(evaluation_path), references)
+        evaluation_path = results_dir / (
+            f"agent-{rank}.jsonl"
+            + judge_evaluator.evaluation_suffix(args.judge_short_name)
+        )
+        aggregate = summarize_agent(
+            read_jsonl(hypothesis_path),
+            read_jsonl(evaluation_path),
+            references,
+            judge_model=args.judge_model,
+        )
         agents.append(
             {
                 **agent,
@@ -181,9 +226,9 @@ def main() -> None:
         },
         "public_harness_revision": "c3caa8e2c19f8a41a0610b9f7db774f97643dd9c",
         "judge": {
-            "official_model": JUDGE_MODEL,
-            "openrouter_model": "openai/gpt-4o-2024-08-06",
-            "profile_revision": "longmemeval-official-gpt4o-openrouter-v1",
+            "official_model": args.judge_model,
+            "openrouter_model": args.judge_openrouter_model,
+            "profile_revision": args.judge_profile_revision,
         },
         "agents": agents,
     }

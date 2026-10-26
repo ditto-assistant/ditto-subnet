@@ -6,6 +6,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import judge_evaluator
 from longmemeval_adapter import (
     NATIVE_MEMORY_TOOLS,
     AdapterError,
@@ -19,7 +20,11 @@ from longmemeval_adapter import (
     sha256_file,
     stable_id,
 )
-from openrouter_judge_proxy import OFFICIAL_MODEL, OPENROUTER_MODEL, rewrite_request
+from openrouter_judge_proxy import (
+    JUDGE_MAX_COMPLETION_TOKENS,
+    JUDGE_MODEL,
+    rewrite_request,
+)
 from openrouter_reader_proxy import (
     PROFILE_REVISION as READER_PROFILE_REVISION,
 )
@@ -176,16 +181,66 @@ class RetrievalConditionTests(unittest.TestCase):
 
 
 class JudgeProxyTests(unittest.TestCase):
-    def test_only_official_model_is_rewritten(self):
-        value = rewrite_request(
-            {"model": OFFICIAL_MODEL, "messages": [], "temperature": 0}
-        )
-        self.assertEqual(value["model"], OPENROUTER_MODEL)
+    def judge_request(self, **overrides):
+        request = {
+            "model": JUDGE_MODEL,
+            "messages": [],
+            "temperature": 0,
+            "max_tokens": JUDGE_MAX_COMPLETION_TOKENS,
+        }
+        request.update(overrides)
+        return request
+
+    def test_the_production_judge_is_accepted_and_the_provider_pinned(self):
+        value = rewrite_request(self.judge_request())
+        self.assertEqual(value["model"], JUDGE_MODEL)
         self.assertFalse(value["stream"])
+        # The provider pin is part of the frozen contract: agreement with the
+        # incumbent ranged 95.3%-100% across the 23 providers OpenRouter served
+        # this model from, so an unpinned run describes no lane we operate.
+        self.assertEqual(
+            value["provider"],
+            {
+                "order": [judge_evaluator.JUDGE_ROUTE_PROVIDER],
+                "allow_fallbacks": False,
+                "zdr": True,
+            },
+        )
 
     def test_other_models_are_rejected(self):
         with self.assertRaises(ValueError):
-            rewrite_request({"model": "gpt-4o-mini", "messages": []})
+            rewrite_request(self.judge_request(model="gpt-4o-mini"))
+
+    def test_the_retired_official_judge_is_rejected(self):
+        with self.assertRaises(ValueError):
+            rewrite_request(
+                self.judge_request(model=judge_evaluator.OFFICIAL_JUDGE_MODEL)
+            )
+
+    def test_the_upstream_completion_bound_is_rejected(self):
+        """An unmodified upstream evaluator sends max_tokens=10.
+
+        A reasoning judge spends that entirely on reasoning tokens and returns
+        content="", which an evaluator labelling by `'yes' in response` scores
+        "no" on every question -- a complete run reporting total failure with
+        no error anywhere. Refuse it at the boundary.
+        """
+        with self.assertRaisesRegex(ValueError, "max_tokens"):
+            rewrite_request(
+                self.judge_request(
+                    max_tokens=judge_evaluator.OFFICIAL_JUDGE_MAX_COMPLETION_TOKENS
+                )
+            )
+
+    def test_a_missing_completion_bound_is_rejected(self):
+        request = self.judge_request()
+        del request["max_tokens"]
+        with self.assertRaisesRegex(ValueError, "max_tokens"):
+            rewrite_request(request)
+
+    def test_streaming_is_rejected(self):
+        with self.assertRaises(ValueError):
+            rewrite_request(self.judge_request(stream=True))
 
 
 class ReaderProxyTests(unittest.TestCase):
@@ -218,14 +273,18 @@ class SummaryTests(unittest.TestCase):
             {"question_id": "q1", "hypothesis": "yes"},
             {"question_id": "q2_abs", "hypothesis": ""},
         ]
+        # The frozen 2026-07-23 result files were produced by the official
+        # gpt-4o judge and keep validating as its rows; summarize_results reads
+        # recorded artifacts and never re-judges anything.
+        official = judge_evaluator.OFFICIAL_JUDGE_MODEL
         evaluations = [
             {
                 "question_id": "q1",
-                "autoeval_label": {"model": OFFICIAL_MODEL, "label": True},
+                "autoeval_label": {"model": official, "label": True},
             },
             {
                 "question_id": "q2_abs",
-                "autoeval_label": {"model": OFFICIAL_MODEL, "label": False},
+                "autoeval_label": {"model": official, "label": False},
             },
         ]
         result = summarize_agent(hypotheses, evaluations, references)
@@ -234,6 +293,30 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(result["empty_answers"], 1)
         self.assertEqual(result["empty_answers_judged_correct"], 0)
         self.assertEqual(result["abstention"], {"n": 1, "accuracy": 0.0})
+
+    def test_a_row_judged_by_another_model_is_rejected(self):
+        """Provenance is validated per row against the declared judge.
+
+        Repointing a module constant at a different judge would make this
+        script reject its own recorded inputs and stamp the output with a judge
+        that never ran, so the expected judge is an argument and every row is
+        checked against it.
+        """
+        references = {"q1": {"question_type": "single-session-user"}}
+        hypotheses = [{"question_id": "q1", "hypothesis": "Lisbon"}]
+        evaluations = [
+            {
+                "question_id": "q1",
+                "autoeval_label": {"model": judge_evaluator.JUDGE_MODEL, "label": True},
+            }
+        ]
+        with self.assertRaisesRegex(ValueError, "not the declared judge"):
+            summarize_agent(
+                hypotheses,
+                evaluations,
+                references,
+                judge_model=judge_evaluator.OFFICIAL_JUDGE_MODEL,
+            )
 
 
 class RecordingHandler(BaseHTTPRequestHandler):
