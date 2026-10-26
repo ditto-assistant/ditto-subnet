@@ -122,11 +122,15 @@ async def get_settings(
     history = await list_track_share_settings_revisions(session)
     settings = settings_from_row(latest)
     served = await _served(session, settings)
-    in_force = (
-        dict(settings.track_shares_bps)
-        if served and settings.track_shares_bps is not None
-        else dict(COMPILED_SPLIT_BPS)
-    )
+    # Unknown readiness (``served is None``) leaves the in-force split
+    # unknown rather than asserting either one.
+    in_force: dict[str, int] | None
+    if served is None:
+        in_force = None
+    elif served and settings.track_shares_bps is not None:
+        in_force = dict(settings.track_shares_bps)
+    else:
+        in_force = dict(COMPILED_SPLIT_BPS)
     return AdminTrackShareSettingsResponse(
         current=[_revision(latest)] if latest is not None else [],
         history=[_revision(row) for row in history],
@@ -139,7 +143,11 @@ async def get_settings(
             source="revision" if latest is not None else "default",
             max_age_seconds=resolver.ttl_seconds,
             in_force_bps=in_force,
-            unallocated_bps=BASIS_POINT_SCALE - sum(in_force.values()),
+            unallocated_bps=(
+                BASIS_POINT_SCALE - sum(in_force.values())
+                if in_force is not None
+                else None
+            ),
             served=served,
             live_validator_count=await _live_validators(session),
             generator_mode=await _generator_mode(session),

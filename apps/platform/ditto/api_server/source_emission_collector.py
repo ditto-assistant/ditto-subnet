@@ -1048,25 +1048,26 @@ class SourceEmissionCollector:
         ):
             return None
         for weights in () if receipt.schema_version == 2 else (receipt.weights, actual):
-            if (
+            total = sum(weights.values())
+            if total <= 0:
+                return None
+            # Recipients and burn must agree on one interpretation: either the
+            # memory-only fold or the generator-paid one, never one of each.
+            if not any(
                 classify_vector_against_pins(
                     weights,
                     expected_current=expected,
                     expected_previous=None,
                     burn_hotkey=payout.owner_hotkey,
-                    generator_current=generator,
+                    generator_current=fraction,
                 )
-                != "current"
-            ):
-                return None
-            total = sum(weights.values())
-            if total <= 0 or all(
-                abs(
+                == "current"
+                and abs(
                     weights.get(payout.owner_hotkey, 0) / total
                     - pin_expected_burn(burn, expected, generator_fraction=fraction)
                 )
-                > 0.002
-                for fraction in {0.0, generator}
+                <= 0.002
+                for fraction in sorted({0.0, generator})
             ):
                 return None
         entry = next(

@@ -192,3 +192,27 @@ async def test_a_malformed_revision_degrades_to_unset() -> None:
 
 async def test_resolver_without_a_session_maker_returns_the_default() -> None:
     assert (await TrackShareSettingsResolver().resolve(None)).track_shares_bps is None
+
+
+async def test_unreadable_fleet_readiness_reports_the_split_as_unknown(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    import ditto.api_server.endpoints.admin_track_share_settings as endpoint
+
+    _install(app, session_maker)
+    applied = await client.post(_URL, headers=_HEADERS, json=_payload(_ACTIVATION))
+    assert applied.status_code == 200, applied.text
+
+    async def _boom(*_args: object, **_kwargs: object) -> bool:
+        raise OperationalError("SELECT ...", {}, Exception("db down"))
+
+    monkeypatch.setattr(endpoint, "live_weight_setter_fleet_supports_protocol", _boom)
+    effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
+    assert effective["served"] is None
+    assert effective["in_force_bps"] is None
+    assert effective["unallocated_bps"] is None

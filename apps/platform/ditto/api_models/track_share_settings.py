@@ -142,12 +142,14 @@ class EffectiveTrackShareSettings(BaseModel):
     """Resolver TTL: the longest a ledger read can still use the previous
     revision. An epoch pin freezes whatever was in force when it was taken."""
 
-    in_force_bps: dict[str, int]
+    in_force_bps: dict[str, int] | None
     """The split validators fold now: the served map, or the compiled
-    memory-only split while nothing is served (unset, or the fleet gate)."""
+    memory-only split while nothing is served (unset, or the fleet gate).
+    ``None`` when fleet readiness could not be read, so it is unknown."""
 
-    unallocated_bps: int
-    """Basis points of the served map no track claims; validators burn them."""
+    unallocated_bps: int | None
+    """Basis points of the in-force split no track claims; validators burn
+    them. ``None`` when the in-force split is unknown."""
 
     served: bool | None = None
     """Whether the configured map is on the scoring ledger now: True only when a

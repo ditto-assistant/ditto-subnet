@@ -20694,7 +20694,7 @@ export interface components {
             /** In Force Bps */
             in_force_bps: {
                 [key: string]: number;
-            };
+            } | null;
             /** Live Validator Count */
             live_validator_count?: number | null;
             /** Max Age Seconds */
@@ -20717,7 +20717,7 @@ export interface components {
              */
             source: "revision" | "default";
             /** Unallocated Bps */
-            unallocated_bps: number;
+            unallocated_bps: number | null;
         };
         /**
          * EffectiveValidatorSlotSettings

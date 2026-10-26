@@ -1862,8 +1862,9 @@ export const effectiveTrackShareSettingsSchema = z.object({
   max_age_seconds: z.number().nonnegative(),
   // The split validators fold now: the served map, or memory-only while
   // nothing is served (unset, or the protocol-33 fleet gate).
-  in_force_bps: trackSharesMapSchema,
-  unallocated_bps: z.number().int(),
+  // null when Platform could not read fleet readiness: unknown, not memory-only.
+  in_force_bps: trackSharesMapSchema.nullable(),
+  unallocated_bps: z.number().int().nullable(),
   served: z.boolean().nullable().default(null),
   required_protocol: z.number().int().default(33),
   live_validator_count: z.number().int().nonnegative().nullable().default(null),
