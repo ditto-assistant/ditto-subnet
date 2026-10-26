@@ -44,6 +44,22 @@ shuffled-presentation order (#3088); that moves the v14 vector and leaves every
 v13 seed untouched. There is no private
 surface expansion or screening policy v14 activation in this change.
 
+## Anti-template work remains unqualified
+
+The October 26 scope in
+[ditto-subnet#1832](https://github.com/ditto-assistant/ditto-subnet/issues/1832)
+adds resistance to public-generator template matching to the intended v14
+launch. The compatibility implementation above does not deliver that work.
+The public phrase banks still carry forward; changing the seed, grading
+normalization or case-file dates does not establish generalization.
+
+See [the implementation and qualification handoff](benchmark-v14-template-resistance.md)
+for the retained experiments, missing version boundaries and required controls.
+Keep anti-template qualification incomplete until those results exist. A
+Backroom `start_ready` result checks mechanical rollout prerequisites; it is
+not that qualification or operator approval. This document does not change a
+production guard or authorize a rollout.
+
 ## Record the release packet before enabling any v14 work
 
 The compatibility PR cannot name an image that has not been released. Leave the
