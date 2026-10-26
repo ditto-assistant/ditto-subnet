@@ -11725,13 +11725,140 @@ class TestPublicSubmissionScores:
 
         body = (await client.get(f"/api/v1/public/agent/{agent_id}/scores")).json()
 
-        assert body["score_count"] == 4
+        # Every row stays published, but the aggregate names one era: the
+        # single next-era row has no quorum to finalize on, so the count and
+        # median stay on the era the agent was finalized in.
+        assert body["total_score_count"] == 4
+        assert body["bench_version"] == _ERA
+        assert body["score_count"] == 3
+        assert body["median_composite"] == pytest.approx(0.55)
         assert sorted(s["bench_version"] for s in body["scores"]) == [
             _ERA,
             _ERA,
             _ERA,
             _NEXT_ERA,
         ]
+
+    async def _add_era_scores(
+        self,
+        maker: async_sessionmaker[AsyncSession],
+        agent_id: str,
+        *,
+        composites: list[float],
+        bench_version: int,
+    ) -> None:
+        """Record more accepted rows for one agent on a second benchmark era."""
+        async with maker() as s, s.begin():
+            for index, composite in enumerate(composites):
+                await upsert_score(
+                    s,
+                    agent_id=UUID(agent_id),
+                    validator_hotkey=_fake_validator_hotkey(index),
+                    run_id=f"run_era_{bench_version}_{index}",
+                    seed=987654321,
+                    composite=composite,
+                    tool_mean=composite,
+                    memory_mean=composite,
+                    median_ms=500,
+                    n=110,
+                    generated_at=datetime(2026, 6, 9, 12, index, 0, tzinfo=UTC),
+                    signature="ab" * 64,
+                    details={"bench_version": bench_version},
+                    bench_version=bench_version,
+                )
+
+    async def test_detail_never_pools_two_finalized_eras_into_one_median(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SN-348: a v12-finalized agent re-scored at v13 read as one pool.
+
+        Production agent 842c28de (Sniper) published median 0.5449585 over six
+        rows: three v12 scores near 0.79 and three v13 scores near 0.13. That
+        number belongs to no benchmark. Once the active era holds a quorum, the
+        aggregate is that era's median and count alone.
+        """
+        async with (
+            session_maker() as floor_session,
+            retired_era_writes_allowed(floor_session),
+        ):
+            agent_id = await _seed_k3(
+                session_maker,
+                miner=_MINER_A,
+                composites=[0.794293, 0.783237, 0.783373],
+                details={"bench_version": _PREV_ERA},
+            )
+        await self._add_era_scores(
+            session_maker,
+            agent_id,
+            composites=[0.133823, 0.036255, 0.306680],
+            bench_version=_ERA,
+        )
+        await _activate_era(session_maker, _ERA)
+        _install_db(app, session_maker)
+
+        body = (await client.get(f"/api/v1/public/agent/{agent_id}/scores")).json()
+        assert body["bench_version"] == _ERA
+        assert body["score_count"] == 3
+        assert body["total_score_count"] == 6
+        assert body["median_composite"] == pytest.approx(0.133823)
+        assert len(body["scores"]) == 6
+
+        index = (await client.get("/api/v1/public/submissions")).json()
+        (row,) = [s for s in index["submissions"] if s["agent_id"] == agent_id]
+        assert row["bench_version"] == _ERA
+        assert row["score_count"] == 3
+        assert row["total_score_count"] == 6
+        assert row["median_composite"] == pytest.approx(0.133823)
+
+    async def test_detail_keeps_the_finalized_era_until_the_active_one_has_quorum(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        async with (
+            session_maker() as floor_session,
+            retired_era_writes_allowed(floor_session),
+        ):
+            agent_id = await _seed_k3(
+                session_maker,
+                miner=_MINER_A,
+                composites=[0.794293, 0.783237, 0.783373],
+                details={"bench_version": _PREV_ERA},
+            )
+        await self._add_era_scores(
+            session_maker, agent_id, composites=[0.2, 0.4], bench_version=_ERA
+        )
+        await _activate_era(session_maker, _ERA)
+        _install_db(app, session_maker)
+
+        body = (await client.get(f"/api/v1/public/agent/{agent_id}/scores")).json()
+        assert body["bench_version"] == _PREV_ERA
+        assert body["score_count"] == 3
+        assert body["total_score_count"] == 5
+        assert body["median_composite"] == pytest.approx(0.783373)
+
+    async def test_detail_median_averages_an_even_era_count(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_k3(
+            session_maker,
+            miner=_MINER_A,
+            composites=[0.2, 0.4, 0.6, 0.9],
+            details={"bench_version": _ERA},
+        )
+        _install_db(app, session_maker)
+
+        body = (await client.get(f"/api/v1/public/agent/{agent_id}/scores")).json()
+        assert body["bench_version"] == _ERA
+        assert body["score_count"] == 4
+        assert body["median_composite"] == pytest.approx(0.5)
 
     async def test_v9_gate_evidence_reaches_public_score_consumers_redacted(
         self,

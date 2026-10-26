@@ -312,17 +312,25 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   transcripts without execution telemetry show a clear unavailable state rather
   than fabricated metrics.
 - `GET /api/v1/public/submissions?limit=` → `{ generated_at, count, quorum,
-  submissions: [ { agent_id, miner_hotkey, status, score_count,
-  median_composite, dataset_seed, dataset_sha256, last_scored_at,
-  artifact_release } ] }`.
+  submissions: [ { agent_id, miner_hotkey, status, bench_version, score_count,
+  total_score_count, median_composite, dataset_seed, dataset_sha256,
+  last_scored_at, artifact_release } ] }`.
   The index over the **k=3 transparency records**, most recently scored first.
   Only settled public scores (`scored` / `live`) appear; held-for-review and
   still-evaluating agents are excluded so a provisional or accused agent is never
   surfaced.
 - `GET /api/v1/public/agent/{agent_id}/scores` → `{ agent_id, miner_hotkey,
-  status, quorum, score_count, median_composite, dataset_seed, dataset_sha256,
-  dataset_run_size, artifact_release, scores: [ { validator_hotkey, composite, tool_mean,
-  memory_mean, median_ms, n, seed, run_id, signature, generated_at } ] }`.
+  status, quorum, bench_version, score_count, total_score_count,
+  median_composite, dataset_seed, dataset_sha256, dataset_run_size,
+  artifact_release, scores: [ { validator_hotkey, composite, tool_mean,
+  memory_mean, median_ms, n, bench_version, seed, run_id, signature,
+  generated_at } ] }`.
+  `score_count` and `median_composite` (here and on the index above) are scoped
+  to one `bench_version`, because composites from different benchmark versions
+  are incomparable: the active version once the agent holds a quorum there,
+  otherwise the newest version it was finalized in, otherwise the newest version
+  it has any row in (median null below quorum). `total_score_count` counts every
+  version, and `scores` keeps every row labeled with its own version.
   The full k=3 breakdown for one finalized agent: *which* validators scored it,
   each one's exact numbers + sr25519 signature (self-verifying against the
   published validator key), the median the platform finalized on, and the pinned
