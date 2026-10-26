@@ -82,6 +82,7 @@ from ditto.db.queries.generator import (
     lock_hotkey_uploads,
     lock_source_tree,
     supersede_active,
+    superseded_by,
 )
 from ditto.db.queries.payments import (
     get_evaluation_payment_for_proof,
@@ -175,7 +176,9 @@ async def _replayed_or_retry(
                 source_sha256=row.source_sha256,
                 tree_sha256=row.tree_sha256,
                 status=cast("SubmissionStatus", row.status),
-                superseded=[],
+                superseded=await superseded_by(
+                    session, miner_hotkey=row.miner_hotkey, keep=row.submission_id
+                ),
             )
         raise PaymentReplayedError("payment proof already funded another upload")
     if await get_evaluation_payment_for_proof(

@@ -41,14 +41,22 @@ import bittensor
 from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.commands.upload import _recovery_receipt_from_args
 from ditto.miner_cli.confirm import confirm_payment
-from ditto.miner_cli.errors import ApiResponseError, MinerCliError
+from ditto.miner_cli.errors import MinerCliError
 from ditto.miner_cli.models import PaymentReceipt, WalletHandle
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
+from ditto.miner_cli.preferences import (
+    GENERATOR_PAYMENTS_BUCKET,
+    clear_pending_payment,
+    load_pending_payment,
+    save_pending_payment,
+)
 from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
 
 MAX_ARCHIVE_BYTES = 4 << 20
 SIGNATURE_DOMAIN = "ditto-generator-v1"
+# Local key for a saved generator fee proof (kept apart from agent proofs).
+PENDING_PAYMENT_NAME = "generator"
 _DATAGEN_DIR = Path(__file__).resolve().parents[3] / "research" / "dittobench-datagen"
 
 
@@ -279,7 +287,9 @@ def _pay_fee(
 def _recovery_hint(receipt: PaymentReceipt) -> str:
     return (
         "\nupload could not be confirmed after payment. The fee is not spent "
-        "until an upload is accepted; within 24 hours rerun upload with:\n"
+        "until an upload is accepted. Within 24 hours, rerunning upload with the "
+        "same archive reuses the saved proof; for another archive, or if the "
+        "saved proof is gone, rerun with:\n"
         f"  --payment-block-hash {receipt.block_hash} "
         f"--payment-block-number {receipt.block_number} "
         f"--payment-extrinsic-index {receipt.extrinsic_index}\n"
@@ -304,8 +314,26 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
     )
     handle, wallet = load_wallet(coldkey_name=coldkey_name, hotkey_name=hotkey_name)
     network = resolve_network(args.network)
+    pending = {
+        "network": network.name,
+        "hotkey": handle.hotkey_ss58,
+        "name": PENDING_PAYMENT_NAME,
+        "sha256": digest,
+        "bucket": GENERATOR_PAYMENTS_BUCKET,
+    }
     with ApiClient(base_url=network.api_url) as client:
         receipt = recovery
+        if receipt is None:
+            # A finalized fee saved by an earlier attempt at this exact archive
+            # is reused instead of paying again (a lost response returns the
+            # submission that proof already funded).
+            receipt = load_pending_payment(**pending)
+            if receipt is not None:
+                print(
+                    "found a saved finalized payment for this exact archive; "
+                    "no new transfer will be sent",
+                    file=sys.stderr,
+                )
         if receipt is None:
             # Read the terms before paying anything. An older Platform has no
             # terms endpoint and never charges for generator uploads.
@@ -334,6 +362,14 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
                         coldkey_name=coldkey_name,
                         subtensor_network=network.subtensor_network,
                     )
+                    # Saved before any upload attempt, so a crash or a lost
+                    # response never strands the proof.
+                    if not save_pending_payment(**pending, payment=receipt):
+                        print(
+                            "warning: could not save the finalized payment proof "
+                            "locally; keep the printed proof if upload fails",
+                            file=sys.stderr,
+                        )
         nonce = str(uuid4())
         timestamp = int(time.time())
         signature = wallet.hotkey.sign(
@@ -360,10 +396,14 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
             )
         try:
             result = client.post_generator_submission(body)
-        except ApiResponseError:
+        except BaseException:
+            # Any failure after paying, including a malformed response or an
+            # interrupt, must leave the miner the proof.
             if receipt is not None:
                 print(_recovery_hint(receipt), file=sys.stderr)
             raise
+    if receipt is not None:
+        clear_pending_payment(**pending, payment=receipt)
     print(result["submission_id"])
     superseded = result.get("superseded") or []
     print(

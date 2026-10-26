@@ -262,6 +262,33 @@ describe('generator competition MCP tools', () => {
     }
   })
 
+  it('refuses to report a settings write an older Platform silently dropped', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    // An older Platform ignores the unknown field and stores the revision without it.
+    const fetchMock = vi.fn(async () => Response.json({
+      revision: 2, parent_revision: 1, scope: '*', settings: olderSettings, reason: 'charge generator uploads',
+      actor: session.email, created_at: '2026-10-23T00:00:00Z', checksum: 'b'.repeat(64),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const dropped = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1, settings: { ...settings, upload_fee_required: true },
+          reason: 'charge generator uploads', confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(dropped.isError).toBe(true)
+      const text = (dropped.content as Array<{ text: string }>)[0].text
+      expect(text).toContain('revision 2 without upload_fee_required')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('drives and debugs rounds: reads, artifact-scoped dataset, guarded writes', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'

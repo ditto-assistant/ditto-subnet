@@ -271,6 +271,19 @@ class TestFeeOn:
         assert verifier.verify_payment.await_count == 1
         assert await _count(session_maker, GeneratorSubmission) == 1
 
+        # A paid upload that superseded an earlier generator reports the same
+        # superseded list on an exact retry.
+        await _skip_cooldown(session_maker)
+        second = _with_proof(
+            _upload_body(_MINER, _archive("paid-2")), _block_hash(0xABD)
+        )
+        accepted = await client.post(_UPLOAD_URL, json=second)
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["superseded"] == [str(submission_id)]
+        again = await client.post(_UPLOAD_URL, json=second)
+        assert again.status_code == 200, again.text
+        assert again.json() == accepted.json()
+
     async def test_a_spent_proof_cannot_fund_another_generator(
         self,
         app: FastAPI,

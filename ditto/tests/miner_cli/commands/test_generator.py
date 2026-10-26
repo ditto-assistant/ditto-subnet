@@ -16,12 +16,19 @@ import pytest
 from ditto.miner_cli.commands import generator as gen_cmd
 from ditto.miner_cli.errors import ApiResponseError, MinerCliError
 from ditto.miner_cli.models import PaymentReceipt
+from ditto.miner_cli.preferences import load_pending_payments_for_hotkey
 
 _KEY = bittensor.Keypair.create_from_uri("//Bob")
 _KIT = (
     Path(__file__).resolve().parents[4] / "miners" / "dittobench-generator-starter-kit"
 )
 _HAS_GO = shutil.which("go") is not None
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cli_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Saved payment proofs go to a per-test config, never the real one."""
+    monkeypatch.setenv("DITTO_CLI_CONFIG_PATH", str(tmp_path / "config.json"))
 
 
 def test_signature_payload_is_the_pinned_wire_format() -> None:
@@ -273,21 +280,43 @@ def test_upload_refuses_before_paying_when_platform_would_refuse(
     assert _FakeClient.posted == []
 
 
-def test_a_failed_upload_after_payment_prints_the_recovery_flags(
+@pytest.mark.parametrize(
+    "failure",
+    [ApiResponseError("generator upload failed: HTTP 503"), ValueError("not json")],
+)
+def test_a_failed_upload_after_payment_keeps_the_proof(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    failure: Exception,
 ) -> None:
     _install_wallet(monkeypatch, _KEY)
-    _install_payment(monkeypatch)
+    calls = _install_payment(monkeypatch)
     archive = _fake_archive(tmp_path, monkeypatch)
     _FakeClient.terms = dict(_FEE_TERMS)
-    _FakeClient.reject = ApiResponseError("generator upload failed: HTTP 503")
-    with pytest.raises(ApiResponseError):
+    _FakeClient.reject = failure
+    with pytest.raises(type(failure)):
         gen_cmd.run(_upload_args(archive))
     err = capsys.readouterr().err
     assert f"--payment-block-hash {_BLOCK}" in err
     assert "--payment-extrinsic-index 3" in err
+    # Saved in its own bucket: agent uploads never see it as a credit.
+    assert (
+        load_pending_payments_for_hotkey(network="local", hotkey=_KEY.ss58_address)
+        == ()
+    )
+
+    # Rerunning the same archive reuses the saved proof without paying again,
+    # and a confirmed upload clears it.
+    paid = len(calls)
+    _FakeClient.reject = None
+    _FakeClient.posted = []
+    assert gen_cmd.run(_upload_args(archive)) == 0
+    assert len(calls) == paid
+    assert _FakeClient.posted[0]["payment_block_hash"] == _BLOCK
+    _FakeClient.posted = []
+    assert gen_cmd.run(_upload_args(archive)) == 0
+    assert len(calls) == paid + 3
 
 
 def test_recovery_flags_reuse_a_proof_without_paying(

@@ -224,6 +224,27 @@ async def supersede_active(
     return list(rows)
 
 
+async def superseded_by(
+    session: AsyncSession, *, miner_hotkey: str, keep: UUID
+) -> list[UUID]:
+    """The hotkey's submissions that uploading ``keep`` superseded.
+
+    Reconstructs :func:`supersede_active`'s result for an exact upload retry
+    from the reason it stamps; a submission an operator later re-ruled no
+    longer carries that reason and is not listed.
+    """
+    rows = await session.scalars(
+        select(GeneratorSubmission.submission_id)
+        .where(
+            GeneratorSubmission.miner_hotkey == miner_hotkey,
+            GeneratorSubmission.status == "superseded",
+            GeneratorSubmission.status_reason == f"superseded by {keep}",
+        )
+        .order_by(GeneratorSubmission.submitted_at, GeneratorSubmission.submission_id)
+    )
+    return list(rows)
+
+
 async def lock_next_runnable_submission(
     session: AsyncSession, *, now: datetime
 ) -> GeneratorSubmission | None:

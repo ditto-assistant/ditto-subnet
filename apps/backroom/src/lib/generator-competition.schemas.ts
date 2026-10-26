@@ -69,6 +69,8 @@ export const generatorCompetitionSettingsSchema = z.object({
 
 // Reads tolerate a Platform that predates a field: an older Platform never
 // charged generator uploads, so a missing upload_fee_required reads as off.
+// A write still refuses to report success when Platform drops the field
+// (setGeneratorSettings checks the stored revision).
 const generatorSettingsReadSchema = generatorCompetitionSettingsSchema.extend({
   upload_fee_required: z.boolean().default(false),
 })
