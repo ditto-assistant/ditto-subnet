@@ -5,6 +5,8 @@ import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   SCREENING_SUBMISSION_AGENT_STATUSES,
+  competitionFeesInputSchema,
+  submissionSettingsRevisionSchema,
   retryValidationInputSchema,
   reinstatementRetryBudgetSchema,
   scoringLeaseConfirmation,
@@ -5508,5 +5510,31 @@ describe('emission allocation', () => {
         confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
       }).success,
     ).toBe(true)
+  })
+})
+
+describe('competition fee policy schemas', () => {
+  it('rejects unknown fields in operator input but tolerates them on read', () => {
+    expect(
+      competitionFeesInputSchema.safeParse({
+        generator: { fee_amount_rao: 2_000_000, fee_required: true, extra: 1 },
+      }).success,
+    ).toBe(false)
+    const revision = submissionSettingsRevisionSchema.parse({
+      revision: 2,
+      parent_revision: 1,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 1_000_000,
+      competition_fees: {
+        generator: { fee_amount_rao: 2_000_000, fee_required: true, added_later: 'x' },
+      },
+      reason: 'price generator uploads',
+      actor: 'operator',
+      created_at: null,
+    })
+    expect(revision.competition_fees.generator).toMatchObject({
+      fee_amount_rao: 2_000_000,
+      fee_required: true,
+    })
   })
 })

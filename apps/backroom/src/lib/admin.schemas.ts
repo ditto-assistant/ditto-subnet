@@ -1441,13 +1441,14 @@ export const competitionFeePolicySchema = z
     // upload_fee_required); true charges, false makes uploads free.
     fee_required: z.boolean().nullable().default(null),
   })
-  .strict()
 
 export type CompetitionFeePolicy = z.infer<typeof competitionFeePolicySchema>
 
+// Operator input rejects unknown fields; the read side (below) tolerates
+// additive Platform fields so a newer Platform does not break reads.
 export const competitionFeesInputSchema = z.partialRecord(
   z.enum(OVERRIDABLE_FEE_COMPETITIONS),
-  competitionFeePolicySchema,
+  competitionFeePolicySchema.strict(),
 )
 
 export type CompetitionFeesInput = z.infer<typeof competitionFeesInputSchema>
