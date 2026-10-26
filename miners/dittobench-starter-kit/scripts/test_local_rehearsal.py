@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -213,8 +214,8 @@ class LocalRehearsalTest(unittest.TestCase):
             {
                 "full_condition": True,
                 "condition": LOCAL.LONGMEM_CONDITION,
-                "judge_model": LOCAL.judge_evaluator.JUDGE_MODEL,
-                "judge_route_provider": LOCAL.judge_evaluator.JUDGE_ROUTE_PROVIDER,
+                "judge_model": LOCAL.judge_evaluator().JUDGE_MODEL,
+                "judge_route_provider": LOCAL.judge_evaluator().JUDGE_ROUTE_PROVIDER,
                 "correct": 277,
                 "n": 500,
                 "accuracy": 0.554,
@@ -238,8 +239,8 @@ class LocalRehearsalTest(unittest.TestCase):
             {
                 "full_condition": True,
                 "condition": LOCAL.LONGMEM_CONDITION,
-                "judge_model": LOCAL.judge_evaluator.JUDGE_MODEL,
-                "judge_route_provider": LOCAL.judge_evaluator.JUDGE_ROUTE_PROVIDER,
+                "judge_model": LOCAL.judge_evaluator().JUDGE_MODEL,
+                "judge_route_provider": LOCAL.judge_evaluator().JUDGE_ROUTE_PROVIDER,
                 "correct": 277,
                 "n": 500,
                 "accuracy": 0.554,
@@ -247,8 +248,8 @@ class LocalRehearsalTest(unittest.TestCase):
                 "abstention_n": 30,
             }
         )
-        self.assertIn(LOCAL.judge_evaluator.JUDGE_MODEL, summary)
-        self.assertIn(LOCAL.judge_evaluator.JUDGE_ROUTE_PROVIDER, summary)
+        self.assertIn(LOCAL.judge_evaluator().JUDGE_MODEL, summary)
+        self.assertIn(LOCAL.judge_evaluator().JUDGE_ROUTE_PROVIDER, summary)
         self.assertIn("not an", summary)
         self.assertIn("official-protocol LongMemEval score", summary)
 
@@ -277,7 +278,7 @@ class LocalRehearsalTest(unittest.TestCase):
             row = {
                 "question_id": "q-1",
                 "autoeval_label": {
-                    "model": LOCAL.judge_evaluator.JUDGE_MODEL,
+                    "model": LOCAL.judge_evaluator().JUDGE_MODEL,
                     "label": True,
                 },
             }
@@ -292,14 +293,14 @@ class LocalRehearsalTest(unittest.TestCase):
                 {
                     "question_id": "q-1",
                     "autoeval_label": {
-                        "model": LOCAL.judge_evaluator.JUDGE_MODEL,
+                        "model": LOCAL.judge_evaluator().JUDGE_MODEL,
                         "label": True,
                     },
                 },
                 {
                     "question_id": "q-2_abs",
                     "autoeval_label": {
-                        "model": LOCAL.judge_evaluator.JUDGE_MODEL,
+                        "model": LOCAL.judge_evaluator().JUDGE_MODEL,
                         "label": False,
                     },
                 },
@@ -314,21 +315,21 @@ class LocalRehearsalTest(unittest.TestCase):
             self.assertEqual(result["dataset_sha256"], LOCAL.LONGMEM_DATASET_SHA256)
             self.assertEqual(result["condition"], LOCAL.LONGMEM_CONDITION)
             self.assertEqual(
-                result["judge_model"], LOCAL.judge_evaluator.JUDGE_MODEL
+                result["judge_model"], LOCAL.judge_evaluator().JUDGE_MODEL
             )
             self.assertEqual(
-                result["judge_profile"], LOCAL.judge_evaluator.JUDGE_PROFILE_REVISION
+                result["judge_profile"], LOCAL.judge_evaluator().JUDGE_PROFILE_REVISION
             )
             self.assertEqual(
                 result["judge_max_completion_tokens"],
-                LOCAL.judge_evaluator.JUDGE_MAX_COMPLETION_TOKENS,
+                LOCAL.judge_evaluator().JUDGE_MAX_COMPLETION_TOKENS,
             )
             self.assertFalse(result["official_protocol"])
             self.assertEqual(
-                result["source_revision"], LOCAL.judge_evaluator.FORK_REVISION
+                result["source_revision"], LOCAL.judge_evaluator().FORK_REVISION
             )
             self.assertEqual(
-                result["upstream_revision"], LOCAL.judge_evaluator.UPSTREAM_REVISION
+                result["upstream_revision"], LOCAL.judge_evaluator().UPSTREAM_REVISION
             )
 
     def test_summarize_longmem_rejects_wrong_judge_model(self) -> None:
@@ -359,7 +360,7 @@ class LocalRehearsalTest(unittest.TestCase):
                     {
                         "question_id": "q-1",
                         "autoeval_label": {
-                            "model": LOCAL.judge_evaluator.OFFICIAL_JUDGE_MODEL,
+                            "model": LOCAL.judge_evaluator().OFFICIAL_JUDGE_MODEL,
                             "label": True,
                         },
                     }
@@ -379,11 +380,12 @@ class LocalRehearsalTest(unittest.TestCase):
         self.assertNotIn("CHUTES_API_KEY", environment)
 
     def test_judge_git_context_has_advertised_ref_and_full_checksum(self) -> None:
+        judge = LOCAL.judge_evaluator()
         context = LOCAL.longmem_judge_context()
-        self.assertIn(f"ref={LOCAL.LONGMEM_SOURCE_REF}", context)
-        self.assertIn(f"checksum={LOCAL.LONGMEM_SOURCE_REVISION}", context)
-        self.assertEqual(len(LOCAL.LONGMEM_SOURCE_REVISION), 40)
-        self.assertEqual(len(LOCAL.LONGMEM_UPSTREAM_REVISION), 40)
+        self.assertIn(f"ref={judge.FORK_REF}", context)
+        self.assertIn(f"checksum={judge.FORK_REVISION}", context)
+        self.assertEqual(len(judge.FORK_REVISION), 40)
+        self.assertEqual(len(judge.UPSTREAM_REVISION), 40)
 
     def test_judge_context_is_the_fork_not_upstream(self) -> None:
         """The judge image must come from the fork, whose evaluator supports a
@@ -392,9 +394,56 @@ class LocalRehearsalTest(unittest.TestCase):
         context = LOCAL.longmem_judge_context()
         self.assertIn("ditto-assistant/LongMemEval", context)
         self.assertNotIn("xiaowu0162/LongMemEval", context)
-        self.assertNotEqual(
-            LOCAL.LONGMEM_SOURCE_REVISION, LOCAL.LONGMEM_UPSTREAM_REVISION
+        judge = LOCAL.judge_evaluator()
+        self.assertNotEqual(judge.FORK_REVISION, judge.UPSTREAM_REVISION)
+
+    @staticmethod
+    def _standalone_kit(root: Path) -> Path:
+        """Materialise a starter-kit checkout with no services/ tree."""
+        scripts = root / "miners" / "dittobench-starter-kit" / "scripts"
+        scripts.mkdir(parents=True)
+        for name in ("local-rehearsal.py", "rehearsal_gates.py"):
+            shutil.copy(SCRIPT_PATH.with_name(name), scripts / name)
+        assert not (root / "services").exists()
+        return scripts / "local-rehearsal.py"
+
+    def test_help_works_without_the_monorepo_api_tree(self) -> None:
+        """A miner's standalone kit has no services/dittobench-api. Loading the
+        shared judge identity at import time made even --help a traceback."""
+        with tempfile.TemporaryDirectory() as directory:
+            script = self._standalone_kit(Path(directory))
+            completed = subprocess.run(
+                [sys.executable, str(script), "--help"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("usage:", completed.stdout)
+
+    def test_missing_judge_identity_is_an_actionable_rehearsal_error(self) -> None:
+        """When the judge identity really is needed and really is absent, say
+        which file is missing instead of raising a bare ImportError."""
+        probe = (
+            "import importlib.util, sys;"
+            "spec = importlib.util.spec_from_file_location('lr', sys.argv[1]);"
+            "m = importlib.util.module_from_spec(spec);"
+            "sys.modules['lr'] = m;"
+            "spec.loader.exec_module(m);"
+            "\ntry:\n m.judge_evaluator()\n"
+            "except m.RehearsalError as exc:\n print('RehearsalError:', exc)\n"
         )
+        with tempfile.TemporaryDirectory() as directory:
+            script = self._standalone_kit(Path(directory))
+            completed = subprocess.run(
+                [sys.executable, "-c", probe, str(script)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("RehearsalError:", completed.stdout)
+        self.assertIn("judge_evaluator.py", completed.stdout)
 
     def test_judge_image_evaluator_digest_is_verified(self) -> None:
         """A judge image whose evaluator is not the recorded fork file must
@@ -412,7 +461,7 @@ class LocalRehearsalTest(unittest.TestCase):
             args=[],
             returncode=0,
             stdout=(
-                f"{LOCAL.judge_evaluator.FORK_EVALUATOR_SHA256}  "
+                f"{LOCAL.judge_evaluator().FORK_EVALUATOR_SHA256}  "
                 "src/evaluation/evaluate_qa.py\n"
             ),
         )

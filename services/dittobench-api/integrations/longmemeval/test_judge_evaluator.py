@@ -69,6 +69,17 @@ def go_provider_block(route_provider: str) -> dict[str, object]:
         elif literal.startswith('"') and literal.endswith('"'):
             parsed[key] = literal[1:-1]
         elif literal.startswith("[]string{"):
+            # Mirroring any []string{...} as a single-element pin would let the
+            # parity assertion pass while the Go slice had drifted -- a second
+            # element, or a different expression, would be invisible. Only the
+            # exact single-element pin this helper can faithfully mirror is
+            # accepted; anything else is a parse failure, not a match.
+            inner = literal[len("[]string{") : -1].strip()
+            if not literal.endswith("}") or inner != "lane.config.RouteProvider":
+                raise AssertionError(
+                    f"unexpected Go provider slice for {key}: {literal!r}; "
+                    "this helper only mirrors a single-element RouteProvider pin"
+                )
             parsed[key] = [route_provider]
         else:
             raise AssertionError(f"unparsed Go provider literal: {key}={literal!r}")

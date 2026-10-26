@@ -282,9 +282,20 @@ def main() -> None:
         },
         "public_harness_revision": "c3caa8e2c19f8a41a0610b9f7db774f97643dd9c",
         "judge": {
+            # `official_model` is the historical key name and now carries
+            # whichever judge ran, so a consumer reading it as proof of the
+            # official protocol would misclassify a substituted run. The
+            # marker is computed from the WHOLE identity, not the model alone:
+            # the official model served through another route or profile is
+            # not the official protocol either.
             "official_model": judge["model"],
             "openrouter_model": judge["openrouter_model"],
             "profile_revision": judge["profile_revision"],
+            "official_protocol": (
+                judge["model"] == OFFICIAL_JUDGE_MODEL
+                and judge["openrouter_model"] == OFFICIAL_JUDGE_OPENROUTER_MODEL
+                and judge["profile_revision"] == OFFICIAL_JUDGE_PROFILE_REVISION
+            ),
         },
         "agents": agents,
     }
