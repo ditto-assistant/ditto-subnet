@@ -129,6 +129,14 @@ describe("round helpers", () => {
       nextRoundIndex({
         mode: "enforce",
         epochs_per_round: 4,
+        subnet_epoch_index: 103_860,
+        next_round_epoch: 103_860,
+      }),
+    ).toBeNull();
+    expect(
+      nextRoundIndex({
+        mode: "enforce",
+        epochs_per_round: 4,
         current_round: 25964,
         next_round_epoch: 103_860,
       }),

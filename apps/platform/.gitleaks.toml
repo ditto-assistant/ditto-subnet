@@ -80,7 +80,7 @@ regexes = [
 paths = ['''^dashboard/fixtures/bounty-(board|detail|claims)\.json$''']
 
 # Public SS58 addresses in the recorded treasury allocation fixture: the Gamma
-# collector and the three service-bucket holding coldkeys. The fixture is a
+# collector hotkey and coldkey and the three service-bucket holding coldkeys. The fixture is a
 # verbatim recording of the public /treasury/allocation response, and addresses
 # are not credentials.
 [[allowlists]]
@@ -93,6 +93,7 @@ regexes = [
   '''^5Cm6Vok2sWkQ33w97AVEsb9U2EyE96Y1utfSLW5vR4viiLKD$''',
   '''^5F2821EzMcBC2b8hWmrMWiNRcx6DgdaTQQiqmPkbAk7a6yn9$''',
   '''^5Fhnko5TCPtR1hyD8aua6n23XRM8cxcBM6TgNEqqUhcxWs1t$''',
+  '''^5H93a8uVJC6ve2bNVZu9jAGEuBHDFspct3UbHRYGsxUNpA1e$''',
 ]
 paths = ['''^dashboard/fixtures/treasury-allocation\.json$''']
 

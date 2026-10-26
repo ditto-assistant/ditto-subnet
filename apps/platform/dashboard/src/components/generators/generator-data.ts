@@ -241,7 +241,11 @@ export function nextRoundIndex(schedule: GeneratorRoundSchedule | null | undefin
   if (schedule.current_round != null) return schedule.current_round + 1;
   const epoch = schedule.next_round_epoch;
   const per = schedule.epochs_per_round;
+  const current = schedule.subnet_epoch_index;
   if (epoch == null || !(per > 0)) return null;
+  // A schedule whose opening epoch has been reached names a round that is
+  // already open, not the next one.
+  if (current != null && epoch <= current) return null;
   return Math.floor(epoch / per);
 }
 
