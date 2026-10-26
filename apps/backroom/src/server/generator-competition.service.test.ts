@@ -240,6 +240,7 @@ describe('generator competition MCP tools', () => {
   it('drives and debugs rounds: reads, artifact-scoped dataset, guarded writes', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const PUBLISHER = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY'
     const summary = {
       round_index: 7, status: 'running', epochs_per_round: 4, commitment: 'aa'.repeat(32),
       commitment_publication: 'published', committed_at: '2026-10-24T00:00:00Z', column_count: 5,
@@ -278,6 +279,26 @@ describe('generator competition MCP tools', () => {
       if (path.endsWith('/default-generator')) {
         return Response.json({ submission_id: SUBMISSION, source_sha256: 'dd'.repeat(32), tree_sha256: 'ee'.repeat(32), status: 'active', superseded: [] })
       }
+      if (path.endsWith('/rounds/9')) {
+        return Response.json({
+          ...roundDetail,
+          summary: { ...summary, round_index: 9, status: 'committed', commitment_publication: 'pending', commitment_confirmations: 1 },
+          commitment_publishers_target: 3,
+          commitment_publications: [
+            {
+              validator_hotkey: PUBLISHER, status: 'confirmed', claimed_at: '2026-10-24T00:00:00Z',
+              claim_expires_at: '2026-10-24T00:10:00Z', reported_at: '2026-10-24T00:01:00Z', block_number: 4242,
+              extrinsic_hash: null, detail: null,
+            },
+            {
+              validator_hotkey: 'quiet-validator', status: 'expired', claimed_at: '2026-10-24T00:00:00Z',
+              claim_expires_at: '2026-10-24T00:10:00Z', reported_at: null, block_number: null,
+              extrinsic_hash: null, detail: null,
+            },
+          ],
+          commitment_elected: ['next-validator'],
+        })
+      }
       return Response.json(
         roundSeed ? { ...roundDetail, seed: roundSeed, summary: { ...summary, seed: roundSeed, secret_hex: 'ff'.repeat(32) } } : roundDetail,
       )
@@ -290,6 +311,18 @@ describe('generator competition MCP tools', () => {
         .toMatchObject({ rounds: [{ round_index: 7 }], schedule: { current_round: 7 } })
       expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 7 } })))
         .toMatchObject({ pending_agents: [AGENT], column_case_counts: { c0: 16 } })
+      // Validator-published commitments are visible per validator; an older
+      // Platform without these fields (round 7 above) still parses.
+      expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 9 } })))
+        .toMatchObject({
+          summary: { commitment_confirmations: 1, commitment_publication: 'pending' },
+          commitment_publishers_target: 3,
+          commitment_publications: [
+            { validator_hotkey: PUBLISHER, status: 'confirmed', block_number: 4242 },
+            { validator_hotkey: 'quiet-validator', status: 'expired' },
+          ],
+          commitment_elected: ['next-validator'],
+        })
       // Platform shows a closed round's seed to operators; read scope never
       // carries it before the round is revealed.
       roundSeed = 'cc'.repeat(32)

@@ -310,6 +310,9 @@ const roundSummarySchema = z.object({
   epochs_per_round: z.number().int(),
   commitment: z.string(),
   commitment_publication: z.enum(['pending', 'published', 'failed', 'disabled']),
+  // Validators that confirmed the commitment on chain. Absent from a Platform
+  // that predates validator-published commitments.
+  commitment_confirmations: z.number().int().optional(),
   committed_at: z.string(),
   open_epoch_index: z.number().int().nullable().optional(),
   open_block: z.number().int().nullable().optional(),
@@ -397,6 +400,22 @@ export const generatorRoundDetailSchema = z.object({
   lease_attempts: z.number().int(),
   commitment_published_at: z.string().nullable(),
   commitment_error: z.string().nullable(),
+  // Validator-published commitments (DITTO-1429). Optional so an older
+  // Platform, which published from its own identity, still parses.
+  commitment_publishers_target: z.number().int().optional(),
+  commitment_publications: z.array(
+    z.object({
+      validator_hotkey: z.string(),
+      status: z.enum(['claimed', 'confirmed', 'failed', 'expired']),
+      claimed_at: z.string(),
+      claim_expires_at: z.string(),
+      reported_at: z.string().nullable().optional(),
+      block_number: z.number().int().nullable().optional(),
+      extrinsic_hash: z.string().nullable().optional(),
+      detail: z.string().nullable().optional(),
+    }),
+  ).optional(),
+  commitment_elected: z.array(z.string()).optional(),
   attempts: z.array(
     z.object({
       agent_id: uuid,

@@ -13662,6 +13662,50 @@ class GeneratorRoundAttempt(Base):
     )
 
 
+class GeneratorRoundCommitmentPublication(Base):
+    """One validator's publication of a committed round's seed commitment.
+
+    Platform elects a few validators per committed round (see
+    ``generator_rounds.elect_commitment_publishers``) to publish
+    ``dgr1:{round}:{commitment}`` with ``Commitments.set_commitment`` from
+    their own Pylon identity. A row is ``claimed`` when Platform hands the
+    job out, then ``confirmed`` (the validator read the value back on chain at
+    ``block_number``) or ``failed``. A claim with no report after
+    ``claim_expires_at`` no longer holds an election slot.
+    """
+
+    __tablename__ = "generator_round_commitment_publications"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    commitment: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    claim_expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    reported_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    block_number: Mapped[int | None] = mapped_column(BigInteger)
+    extrinsic_hash: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "status IN ('claimed', 'confirmed', 'failed')",
+            name="publication_status_check",
+        ),
+        CheckConstraint(
+            "status <> 'confirmed' OR block_number IS NOT NULL",
+            name="publication_block_check",
+        ),
+    )
+
+
 class GeneratorRoundCaseVerdict(Base):
     """One case of one column of a scored round.
 

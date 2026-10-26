@@ -119,8 +119,10 @@ class GeneratorCompetitionSettings(BaseModel):
     """Rounds after a round opens before its secret, seed, and dataset are
     revealed publicly."""
     onchain_commitment: bool = True
-    """Also publish each round's seed commitment on-chain (a Commitments
-    pallet ``set_commitment`` from Platform's Pylon identity)."""
+    """Also publish each round's seed commitment on-chain: Platform elects up
+    to three fresh validators per round to write ``dgr1:{round}:{commitment}``
+    with the Commitments pallet ``set_commitment`` from their own Pylon
+    identities. Best effort; a round opens either way."""
     validator_rounds_enabled: bool = False
     """Issue round panel runs to validators. Off, rounds generate and wait
     without consuming validator capacity."""

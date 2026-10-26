@@ -117,7 +117,6 @@ def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> MagicMock
             )
         ]
     )
-    chain.set_commitment = AsyncMock()
     # The lease endpoint reads the head at lease time. By default it is the
     # position the test last advanced the round loop to, five blocks into
     # that epoch, as on chain. Tests that need another head override this.
@@ -1027,38 +1026,33 @@ class TestOperatorControls:
         assert "round 6: committed" in tick["actions"]
         assert tick["schedule"]["current_round"] == 5
         assert tick["schedule"]["next_round_epoch"] == 24
-        # The commitment went on-chain.
+        # Platform never publishes the commitment itself: it waits for elected
+        # validators, and the loop has no publication step any more.
         async with session_maker() as session:
             row = await get_round(session, 6)
-            assert row is not None and row.commitment_publication == "published"
-        chain.set_commitment.assert_awaited_with(
-            onchain_commitment_payload(6, row.commitment)
-        )
+            assert row is not None and row.commitment_publication == "pending"
+        assert not hasattr(GeneratorRoundLoop, "publish_commitments")
 
-        # A failed publication is visible and can be retried.
-        chain.set_commitment = AsyncMock(side_effect=RuntimeError("pylon down"))
-        loop = GeneratorRoundLoop(app_state=app.state, session_maker=session_maker)
+        # A failed publication is reopened for validators, not published here.
         async with session_maker() as session, session.begin():
             rnd = await get_round(session, 6, for_update=True)
             assert rnd is not None
-            rnd.commitment_publication = "pending"
-        await loop.publish_commitments(now=datetime.now(UTC))
-        detail = (await client.get(f"{_ROUNDS_URL}/6", headers=_ADMIN)).json()
-        assert detail["summary"]["commitment_publication"] == "failed"
-        assert "pylon down" in detail["commitment_error"]
-        chain.set_commitment = AsyncMock()
+            rnd.commitment_publication = "failed"
+            rnd.commitment_error = "no validator confirmed"
         retry = await client.post(
             f"{_ROUNDS_URL}/6/republish-commitment",
             headers=_ADMIN,
             json={
                 "expected_status": "committed",
-                "reason": "pylon is back",
+                "reason": "validators are back",
                 "actor": "backroom:test",
                 "confirmation": "REPUBLISH GENERATOR ROUND COMMITMENT",
             },
         )
         assert retry.status_code == 200, retry.text
-        assert retry.json()["summary"]["commitment_publication"] == "published"
+        assert retry.json()["summary"]["commitment_publication"] == "pending"
+        assert retry.json()["commitment_error"] is None
+        assert retry.json()["commitment_publishers_target"] == 3
 
         # Void is confirmation- and status-guarded.
         body = {

@@ -167,7 +167,8 @@ Each round's secret is revealed after `privacy_window_rounds`.
   - `list_generator_rounds`, `get_generator_round`, `preview_generator_round`
     and `get_generator_round_loop` expose the following:
     - the schedule;
-    - each round's commitment and its publication;
+    - each round's commitment and which elected validators published it
+      on chain (claim, status, block);
     - columns, panel and per-column generation;
     - every validator lease and result;
     - pending agents;
@@ -188,8 +189,8 @@ Each round's secret is revealed after `privacy_window_rounds`.
     `close_generator_round` (`CLOSE GENERATOR ROUND {n}`) scores a running
     round with the results it already has.
   - `republish_generator_round_commitment`
-    (`REPUBLISH GENERATOR ROUND COMMITMENT`) retries a failed on-chain
-    commitment for a round that has not opened.
+    (`REPUBLISH GENERATOR ROUND COMMITMENT`) re-elects validators to
+    publish the on-chain commitment of a round that has not opened.
   - `release_generator_round_lease` (`RELEASE GENERATOR ROUND LEASE`) frees a
     quiet validator's round lease.
   - `rotate_generator_probe_seed` needs the confirmation

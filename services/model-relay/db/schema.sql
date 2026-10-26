@@ -4128,6 +4128,26 @@ CREATE TABLE public.generator_round_case_verdicts (
 
 
 --
+-- Name: generator_round_commitment_publications; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_round_commitment_publications (
+    round_index bigint NOT NULL,
+    validator_hotkey text NOT NULL,
+    commitment text NOT NULL,
+    status text NOT NULL,
+    claimed_at timestamp with time zone NOT NULL,
+    claim_expires_at timestamp with time zone NOT NULL,
+    reported_at timestamp with time zone,
+    block_number bigint,
+    extrinsic_hash text,
+    detail text,
+    CONSTRAINT ck_generator_round_commitment_publications_publication__0173 CHECK ((status = ANY (ARRAY['claimed'::text, 'confirmed'::text, 'failed'::text]))),
+    CONSTRAINT ck_generator_round_commitment_publications_publication__b208 CHECK (((status <> 'confirmed'::text) OR (block_number IS NOT NULL)))
+);
+
+
+--
 -- Name: generator_round_results; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9296,6 +9316,14 @@ ALTER TABLE ONLY public.generator_round_case_verdicts
 
 
 --
+-- Name: generator_round_commitment_publications pk_generator_round_commitment_publications; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_commitment_publications
+    ADD CONSTRAINT pk_generator_round_commitment_publications PRIMARY KEY (round_index, validator_hotkey);
+
+
+--
 -- Name: generator_round_results pk_generator_round_results; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14273,6 +14301,14 @@ ALTER TABLE ONLY public.generator_round_attempts
 
 ALTER TABLE ONLY public.generator_round_case_verdicts
     ADD CONSTRAINT fk_generator_round_case_verdicts_round_index_generator_rounds FOREIGN KEY (round_index) REFERENCES public.generator_rounds(round_index) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_round_commitment_publications fk_generator_round_commitment_publications_round_index__ea4c; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_commitment_publications
+    ADD CONSTRAINT fk_generator_round_commitment_publications_round_index__ea4c FOREIGN KEY (round_index) REFERENCES public.generator_rounds(round_index) ON DELETE CASCADE;
 
 
 --

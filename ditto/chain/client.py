@@ -440,6 +440,58 @@ class ChainClient:
             f"with {len(weights)} entries"
         )
 
+    # --- Commitments ---
+
+    def has_identity(self) -> bool:
+        """True when this client can submit identity-scoped extrinsics."""
+        return bool(self._config.identity_name and self._config.identity_token)
+
+    async def set_commitment(self, data: bytes) -> None:
+        """Publish ``data`` as this hotkey's subnet commitment via Pylon.
+
+        Used for generator-round seed commitments Platform elects this
+        validator to publish. Pylon schedules the extrinsic and returns before
+        it lands; read it back with :meth:`get_own_commitment`. The
+        Commitments pallet keeps one value per hotkey and subnet, so each call
+        overwrites the last.
+
+        Raises:
+            ChainAuthError: When the client has no identity, or Pylon refuses it.
+            ChainConnectionError: When Pylon rejects or cannot reach the chain.
+            ValueError: When ``data`` is empty or over the pallet's 128 bytes.
+        """
+        if not self.has_identity():
+            raise ChainAuthError("set_commitment requires a Pylon identity client")
+        if not data or len(data) > 128:
+            raise ValueError("commitment data must be 1..128 bytes")
+        pylon = self._ensure_pylon()
+        try:
+            await pylon.v1.identity.set_commitment(data.hex())
+        except Exception as e:
+            raise _translate_pylon_error(e, "set_commitment") from e
+        logger.info(
+            f"set_commitment submitted for netuid={self._config.netuid} "
+            f"({len(data)} bytes)"
+        )
+
+    async def get_own_commitment(self, hotkey: str) -> tuple[int, bytes] | None:
+        """Read ``hotkey``'s current subnet commitment as ``(block, data)``.
+
+        ``None`` when the hotkey has no commitment. The block is the one the
+        chain stamped the commitment at.
+        """
+        pylon = self._ensure_pylon()
+        try:
+            response = await pylon.v1.identity.get_commitment(hotkey)
+        except Exception as e:
+            translated = _translate_pylon_error(e, "get_commitment")
+            if isinstance(translated, ExtrinsicNotFoundError):
+                return None
+            raise translated from e
+        raw = str(response.commitment)
+        data = bytes.fromhex(raw.removeprefix("0x"))
+        return int(response.commitment_block_number), data
+
     async def _weight_receipt_request(
         self,
         method: str,

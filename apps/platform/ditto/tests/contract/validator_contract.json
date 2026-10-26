@@ -8181,6 +8181,10 @@
           "require_screened_image": {
             "type": "boolean"
           },
+          "round_commitments": {
+            "default": false,
+            "type": "boolean"
+          },
           "sandbox_egress_restricted": {
             "type": "boolean"
           },

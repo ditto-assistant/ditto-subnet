@@ -917,7 +917,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_generator_round_dataset: 'Download a closed round\'s exact dataset to reproduce it. Artifact scope.',
   void_generator_round: 'Void a round with VOID GENERATOR ROUND {n}; expires its live leases.',
   close_generator_round: 'Close a running round now with CLOSE GENERATOR ROUND {n}; scores what it has.',
-  republish_generator_round_commitment: 'Retry a failed on-chain commitment for a committed round.',
+  republish_generator_round_commitment: 'Re-elect validators to publish a committed round\'s commitment.',
   release_generator_round_lease: 'Release one validator\'s stuck round lease so the agent re-leases.',
   register_default_generator: 'Register the public default generator (uploadKey or sourceBase64) that fills empty counted columns.',
   create_default_generator_upload: 'Presigned five-minute PUT for one default-generator archive under this operator\'s prefix.',
@@ -1839,13 +1839,13 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('list_generator_rounds', {
     title: 'List generator rounds',
-    description: 'Newest-first generator rounds and the chain schedule. A round is keyed on the chain epoch counter (round = SubnetEpochIndex // epochs_per_round). Each round reports status (committed: secret drawn and commitment published one round ahead; generating: columns and panel frozen, seed derived from the committed secret and the block the round opened at, waiting for the scorer to build the dataset; running: validators are running panel agents on it; scoring; scored; void with void_reason), commitment and its on-chain publication state, open epoch and block, column count, panel size, results received, and once past privacy_window_rounds the revealed secret and seed. schedule shows the observed SubnetEpochIndex, current round, and the epoch the next round opens at. Requires backroom:read.',
+    description: 'Newest-first generator rounds and the chain schedule. A round is keyed on the chain epoch counter (round = SubnetEpochIndex // epochs_per_round). Each round reports status (committed: secret drawn and commitment published one round ahead; generating: columns and panel frozen, seed derived from the committed secret and the block the round opened at, waiting for the scorer to build the dataset; running: validators are running panel agents on it; scoring; scored; void with void_reason), commitment and its on-chain publication state (published by elected validators; commitment_confirmations counts them), open epoch and block, column count, panel size, results received, and once past privacy_window_rounds the revealed secret and seed. schedule shows the observed SubnetEpochIndex, current round, and the epoch the next round opens at. Requires backroom:read.',
     inputSchema: listGeneratorRoundsInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await listGeneratorRounds(input)))
 
   registerTool('get_generator_round', {
     title: 'Get generator round',
-    description: 'Everything about one round for running or debugging it: the frozen columns (submission, hotkey, owner key, source SHA-256, counted or challenger, public default), the panel (agents, owner keys, champion, reference agents), the settings revision and cases per column, per-column generation results (ok, error, build and generate durations, scorer version), case counts per column and dataset size, the scorer lease and its attempts, commitment publication and error, every validator lease attempt (validator, slot, deadline, status, detail), every accepted result (validator, run id, answered, faulted, mean score), the panel agents still pending, and once scored the per-column scores and pairwise-neutral agent standings. The seed and secret are withheld until the round is revealed; get_generator_round_dataset (backroom:artifact:read) returns the seed with the dataset. Requires backroom:read.',
+    description: 'Everything about one round for running or debugging it: the frozen columns (submission, hotkey, owner key, source SHA-256, counted or challenger, public default), the panel (agents, owner keys, champion, reference agents), the settings revision and cases per column, per-column generation results (ok, error, build and generate durations, scorer version), case counts per column and dataset size, the scorer lease and its attempts, commitment publication and error, which validators published the commitment on chain (commitment_publications: each elected validator\'s claim, status claimed/confirmed/failed/expired, block number and detail; commitment_elected: who is asked right now; commitment_publishers_target), every validator lease attempt (validator, slot, deadline, status, detail), every accepted result (validator, run id, answered, faulted, mean score), the panel agents still pending, and once scored the per-column scores and pairwise-neutral agent standings. The seed and secret are withheld until the round is revealed; get_generator_round_dataset (backroom:artifact:read) returns the seed with the dataset. Requires backroom:read.',
     inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorRound(input)))
 
@@ -1863,7 +1863,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('tick_generator_rounds', {
     title: 'Tick generator rounds',
-    description: 'Run one round-driver tick now instead of waiting up to a minute: read the epoch schedule at a finalized head and apply every transition already due (commit the next round, open the current one, close or void earlier ones, reveal past the privacy window), then publish pending on-chain commitments. Idempotent: at the same chain position a second tick changes nothing. Needs a reason. Returns the actions taken or the error. Requires backroom:write.',
+    description: 'Run one round-driver tick now instead of waiting up to a minute: read the epoch schedule at a finalized head and apply every transition already due (commit the next round, open the current one, close or void earlier ones, reveal past the privacy window), and settle the on-chain commitment publication of rounds that opened (elected validators publish commitments; Platform does not). Idempotent: at the same chain position a second tick changes nothing. Needs a reason. Returns the actions taken or the error. Requires backroom:write.',
     inputSchema: tickGeneratorRoundsInputSchema, annotations: toolAnnotations('write', false),
   }, async (input) => write(() => tickGeneratorRounds(input, props.session.email)))
 
@@ -1887,7 +1887,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('republish_generator_round_commitment', {
     title: 'Republish generator round commitment',
-    description: 'Retry the on-chain publication (Commitments set_commitment from Platform\'s Pylon identity, payload dgr1:{round}:{commitment}) of a committed round whose publication failed or was disabled. Only before the round opens: a commitment published after the open proves nothing. Confirmation: REPUBLISH GENERATOR ROUND COMMITMENT. Requires backroom:write.',
+    description: 'Reopen on-chain publication of a committed round\'s seed commitment (payload dgr1:{round}:{commitment}). Platform never publishes it itself: it elects up to three fresh validators advertising round_commitments, in a stable per-round order, to call Commitments set_commitment from their own Pylon identity. This sets publication back to pending and forgets every failed or unconfirmed validator claim so the election starts over; confirmed validators still count. Refused once the round reached its validator target or opened (a commitment published after the open proves nothing). Confirmation: REPUBLISH GENERATOR ROUND COMMITMENT. Requires backroom:write.',
     inputSchema: republishRoundCommitmentInputSchema, annotations: toolAnnotations('write', false),
   }, async (input) => write(() => republishGeneratorRoundCommitment(input, props.session.email)))
 

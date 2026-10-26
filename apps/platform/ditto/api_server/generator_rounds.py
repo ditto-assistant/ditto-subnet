@@ -8,7 +8,12 @@ validators fold. The lifecycle (:func:`advance_rounds`, driven by
 
 1. **Commit.** While round ``r`` runs, Platform draws round ``r + 1``'s 32-byte
    secret and publishes ``commitment = RoundCommitment(r + 1, secret)`` on
-   Platform and, when enabled, on-chain (``Commitments.set_commitment``).
+   Platform. When ``onchain_commitment`` is enabled, Platform elects up to
+   :data:`ROUND_COMMITMENT_PUBLISHERS` fresh validators (a stable per-round
+   order) to publish ``dgr1:{r + 1}:{commitment}`` with
+   ``Commitments.set_commitment`` from their own Pylon identity
+   (``endpoints/validator_generator_round.py``). This is best effort: a round
+   opens whether or not any validator confirmed the on-chain copy.
 2. **Open.** At the first epoch of round ``r``, a round committed before that
    epoch derives ``seed = RoundSeed(r, secret, open_block_hash)`` (the block
    the epoch fired at, unknowable when the secret was committed) and freezes
@@ -39,12 +44,13 @@ import hashlib
 import logging
 import secrets
 import struct
-from collections.abc import Awaitable, Callable
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import and_, func, select, update
 
 from ditto.api_models.generator import PanelCaseResult
@@ -52,10 +58,17 @@ from ditto.api_models.generator_ledger import (
     GeneratorLedgerEntry,
     GeneratorLedgerResponse,
 )
-from ditto.api_models.generator_round_validator import GeneratorRoundCaseResult
+from ditto.api_models.generator_round_validator import (
+    GeneratorRoundCaseResult,
+    GeneratorRoundCommitmentJobResponse,
+    GeneratorRoundCommitmentReportRequest,
+    GeneratorRoundCommitmentReportResponse,
+    round_commitment_payload,
+)
 from ditto.api_models.generator_rounds import (
     GeneratorRoundAttemptView,
     GeneratorRoundColumnView,
+    GeneratorRoundCommitmentPublicationView,
     GeneratorRoundGenerateResult,
     GeneratorRoundLoopStatus,
     GeneratorRoundResultView,
@@ -69,16 +82,18 @@ from ditto.api_models.generator_rounds import (
     RoundMatrixAgent,
     RoundMatrixColumn,
     RoundSourceColumn,
-    onchain_commitment_payload,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_models.validator_capabilities import ValidatorCapabilities
 from ditto.db.models import (
     Agent,
     GeneratorRound,
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
+    GeneratorRoundCommitmentPublication,
     GeneratorRoundResult,
     GeneratorSubmission,
+    ValidatorHeartbeat,
     ValidatorTicket,
 )
 from ditto.db.queries.generator import claimed_fingerprints
@@ -101,6 +116,16 @@ MAX_COLUMNS = 8
 # this long; a round whose generation keeps failing is voided.
 ROUND_LEASE_TTL = timedelta(minutes=30)
 MAX_GENERATION_ATTEMPTS = 4
+# Round commitment publication by validators (best effort, never gates a
+# round): how many confirmed publications a round wants, how long one elected
+# validator holds its claim before the next in order may take its place, how
+# often an unfinished election widens by one more validator, and how fresh a
+# validator's heartbeat must be to be elected.
+ROUND_COMMITMENT_PUBLISHERS = 3
+COMMITMENT_CLAIM_TTL = timedelta(minutes=10)
+COMMITMENT_ESCALATION_INTERVAL = timedelta(minutes=15)
+COMMITMENT_HEARTBEAT_FRESHNESS = timedelta(minutes=5)
+PUBLISHER_ORDER_DOMAIN = b"dittobench-generator-round-publisher/v1"
 
 
 # --- derivations ------------------------------------------------------------
@@ -498,19 +523,9 @@ async def advance_rounds(
             # The seed binds the boundary block of the round's first epoch, and
             # only the latest boundary is observable: a round the loop reaches
             # late cannot be opened on the block its commitment promised.
-            opening.commitment_publication = (
-                opening.commitment_publication
-                if opening.commitment_publication == "published"
-                else "disabled"
-            )
             void_round(opening, "round opening epoch was missed", now=now)
             out.note(f"round {current}: void (opening epoch missed)")
         elif opening.committed_epoch_index >= first_epoch:
-            opening.commitment_publication = (
-                opening.commitment_publication
-                if opening.commitment_publication == "published"
-                else "disabled"
-            )
             void_round(opening, "not committed before the round opened", now=now)
             out.note(f"round {current}: void (committed too late)")
         else:
@@ -519,7 +534,12 @@ async def advance_rounds(
             )
             out.note(f"round {current}: {opening.status}")
 
-    # 4. Reveal rounds past the privacy window.
+    # 4. Settle the publication of every round that left ``committed``: no
+    # validator is asked to publish a commitment once its round opened.
+    for settled in await settle_commitment_publications(session):
+        out.note(settled)
+
+    # 5. Reveal rounds past the privacy window.
     reveal = await session.scalars(
         select(GeneratorRound)
         .where(
@@ -1052,6 +1072,9 @@ async def round_summary(
         epochs_per_round=row.epochs_per_round,
         commitment=row.commitment,
         commitment_publication=row.commitment_publication,  # type: ignore[arg-type]
+        commitment_confirmations=await commitment_confirmations(
+            session, row.round_index
+        ),
         committed_at=row.committed_at,
         open_epoch_index=row.open_epoch_index,
         open_block=row.open_block,
@@ -1272,16 +1295,14 @@ async def build_round_ledger(
 # --- driver -----------------------------------------------------------------
 
 
-CommitmentPublisher = Callable[[bytes], Awaitable[None]]
-
-
 class GeneratorRoundLoop:
     """Drive round transitions from the chain's epoch counter.
 
     One loop per platform role. Every tick reads the subnet's epoch schedule
-    at a finalized head, applies :func:`advance_rounds` in one transaction,
-    then publishes pending commitments outside it. A chain read failure
-    changes nothing: rounds never advance on a guess.
+    at a finalized head and applies :func:`advance_rounds` in one
+    transaction. A chain read failure changes nothing: rounds never advance on
+    a guess. Platform never publishes a round commitment itself; elected
+    validators do (:func:`claim_commitment_publication`).
     """
 
     def __init__(
@@ -1370,7 +1391,6 @@ class GeneratorRoundLoop:
                 actions = await advance_rounds(
                     session, resolved=resolved, position=position, now=now
                 )
-            await self.publish_commitments(now=now)
             return actions
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"[:500]
@@ -1386,39 +1406,318 @@ class GeneratorRoundLoop:
                 ticks=self.status.ticks + 1,
             )
 
-    async def publish_commitments(self, *, now: datetime) -> None:
-        """Publish every pending commitment on-chain, best effort.
 
-        The Platform record is authoritative; the on-chain copy is a public
-        timestamp. A failure is recorded and can be retried from Backroom.
-        """
-        chain = getattr(self._app_state, "chain", None)
-        async with self._session_maker() as session:
-            pending = list(
-                await session.scalars(
-                    select(GeneratorRound)
-                    .where(GeneratorRound.commitment_publication == "pending")
-                    .order_by(GeneratorRound.round_index)
-                )
+# --- commitment publication by validators -----------------------------------
+
+
+def publisher_rank_key(round_index: int, validator_hotkey: str) -> str:
+    """A validator's place in a round's publisher order (lower goes first).
+
+    Stable per round and unpredictable across rounds, so the same few
+    validators are asked for one round while the duty rotates between rounds.
+    """
+    return hashlib.sha256(
+        PUBLISHER_ORDER_DOMAIN
+        + b"\x00"
+        + struct.pack(">Q", round_index)
+        + validator_hotkey.encode()
+    ).hexdigest()
+
+
+def publisher_order(round_index: int, hotkeys: Iterable[str]) -> list[str]:
+    return sorted(set(hotkeys), key=lambda h: (publisher_rank_key(round_index, h), h))
+
+
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def commitment_capable(heartbeat: ValidatorHeartbeat, *, now: datetime) -> bool:
+    """A fresh heartbeat advertising the ``round_commitments`` capability."""
+    if now - _aware(heartbeat.seen_at) > COMMITMENT_HEARTBEAT_FRESHNESS:
+        return False
+    try:
+        capabilities = ValidatorCapabilities.model_validate(heartbeat.capabilities)
+    except ValidationError:
+        return False
+    return capabilities.round_commitments
+
+
+async def commitment_capable_hotkeys(
+    session: AsyncSession, *, now: datetime
+) -> list[str]:
+    heartbeats = await session.scalars(
+        select(ValidatorHeartbeat).where(
+            ValidatorHeartbeat.seen_at >= now - COMMITMENT_HEARTBEAT_FRESHNESS
+        )
+    )
+    return [
+        heartbeat.validator_hotkey
+        for heartbeat in heartbeats
+        if commitment_capable(heartbeat, now=now)
+    ]
+
+
+@dataclass(frozen=True)
+class CommitmentElection:
+    """Who should publish one round's commitment now."""
+
+    target: int
+    confirmed: tuple[str, ...]
+    elected: tuple[str, ...]
+
+
+def elect_commitment_publishers(
+    row: GeneratorRound,
+    publications: Iterable[GeneratorRoundCommitmentPublication],
+    capable: Iterable[str],
+    *,
+    now: datetime,
+    target: int = ROUND_COMMITMENT_PUBLISHERS,
+) -> CommitmentElection:
+    """Elect the validators that should publish ``row``'s commitment now.
+
+    Confirmed publications count toward ``target``. The remaining places go to
+    capable validators in the round's publisher order, skipping any that
+    already failed or let a claim expire. A live claim keeps its place. Each
+    :data:`COMMITMENT_ESCALATION_INTERVAL` since the first claim without
+    reaching ``target`` widens the election by one validator, so a validator
+    that is fresh but never answers cannot stall publication. Once ``target``
+    confirmed, nobody else is elected.
+    """
+    publications = list(publications)
+    confirmed = tuple(
+        sorted(p.validator_hotkey for p in publications if p.status == "confirmed")
+    )
+    needed = max(0, target - len(confirmed))
+    if needed == 0:
+        return CommitmentElection(target=target, confirmed=confirmed, elected=())
+    excluded = set(confirmed) | {
+        p.validator_hotkey
+        for p in publications
+        if p.status == "failed"
+        or (p.status == "claimed" and _aware(p.claim_expires_at) <= now)
+    }
+    claims = [_aware(p.claimed_at) for p in publications]
+    widen = int((now - min(claims)) / COMMITMENT_ESCALATION_INTERVAL) if claims else 0
+    candidates = [
+        hotkey
+        for hotkey in publisher_order(row.round_index, capable)
+        if hotkey not in excluded
+    ]
+    return CommitmentElection(
+        target=target,
+        confirmed=confirmed,
+        elected=tuple(candidates[: needed + widen]),
+    )
+
+
+async def _publications(
+    session: AsyncSession, round_index: int, *, for_update: bool = False
+) -> list[GeneratorRoundCommitmentPublication]:
+    stmt = (
+        select(GeneratorRoundCommitmentPublication)
+        .where(GeneratorRoundCommitmentPublication.round_index == round_index)
+        .order_by(GeneratorRoundCommitmentPublication.claimed_at)
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return list(await session.scalars(stmt))
+
+
+async def commitment_confirmations(session: AsyncSession, round_index: int) -> int:
+    return int(
+        await session.scalar(
+            select(func.count()).where(
+                GeneratorRoundCommitmentPublication.round_index == round_index,
+                GeneratorRoundCommitmentPublication.status == "confirmed",
             )
-        for row in pending:
-            outcome, error = "published", None
-            try:
-                if chain is None or not hasattr(chain, "set_commitment"):
-                    raise RuntimeError("chain client cannot publish commitments")
-                await chain.set_commitment(
-                    onchain_commitment_payload(row.round_index, row.commitment)
-                )
-            except Exception as exc:  # noqa: BLE001 - recorded for operators
-                outcome, error = "failed", f"{type(exc).__name__}: {exc}"[:500]
-                logger.warning(
-                    "generator round %s commitment publication failed: %s",
-                    row.round_index,
-                    error,
-                )
-            async with self._session_maker() as session, session.begin():
-                locked = await get_round(session, row.round_index, for_update=True)
-                if locked is not None and locked.commitment_publication == "pending":
-                    locked.commitment_publication = outcome
-                    locked.commitment_error = error
-                    locked.commitment_published_at = now if error is None else None
+        )
+        or 0
+    )
+
+
+async def claim_commitment_publication(
+    session: AsyncSession, *, validator_hotkey: str, now: datetime
+) -> GeneratorRoundCommitmentJobResponse | None:
+    """Hand ``validator_hotkey`` a commitment to publish if it is elected.
+
+    Only rounds still ``committed`` with publication ``pending`` are offered:
+    a commitment published after its round opened proves nothing. The rounds
+    are locked so concurrent polls see each other's claims (caller commits).
+    """
+    rows = list(
+        await session.scalars(
+            select(GeneratorRound)
+            .where(
+                GeneratorRound.status == "committed",
+                GeneratorRound.commitment_publication == "pending",
+            )
+            .order_by(GeneratorRound.round_index)
+            .with_for_update()
+        )
+    )
+    if not rows:
+        return None
+    capable = await commitment_capable_hotkeys(session, now=now)
+    if validator_hotkey not in capable:
+        return None
+    for row in rows:
+        publications = await _publications(session, row.round_index, for_update=True)
+        mine = next(
+            (p for p in publications if p.validator_hotkey == validator_hotkey), None
+        )
+        if mine is not None:
+            # Already answered, or a live claim this validator is working on.
+            continue
+        election = elect_commitment_publishers(row, publications, capable, now=now)
+        if validator_hotkey not in election.elected:
+            continue
+        claim = GeneratorRoundCommitmentPublication(
+            round_index=row.round_index,
+            validator_hotkey=validator_hotkey,
+            commitment=row.commitment,
+            status="claimed",
+            claimed_at=now,
+            claim_expires_at=now + COMMITMENT_CLAIM_TTL,
+        )
+        session.add(claim)
+        await session.flush()
+        return GeneratorRoundCommitmentJobResponse(
+            round_index=row.round_index,
+            commitment=row.commitment,
+            payload=round_commitment_payload(row.round_index, row.commitment),
+            claim_expires_at=claim.claim_expires_at,
+        )
+    return None
+
+
+class CommitmentReportRejected(ValueError):
+    """A commitment report names no claim or another commitment."""
+
+
+async def record_commitment_report(
+    session: AsyncSession,
+    report: GeneratorRoundCommitmentReportRequest,
+    *,
+    now: datetime,
+) -> GeneratorRoundCommitmentReportResponse:
+    """Record one elected validator's publication outcome (caller commits).
+
+    Idempotent: a repeated report, or a ``failed`` report after a
+    ``confirmed`` one, changes nothing. A late ``confirmed`` report is still
+    recorded (the value is on chain at its block); it moves the round to
+    ``published`` only while the round still collects publications.
+    """
+    row = await get_round(session, report.round_index, for_update=True)
+    if row is None:
+        raise CommitmentReportRejected("unknown round")
+    if report.commitment != row.commitment:
+        raise CommitmentReportRejected("report names another commitment")
+    publication = await session.get(
+        GeneratorRoundCommitmentPublication,
+        (report.round_index, report.validator_hotkey),
+        with_for_update=True,
+    )
+    if publication is None:
+        raise CommitmentReportRejected("no publication was claimed by this validator")
+    duplicate = publication.status == "confirmed" or (
+        publication.status == "failed" and report.outcome == "failed"
+    )
+    if not duplicate:
+        publication.status = report.outcome
+        publication.reported_at = now
+        publication.block_number = report.block_number
+        publication.extrinsic_hash = report.extrinsic_hash
+        publication.detail = report.detail
+        await session.flush()
+    confirmations = await commitment_confirmations(session, row.round_index)
+    if not duplicate and report.outcome == "confirmed":
+        row.commitment_published_at = row.commitment_published_at or now
+        if (
+            row.commitment_publication == "pending"
+            and confirmations >= ROUND_COMMITMENT_PUBLISHERS
+        ):
+            row.commitment_publication = "published"
+            row.commitment_error = None
+    return GeneratorRoundCommitmentReportResponse(
+        round_index=row.round_index,
+        accepted=not duplicate,
+        duplicate=duplicate,
+        confirmations=confirmations,
+        target=ROUND_COMMITMENT_PUBLISHERS,
+    )
+
+
+async def settle_commitment_publications(session: AsyncSession) -> list[str]:
+    """Close publication for rounds that left ``committed`` while pending.
+
+    One confirmed validator publication is enough for ``published``. With
+    none, an opened round is ``failed`` (the on-chain copy never landed) and a
+    void round ``disabled`` (nobody needs it). Returns one note per round.
+    """
+    rows = list(
+        await session.scalars(
+            select(GeneratorRound)
+            .where(
+                GeneratorRound.commitment_publication == "pending",
+                GeneratorRound.status != "committed",
+            )
+            .with_for_update()
+        )
+    )
+    notes: list[str] = []
+    for row in rows:
+        confirmations = await commitment_confirmations(session, row.round_index)
+        if confirmations > 0:
+            row.commitment_publication = "published"
+            row.commitment_error = None
+        elif row.status == "void":
+            row.commitment_publication = "disabled"
+        else:
+            row.commitment_publication = "failed"
+            row.commitment_error = (
+                "no validator confirmed the on-chain commitment before the round opened"
+            )
+        notes.append(
+            f"round {row.round_index}: commitment publication "
+            f"{row.commitment_publication} ({confirmations} confirmed)"
+        )
+    return notes
+
+
+async def commitment_publication_views(
+    session: AsyncSession, row: GeneratorRound, *, now: datetime
+) -> tuple[list[GeneratorRoundCommitmentPublicationView], list[str]]:
+    """Every validator publication of ``row`` plus who is elected right now."""
+    publications = await _publications(session, row.round_index)
+    order = {
+        hotkey: rank
+        for rank, hotkey in enumerate(
+            publisher_order(row.round_index, (p.validator_hotkey for p in publications))
+        )
+    }
+    views = [
+        GeneratorRoundCommitmentPublicationView(
+            validator_hotkey=p.validator_hotkey,
+            status=(
+                "expired"
+                if p.status == "claimed" and _aware(p.claim_expires_at) <= now
+                else p.status  # type: ignore[arg-type]
+            ),
+            claimed_at=p.claimed_at,
+            claim_expires_at=p.claim_expires_at,
+            reported_at=p.reported_at,
+            block_number=p.block_number,
+            extrinsic_hash=p.extrinsic_hash,
+            detail=p.detail,
+        )
+        for p in sorted(publications, key=lambda p: order[p.validator_hotkey])
+    ]
+    elected: list[str] = []
+    if row.status == "committed" and row.commitment_publication == "pending":
+        capable = await commitment_capable_hotkeys(session, now=now)
+        elected = list(
+            elect_commitment_publishers(row, publications, capable, now=now).elected
+        )
+    return views, elected

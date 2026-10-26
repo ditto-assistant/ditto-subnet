@@ -79,6 +79,10 @@ GENERATOR_ROUND_MODELS = [
     "GeneratorRoundScoreResponse",
     "GeneratorRoundFailRequest",
     "GeneratorRoundFailResponse",
+    "GeneratorRoundCommitmentJobRequest",
+    "GeneratorRoundCommitmentJobResponse",
+    "GeneratorRoundCommitmentReportRequest",
+    "GeneratorRoundCommitmentReportResponse",
 ]
 
 # The miner-CLI request/response models that cross the same boundary, keyed by

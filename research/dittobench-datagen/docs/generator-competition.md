@@ -206,6 +206,14 @@ unpredictable to Platform, which must not be able to grind it.
    `sha256("dittobench-generator-round-commit/v1" ‖ 0 ‖ u64be(r) ‖ secret)`.
    The commitment goes on Platform and, when `onchain_commitment` is set, on
    chain as a Commitments `set_commitment` of `dgr1:{r}:{commitment}`.
+   Validators publish the on-chain copy, not Platform. Platform elects up to
+   three fresh validators that advertise `round_commitments`, in a stable
+   per-round order (`sha256("dittobench-generator-round-publisher/v1" ‖ 0 ‖
+   u64be(r) ‖ hotkey)`, lowest first). Each elected validator calls
+   `set_commitment` from its own Pylon identity, reads its commitment back, and
+   reports the block. A failed or silent validator hands its place to the next
+   one in order. Publication is best effort: a round opens whether or not any
+   validator confirmed it.
 2. **Open.** At round `r`'s epoch boundary, Platform derives
    `seed = RoundSeed(r, secret, open_block_hash)`, using the hash of the block
    the epoch fired at. That block did not exist when the secret was committed.

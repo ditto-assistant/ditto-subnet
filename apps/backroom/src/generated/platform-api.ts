@@ -1874,7 +1874,12 @@ export interface paths {
         put?: never;
         /**
          * Admin Republish Commitment
-         * @description Retry a failed on-chain commitment publication for a committed round.
+         * @description Ask elected validators to publish a committed round's commitment again.
+         *
+         *     Platform never publishes a commitment itself. This reopens publication
+         *     (``pending``) and forgets every failed or unconfirmed validator claim, so
+         *     the round's publisher order elects again from the validators fresh now.
+         *     Confirmed publications are kept and still count toward the target.
          */
         post: operations["admin_republish_commitment_api_v1_admin_generator_competition_rounds__round_index__republish_commitment_post"];
         delete?: never;
@@ -8604,6 +8609,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/generator-round-commitment-job": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Generator Round Commitment Job
+         * @description Claim a committed round's on-chain commitment if this validator is elected.
+         */
+        post: operations["request_generator_round_commitment_job_api_v1_validator_generator_round_commitment_job_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/generator-round-commitment-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Generator Round Commitment
+         * @description Record a claimed commitment publication's signed outcome.
+         */
+        post: operations["report_generator_round_commitment_api_v1_validator_generator_round_commitment_report_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/generator-round-job": {
         parameters: {
             query?: never;
@@ -11474,10 +11519,19 @@ export interface components {
             columns: components["schemas"]["GeneratorRoundColumnSlot"][];
             /** Columns Scored */
             columns_scored: components["schemas"]["GeneratorRoundColumnView"][];
+            /** Commitment Elected */
+            commitment_elected?: string[];
             /** Commitment Error */
             commitment_error: string | null;
+            /** Commitment Publications */
+            commitment_publications?: components["schemas"]["GeneratorRoundCommitmentPublicationView"][];
             /** Commitment Published At */
             commitment_published_at: string | null;
+            /**
+             * Commitment Publishers Target
+             * @default 0
+             */
+            commitment_publishers_target: number;
             /** Dataset Bytes */
             dataset_bytes: number | null;
             /** Generation */
@@ -21648,6 +21702,149 @@ export interface components {
             /** Unsolved */
             unsolved?: number | null;
         };
+        /**
+         * GeneratorRoundCommitmentJobRequest
+         * @description Ask Platform whether this validator should publish a round commitment.
+         */
+        GeneratorRoundCommitmentJobRequest: {
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * GeneratorRoundCommitmentJobResponse
+         * @description One committed round this validator is elected to publish on-chain.
+         *
+         *     ``payload`` is exactly ``round_commitment_payload(round_index,
+         *     commitment)``; a validator refuses any other value. ``claim_expires_at`` is
+         *     when Platform stops waiting for this validator's report and lets the next
+         *     validator in the round's publisher order take its place.
+         */
+        GeneratorRoundCommitmentJobResponse: {
+            /**
+             * Claim Expires At
+             * Format: date-time
+             */
+            claim_expires_at: string;
+            /** Commitment */
+            commitment: string;
+            /** Payload */
+            payload: string;
+            /** Round Index */
+            round_index: number;
+        };
+        /**
+         * GeneratorRoundCommitmentPublicationView
+         * @description One elected validator's on-chain publication of a round commitment.
+         *
+         *     ``expired`` is a claim whose validator never reported before
+         *     ``claim_expires_at``; it no longer holds an election place.
+         */
+        GeneratorRoundCommitmentPublicationView: {
+            /** Block Number */
+            block_number?: number | null;
+            /**
+             * Claim Expires At
+             * Format: date-time
+             */
+            claim_expires_at: string;
+            /**
+             * Claimed At
+             * Format: date-time
+             */
+            claimed_at: string;
+            /** Detail */
+            detail?: string | null;
+            /** Extrinsic Hash */
+            extrinsic_hash?: string | null;
+            /** Reported At */
+            reported_at?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "claimed" | "confirmed" | "failed" | "expired";
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * GeneratorRoundCommitmentReportRequest
+         * @description Signed outcome of one elected round-commitment publication.
+         *
+         *     ``confirmed`` means the validator read its own on-chain commitment back
+         *     and it equals the payload; ``block_number`` is the block the chain stamped
+         *     it at. ``failed`` means the submission or the read-back did not succeed.
+         */
+        GeneratorRoundCommitmentReportRequest: {
+            /** Block Number */
+            block_number?: number | null;
+            /** Commitment */
+            commitment: string;
+            /** Detail */
+            detail?: string | null;
+            /** Extrinsic Hash */
+            extrinsic_hash?: string | null;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "failed";
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Round Index */
+            round_index: number;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** GeneratorRoundCommitmentReportResponse */
+        GeneratorRoundCommitmentReportResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /**
+             * Confirmations
+             * @default 0
+             */
+            confirmations: number;
+            /**
+             * Duplicate
+             * @default false
+             */
+            duplicate: boolean;
+            /** Round Index */
+            round_index: number;
+            /**
+             * Target
+             * @default 0
+             */
+            target: number;
+        };
         /** GeneratorRoundDatasetResponse */
         GeneratorRoundDatasetResponse: {
             /** Dataset Base64 */
@@ -22018,6 +22215,11 @@ export interface components {
             column_count: number;
             /** Commitment */
             commitment: string;
+            /**
+             * Commitment Confirmations
+             * @default 0
+             */
+            commitment_confirmations: number;
             /**
              * Commitment Publication
              * @enum {string}
@@ -38793,6 +38995,11 @@ export interface components {
             full_stack_managed: boolean;
             /** Require Screened Image */
             require_screened_image: boolean;
+            /**
+             * Round Commitments
+             * @default false
+             */
+            round_commitments: boolean;
             /** Sandbox Egress Restricted */
             sandbox_egress_restricted: boolean;
             /**
@@ -56629,6 +56836,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmitTranscriptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_generator_round_commitment_job_api_v1_validator_generator_round_commitment_job_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorRoundCommitmentJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundCommitmentJobResponse"];
+                };
+            };
+            /** @description No commitment needs this validator. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_generator_round_commitment_api_v1_validator_generator_round_commitment_report_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorRoundCommitmentReportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorRoundCommitmentReportResponse"];
                 };
             };
             /** @description Validation Error */

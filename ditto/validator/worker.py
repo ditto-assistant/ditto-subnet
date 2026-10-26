@@ -105,6 +105,7 @@ from ditto.validator.resource_gate import (
     ConstrainedResource,
     ResourceCeilings,
 )
+from ditto.validator.round_commitments import RoundCommitmentPublisher
 from ditto.validator.signing import (
     rebuild_v9_confirmation_evidence_root,
     sign_heartbeat,
@@ -825,6 +826,12 @@ class ValidatorWorker:
         self._weight_setter: Any = weight_setter if weight_setter is not None else chain
         self._weight_receipt_relay = WeightReceiptRelay(
             self._weight_setter, self._platform, config.validator_hotkey, config.netuid
+        )
+        # Generator-round seed commitments this validator is elected to publish
+        # on chain. An independent best-effort lane: it shares no flag or lock
+        # with the weight loop and never delays it.
+        self._round_commitments = RoundCommitmentPublisher(
+            platform, chain, config.validator_hotkey
         )
         # Public telemetry sink. A disabled instance is a cheap no-op, so the
         # sweep can call it unconditionally.
@@ -1742,6 +1749,7 @@ class ValidatorWorker:
                 update={
                     "scorer_benchmarks": scorer_benchmarks,
                     "treasury_weights": await self._treasury_weight_capability(),
+                    "round_commitments": self._round_commitments.supported(),
                 }
             )
             # v9: per-component runtime health. A collector failure (or no
@@ -4911,6 +4919,10 @@ class ValidatorWorker:
             self._run_longmem_forever(stop, drain_requested=drain_requested),
             name="validator-longmem",
         )
+        commitment_task = asyncio.create_task(
+            self._round_commitments.run_forever(stop, drain_requested=drain_requested),
+            name="validator-round-commitments",
+        )
         bootstrap_resume_pending = bootstrap_resume
         try:
             while not stop.is_set():
@@ -4962,10 +4974,13 @@ class ValidatorWorker:
         finally:
             weight_task.cancel()
             longmem_task.cancel()
+            commitment_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await weight_task
             with contextlib.suppress(asyncio.CancelledError):
                 await longmem_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await commitment_task
             # The remembered event belongs to this run's lifetime; a later
             # standalone ``run_once`` must not inherit a drain that ended here.
             if self._drain_requested is drain_requested:

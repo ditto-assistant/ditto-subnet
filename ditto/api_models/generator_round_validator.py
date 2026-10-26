@@ -7,6 +7,11 @@ validator fetches the round dataset through the private-dataset route, runs
 the screened image on it with dittobench-api's ``generator-round-v1`` mode,
 and posts per-case results here. Nothing in this lane writes an agent score.
 
+The same module carries the round-commitment lane: Platform elects a few
+validators per committed round to publish the round's seed commitment
+(``dgr1:{round}:{commitment}``) with ``Commitments.set_commitment`` from their
+own Pylon identity, and each reports the block it observed the value at.
+
 This module is a hand-maintained copy in the validator package
 (``ditto/api_models/generator_round_validator.py``) and Platform
 (``apps/platform/ditto/api_models/generator_round_validator.py``); the
@@ -29,13 +34,22 @@ GENERATOR_ROUND_DATASET_MODE: Literal["generator-round-v1"] = "generator-round-v
 GENERATOR_ROUND_JOB_DOMAIN = "validator-generator-round-job:v1"
 GENERATOR_ROUND_SCORE_DOMAIN = "validator-generator-round-score-v1"
 GENERATOR_ROUND_FAIL_DOMAIN = "validator-generator-round-fail-v1"
+GENERATOR_ROUND_COMMITMENT_JOB_DOMAIN = "validator-generator-round-commitment-job:v1"
+GENERATOR_ROUND_COMMITMENT_REPORT_DOMAIN = (
+    "validator-generator-round-commitment-report-v1"
+)
+ROUND_COMMITMENT_TAG = "dgr1"
+# ``Commitments.set_commitment`` accepts at most 128 bytes of raw data.
+MAX_COMMITMENT_PAYLOAD_BYTES = 128
 MAX_ROUND_CASES = 8 * 32
 
 GeneratorRoundFailReason = Literal["scoring_error", "infrastructure"]
+GeneratorRoundCommitmentOutcome = Literal["confirmed", "failed"]
 
 _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{48}$"
 _SHA256 = r"^[0-9a-f]{64}$"
 _SIG = r"^[0-9a-f]{128}$"
+_EXTRINSIC_HASH = r"^0x[0-9a-f]{64}$"
 
 
 def _iso(value: datetime) -> str:
@@ -184,3 +198,100 @@ class GeneratorRoundFailResponse(_Model):
     round_index: int
     agent_id: UUID
     released: bool
+
+
+# --- round commitment publication -------------------------------------------
+
+
+def round_commitment_payload(round_index: int, commitment: str) -> str:
+    """The exact ASCII value published with ``Commitments.set_commitment``."""
+    return f"{ROUND_COMMITMENT_TAG}:{round_index}:{commitment}"
+
+
+class GeneratorRoundCommitmentJobRequest(_Timed):
+    """Ask Platform whether this validator should publish a round commitment."""
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58)]
+    nonce: UUID
+    requested_at: datetime
+    signature: Annotated[str, Field(pattern=_SIG)] = "0" * 128
+
+    def signing_message(self) -> bytes:
+        return (
+            f"{GENERATOR_ROUND_COMMITMENT_JOB_DOMAIN}:{self.validator_hotkey}:"
+            f"{self.nonce}:{_iso(self.requested_at)}"
+        ).encode()
+
+
+class GeneratorRoundCommitmentJobResponse(_Model):
+    """One committed round this validator is elected to publish on-chain.
+
+    ``payload`` is exactly ``round_commitment_payload(round_index,
+    commitment)``; a validator refuses any other value. ``claim_expires_at`` is
+    when Platform stops waiting for this validator's report and lets the next
+    validator in the round's publisher order take its place.
+    """
+
+    round_index: Annotated[int, Field(ge=0)]
+    commitment: Annotated[str, Field(pattern=_SHA256)]
+    payload: Annotated[
+        str, Field(min_length=1, max_length=MAX_COMMITMENT_PAYLOAD_BYTES)
+    ]
+    claim_expires_at: datetime
+
+    @model_validator(mode="after")
+    def _payload_is_the_commitment(self):  # type: ignore[no-untyped-def]
+        if self.payload != round_commitment_payload(self.round_index, self.commitment):
+            raise ValueError("payload is not this round's commitment")
+        return self
+
+
+class GeneratorRoundCommitmentReportRequest(_Timed):
+    """Signed outcome of one elected round-commitment publication.
+
+    ``confirmed`` means the validator read its own on-chain commitment back
+    and it equals the payload; ``block_number`` is the block the chain stamped
+    it at. ``failed`` means the submission or the read-back did not succeed.
+    """
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58)]
+    round_index: Annotated[int, Field(ge=0)]
+    commitment: Annotated[str, Field(pattern=_SHA256)]
+    outcome: GeneratorRoundCommitmentOutcome
+    block_number: Annotated[int | None, Field(ge=1)] = None
+    extrinsic_hash: Annotated[str | None, Field(pattern=_EXTRINSIC_HASH)] = None
+    detail: Annotated[str | None, Field(max_length=500)] = None
+    nonce: UUID
+    requested_at: datetime
+    signature: Annotated[str, Field(pattern=_SIG)] = "0" * 128
+
+    @model_validator(mode="after")
+    def _confirmed_has_a_block(self):  # type: ignore[no-untyped-def]
+        if self.outcome == "confirmed" and self.block_number is None:
+            raise ValueError("a confirmed publication names its block")
+        return self
+
+    def signing_message(self) -> bytes:
+        return json.dumps(
+            [
+                GENERATOR_ROUND_COMMITMENT_REPORT_DOMAIN,
+                self.validator_hotkey,
+                self.round_index,
+                self.commitment,
+                self.outcome,
+                self.block_number,
+                self.extrinsic_hash,
+                str(self.nonce),
+                _iso(self.requested_at),
+            ],
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+
+
+class GeneratorRoundCommitmentReportResponse(_Model):
+    round_index: int
+    accepted: bool
+    duplicate: bool = False
+    confirmations: int = 0
+    target: int = 0

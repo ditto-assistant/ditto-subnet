@@ -1,13 +1,14 @@
 """Audited operator control and inspection for generator-competition rounds.
 
 Every round fact an operator needs to run or debug the matrix is readable
-here: the chain schedule, each round's commitment and its on-chain
-publication, frozen columns and panel, generation per column, every validator
-lease and result, the agents still pending, the scored matrix, and the round
-driver's last tick. Writes are confirmation-gated and guarded by the round's
-current status. The round secret is never served before the reveal; the seed
-and dataset are served to operators only once the round closed (or, for the
-dataset, through the artifact-scoped download used to reproduce a round).
+here: the chain schedule, each round's commitment and which elected
+validators published it on-chain, frozen columns and panel, generation per
+column, every validator lease and result, the agents still pending, the
+scored matrix, and the round driver's last tick. Writes are
+confirmation-gated and guarded by the round's current status. The round
+secret is never served before the reveal; the seed and dataset are served to
+operators only once the round closed (or, for the dataset, through the
+artifact-scoped download used to reproduce a round).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import MAX_SOURCE_ARCHIVE_BYTES
@@ -57,10 +58,12 @@ from ditto.api_server.generator_competition import (
     load_settings,
 )
 from ditto.api_server.generator_rounds import (
+    ROUND_COMMITMENT_PUBLISHERS,
     GeneratorRoundLoop,
     attempt_views,
     close_round,
     column_views,
+    commitment_publication_views,
     expire_round_tickets,
     get_round,
     list_rounds,
@@ -81,6 +84,7 @@ from ditto.api_server.storage.errors import (
 )
 from ditto.db.models import (
     GeneratorRoundAttempt,
+    GeneratorRoundCommitmentPublication,
     GeneratorSubmission,
     ValidatorTicket,
 )
@@ -273,6 +277,8 @@ async def admin_round_detail(
     if row is None:
         raise HTTPException(status_code=404, detail="unknown round")
     closed = row.status in {"scoring", "scored", "void"}
+    now = datetime.now(UTC)
+    publications, elected = await commitment_publication_views(session, row, now=now)
     return AdminGeneratorRoundDetail(
         summary=await round_summary(session, row, operator=True),
         settings_revision=row.settings_revision,
@@ -288,10 +294,13 @@ async def admin_round_detail(
         lease_attempts=row.lease_attempts,
         commitment_published_at=row.commitment_published_at,
         commitment_error=row.commitment_error,
+        commitment_publishers_target=ROUND_COMMITMENT_PUBLISHERS,
+        commitment_publications=publications,
+        commitment_elected=elected,
         attempts=await attempt_views(session, round_index),
         results=await result_views(session, round_index),
         pending_agents=(
-            await pending_panel_agents(session, row, now=datetime.now(UTC))
+            await pending_panel_agents(session, row, now=now)
             if row.status == "running"
             else []
         ),
@@ -420,42 +429,52 @@ async def admin_close_round(
 async def admin_republish_commitment(
     round_index: int,
     payload: AdminGeneratorRoundActionRequest,
-    request: Request,
     _admin: AdminDep,
     session: SessionDep,
 ) -> AdminGeneratorRoundDetail:
-    """Retry a failed on-chain commitment publication for a committed round."""
+    """Ask elected validators to publish a committed round's commitment again.
+
+    Platform never publishes a commitment itself. This reopens publication
+    (``pending``) and forgets every failed or unconfirmed validator claim, so
+    the round's publisher order elects again from the validators fresh now.
+    Confirmed publications are kept and still count toward the target.
+    """
     if payload.confirmation != REPUBLISH_COMMITMENT_CONFIRMATION:
         raise HTTPException(
             status_code=409,
             detail=f"confirmation must be exactly {REPUBLISH_COMMITMENT_CONFIRMATION}",
         )
     row, reason, actor = await _locked_round(session, round_index, payload)
-    if row.commitment_publication not in {"failed", "disabled"}:
-        raise HTTPException(
-            status_code=409,
-            detail=f"commitment publication is {row.commitment_publication}",
-        )
     if row.status != "committed":
         raise HTTPException(
             status_code=409,
             detail="a commitment published after the round opened proves nothing",
         )
+    if row.commitment_publication == "published":
+        raise HTTPException(
+            status_code=409,
+            detail="commitment publication already reached its validator target",
+        )
+    cleared = await session.execute(
+        delete(GeneratorRoundCommitmentPublication).where(
+            GeneratorRoundCommitmentPublication.round_index == round_index,
+            GeneratorRoundCommitmentPublication.status != "confirmed",
+        )
+    )
     record_operator_action(
         session,
         action="republish_commitment",
         subject=f"round:{round_index}",
         actor=actor,
         reason=reason,
-        detail={"previous": row.commitment_publication},
+        detail={
+            "previous": row.commitment_publication,
+            "cleared_claims": int(cleared.rowcount or 0),  # type: ignore[attr-defined]
+        },
     )
     row.commitment_publication = "pending"
     row.commitment_error = None
     await session.commit()
-    loop = _loop(request) or GeneratorRoundLoop(
-        app_state=request.app.state, session_maker=request.app.state.session_maker
-    )
-    await loop.publish_commitments(now=datetime.now(UTC))
     session.expire_all()
     return await admin_round_detail(round_index, _admin, session)
 

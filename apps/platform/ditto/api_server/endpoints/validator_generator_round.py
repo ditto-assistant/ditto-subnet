@@ -13,6 +13,15 @@ private-dataset route, runs it with dittobench-api's ``generator-round-v1``
 mode, and posts signed per-case results to
 ``/validator/agent/{id}/generator-round-score``. The results enter only the
 round matrix; no agent score row is ever written by this lane.
+
+The same router serves round-commitment publication. Validators advertising
+``round_commitments`` poll ``POST /validator/generator-round-commitment-job``;
+Platform elects up to three per committed round in a stable per-round order
+(``generator_rounds.elect_commitment_publishers``) and hands each the exact
+``dgr1:{round}:{commitment}`` payload. The validator publishes it with
+``Commitments.set_commitment`` from its own Pylon identity, reads it back, and
+posts the outcome to ``/validator/generator-round-commitment-report``.
+Publication is best effort and never gates a round opening.
 """
 
 from __future__ import annotations
@@ -28,6 +37,10 @@ from sqlalchemy import select
 
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.generator_round_validator import (
+    GeneratorRoundCommitmentJobRequest,
+    GeneratorRoundCommitmentJobResponse,
+    GeneratorRoundCommitmentReportRequest,
+    GeneratorRoundCommitmentReportResponse,
     GeneratorRoundFailRequest,
     GeneratorRoundFailResponse,
     GeneratorRoundJobRequest,
@@ -41,8 +54,11 @@ from ditto.api_server.endpoints import validator as v
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import (
     ROUND_LEASE_CUTOFF,
+    CommitmentReportRejected,
     RoundSubmissionRejected,
+    claim_commitment_publication,
     pending_panel_agents,
+    record_commitment_report,
     record_panel_result,
     round_case_ids,
     round_for_dataset,
@@ -493,3 +509,119 @@ async def fail_generator_round_job(
     return GeneratorRoundFailResponse(
         round_index=payload.round_index, agent_id=agent_id, released=True
     )
+
+
+@router.post(
+    "/generator-round-commitment-job",
+    response_model=GeneratorRoundCommitmentJobResponse,
+    responses={204: {"description": "No commitment needs this validator."}},
+)
+async def request_generator_round_commitment_job(
+    payload: GeneratorRoundCommitmentJobRequest,
+    request: Request,
+    response: Response,
+    chain: v.ChainDep,
+    session: v.SessionDep,
+    x_validator_hotkey: Annotated[str | None, Header()] = None,
+) -> GeneratorRoundCommitmentJobResponse | Response:
+    """Claim a committed round's on-chain commitment if this validator is elected."""
+    response.headers["Cache-Control"] = "no-store"
+    if x_validator_hotkey != payload.validator_hotkey:
+        raise v.ValidatorAuthError("commitment job header does not match signed hotkey")
+    now = await _verify_signed(
+        request=request,
+        chain=chain,
+        hotkey=payload.validator_hotkey,
+        message=payload.signing_message(),
+        signature=payload.signature,
+        requested_at=payload.requested_at,
+        what="commitment job",
+    )
+    async with session.begin():
+        try:
+            await v.consume_validator_nonce(
+                session,
+                nonce=payload.nonce,
+                validator_hotkey=payload.validator_hotkey,
+                now=now,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=v._JOB_REQUEST_MAX_AGE,
+                ),
+            )
+        except v.ValidatorRequestReplayError as exc:
+            raise HTTPException(
+                409, "commitment job nonce has already been used"
+            ) from exc
+        resolved = await load_settings(session)
+        if resolved.settings.mode == "off":
+            return _no_work()
+        job = await claim_commitment_publication(
+            session, validator_hotkey=payload.validator_hotkey, now=now
+        )
+        if job is None:
+            return _no_work()
+    logger.info(
+        "issued generator round commitment job round=%s validator=%s",
+        job.round_index,
+        payload.validator_hotkey,
+    )
+    return job
+
+
+@router.post(
+    "/generator-round-commitment-report",
+    response_model=GeneratorRoundCommitmentReportResponse,
+)
+async def report_generator_round_commitment(
+    payload: GeneratorRoundCommitmentReportRequest,
+    request: Request,
+    response: Response,
+    chain: v.ChainDep,
+    session: v.SessionDep,
+) -> GeneratorRoundCommitmentReportResponse:
+    """Record a claimed commitment publication's signed outcome."""
+    response.headers["Cache-Control"] = "no-store"
+    now = await _verify_signed(
+        request=request,
+        chain=chain,
+        hotkey=payload.validator_hotkey,
+        message=payload.signing_message(),
+        signature=payload.signature,
+        requested_at=payload.requested_at,
+        what="commitment report",
+    )
+    async with session.begin():
+        try:
+            await v.consume_validator_nonce(
+                session,
+                nonce=payload.nonce,
+                validator_hotkey=payload.validator_hotkey,
+                now=now,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=v._JOB_REQUEST_MAX_AGE,
+                ),
+            )
+        except v.ValidatorRequestReplayError as exc:
+            raise HTTPException(
+                409, "commitment report nonce has already been used"
+            ) from exc
+        try:
+            result = await record_commitment_report(session, payload, now=now)
+        except CommitmentReportRejected as exc:
+            raise HTTPException(409, str(exc)) from exc
+    logger.info(
+        "generator round commitment report round=%s validator=%s outcome=%s "
+        "block=%s accepted=%s confirmations=%s/%s",
+        payload.round_index,
+        payload.validator_hotkey,
+        payload.outcome,
+        payload.block_number,
+        result.accepted,
+        result.confirmations,
+        result.target,
+    )
+    return result

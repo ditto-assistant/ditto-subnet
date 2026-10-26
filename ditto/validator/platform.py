@@ -72,6 +72,11 @@ from ditto.api_models.coding_inference_grants import (
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_round_validator import (
     GeneratorRoundCaseResult,
+    GeneratorRoundCommitmentJobRequest,
+    GeneratorRoundCommitmentJobResponse,
+    GeneratorRoundCommitmentOutcome,
+    GeneratorRoundCommitmentReportRequest,
+    GeneratorRoundCommitmentReportResponse,
     GeneratorRoundFailReason,
     GeneratorRoundFailRequest,
     GeneratorRoundFailResponse,
@@ -2092,6 +2097,72 @@ class PlatformClient:
             )
             return None
         return GeneratorRoundFailResponse.model_validate(resp.json())
+
+    async def request_generator_round_commitment_job(
+        self,
+    ) -> GeneratorRoundCommitmentJobResponse | None:
+        """Ask Platform whether this validator should publish a round commitment.
+
+        ``None`` (HTTP 204) means nothing needs this validator: no round is
+        waiting for publication, or another validator is elected for it.
+        """
+        payload = GeneratorRoundCommitmentJobRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/generator-round-commitment-job"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PlatformError(f"commitment job request failed: {exc}") from exc
+        if resp.status_code == 204:
+            return None
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"commitment job rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return GeneratorRoundCommitmentJobResponse.model_validate(resp.json())
+
+    async def report_generator_round_commitment(
+        self,
+        job: GeneratorRoundCommitmentJobResponse,
+        *,
+        outcome: GeneratorRoundCommitmentOutcome,
+        block_number: int | None = None,
+        extrinsic_hash: str | None = None,
+        detail: str | None = None,
+    ) -> GeneratorRoundCommitmentReportResponse:
+        """Post the signed outcome of one elected commitment publication."""
+        payload = GeneratorRoundCommitmentReportRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            round_index=job.round_index,
+            commitment=job.commitment,
+            outcome=outcome,
+            block_number=block_number,
+            extrinsic_hash=extrinsic_hash,
+            detail=(detail or None) and detail[:500],
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/generator-round-commitment-report"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PlatformError(f"commitment report failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"commitment report rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return GeneratorRoundCommitmentReportResponse.model_validate(resp.json())
 
     async def get_ledger(self) -> LedgerResponse:
         """Pull the best-score-per-payment-coldkey ledger folded into weights.

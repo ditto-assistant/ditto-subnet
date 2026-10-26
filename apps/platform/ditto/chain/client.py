@@ -805,32 +805,6 @@ class ChainClient:
             f"with {len(weights)} entries"
         )
 
-    async def set_commitment(self, data: bytes) -> None:
-        """Publish ``data`` as this identity's subnet commitment via Pylon.
-
-        Used for generator-round seed commitments: a public, block-stamped copy
-        of a commitment Platform already records. Requires an identity client
-        (``identity_name`` / ``identity_token``); the Commitments pallet keeps
-        one value per hotkey and subnet, so each call overwrites the last.
-
-        Raises:
-            ChainAuthError: When the client has no identity.
-            ChainConnectionError: When Pylon rejects or cannot reach the chain.
-        """
-        if not (self._config.identity_name and self._config.identity_token):
-            raise ChainAuthError("set_commitment requires a Pylon identity client")
-        if not data or len(data) > 128:
-            raise ValueError("commitment data must be 1..128 bytes")
-        pylon = self._ensure_pylon()
-        try:
-            await pylon.v1.identity.set_commitment(data.hex())
-        except Exception as e:
-            raise _translate_pylon_error(e, "set_commitment") from e
-        logger.info(
-            f"set_commitment submitted for netuid={self._config.netuid} "
-            f"({len(data)} bytes)"
-        )
-
     async def get_weights(self, netuid: int) -> ChainWeightsSnapshot:
         """Read the latest publicly revealed validator weight matrix natively.
 

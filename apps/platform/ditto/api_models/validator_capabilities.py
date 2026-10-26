@@ -331,6 +331,9 @@ class ValidatorCapabilities(BaseModel):
     sandbox_memory_limit: bool = Field(
         default=False, exclude_if=lambda value: not value
     )
+    # Publishes generator-round seed commitments Platform elects it for
+    # (``Commitments.set_commitment`` from its own Pylon identity).
+    round_commitments: bool = Field(default=False, exclude_if=lambda value: not value)
     executor_isolation: ExecutorIsolation
     scorer_benchmarks: ScorerBenchmarkCapability | None = Field(
         default=None, exclude_if=lambda value: value is None

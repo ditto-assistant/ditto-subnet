@@ -2,7 +2,8 @@
 
 A round is keyed on the chain's epoch counter:
 ``round_index = SubnetEpochIndex // epochs_per_round``. Platform commits each
-round's secret one round ahead (``commitment``, also published on-chain),
+round's secret one round ahead (``commitment``; elected validators publish
+it on-chain),
 derives the seed from the secret and the block the round opened at, and
 freezes the round's generator columns and agent panel. The trusted scorer
 generates the round dataset and later scores the matrix; validators run every
@@ -27,14 +28,15 @@ from ditto.api_models.generator import (
     PanelCaseResult,
     SubmissionStatus,
 )
+from ditto.api_models.generator_round_validator import round_commitment_payload
 
 RoundStatus = Literal["committed", "generating", "running", "scoring", "scored", "void"]
 CommitmentPublication = Literal["pending", "published", "failed", "disabled"]
+CommitmentPublicationStatus = Literal["claimed", "confirmed", "failed", "expired"]
 RoundCaseStatus = Literal[
     "discriminating", "trivial", "unsolved", "duplicate", "insufficient_panel"
 ]
 
-ROUND_COMMITMENT_TAG = "dgr1"
 REGISTER_DEFAULT_GENERATOR_CONFIRMATION = "REGISTER DEFAULT GENERATOR"
 # A starter-kit archive with its vendored datagen is a few hundred KiB, too
 # large to inline through an MCP tool argument, so an operator can PUT it to a
@@ -55,8 +57,8 @@ def void_round_confirmation(round_index: int) -> str:
 
 
 def onchain_commitment_payload(round_index: int, commitment: str) -> bytes:
-    """The bytes Platform writes with ``Commitments.set_commitment``."""
-    return f"{ROUND_COMMITMENT_TAG}:{round_index}:{commitment}".encode("ascii")
+    """The bytes an elected validator writes with ``Commitments.set_commitment``."""
+    return round_commitment_payload(round_index, commitment).encode("ascii")
 
 
 class RoundModel(BaseModel):
@@ -114,6 +116,9 @@ class GeneratorRoundSummary(RoundModel):
     epochs_per_round: int
     commitment: str
     commitment_publication: CommitmentPublication
+    commitment_confirmations: int = 0
+    """Validators that confirmed the commitment on chain (see
+    ``AdminGeneratorRoundDetail.commitment_publications``)."""
     committed_at: datetime
     open_epoch_index: int | None = None
     open_block: int | None = None
@@ -168,6 +173,23 @@ class GeneratorRoundResultView(RoundModel):
     recorded_at: datetime
 
 
+class GeneratorRoundCommitmentPublicationView(RoundModel):
+    """One elected validator's on-chain publication of a round commitment.
+
+    ``expired`` is a claim whose validator never reported before
+    ``claim_expires_at``; it no longer holds an election place.
+    """
+
+    validator_hotkey: str
+    status: CommitmentPublicationStatus
+    claimed_at: datetime
+    claim_expires_at: datetime
+    reported_at: datetime | None = None
+    block_number: int | None = None
+    extrinsic_hash: str | None = None
+    detail: str | None = None
+
+
 class GeneratorRoundPanelSlot(RoundModel):
     agent_id: UUID
     owner_key: str
@@ -203,6 +225,14 @@ class AdminGeneratorRoundDetail(RoundModel):
     lease_attempts: int
     commitment_published_at: datetime | None
     commitment_error: str | None
+    commitment_publishers_target: int = 0
+    """Confirmed validator publications a round collects before it stops asking."""
+    commitment_publications: list[GeneratorRoundCommitmentPublicationView] = Field(
+        default_factory=list
+    )
+    """Every validator claim and report, in the round's publisher order."""
+    commitment_elected: list[str] = Field(default_factory=list)
+    """Validators elected to publish right now (a pending, committed round)."""
     attempts: list[GeneratorRoundAttemptView]
     results: list[GeneratorRoundResultView]
     pending_agents: list[UUID]
