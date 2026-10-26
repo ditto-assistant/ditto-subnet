@@ -73,8 +73,16 @@ LONGMEM_DATASET_REVISION = (
     "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-"
     "longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc"
 )
-PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8"
-LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-48-zdr-v4"
+# These revision strings are part of the operator-visible contract, and the
+# confirmation-bundle settings pin a (profile_revision, profile_checksum) pair.
+# Any change to the frozen profile -- judge model, provider, or lane rails --
+# rolls the checksum, so the revision string MUST be bumped with it. Leaving the
+# name fixed while the bytes move produces two different contracts sharing one
+# name, and the live settings then pin a checksum the release no longer
+# installs: issuance silently stops while the settings still read mode=shadow,
+# issuance_active=true. Re-pin the settings after deploying a change here.
+PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-10-25-deepseek-judge-v9"
+LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-48-zdr-v5"
 ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-6-v1"
 COMPOSITE_REVISION = "v9-confirmation-composite-shadow-70-30-v1"
 STARTER_MAX_AGENT_TURNS = 24

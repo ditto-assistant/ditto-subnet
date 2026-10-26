@@ -5,8 +5,8 @@
     "minimum_base_score_micros": 950000,
     "mode": "score_threshold"
   },
-  "execution_profile_checksum": "525c20daac264360b78431f46bb557fd831671f54c1e93ffe8af4db46cdb0a35",
-  "execution_profile_revision": "v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8",
+  "execution_profile_checksum": "4984c86656ddab614296ae821ddab8ba18e7d17e33fdf54223ef33d121ed34ed",
+  "execution_profile_revision": "v9-confirmation-shadow-bounded-2026-10-25-deepseek-judge-v9",
   "guarantees": {
     "changes_canonical_scores": false,
     "changes_rewards": false,
