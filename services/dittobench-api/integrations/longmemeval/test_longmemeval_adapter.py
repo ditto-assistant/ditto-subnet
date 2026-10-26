@@ -195,17 +195,21 @@ class JudgeProxyTests(unittest.TestCase):
         value = rewrite_request(self.judge_request())
         self.assertEqual(value["model"], JUDGE_MODEL)
         self.assertFalse(value["stream"])
-        # The provider pin is part of the frozen contract: agreement with the
-        # incumbent ranged 95.3%-100% across the 23 providers OpenRouter served
-        # this model from, so an unpinned run describes no lane we operate.
+        # The provider block is the frozen contract as a unit, not just the
+        # pin: agreement with the incumbent ranged 95.3%-100% across the 23
+        # providers OpenRouter served this model from, and the relay rejects a
+        # block that is a subset of production's rather than widening it.
+        # ProductionParityTests checks that helper against the Go runtime.
         self.assertEqual(
-            value["provider"],
-            {
-                "order": [judge_evaluator.JUDGE_ROUTE_PROVIDER],
-                "allow_fallbacks": False,
-                "zdr": True,
-            },
+            value["provider"], judge_evaluator.judge_provider_routing()
         )
+        self.assertEqual(
+            value["provider"]["only"], [judge_evaluator.JUDGE_ROUTE_PROVIDER]
+        )
+        self.assertFalse(value["provider"]["allow_fallbacks"])
+        self.assertTrue(value["provider"]["require_parameters"])
+        self.assertEqual(value["provider"]["data_collection"], "deny")
+        self.assertTrue(value["provider"]["zdr"])
 
     def test_other_models_are_rejected(self):
         with self.assertRaises(ValueError):

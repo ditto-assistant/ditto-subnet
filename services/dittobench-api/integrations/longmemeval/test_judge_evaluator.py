@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import re
+import shutil
 import hashlib
 import io
 import json
@@ -22,6 +23,7 @@ import types
 import unittest
 import warnings
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import judge_evaluator
 
@@ -39,6 +41,38 @@ PROVIDER_RUNTIME = (
     / "provider_runtime.go"
 )
 _GO_CONSTANT = re.compile(r"^\s*(officialJudge\w+)\s*=\s*(.+?)\s*$", re.MULTILINE)
+_GO_PROVIDER_BLOCK = re.compile(
+    r'"provider":\s*map\[string\]any\{(.*?)\n\t*\}', re.DOTALL
+)
+_GO_PROVIDER_ENTRY = re.compile(r'"(\w+)":\s*(.+?),\s*$', re.MULTILINE)
+
+
+def go_provider_block(route_provider: str) -> dict[str, object]:
+    """The judge lane's OpenRouter provider block, read out of the Go runtime.
+
+    The relay compares this block as a unit, so the Python helper has to
+    reproduce all of it rather than the pin alone.
+    """
+    blocks = _GO_PROVIDER_BLOCK.findall(PROVIDER_RUNTIME.read_text())
+    if len(blocks) != 1:
+        raise AssertionError(
+            f"expected exactly 1 provider block in {PROVIDER_RUNTIME.name}, "
+            f"found {len(blocks)}"
+        )
+    parsed: dict[str, object] = {}
+    for key, literal in _GO_PROVIDER_ENTRY.findall(blocks[0]):
+        literal = literal.strip()
+        if literal == "false":
+            parsed[key] = False
+        elif literal == "true":
+            parsed[key] = True
+        elif literal.startswith('"') and literal.endswith('"'):
+            parsed[key] = literal[1:-1]
+        elif literal.startswith("[]string{"):
+            parsed[key] = [route_provider]
+        else:
+            raise AssertionError(f"unparsed Go provider literal: {key}={literal!r}")
+    return parsed
 
 
 def go_judge_constants() -> dict[str, object]:
@@ -109,17 +143,25 @@ class StubClient:
         return StubCompletion(self._content, self._finish_reason)
 
 
+class EvaluatorRun(NamedTuple):
+    client: StubClient
+    result_name: str
+    rows: list[dict[str, Any]]
+
+
 def run_evaluator(
     evaluator: Path,
     judge_short_name: str,
     *,
     content: str | None,
     finish_reason: str = "stop",
-) -> tuple[StubClient, Path]:
+) -> EvaluatorRun:
     """Execute one evaluator against a stubbed OpenAI client.
 
-    Returns the client (so the outbound kwargs can be asserted) and the result
-    file the evaluator wrote. Raises whatever the evaluator raises.
+    Returns the recorded calls, the result file's name and its parsed rows.
+    The scratch directory is removed on every path, including when the
+    evaluator raises, so the result is read here rather than handed back as a
+    path into a directory that no longer exists.
     """
     client = StubClient(content, finish_reason)
 
@@ -157,7 +199,7 @@ def run_evaluator(
     ]
     hypotheses = [{"question_id": "q1", "hypothesis": "You moved to Lisbon."}]
 
-    directory = Path(tempfile.mkdtemp())
+    directory = Path(tempfile.mkdtemp(prefix="longmemeval-judge-test-"))
     hypothesis_path = directory / "hyp.jsonl"
     reference_path = directory / "ref.json"
     hypothesis_path.write_text(
@@ -179,6 +221,8 @@ def run_evaluator(
         str(hypothesis_path),
         str(reference_path),
     ]
+    suffix = judge_evaluator.evaluation_suffix(judge_short_name)
+    result_path = hypothesis_path.with_name(hypothesis_path.name + suffix)
     try:
         # The evaluator prints every verdict and a final accuracy table; keep
         # that out of the test report without hiding exceptions.
@@ -188,6 +232,12 @@ def run_evaluator(
             # the ResourceWarning is expected rather than a defect to report.
             warnings.simplefilter("ignore", ResourceWarning)
             runpy.run_path(str(evaluator), run_name="__main__")
+        rows = [
+            json.loads(line)
+            for line in result_path.read_text().splitlines()
+            if line.strip()
+        ]
+        return EvaluatorRun(client, result_path.name, rows)
     finally:
         sys.argv = saved_argv
         for name, module in saved_modules.items():
@@ -195,9 +245,7 @@ def run_evaluator(
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
-
-    suffix = judge_evaluator.evaluation_suffix(judge_short_name)
-    return client, hypothesis_path.with_name(hypothesis_path.name + suffix)
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 class RecordedEvaluatorTests(unittest.TestCase):
@@ -268,6 +316,26 @@ class ProductionParityTests(unittest.TestCase):
             "miners would rehearse against a grader that does not score them",
         )
 
+    def test_the_provider_block_matches_the_production_lane(self):
+        """A subset of the production block is rejected, not widened.
+
+        `require_parameters` drops endpoints that would ignore the completion
+        bound, and `data_collection: deny` is part of what makes Together the
+        eligible provider at all, so omitting either is a behaviour change.
+        """
+        route = self.constants["officialJudgeRouteProvider"]
+        expected = go_provider_block(route)
+        self.assertEqual(
+            set(expected),
+            {"only", "order", "allow_fallbacks", "require_parameters", "data_collection"},
+            "the Go provider block changed shape; re-check the Python helper",
+        )
+        routing = dict(judge_evaluator.judge_provider_routing())
+        # zdr is appended by the platform (endpoints/inference.py), not the Go
+        # lane, so it is the one key legitimately absent from the Go map.
+        self.assertTrue(routing.pop("zdr"), "production sends every judge call under ZDR")
+        self.assertEqual(routing, expected)
+
     def test_the_forked_evaluator_can_run_the_production_judge(self):
         """Parity is worthless if the evaluator cannot invoke that judge."""
         zoo = module_constant(DITTO_EVALUATOR, "model_zoo")
@@ -327,11 +395,11 @@ class DeltaTests(unittest.TestCase):
 
 class JudgeCallTests(unittest.TestCase):
     def test_the_fork_sends_the_frozen_bound_and_call_shape(self):
-        client, result = run_evaluator(
+        run = run_evaluator(
             DITTO_EVALUATOR, judge_evaluator.JUDGE_SHORT_NAME, content="yes"
         )
-        self.assertEqual(len(client.calls), 1)
-        call = client.calls[0]
+        self.assertEqual(len(run.client.calls), 1)
+        call = run.client.calls[0]
         self.assertEqual(call["model"], judge_evaluator.JUDGE_MODEL)
         self.assertEqual(
             call["max_tokens"], judge_evaluator.JUDGE_MAX_COMPLETION_TOKENS
@@ -339,35 +407,36 @@ class JudgeCallTests(unittest.TestCase):
         self.assertEqual(call["temperature"], 0)
         self.assertEqual(call["n"], 1)
 
-        rows = [json.loads(line) for line in result.read_text().splitlines() if line]
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(run.rows), 1)
         self.assertEqual(
-            rows[0]["autoeval_label"],
+            run.rows[0]["autoeval_label"],
             {"model": judge_evaluator.JUDGE_MODEL, "label": True},
         )
 
     def test_the_official_judge_keeps_upstreams_bound_in_the_fork(self):
-        client, _ = run_evaluator(
+        run = run_evaluator(
             DITTO_EVALUATOR,
             judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME,
             content="yes",
         )
         self.assertEqual(
-            client.calls[0]["max_tokens"],
+            run.client.calls[0]["max_tokens"],
             judge_evaluator.OFFICIAL_JUDGE_MAX_COMPLETION_TOKENS,
         )
 
     def test_the_result_file_is_named_for_the_judge_that_ran(self):
-        _, result = run_evaluator(
+        run = run_evaluator(
             DITTO_EVALUATOR, judge_evaluator.JUDGE_SHORT_NAME, content="yes"
         )
         self.assertTrue(
-            result.name.endswith(
+            run.result_name.endswith(
                 judge_evaluator.evaluation_suffix(judge_evaluator.JUDGE_SHORT_NAME)
             ),
-            result.name,
+            run.result_name,
         )
-        self.assertNotIn(judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME, result.name)
+        self.assertNotIn(
+            judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME, run.result_name
+        )
 
     def test_the_fork_refuses_a_truncated_verdict(self):
         with self.assertRaises(RuntimeError) as caught:
@@ -386,16 +455,15 @@ class JudgeCallTests(unittest.TestCase):
         If this ever stops producing a silent False, the premise of the fork
         changed and the comparison in every report built on it is stale.
         """
-        _, result = run_evaluator(
+        run = run_evaluator(
             UPSTREAM_EVALUATOR,
             judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME,
             content="",
             finish_reason="length",
         )
-        rows = [json.loads(line) for line in result.read_text().splitlines() if line]
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(run.rows), 1)
         self.assertIs(
-            rows[0]["autoeval_label"]["label"],
+            run.rows[0]["autoeval_label"]["label"],
             False,
             "upstream is expected to label a truncated verdict False, silently",
         )

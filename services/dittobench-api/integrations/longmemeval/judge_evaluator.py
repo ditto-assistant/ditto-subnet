@@ -90,10 +90,28 @@ def evaluation_suffix(judge_short_name: str = JUDGE_SHORT_NAME) -> str:
 
 
 def judge_provider_routing() -> dict[str, object]:
-    """The OpenRouter ``provider`` block the production judge lane sends."""
+    """The OpenRouter ``provider`` block the production judge lane sends.
+
+    This is the whole contract, not just the pin. ``provider_runtime.go``
+    builds exactly ``only``/``order``/``allow_fallbacks``/``require_parameters``
+    /``data_collection`` for the judge lane, and the relay compares the
+    provider block as a unit -- a subset is rejected rather than widened. The
+    filters also do real work on a direct call: ``require_parameters`` drops
+    endpoints that would silently ignore the completion bound, and
+    ``data_collection: deny`` plus ``zdr`` are what make Together the provider
+    that is actually eligible (two otherwise-viable providers 404 under that
+    posture). ``zdr`` is appended by the platform rather than the Go lane
+    (``endpoints/inference.py``), so it is the one key absent from the Go map.
+
+    ``test_judge_evaluator.ProductionParityTests`` reads that Go map and
+    compares it with this one, so the two cannot drift apart silently.
+    """
     routing: dict[str, object] = {
+        "only": [JUDGE_ROUTE_PROVIDER],
         "order": [JUDGE_ROUTE_PROVIDER],
         "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
     }
     if JUDGE_ZERO_DATA_RETENTION:
         routing["zdr"] = True
