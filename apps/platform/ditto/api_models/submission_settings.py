@@ -36,9 +36,15 @@ FeeAmountRao = Annotated[
 
 
 class CompetitionFeePolicy(BaseModel):
-    """One competition's override. ``null`` inherits."""
+    """One competition's override. ``null`` inherits.
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    Unknown keys are ignored like every wire model (additive JSON across
+    rolling upgrades). A misspelled field therefore reads as "inherit", and
+    the confirmation phrase, which echoes only the recognized fields, is
+    what catches it before anything is stored.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     fee_amount_rao: FeeAmountRao | None = None
     """This competition's own price in rao; ``null`` charges the default

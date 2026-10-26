@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -101,6 +102,14 @@ def test_an_older_platform_or_an_unreadable_response_never_blocks(
     assert (
         show_submission_terms(
             _Client(error=ApiResponseError("submission terms failed: HTTP 503")),
+            "generator",
+        )
+        is None
+    )
+    assert "could not read submission terms" in capsys.readouterr().err
+    assert (
+        show_submission_terms(
+            _Client(error=json.JSONDecodeError("Expecting value", "<html>", 0)),
             "generator",
         )
         is None

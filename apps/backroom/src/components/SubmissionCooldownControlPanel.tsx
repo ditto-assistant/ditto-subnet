@@ -194,7 +194,7 @@ export function SubmissionCooldownControlPanel({
             </div>
           </div>
 
-          {state.effective_competition_fees ? (
+          {state.effective_competition_fees?.length ? (
             <div className="mt-5">
               <p className="text-xs text-[var(--muted)]">
                 Fee per competition. The fee above is the memory (agent upload) price and the default

@@ -90,7 +90,8 @@ def show_submission_terms(
     """
     try:
         terms = client.get_submission_terms(competition)
-    except MinerCliError as error:
+    except (MinerCliError, ValueError) as error:
+        # ValueError covers a 200 whose body is not JSON (JSONDecodeError).
         print(f"note: could not read submission terms: {error}", file=sys.stderr)
         return None
     if not isinstance(terms, dict):

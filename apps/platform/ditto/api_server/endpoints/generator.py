@@ -233,16 +233,19 @@ async def upload_terms(
     blockers: list[str] = []
     if not accepting:
         blockers.append("the generator competition is not accepting submissions")
-    fee, address = await _generator_fee(
-        session, request, upload_fee_required=settings.upload_fee_required
-    )
-    payment_required = accepting and fee.fee_required
+    payment_required = False
     amount_rao: int | None = None
     send_address: str | None = None
     amount_source = None
-    if payment_required:
-        amount_rao, send_address = fee.fee_amount_rao, address
-        amount_source = fee.amount_source
+    if accepting:
+        # A closed lane charges nothing, so it never resolves the fee.
+        fee, address = await _generator_fee(
+            session, request, upload_fee_required=settings.upload_fee_required
+        )
+        payment_required = fee.fee_required
+        if payment_required:
+            amount_rao, send_address = fee.fee_amount_rao, address
+            amount_source = fee.amount_source
     retry_at = None
     if hotkey is not None:
         if await is_hotkey_banned(session, hotkey=hotkey):
