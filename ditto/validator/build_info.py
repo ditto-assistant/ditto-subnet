@@ -146,8 +146,12 @@ from ditto import __version__
 # share with no eligible entry falls back to memory instead of burning. A v32
 # validator folds the generator track in shadow, so it would burn that share
 # instead: Platform must withhold a map naming a nonzero generator share until
-# every recently-live weight setter reports v33+. Heartbeat signing bytes are
-# unchanged.
+# every recently-live weight setter reports v33+ (``TRACK_SHARES_PROTOCOL`` in
+# apps/platform/ditto/api_models/track_share_settings.py; the scoring ledger
+# serves ``track_shares_bps`` only to a fully-v33 fleet and refuses a sub-33
+# requester while a split is served or pinned). Until that Platform setting
+# exists and is written, no split is served and v33 folds exactly as v32.
+# Heartbeat signing bytes are unchanged.
 HEARTBEAT_PROTOCOL_VERSION = 33
 
 
