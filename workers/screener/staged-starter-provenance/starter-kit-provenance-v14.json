@@ -24,11 +24,11 @@
     "fixtures/seed-user/subject_links.json": "91b826124e7b93055afa3bc4f2317bcdc8326cdcaeb368267b76ca5b13befd22",
     "fixtures/seed-user/subjects.json": "12881b1f26c348d9b9ceaadbddf1c477309b8390dae62b51c1fe4fe5b4cb6f36",
     "scripts/build-seed-user.py": "8c6da852ecca97247beb73309713a5815a1cd835b6e0ae1cc011437e52eac303",
-    "scripts/local-rehearsal.py": "d7c26eb9fe137257dfe8108eac754e21a54f77f36cbc8cda36328b604a5e7624",
+    "scripts/local-rehearsal.py": "3e47dd9eae85c9d149b8cf9c878afb4379f533fed8b199f2d05d621e22e33f86",
     "scripts/rehearsal_gates.py": "903cedd8ed3ead62352692f1967a2192c69b774b35bbd182a1e27209ea2473c2",
     "scripts/submission-lab.py": "d6a422063e94e18317f98bbcd53e4002b4704ad84cf6a873aa2a53aa2a90cc6e",
     "scripts/submission-workbench.py": "5509e4f2037cfb717799fc91363eb3b4bd5722ad2e3445451f708caad5190ca2",
-    "scripts/test_local_rehearsal.py": "4f2ab89bc81574ceb8dc5bcf1d41664ba4361b002c77c77de4173a65552f5b5a",
+    "scripts/test_local_rehearsal.py": "006e3ea7d36dab5fc69a75ada24fcac30ba844dc6d83dd5105793b77d4eab845",
     "scripts/test_submission_lab.py": "27459bbacf2f97b4f615c30e9ddd7e40b89a5d632a87a38db5e04ee9604cb1cf",
     "scripts/test_submission_workbench.py": "dfb39a8a2a45fecb8c7cd3eaf59db29ad830f907237a3f3e27008c0b1987bbc5",
     "src/baseline.rs": "e828d354a3a0a1f2edcb05f2a0a2c32114c3cbcc3d408a8bddcf18675bbbfce7",
@@ -51,6 +51,6 @@
     "tests/store_concurrency.rs": "7cf956ffa08d2632ecb400f1f5aa7580df6e684fa831861beca8ba947c8578cd"
   },
   "origin": "ditto-assistant/ditto-subnet/miners/dittobench-starter-kit",
-  "revision": "15045b531fed26c228910e4c652c8a2cafda6a85",
+  "revision": "945e7960c6fb2dbd8fe8a8e4ff2dc65257948f35",
   "version": 1
 }
