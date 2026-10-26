@@ -199,7 +199,8 @@ export function projectGeneratorPayouts(
 
 /** Estimated start of the next round: the next epoch boundary, plus one
  * epoch per whole epoch still between it and the round's opening epoch.
- * Null when either the schedule or the chain clock is missing. */
+ * Null when the schedule or the chain clock is missing, or when the schedule
+ * is stale (its opening epoch has already been reached). */
 export function nextRoundEta(
   schedule: GeneratorRoundSchedule | null | undefined,
   epoch: ChainEpoch | null | undefined,
@@ -209,7 +210,8 @@ export function nextRoundEta(
   const nextAt = epoch?.next_epoch_at ? new Date(epoch.next_epoch_at).getTime() : NaN;
   const seconds = epoch?.epoch_seconds;
   if (nextRound == null || current == null || !Number.isFinite(nextAt)) return null;
-  const extra = Math.max(0, nextRound - current - 1);
+  if (nextRound <= current) return null;
+  const extra = nextRound - current - 1;
   if (extra > 0 && !(typeof seconds === "number" && seconds > 0)) return null;
   return new Date(nextAt + extra * (seconds ?? 0) * 1000);
 }
@@ -223,7 +225,24 @@ export function columnCases(column: GeneratorRoundColumn): number {
 export function latestScoredRound(
   list: GeneratorRoundList | null | undefined,
 ): GeneratorRoundSummary | null {
-  return list?.rounds.find((round) => round.status === "scored") ?? null;
+  let newest: GeneratorRoundSummary | null = null;
+  for (const round of list?.rounds ?? []) {
+    if (round.status === "scored" && (!newest || round.round_index > newest.round_index)) {
+      newest = round;
+    }
+  }
+  return newest;
+}
+
+/** The round index that opens next. ``next_round_epoch`` is the round's first
+ * subnet epoch (round_index * epochs_per_round), not its index. */
+export function nextRoundIndex(schedule: GeneratorRoundSchedule | null | undefined): number | null {
+  if (!schedule) return null;
+  if (schedule.current_round != null) return schedule.current_round + 1;
+  const epoch = schedule.next_round_epoch;
+  const per = schedule.epochs_per_round;
+  if (epoch == null || !(per > 0)) return null;
+  return Math.floor(epoch / per);
 }
 
 /** The share of total miner emission the generator track carries, when

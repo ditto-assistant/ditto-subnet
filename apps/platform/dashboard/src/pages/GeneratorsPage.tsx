@@ -33,6 +33,7 @@ import {
   generatorEmissionShare,
   latestScoredRound,
   nextRoundEta,
+  nextRoundIndex,
   projectGeneratorPayouts,
   taoAmount,
 } from "../components/generators/generator-data";
@@ -506,13 +507,15 @@ export function GeneratorsPage(): JSX.Element {
   const scoredRound = () => latestScoredRound(roundList())?.round_index;
   // Keyed on the round index so a new scored round refetches its detail
   // while unchanged polls reuse the one already loaded.
-  const [detail] = createResource(scoredRound, (index) =>
+  const [detail, { refetch: refetchDetail }] = createResource(scoredRound, (index) =>
     getJSON<GeneratorRoundDetail>("/generator/rounds/" + index),
   );
   const detailData = () => (detail.error ? undefined : detail());
   const schedule = () => roundList()?.schedule;
+  const nextIndex = () => nextRoundIndex(schedule());
   const nextRound = () => {
-    const next = schedule()?.next_round_epoch;
+    const next = nextIndex();
+    if (next == null) return null;
     return roundList()?.rounds.find((round) => round.round_index === next) ?? null;
   };
   const currentRound = () => {
@@ -576,7 +579,7 @@ export function GeneratorsPage(): JSX.Element {
             <div>
               <dt>Next round</dt>
               <dd>
-                {schedule()?.next_round_epoch ?? "–"}
+                {nextIndex() ?? "–"}
                 <Show when={eta()}>
                   {(at) => (
                     <small title={at().toISOString()}>
@@ -626,6 +629,14 @@ export function GeneratorsPage(): JSX.Element {
         {(value) => <PayoutTable board={value()} generatorShare={generatorShare()} />}
       </Show>
 
+      <Show when={detail.error}>
+        <p role="alert">
+          Round {scoredRound()} results could not be loaded.{" "}
+          <button class="btn" onClick={() => void refetchDetail()}>
+            Try again
+          </button>
+        </p>
+      </Show>
       <Show when={detailData()}>{(value) => <RoundDetail detail={value()} />}</Show>
 
       <Show when={roundList()?.rounds.length}>

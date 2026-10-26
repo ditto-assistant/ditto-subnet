@@ -13,6 +13,7 @@ import {
   generatorEmissionShare,
   latestScoredRound,
   nextRoundEta,
+  nextRoundIndex,
   projectGeneratorPayouts,
   taoAmount,
 } from "./generator-data";
@@ -100,6 +101,11 @@ describe("nextRoundEta", () => {
     expect(nextRoundEta(schedule, epoch)?.toISOString()).toBe("2026-10-26T23:24:00.000Z");
   });
 
+  it("is unknown when the schedule's opening epoch has already passed", () => {
+    const stale = { ...rounds.schedule, next_round_epoch: 25963, subnet_epoch_index: 25963 };
+    expect(nextRoundEta(stale, epoch)).toBeNull();
+  });
+
   it("is unknown without a chain clock", () => {
     expect(nextRoundEta(rounds.schedule, null)).toBeNull();
     expect(nextRoundEta({ mode: "enforce", epochs_per_round: 1 }, epoch)).toBeNull();
@@ -110,6 +116,23 @@ describe("round helpers", () => {
   it("counts every case bucket and finds the newest scored round", () => {
     expect(round.columns.map(columnCases)).toEqual([32, 32, 32, 32, 32]);
     expect(latestScoredRound(rounds)?.round_index).toBe(25963);
+    const ascending = { ...rounds, rounds: [...rounds.rounds].reverse() };
+    expect(latestScoredRound(ascending)?.round_index).toBe(25963);
+  });
+
+  it("maps the next round's first epoch back to its round index", () => {
+    expect(nextRoundIndex(rounds.schedule)).toBe(25964);
+    expect(
+      nextRoundIndex({ mode: "enforce", epochs_per_round: 4, next_round_epoch: 103_860 }),
+    ).toBe(25965);
+    expect(
+      nextRoundIndex({
+        mode: "enforce",
+        epochs_per_round: 4,
+        current_round: 25964,
+        next_round_epoch: 103_860,
+      }),
+    ).toBe(25965);
   });
 
   it("reads the generator share only once the split is published", () => {

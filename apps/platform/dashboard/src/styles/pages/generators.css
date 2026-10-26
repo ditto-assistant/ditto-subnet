@@ -213,6 +213,9 @@
 .gen-casebar .gen-case:last-child {
   border-radius: 0 4px 4px 0;
 }
+.gen-casebar .gen-case:only-child {
+  border-radius: 4px;
+}
 .gen-case-legend {
   display: flex;
   flex-wrap: wrap;

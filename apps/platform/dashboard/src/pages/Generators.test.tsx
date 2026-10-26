@@ -101,6 +101,37 @@ it("says the generator share pays agent miners when nothing is eligible", async 
   expect(screen.getAllByText("Not weight-eligible")).toHaveLength(4);
 });
 
+it("finds the committed next round when a round spans several epochs", async () => {
+  const list = loadFixture<{
+    schedule: Record<string, unknown>;
+    rounds: { round_index: number }[];
+  }>("generator-rounds");
+  // Round 25964 opens at epoch 25964 * 4 when rounds span four epochs.
+  list.schedule = {
+    ...list.schedule,
+    epochs_per_round: 4,
+    subnet_epoch_index: 103_853,
+    next_round_epoch: 103_856,
+  };
+  serve({ "/generator/rounds": list });
+  render(() => <GeneratorsPage />);
+  const next = await screen.findByText("Next round");
+  expect(next.nextElementSibling).toHaveTextContent(/^25964/);
+  expect(screen.getByText(/Published · 3 confirmations/)).toBeInTheDocument();
+});
+
+it("offers a retry when the scored round's detail fails to load", async () => {
+  serve({ "/generator/rounds/25963": new Error("offline") });
+  render(() => <GeneratorsPage />);
+  expect(await screen.findByText(/Round 25963 results could not be loaded/)).toBeInTheDocument();
+  serve();
+  screen
+    .getByText(/Round 25963 results could not be loaded/)
+    .querySelector("button")
+    ?.click();
+  expect(await screen.findByText("Round 25963 results")).toBeInTheDocument();
+});
+
 it("reports unavailable data instead of inventing a schedule or payouts", async () => {
   serve({
     "/generator/board": new Error("offline"),
