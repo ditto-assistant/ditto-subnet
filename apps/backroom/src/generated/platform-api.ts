@@ -5573,6 +5573,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/generator/upload-terms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Upload Terms
+         * @description What an upload needs now; read it before paying any fee.
+         */
+        get: operations["upload_terms_api_v1_generator_upload_terms_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inference/chat/completions": {
         parameters: {
             query?: never;
@@ -21486,6 +21506,11 @@ export interface components {
              */
             upload_cooldown_seconds: number;
             /**
+             * Upload Fee Required
+             * @default false
+             */
+            upload_fee_required: boolean;
+            /**
              * Validator Rounds Enabled
              * @default false
              */
@@ -22573,6 +22598,12 @@ export interface components {
         GeneratorSubmissionUploadRequest: {
             /** Hotkey */
             hotkey: string;
+            /** Payment Block Hash */
+            payment_block_hash?: string | null;
+            /** Payment Block Number */
+            payment_block_number?: number | null;
+            /** Payment Extrinsic Index */
+            payment_extrinsic_index?: number | null;
             /** Signature */
             signature: string;
             /**
@@ -22605,6 +22636,32 @@ export interface components {
             superseded?: string[];
             /** Tree Sha256 */
             tree_sha256: string;
+        };
+        /**
+         * GeneratorUploadTerms
+         * @description What an upload must satisfy right now, read before paying anything.
+         *
+         *     ``blockers`` lists every refusal Platform can decide without the archive
+         *     (lane closed, banned hotkey, upload cooldown, an archive already
+         *     uploaded); a client must not pay while it is non-empty. Registration,
+         *     archive structure and duplicate source trees are only checked on upload,
+         *     and an unspent fee stays reusable for 24 hours after a refused upload.
+         */
+        GeneratorUploadTerms: {
+            /** Accepting */
+            accepting: boolean;
+            /** Blockers */
+            blockers?: string[];
+            /** Payment Amount Rao */
+            payment_amount_rao?: number | null;
+            /** Payment Required */
+            payment_required: boolean;
+            /** Payment Send Address */
+            payment_send_address?: string | null;
+            /** Retry At */
+            retry_at?: string | null;
+            /** Upload Cooldown Seconds */
+            upload_cooldown_seconds: number;
         };
         /** GeneratorWorkItem */
         GeneratorWorkItem: {
@@ -51744,6 +51801,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GeneratorSubmissionUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_terms_api_v1_generator_upload_terms_get: {
+        parameters: {
+            query?: {
+                hotkey?: string | null;
+                source_sha256?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorUploadTerms"];
                 };
             };
             /** @description Validation Error */

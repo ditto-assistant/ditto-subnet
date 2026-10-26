@@ -158,7 +158,9 @@ Each round's secret is revealed after `privacy_window_rounds`.
 - **Reads (`backroom:read`):**
   - `get_generator_competition_settings` returns the policy, including the
     round knobs (`epochs_per_round`, columns, reference agents, privacy
-    window, on-chain commitment and `validator_rounds_enabled`).
+    window, on-chain commitment and `validator_rounds_enabled`) and
+    `upload_fee_required`. A Platform that predates the fee field reads as
+    `false`.
   - `list_generator_submissions` and `get_generator_submission` return
     identity, status, qualification and latest round score, never source.
   - `get_generator_run` returns a qualification run's evaluation. Seeds appear
@@ -182,6 +184,9 @@ Each round's secret is revealed after `privacy_window_rounds`.
 - **Writes (`backroom:write`, actor recorded):**
   - `set_generator_competition_settings` stores a whole-object revision with
     `expectedRevision` and the confirmation `APPLY GENERATOR COMPETITION {MODE}`.
+    `upload_fee_required=true` charges every generator upload the agent-upload
+    fee (`get_submission_cooldown` `feeAmountRao`, same address); one payment
+    funds one upload across both lanes. It ships `false`.
   - `register_default_generator` (`REGISTER DEFAULT GENERATOR`) registers the
     public generator that fills empty counted columns.
   - `tick_generator_rounds` runs one idempotent round-driver tick now.

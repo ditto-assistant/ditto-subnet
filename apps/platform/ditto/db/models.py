@@ -13355,6 +13355,70 @@ class GeneratorSubmission(Base):
     )
 
 
+class GeneratorSubmissionPayment(Base):
+    """The finalized TAO transfer that funded one generator upload.
+
+    Written only while the generator setting ``upload_fee_required`` is on.
+    The primary key ``(block_hash, extrinsic_index)`` stops one proof funding
+    two generator uploads; the upload paths refuse a proof already recorded in
+    :class:`EvaluationPayment` (and agent uploads one recorded here) under a
+    shared per-proof advisory lock, so a transfer funds exactly one upload
+    across both lanes. Columns mirror :class:`EvaluationPayment`.
+    """
+
+    __tablename__ = "generator_submission_payments"
+
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """Coldkey that owned the hotkey and signed the transfer at payment time."""
+    amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tao_usd_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    dest_address: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """On-chain block timestamp."""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "block_hash",
+            "extrinsic_index",
+            name="generator_submission_payments_pkey",
+        ),
+        UniqueConstraint(
+            "submission_id", name="generator_submission_payments_submission_key"
+        ),
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["generator_submissions.submission_id"],
+            ondelete="RESTRICT",
+            name="generator_submission_payments_submission_fkey",
+        ),
+        CheckConstraint(
+            "block_hash = lower(block_hash)",
+            name="generator_submission_payments_block_hash_check",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0",
+            name="generator_submission_payments_extrinsic_index_check",
+        ),
+        CheckConstraint(
+            "amount_rao > 0", name="generator_submission_payments_amount_rao_check"
+        ),
+        CheckConstraint(
+            "tao_usd_rate IS NULL OR tao_usd_rate > 0",
+            name="generator_submission_payments_tao_usd_rate_check",
+        ),
+        Index("generator_submission_payments_miner_coldkey_idx", "miner_coldkey"),
+    )
+
+
 class GeneratorProbeEpoch(Base):
     """A secret seed every generator run also generates (never panel-run).
 

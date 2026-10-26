@@ -398,6 +398,28 @@ class ApiClient:
         result: dict[str, Any] = response.json()
         return result
 
+    def get_generator_upload_terms(
+        self, *, hotkey: str, source_sha256: str
+    ) -> dict[str, Any] | None:
+        """What a generator upload needs now, or ``None`` on an older Platform.
+
+        A Platform without the endpoint predates generator upload fees, so it
+        never requires one.
+        """
+        response = self._request(
+            "GET",
+            "/api/v1/generator/upload-terms",
+            params={"hotkey": hotkey, "source_sha256": source_sha256},
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise ApiResponseError(
+                _format_error(response, prefix="generator upload terms")
+            )
+        result: dict[str, Any] = response.json()
+        return result
+
     def list_generator_submissions(
         self, *, hotkey: str, limit: int = 25
     ) -> dict[str, Any]:

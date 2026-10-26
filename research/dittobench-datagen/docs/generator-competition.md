@@ -437,6 +437,34 @@ generator. Earnings therefore need a generator that keeps finding blind spots.
 Uploading a new generator supersedes the hotkey's previous one. The previous
 one's last round score keeps counting until the new one is scored.
 
+## Upload fee
+
+Generator uploads can carry the same anti-spam TAO fee as agent uploads. The
+generator setting `upload_fee_required` ships `false`, so uploads are free
+until an operator turns it on in Backroom (`set_generator_competition_settings`).
+
+- **Price and address.** The fee is the agent-upload fee: the submission
+  settings' `feeAmountRao` (`get_submission_cooldown`), paid to the same
+  address and verified by the same Platform payment verifier. One operator
+  price covers both lanes. A fee change between paying and uploading makes
+  the proof's amount mismatch; pay again at the new price.
+- **One payment, one upload.** A finalized `transfer_keep_alive` funds exactly
+  one upload across both lanes: a proof spent on an agent cannot fund a
+  generator, and a proof spent on a generator cannot fund an agent.
+- **Before paying.** `GET /generator/upload-terms?hotkey=...&source_sha256=...`
+  reports whether a fee is required, its amount and address, and every refusal
+  Platform can decide without the archive (lane closed, ban, cooldown, an
+  already uploaded archive). `ditto generator upload` reads it, refuses to pay
+  while anything blocks, pays through the agent-upload payment path, and
+  attaches the proof.
+- **Refused or lost uploads.** A refused upload does not spend the proof. It
+  can be reused for 24 hours with `--payment-block-hash`,
+  `--payment-block-number` and `--payment-extrinsic-index`. Resending the same
+  archive with the same proof after a lost response returns the submission
+  that proof already funded.
+- **Older CLIs.** A CLI that predates the fee sends no proof and gets
+  `402` telling the miner to upgrade.
+
 ## Privacy
 
 Generator source, an open round's secret, seed, and dataset, probe seeds, and
@@ -482,7 +510,8 @@ operator ruling.
    the matrix versus the benchmark.
 3. **Enforce.**
    - Operators set a generator track share through governance, and the ledger
-     marks entries eligible. An upload fee is added at the same time.
+     marks entries eligible. The upload fee (`upload_fee_required`, see
+     "Upload fee") is switched on at the same time.
    - Settings `mode=enforce` (confirmation `APPLY GENERATOR COMPETITION
      ENFORCE`) runs the lane exactly like shadow but marks each qualified miner
      generator's ledger entry `weight_eligible: true`. The public default

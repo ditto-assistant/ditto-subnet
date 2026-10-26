@@ -79,6 +79,40 @@ def _envelope_response(
     )
 
 
+class TestGeneratorUploadTerms:
+    def test_terms_pass_the_hotkey_and_digest(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, json={"payment_required": True})
+
+        with make_client(_handler) as client:
+            terms = client.get_generator_upload_terms(
+                hotkey="5Hot", source_sha256="ab" * 32
+            )
+        assert terms == {"payment_required": True}
+        assert seen[0].url.path == "/api/v1/generator/upload-terms"
+        assert seen[0].url.params["hotkey"] == "5Hot"
+        assert seen[0].url.params["source_sha256"] == "ab" * 32
+
+    def test_an_older_platform_without_terms_reads_as_none(self) -> None:
+        with make_client(lambda _request: httpx.Response(404)) as client:
+            assert (
+                client.get_generator_upload_terms(hotkey="5Hot", source_sha256="ab")
+                is None
+            )
+
+    def test_other_failures_raise(self) -> None:
+        with (
+            make_client(
+                lambda _request: _envelope_response(500, 3000, "boom")
+            ) as client,
+            pytest.raises(ApiResponseError, match="generator upload terms"),
+        ):
+            client.get_generator_upload_terms(hotkey="5Hot", source_sha256="ab")
+
+
 class TestContributorAuthenticationErrors:
     def test_tokenless_cla_401_keeps_endpoint_error(self) -> None:
         with (

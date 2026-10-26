@@ -86,6 +86,7 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "privacy_window_rounds": 6,
         "onchain_commitment": False,
         "validator_rounds_enabled": False,
+        "upload_fee_required": False,
     }
     base.update(overrides)
     return base

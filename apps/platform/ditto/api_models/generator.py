@@ -54,6 +54,7 @@ CaseStatus = Literal["discriminating", "trivial", "unsolved", "duplicate"]
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
+_BLOCK_HASH = r"^0x[0-9a-fA-F]{64}$"
 
 
 def generator_settings_confirmation(mode: str) -> str:
@@ -145,6 +146,12 @@ class GeneratorCompetitionSettings(BaseModel):
     max_attempts: Annotated[int, Field(ge=1, le=20)] = 6
     """Consecutive unfinished leases before a run backs off."""
     retry_backoff_seconds: Annotated[int, Field(ge=60, le=86_400)] = 3_600
+    upload_fee_required: bool = False
+    """Require a finalized TAO payment proof on every miner upload. The fee
+    amount and receiving address are the agent-upload submission settings
+    (one operator-controlled price); a proof funds exactly one upload across
+    the agent and generator lanes. Off by default, and a revision written
+    before this field existed reads as off."""
 
     @model_validator(mode="after")
     def _coherent(self) -> GeneratorCompetitionSettings:
@@ -238,6 +245,49 @@ class GeneratorSubmissionUploadRequest(BaseModel):
     signature: Annotated[str, Field(pattern=r"^(0x)?[0-9a-fA-F]{128}$")]
     signature_timestamp: Annotated[int, Field(ge=1)]
     signature_nonce: UUID
+    payment_block_hash: Annotated[str | None, Field(pattern=_BLOCK_HASH)] = None
+    payment_block_number: Annotated[int | None, Field(ge=1)] = None
+    payment_extrinsic_index: Annotated[int | None, Field(ge=0)] = None
+    """The finalized ``Balances.transfer_keep_alive`` that pays the upload
+    fee, required only while ``upload_fee_required`` is on. All three or
+    none."""
+
+    @model_validator(mode="after")
+    def _payment_all_or_none(self) -> GeneratorSubmissionUploadRequest:
+        supplied = {
+            self.payment_block_hash is not None,
+            self.payment_block_number is not None,
+            self.payment_extrinsic_index is not None,
+        }
+        if len(supplied) != 1:
+            raise ValueError(
+                "payment_block_hash, payment_block_number and "
+                "payment_extrinsic_index are required together"
+            )
+        return self
+
+    @property
+    def has_payment(self) -> bool:
+        return self.payment_block_hash is not None
+
+
+class GeneratorUploadTerms(GeneratorModel):
+    """What an upload must satisfy right now, read before paying anything.
+
+    ``blockers`` lists every refusal Platform can decide without the archive
+    (lane closed, banned hotkey, upload cooldown, an archive already
+    uploaded); a client must not pay while it is non-empty. Registration,
+    archive structure and duplicate source trees are only checked on upload,
+    and an unspent fee stays reusable for 24 hours after a refused upload.
+    """
+
+    accepting: bool
+    payment_required: bool
+    payment_amount_rao: int | None = None
+    payment_send_address: str | None = None
+    upload_cooldown_seconds: int
+    retry_at: datetime | None = None
+    blockers: list[str] = Field(default_factory=list)
 
 
 class GeneratorSubmissionUploadResponse(GeneratorModel):

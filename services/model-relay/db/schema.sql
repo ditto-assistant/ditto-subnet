@@ -4261,6 +4261,28 @@ CREATE TABLE public.generator_runs (
 
 
 --
+-- Name: generator_submission_payments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_submission_payments (
+    block_hash text NOT NULL,
+    extrinsic_index integer NOT NULL,
+    submission_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    miner_coldkey text NOT NULL,
+    amount_rao bigint NOT NULL,
+    tao_usd_rate numeric(20,8),
+    dest_address text NOT NULL,
+    "timestamp" timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_548c CHECK ((amount_rao > 0)),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_8849 CHECK ((extrinsic_index >= 0)),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_e702 CHECK ((block_hash = lower(block_hash))),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_fea8 CHECK (((tao_usd_rate IS NULL) OR (tao_usd_rate > (0)::numeric)))
+);
+
+
+--
 -- Name: generator_submissions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8508,6 +8530,22 @@ ALTER TABLE ONLY public.generator_competition_settings_revisions
 
 
 --
+-- Name: generator_submission_payments generator_submission_payments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_pkey PRIMARY KEY (block_hash, extrinsic_index);
+
+
+--
+-- Name: generator_submission_payments generator_submission_payments_submission_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_submission_key UNIQUE (submission_id);
+
+
+--
 -- Name: generator_submissions generator_submissions_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11537,6 +11575,13 @@ CREATE INDEX generator_runs_scored_idx ON public.generator_runs USING btree (fin
 --
 
 CREATE INDEX generator_runs_submission_idx ON public.generator_runs USING btree (submission_id, leased_at DESC);
+
+
+--
+-- Name: generator_submission_payments_miner_coldkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_submission_payments_miner_coldkey_idx ON public.generator_submission_payments USING btree (miner_coldkey);
 
 
 --
@@ -14844,6 +14889,14 @@ ALTER TABLE ONLY public.v13_replay_private_generation_groups
 
 ALTER TABLE ONLY public.v13_replay_private_generation_groups
     ADD CONSTRAINT fk_v13_replay_private_generation_groups_target_attempt__08f4 FOREIGN KEY (target_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: generator_submission_payments generator_submission_payments_submission_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_submission_fkey FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE RESTRICT;
 
 
 --

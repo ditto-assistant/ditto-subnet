@@ -14,6 +14,8 @@ import bittensor
 import pytest
 
 from ditto.miner_cli.commands import generator as gen_cmd
+from ditto.miner_cli.errors import ApiResponseError, MinerCliError
+from ditto.miner_cli.models import PaymentReceipt
 
 _KEY = bittensor.Keypair.create_from_uri("//Bob")
 _KIT = (
@@ -76,9 +78,16 @@ def test_missing_tool_is_a_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class _FakeClient:
     posted: list[dict[str, Any]] = []
+    # None models an older Platform with no terms endpoint.
+    terms: dict[str, Any] | None = None
+    reject: Exception | None = None
 
     def __init__(self, **_kwargs: Any) -> None:
         pass
+
+    def get_generator_upload_terms(self, **query: str) -> dict[str, Any] | None:
+        assert set(query) == {"hotkey", "source_sha256"}
+        return _FakeClient.terms
 
     def __enter__(self) -> _FakeClient:
         return self
@@ -88,6 +97,8 @@ class _FakeClient:
 
     def post_generator_submission(self, body: dict[str, Any]) -> dict[str, Any]:
         _FakeClient.posted.append(body)
+        if _FakeClient.reject is not None:
+            raise _FakeClient.reject
         return {
             "submission_id": "00000000-0000-4000-8000-000000000001",
             "status": "active",
@@ -117,6 +128,9 @@ def _install_wallet(monkeypatch: pytest.MonkeyPatch, key: bittensor.Keypair) -> 
     wallet = SimpleNamespace(hotkey=key)
     monkeypatch.setattr(gen_cmd, "load_wallet", lambda **_kw: (handle, wallet))
     monkeypatch.setattr(gen_cmd, "ApiClient", _FakeClient)
+    _FakeClient.posted = []
+    _FakeClient.terms = None
+    _FakeClient.reject = None
 
 
 def test_upload_signs_the_exact_bytes(
@@ -168,3 +182,149 @@ def test_upload_needs_exactly_one_source(tmp_path: Path) -> None:
         gen_cmd.run(_upload_args(None))
     with pytest.raises(gen_cmd.GeneratorToolError, match="exactly one"):
         gen_cmd.run(_upload_args(tmp_path / "a", tmp_path))
+
+
+_BLOCK = "0x" + "ef" * 32
+_FEE_TERMS = {
+    "accepting": True,
+    "payment_required": True,
+    "payment_amount_rao": 40_000_000,
+    "payment_send_address": "5FeeAddress",
+    "upload_cooldown_seconds": 3600,
+    "retry_at": None,
+    "blockers": [],
+}
+
+
+def _fake_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    raw = b"\x1f\x8b generator bytes"
+    archive = tmp_path / "gen.tar.gz"
+    archive.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    monkeypatch.setattr(
+        gen_cmd,
+        "inspect_archive",
+        lambda _path, **_kw: {"sha256": digest, "files": 2, "module": "m"},
+    )
+    return archive
+
+
+def _install_payment(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        gen_cmd,
+        "preflight_payment_signer",
+        lambda **kw: calls.append({"preflight": kw}),
+    )
+    monkeypatch.setattr(
+        gen_cmd, "confirm_payment", lambda **kw: calls.append({"confirm": kw})
+    )
+
+    def _pay(**kw: Any) -> PaymentReceipt:
+        calls.append({"pay": kw})
+        return PaymentReceipt(block_hash=_BLOCK, block_number=77, extrinsic_index=3)
+
+    monkeypatch.setattr(gen_cmd, "submit_eval_payment", _pay)
+    return calls
+
+
+def test_upload_pays_nothing_when_the_fee_is_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    calls = _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    for terms in (None, {**_FEE_TERMS, "payment_required": False}):
+        _FakeClient.terms = terms
+        _FakeClient.posted = []
+        assert gen_cmd.run(_upload_args(archive)) == 0
+        assert "payment_block_hash" not in _FakeClient.posted[0]
+    assert calls == []
+
+
+def test_upload_pays_the_quoted_fee_and_attaches_the_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    calls = _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = dict(_FEE_TERMS)
+    assert gen_cmd.run(_upload_args(archive)) == 0
+    pay = next(c["pay"] for c in calls if "pay" in c)
+    assert pay["amount_rao"] == 40_000_000
+    assert pay["dest_address"] == "5FeeAddress"
+    assert [next(iter(c)) for c in calls] == ["preflight", "confirm", "pay"]
+    body = _FakeClient.posted[0]
+    assert body["payment_block_hash"] == _BLOCK
+    assert body["payment_block_number"] == 77
+    assert body["payment_extrinsic_index"] == 3
+
+
+def test_upload_refuses_before_paying_when_platform_would_refuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    calls = _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = {**_FEE_TERMS, "blockers": ["generator upload cooldown"]}
+    with pytest.raises(MinerCliError, match="no payment was sent.*cooldown"):
+        gen_cmd.run(_upload_args(archive))
+    assert calls == []
+    assert _FakeClient.posted == []
+
+
+def test_a_failed_upload_after_payment_prints_the_recovery_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = dict(_FEE_TERMS)
+    _FakeClient.reject = ApiResponseError("generator upload failed: HTTP 503")
+    with pytest.raises(ApiResponseError):
+        gen_cmd.run(_upload_args(archive))
+    err = capsys.readouterr().err
+    assert f"--payment-block-hash {_BLOCK}" in err
+    assert "--payment-extrinsic-index 3" in err
+
+
+def test_recovery_flags_reuse_a_proof_without_paying(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    calls = _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = dict(_FEE_TERMS)
+    args = _upload_args(archive)
+    args.payment_block_hash = _BLOCK
+    args.payment_block_number = 77
+    args.payment_extrinsic_index = 3
+    assert gen_cmd.run(args) == 0
+    assert calls == []
+    assert _FakeClient.posted[0]["payment_extrinsic_index"] == 3
+
+    args.payment_block_number = None
+    with pytest.raises(MinerCliError, match="together"):
+        gen_cmd.run(args)
+
+
+def test_the_upload_parser_accepts_recovery_flags() -> None:
+    parser = argparse.ArgumentParser()
+    subs = parser.add_subparsers()
+    gen_cmd.add_subparser(subs)
+    args = parser.parse_args(
+        [
+            "generator",
+            "upload",
+            "gen.tar.gz",
+            "--payment-block-hash",
+            _BLOCK,
+            "--payment-block-number",
+            "77",
+            "--payment-extrinsic-index",
+            "3",
+        ]
+    )
+    assert (args.payment_block_number, args.payment_extrinsic_index) == (77, 3)

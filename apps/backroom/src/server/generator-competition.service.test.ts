@@ -50,7 +50,10 @@ const settings = {
   lease_ttl_seconds: 7200, max_attempts: 6, retry_backoff_seconds: 3600,
   epochs_per_round: 4, counted_columns: 5, challenger_columns: 1, reference_agent_ids: [],
   privacy_window_rounds: 6, onchain_commitment: true, validator_rounds_enabled: false,
+  upload_fee_required: false,
 }
+// What a Platform that predates the generator upload fee returns.
+const { upload_fee_required: _absent, ...olderSettings } = settings
 const runSummary = {
   run_id: RUN, attempt: 1, status: 'qualified', outcome: 'qualified', score: null,
   case_counts: null,
@@ -78,8 +81,8 @@ describe('generator competition MCP tools', () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const routes: Record<string, unknown> = {
       '/api/v1/admin/generator-competition/settings': {
-        current: [], history: [], default: { ...settings, mode: 'off' },
-        effective: { revision: 0, settings: { ...settings, mode: 'off' }, checksum: '', source: 'default' },
+        current: [], history: [], default: { ...olderSettings, mode: 'off' },
+        effective: { revision: 0, settings: { ...olderSettings, mode: 'off' }, checksum: '', source: 'default' },
       },
       '/api/v1/admin/generator-competition/submissions?limit=50&offset=0&status=active': {
         submissions: [{ ...submission, source_base64: 'must-not-pass' }], counts_by_status: { active: 1 },
@@ -108,9 +111,10 @@ describe('generator competition MCP tools', () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     try {
       const control = json(await client.callTool({ name: 'get_generator_competition_settings', arguments: {} })) as {
-        effective: { settings: { mode: string } }
+        effective: { settings: { mode: string, upload_fee_required: boolean } }
       }
       expect(control.effective.settings.mode).toBe('off')
+      expect(control.effective.settings.upload_fee_required).toBe(false)
       const listing = json(await client.callTool({ name: 'list_generator_submissions', arguments: { status: 'active' } }))
       expect(JSON.stringify(listing)).not.toContain('must-not-pass')
       expect(json(await client.callTool({ name: 'get_generator_submission', arguments: { submissionId: SUBMISSION } })))
@@ -209,9 +213,17 @@ describe('generator competition MCP tools', () => {
       expect(wrongPhrase.isError).toBe(true)
       expect(fetchMock).not.toHaveBeenCalled()
 
+      // A revision stores the whole policy: omitting the fee flag is refused.
+      const partial = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: { expectedRevision: 1, settings: olderSettings, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
+      })
+      expect(partial.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+
       const applied = json(await client.callTool({
         name: 'set_generator_competition_settings',
-        arguments: { expectedRevision: 1, settings, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
+        arguments: { expectedRevision: 1, settings: { ...settings, upload_fee_required: true }, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
       })) as { revision: number }
       expect(applied.revision).toBe(2)
       expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -219,6 +231,7 @@ describe('generator competition MCP tools', () => {
       expect(settingsUrl).toContain('/api/v1/admin/generator-competition/settings')
       expect(JSON.parse(String(settingsInit.body))).toMatchObject({
         expected_revision: 1, scope: '*', actor: session.email, confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        settings: { upload_fee_required: true },
       })
       expect(settingsInit.headers['X-Admin-Actor']).toBe(session.email)
 

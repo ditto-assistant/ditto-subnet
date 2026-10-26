@@ -61,13 +61,23 @@ export const generatorCompetitionSettingsSchema = z.object({
   privacy_window_rounds: z.number().int().min(1).max(180),
   onchain_commitment: z.boolean(),
   validator_rounds_enabled: z.boolean(),
+  // Require a finalized TAO payment proof on every generator upload, priced
+  // and addressed by the agent-upload submission settings
+  // (get_submission_cooldown feeAmountRao). Ships off.
+  upload_fee_required: z.boolean(),
+})
+
+// Reads tolerate a Platform that predates a field: an older Platform never
+// charged generator uploads, so a missing upload_fee_required reads as off.
+const generatorSettingsReadSchema = generatorCompetitionSettingsSchema.extend({
+  upload_fee_required: z.boolean().default(false),
 })
 
 export const generatorSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
   scope: z.string(),
-  settings: generatorCompetitionSettingsSchema,
+  settings: generatorSettingsReadSchema,
   reason: z.string(),
   actor: z.string(),
   created_at: z.string(),
@@ -78,10 +88,10 @@ export const generatorSettingsRevisionSchema = z.object({
 export const generatorSettingsControlSchema = z.object({
   current: z.array(generatorSettingsRevisionSchema),
   history: z.array(generatorSettingsRevisionSchema),
-  default: generatorCompetitionSettingsSchema,
+  default: generatorSettingsReadSchema,
   effective: z.object({
     revision: z.number().int().nonnegative(),
-    settings: generatorCompetitionSettingsSchema,
+    settings: generatorSettingsReadSchema,
     checksum: z.string(),
     source: z.enum(['revision', 'default']),
     settings_valid: z.boolean().optional(),

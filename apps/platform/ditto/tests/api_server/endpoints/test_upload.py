@@ -385,6 +385,38 @@ class TestUploadCheck:
         duplicate_lookup.assert_not_awaited()
         verifier.verify_payment.assert_not_awaited()
 
+    async def test_recovery_proof_that_funded_a_generator_is_replayed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        kp = _make_keypair()
+        verifier = _override_payment_verifier(app)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_generator_payment_for_proof",
+            AsyncMock(return_value=MagicMock()),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(keypair=kp),
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == 402
+        assert response.json()["error_code"] == 3207
+        verifier.verify_payment.assert_not_awaited()
+
     async def test_payment_older_than_recovery_window_is_rejected(
         self,
         app: FastAPI,
@@ -402,6 +434,10 @@ class TestUploadCheck:
         )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_generator_payment_for_proof",
             AsyncMock(return_value=None),
         )
 
@@ -461,6 +497,10 @@ class TestUploadCheck:
         )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_generator_payment_for_proof",
             AsyncMock(return_value=None),
         )
         monkeypatch.setattr(

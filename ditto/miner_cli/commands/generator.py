@@ -11,7 +11,8 @@ credit for cases strong agents split on. The lane is weight-zero in shadow.
 * ``rehearse DIR``: build and run the generator as the scorer does
   (``challenge rehearse``; ``--sandbox docker`` uses the scorer's images).
 * ``package DIR``: write the deterministic, vendored source archive.
-* ``upload [ARCHIVE | --dir DIR]``: check, sign ``ditto-generator-v1``, upload.
+* ``upload [ARCHIVE | --dir DIR]``: check, pay the upload fee when Platform
+  requires one, sign ``ditto-generator-v1``, upload.
 * ``status``: list your generators, their qualification, and latest round score.
 * ``board``: the shadow generator ledger.
 
@@ -32,11 +33,18 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
+import bittensor
+
 from ditto.miner_cli.api_client import ApiClient
-from ditto.miner_cli.errors import MinerCliError
+from ditto.miner_cli.commands.upload import _recovery_receipt_from_args
+from ditto.miner_cli.confirm import confirm_payment
+from ditto.miner_cli.errors import ApiResponseError, MinerCliError
+from ditto.miner_cli.models import PaymentReceipt, WalletHandle
 from ditto.miner_cli.network import resolve_network
+from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
 from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
 
 MAX_ARCHIVE_BYTES = 4 << 20
@@ -109,11 +117,22 @@ def add_subparser(
     _tool_flag(package)
     package.set_defaults(func=run)
 
-    upload = subs.add_parser("upload", help="Check, sign, and upload generator source.")
+    upload = subs.add_parser(
+        "upload",
+        help="Check, pay the fee if required, sign, and upload generator source.",
+    )
     upload.add_argument("archive", type=Path, nargs="?")
     upload.add_argument("--dir", type=Path, help="Package this directory first.")
     _tool_flag(upload)
     _wallet_flags(upload)
+    recovery = upload.add_argument_group(
+        "payment recovery",
+        "Reuse a finalized fee payment after an upload failed or its response "
+        "was lost. All three are required together; no new transfer is sent.",
+    )
+    recovery.add_argument("--payment-block-hash")
+    recovery.add_argument("--payment-block-number", type=int)
+    recovery.add_argument("--payment-extrinsic-index", type=int)
     upload.set_defaults(func=run)
 
     status = subs.add_parser("status", help="List a hotkey's generators.")
@@ -212,7 +231,64 @@ def _resolve_hotkey(args: argparse.Namespace) -> str:
     return str(handle.hotkey_ss58)
 
 
+def _pay_fee(
+    *,
+    args: argparse.Namespace,
+    terms: dict[str, Any],
+    handle: WalletHandle,
+    wallet: bittensor.Wallet,
+    coldkey_name: str,
+    subtensor_network: str,
+) -> PaymentReceipt:
+    """Pay the quoted upload fee through the agent-upload payment path."""
+    amount_rao = terms.get("payment_amount_rao")
+    send_address = terms.get("payment_send_address")
+    if not isinstance(amount_rao, int) or not isinstance(send_address, str):
+        raise MinerCliError("platform requires a fee but did not quote one")
+    hotkey_ss58 = handle.hotkey_ss58
+    chain_endpoint = getattr(args, "chain_endpoint", None) or None
+    preflight_payment_signer(
+        live_wallet=wallet,
+        hotkey_ss58=hotkey_ss58,
+        subtensor_network=subtensor_network,
+        chain_endpoint=chain_endpoint,
+    )
+    confirm_payment(
+        amount_rao=amount_rao,
+        dest_address=send_address,
+        hotkey_ss58=hotkey_ss58,
+        coldkey_name=coldkey_name,
+        skip=args.yes,
+    )
+    print(f"submitting payment on subtensor={subtensor_network}...", file=sys.stderr)
+    receipt = submit_eval_payment(
+        live_wallet=wallet,
+        subtensor_network=subtensor_network,
+        amount_rao=amount_rao,
+        dest_address=send_address,
+        chain_endpoint=chain_endpoint,
+    )
+    print(
+        f"payment finalised: block={receipt.block_number} "
+        f"ext_idx={receipt.extrinsic_index}",
+        file=sys.stderr,
+    )
+    return receipt
+
+
+def _recovery_hint(receipt: PaymentReceipt) -> str:
+    return (
+        "\nupload could not be confirmed after payment. The fee is not spent "
+        "until an upload is accepted; within 24 hours rerun upload with:\n"
+        f"  --payment-block-hash {receipt.block_hash} "
+        f"--payment-block-number {receipt.block_number} "
+        f"--payment-extrinsic-index {receipt.extrinsic_index}\n"
+        "and no new transfer is sent."
+    )
+
+
 def _upload(args: argparse.Namespace, archive: Path) -> int:
+    recovery = _recovery_receipt_from_args(args)
     with archive.open("rb") as source:
         raw = source.read(MAX_ARCHIVE_BYTES + 1)
     if not raw or len(raw) > MAX_ARCHIVE_BYTES:
@@ -227,27 +303,67 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
         interactive=sys.stdin.isatty() and not args.yes,
     )
     handle, wallet = load_wallet(coldkey_name=coldkey_name, hotkey_name=hotkey_name)
-    nonce = str(uuid4())
-    timestamp = int(time.time())
-    signature = wallet.hotkey.sign(
-        build_source_payload(
-            hotkey_ss58=handle.hotkey_ss58,
-            source_sha256=digest,
-            signature_timestamp=timestamp,
-            nonce=nonce,
-        )
-    ).hex()
-    body = {
-        "hotkey": handle.hotkey_ss58,
-        "source_sha256": digest,
-        "source_base64": base64.b64encode(raw).decode("ascii"),
-        "signature": signature,
-        "signature_timestamp": timestamp,
-        "signature_nonce": nonce,
-    }
     network = resolve_network(args.network)
     with ApiClient(base_url=network.api_url) as client:
-        result = client.post_generator_submission(body)
+        receipt = recovery
+        if receipt is None:
+            # Read the terms before paying anything. An older Platform has no
+            # terms endpoint and never charges for generator uploads.
+            terms = client.get_generator_upload_terms(
+                hotkey=handle.hotkey_ss58, source_sha256=digest
+            )
+            if terms is not None:
+                blockers = terms.get("blockers") or []
+                if blockers:
+                    raise MinerCliError(
+                        "platform would refuse this upload"
+                        + (
+                            " (no payment was sent)"
+                            if terms.get("payment_required")
+                            else ""
+                        )
+                        + ": "
+                        + "; ".join(str(b) for b in blockers)
+                    )
+                if terms.get("payment_required"):
+                    receipt = _pay_fee(
+                        args=args,
+                        terms=terms,
+                        handle=handle,
+                        wallet=wallet,
+                        coldkey_name=coldkey_name,
+                        subtensor_network=network.subtensor_network,
+                    )
+        nonce = str(uuid4())
+        timestamp = int(time.time())
+        signature = wallet.hotkey.sign(
+            build_source_payload(
+                hotkey_ss58=handle.hotkey_ss58,
+                source_sha256=digest,
+                signature_timestamp=timestamp,
+                nonce=nonce,
+            )
+        ).hex()
+        body: dict[str, object] = {
+            "hotkey": handle.hotkey_ss58,
+            "source_sha256": digest,
+            "source_base64": base64.b64encode(raw).decode("ascii"),
+            "signature": signature,
+            "signature_timestamp": timestamp,
+            "signature_nonce": nonce,
+        }
+        if receipt is not None:
+            body.update(
+                payment_block_hash=receipt.block_hash,
+                payment_block_number=receipt.block_number,
+                payment_extrinsic_index=receipt.extrinsic_index,
+            )
+        try:
+            result = client.post_generator_submission(body)
+        except ApiResponseError:
+            if receipt is not None:
+                print(_recovery_hint(receipt), file=sys.stderr)
+            raise
     print(result["submission_id"])
     superseded = result.get("superseded") or []
     print(

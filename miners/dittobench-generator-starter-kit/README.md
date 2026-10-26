@@ -104,6 +104,13 @@ uv run ditto generator board
 `uv run ditto generator rehearse DIR` and `uv run ditto generator package DIR`
 wrap the same tool.
 
+When the operator requires an upload fee, `ditto generator upload` charges the
+same TAO fee as an agent upload. It shows the amount and asks before paying
+(`-y` skips the prompt), then attaches the payment proof. If the upload fails
+after payment, it prints `--payment-block-*` flags. Rerun with them within 24
+hours to reuse the payment without paying again. See "Upload fee" in
+[generator-competition.md](../../research/dittobench-datagen/docs/generator-competition.md).
+
 ## Rehearse against agents locally
 
 Run three or more agent harnesses, for example the

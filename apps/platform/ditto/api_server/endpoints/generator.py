@@ -2,10 +2,15 @@
 
 ``POST /generator/submissions`` accepts a signed generator source archive. The
 checks run cheap-before-expensive and every mutation happens after every check
-passes: lane open, fresh domain-separated signature, ban, subnet registration,
-archive bytes and structure (the Go contract's rules), duplicate source,
-duplicate tree, cooldown, then one insert that supersedes the hotkey's
-previous generator.
+passes: lane open, fresh domain-separated signature, ban, the fee proof's
+presence and replay status (only while ``upload_fee_required``), subnet
+registration, archive bytes and structure (the Go contract's rules), duplicate
+source, duplicate tree, cooldown, the on-chain fee verification, then one
+insert that supersedes the hotkey's previous generator and records the fee.
+
+``GET /generator/upload-terms`` tells a client, before it pays anything,
+whether a fee is required, its amount and receiving address, and every
+refusal Platform can already decide without the archive.
 
 Source never leaves Platform except to the trusted scorer. The listing and
 board here expose identities, lifecycle, and aggregate outcomes only.
@@ -16,7 +21,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 import bittensor
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -27,6 +32,8 @@ from ditto.api_models.generator import (
     GeneratorSubmissionListResponse,
     GeneratorSubmissionUploadRequest,
     GeneratorSubmissionUploadResponse,
+    GeneratorUploadTerms,
+    SubmissionStatus,
     source_signature_payload,
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
@@ -35,7 +42,11 @@ from ditto.api_models.generator_rounds import (
     GeneratorRoundListResponse,
     GeneratorRoundSchedule,
 )
-from ditto.api_server.dependencies import get_chain_client, get_session
+from ditto.api_server.dependencies import (
+    get_chain_client,
+    get_payment_verifier,
+    get_session,
+)
 from ditto.api_server.generator_competition import (
     UploadRejected,
     build_ledger,
@@ -50,10 +61,18 @@ from ditto.api_server.generator_rounds import (
     round_summary,
     standing_views,
 )
+from ditto.api_server.payment_verifier import (
+    PaymentProof,
+    PaymentRecoveryExpired,
+    PaymentReplayedError,
+    PaymentVerifier,
+    VerifiedPayment,
+)
 from ditto.chain.errors import ChainError
 from ditto.db.queries.bans import is_hotkey_banned
 from ditto.db.queries.generator import (
     case_status_counts,
+    get_submission,
     get_submission_by_sha,
     get_submission_by_tree,
     insert_submission,
@@ -64,10 +83,20 @@ from ditto.db.queries.generator import (
     lock_source_tree,
     supersede_active,
 )
+from ditto.db.queries.payments import (
+    get_evaluation_payment_for_proof,
+    get_generator_payment_for_proof,
+    insert_generator_payment,
+)
 from ditto.db.queries.scores import emission_owner
+from ditto.db.queries.submission_settings import (
+    UPLOAD_ADMISSION_TTL,
+    effective_submission_settings,
+)
 
 if TYPE_CHECKING:
     from ditto.chain.client import ChainClient
+    from ditto.db.models import GeneratorSubmission
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +107,13 @@ _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 ChainDep = Annotated["ChainClient", Depends(get_chain_client)]
+
+FEE_REQUIRED_DETAIL = (
+    "generator uploads require a TAO fee: send payment_block_hash, "
+    "payment_block_number and payment_extrinsic_index for a finalized transfer "
+    "of the fee in GET /generator/upload-terms. Upgrade the ditto CLI and rerun "
+    "`ditto generator upload`; it pays the fee and attaches the proof"
+)
 
 
 def _verify_signature(payload: GeneratorSubmissionUploadRequest) -> bool:
@@ -98,6 +134,110 @@ def _verify_signature(payload: GeneratorSubmissionUploadRequest) -> bool:
         return bool(keypair.verify(message, bytes.fromhex(signature)))
     except (ValueError, TypeError):
         return False
+
+
+def _ensure_payment_fresh(verified: VerifiedPayment) -> None:
+    """A fee older than the agent-upload recovery window cannot fund an upload."""
+    paid_at = verified.block_timestamp
+    if paid_at.tzinfo is None:
+        paid_at = paid_at.replace(tzinfo=UTC)
+    if paid_at + UPLOAD_ADMISSION_TTL <= datetime.now(UTC):
+        raise PaymentRecoveryExpired(
+            f"payment at {paid_at.isoformat()} is outside the 24-hour window"
+        )
+
+
+async def _replayed_or_retry(
+    session: AsyncSession, payload: GeneratorSubmissionUploadRequest
+) -> GeneratorSubmissionUploadResponse | None:
+    """Refuse a proof another upload already spent; recover an exact retry.
+
+    A gateway failure can hide the 200 after the commit. The same hotkey
+    re-sending the same archive with the same proof gets its submission back
+    instead of a refusal, so the miner never pays twice.
+    """
+    assert payload.payment_block_hash is not None
+    assert payload.payment_extrinsic_index is not None
+    funded = await get_generator_payment_for_proof(
+        session,
+        block_hash=payload.payment_block_hash,
+        extrinsic_index=payload.payment_extrinsic_index,
+    )
+    if funded is not None:
+        row = await get_submission(session, funded.submission_id)
+        if (
+            row is not None
+            and row.miner_hotkey == payload.hotkey
+            and row.source_sha256 == payload.source_sha256
+        ):
+            return GeneratorSubmissionUploadResponse(
+                submission_id=row.submission_id,
+                source_sha256=row.source_sha256,
+                tree_sha256=row.tree_sha256,
+                status=cast("SubmissionStatus", row.status),
+                superseded=[],
+            )
+        raise PaymentReplayedError("payment proof already funded another upload")
+    if await get_evaluation_payment_for_proof(
+        session,
+        block_hash=payload.payment_block_hash,
+        extrinsic_index=payload.payment_extrinsic_index,
+    ):
+        raise PaymentReplayedError("payment proof already funded an agent upload")
+    return None
+
+
+@router.get("/upload-terms", response_model=GeneratorUploadTerms)
+async def upload_terms(
+    request: Request,
+    session: SessionDep,
+    response: Response,
+    hotkey: Annotated[str | None, Query(pattern=_SS58)] = None,
+    source_sha256: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
+) -> GeneratorUploadTerms:
+    """What an upload needs now; read it before paying any fee."""
+    response.headers["Cache-Control"] = "no-store"
+    settings = (await load_settings(session)).settings
+    accepting = settings.mode != "off"
+    blockers: list[str] = []
+    if not accepting:
+        blockers.append("the generator competition is not accepting submissions")
+    payment_required = accepting and settings.upload_fee_required
+    amount_rao: int | None = None
+    send_address: str | None = None
+    if payment_required:
+        fee = await effective_submission_settings(
+            session,
+            default_payment_address=request.app.state.config.upload_payment_address,
+        )
+        amount_rao, send_address = fee.fee_amount_rao, fee.payment_address
+    retry_at = None
+    if hotkey is not None:
+        if await is_hotkey_banned(session, hotkey=hotkey):
+            blockers.append("hotkey is banned from submitting")
+        last = await latest_submitted_at(session, miner_hotkey=hotkey)
+        if last is not None:
+            candidate = last + timedelta(seconds=settings.upload_cooldown_seconds)
+            if candidate > datetime.now(UTC):
+                retry_at = candidate
+                blockers.append(
+                    f"generator upload cooldown until {retry_at.isoformat()}"
+                )
+    if source_sha256 is not None:
+        existing = await get_submission_by_sha(session, source_sha256)
+        if existing is not None:
+            blockers.append(
+                f"this exact archive was already uploaded as {existing.submission_id}"
+            )
+    return GeneratorUploadTerms(
+        accepting=accepting,
+        payment_required=payment_required,
+        payment_amount_rao=amount_rao,
+        payment_send_address=send_address,
+        upload_cooldown_seconds=settings.upload_cooldown_seconds,
+        retry_at=retry_at,
+        blockers=blockers,
+    )
 
 
 @router.post("/submissions", response_model=GeneratorSubmissionUploadResponse)
@@ -123,6 +263,13 @@ async def upload_submission(
         )
     if await is_hotkey_banned(session, hotkey=payload.hotkey):
         raise HTTPException(status_code=403, detail="hotkey is banned from submitting")
+    fee_required = settings.upload_fee_required
+    if fee_required:
+        if not payload.has_payment:
+            raise HTTPException(status_code=402, detail=FEE_REQUIRED_DETAIL)
+        retried = await _replayed_or_retry(session, payload)
+        if retried is not None:
+            return retried
     if session.in_transaction():
         await session.rollback()
 
@@ -146,38 +293,60 @@ async def upload_submission(
     except UploadRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    verified: VerifiedPayment | None = None
+    if fee_required:
+        # Refuse a doomed upload before the chain reads, without locks (the
+        # locked checks below repeat these), then verify with no transaction
+        # held open across the slow calls. A refused upload never spends the
+        # proof, so the miner can reuse it within the 24-hour window.
+        _check_duplicates_and_cooldown(
+            response,
+            existing=await get_submission_by_sha(session, payload.source_sha256),
+            same_tree=await get_submission_by_tree(session, upload.info.tree_sha256),
+            last=await latest_submitted_at(session, miner_hotkey=payload.hotkey),
+            cooldown_seconds=settings.upload_cooldown_seconds,
+            now=datetime.now(UTC),
+        )
+        fee = await effective_submission_settings(
+            session,
+            default_payment_address=request.app.state.config.upload_payment_address,
+        )
+        if session.in_transaction():
+            await session.rollback()
+        assert payload.payment_block_hash is not None
+        assert payload.payment_block_number is not None
+        assert payload.payment_extrinsic_index is not None
+        # Resolved only here: with the fee off the upload never touches it.
+        verifier: PaymentVerifier = await get_payment_verifier(request)
+        try:
+            verified = await verifier.verify_payment(
+                PaymentProof(
+                    block_hash=payload.payment_block_hash,
+                    block_number=payload.payment_block_number,
+                    extrinsic_index=payload.payment_extrinsic_index,
+                ),
+                expected_hotkey=payload.hotkey,
+                expected_amount_rao=fee.fee_amount_rao,
+                expected_send_address=fee.payment_address,
+            )
+        except ChainError as exc:
+            logger.warning("chain unreachable during generator fee verify: %s", exc)
+            raise HTTPException(
+                status_code=503, detail="chain unavailable; retry shortly"
+            ) from exc
+        _ensure_payment_fresh(verified)
+
     await lock_hotkey_uploads(session, payload.hotkey)
     await lock_source_tree(session, upload.info.tree_sha256)
-    existing = await get_submission_by_sha(session, payload.source_sha256)
-    if existing is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"this exact archive was already uploaded as {existing.submission_id}"
-            ),
-        )
-    same_tree = await get_submission_by_tree(session, upload.info.tree_sha256)
-    if same_tree is not None:
-        # Re-packing identical files is not a new generator, whoever uploads it.
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "these exact source files were already uploaded as "
-                f"{same_tree.submission_id}"
-            ),
-        )
     now = datetime.now(UTC)
-    last = await latest_submitted_at(session, miner_hotkey=payload.hotkey)
-    if last is not None:
-        retry_at = last + timedelta(seconds=settings.upload_cooldown_seconds)
-        if retry_at > now:
-            retry_after = str(int((retry_at - now).total_seconds()) + 1)
-            response.headers["Retry-After"] = retry_after
-            raise HTTPException(
-                status_code=429,
-                detail=f"generator upload cooldown until {retry_at.isoformat()}",
-                headers={"Retry-After": retry_after},
-            )
+    _check_duplicates_and_cooldown(
+        response,
+        existing=await get_submission_by_sha(session, payload.source_sha256),
+        same_tree=await get_submission_by_tree(session, upload.info.tree_sha256),
+        last=await latest_submitted_at(session, miner_hotkey=payload.hotkey),
+        cooldown_seconds=settings.upload_cooldown_seconds,
+        now=now,
+    )
 
     try:
         row = await insert_submission(
@@ -194,10 +363,17 @@ async def upload_submission(
             file_count=upload.info.files,
             now=now,
         )
+        if verified is not None:
+            await insert_generator_payment(
+                session, verified=verified, submission_id=row.submission_id
+            )
         superseded = await supersede_active(
             session, miner_hotkey=payload.hotkey, keep=row.submission_id, now=now
         )
         await session.commit()
+    except PaymentReplayedError:
+        await session.rollback()
+        raise
     except IntegrityError as exc:
         await session.rollback()
         raise HTTPException(
@@ -205,11 +381,12 @@ async def upload_submission(
         ) from exc
     logger.info(
         "generator submission accepted hotkey=%s submission_id=%s files=%d "
-        "superseded=%d",
+        "superseded=%d paid=%s",
         payload.hotkey,
         row.submission_id,
         row.file_count,
         len(superseded),
+        verified is not None,
     )
     return GeneratorSubmissionUploadResponse(
         submission_id=row.submission_id,
@@ -218,6 +395,43 @@ async def upload_submission(
         status="active",
         superseded=superseded,
     )
+
+
+def _check_duplicates_and_cooldown(
+    response: Response,
+    *,
+    existing: GeneratorSubmission | None,
+    same_tree: GeneratorSubmission | None,
+    last: datetime | None,
+    cooldown_seconds: int,
+    now: datetime,
+) -> None:
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"this exact archive was already uploaded as {existing.submission_id}"
+            ),
+        )
+    if same_tree is not None:
+        # Re-packing identical files is not a new generator, whoever uploads it.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "these exact source files were already uploaded as "
+                f"{same_tree.submission_id}"
+            ),
+        )
+    if last is not None:
+        retry_at = last + timedelta(seconds=cooldown_seconds)
+        if retry_at > now:
+            retry_after = str(int((retry_at - now).total_seconds()) + 1)
+            response.headers["Retry-After"] = retry_after
+            raise HTTPException(
+                status_code=429,
+                detail=f"generator upload cooldown until {retry_at.isoformat()}",
+                headers={"Retry-After": retry_after},
+            )
 
 
 @router.get("/submissions", response_model=GeneratorSubmissionListResponse)
