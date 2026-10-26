@@ -85,6 +85,7 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     AttestationRejectedError,
     AvatarRejectedError,
+    GeneratorPaymentRejectedError,
     HotkeyAgentNotFoundError,
     LoginRejectedError,
     LoginRequiredError,
@@ -117,6 +118,11 @@ _ERROR_CODE_HOTKEY_AGENT_NOT_FOUND = 1201
 _ERROR_CODE_SUBMISSION_COOLDOWN = 1105
 _ERROR_CODE_PAYMENT_AMOUNT_MISMATCH = 3203
 _ERROR_CODE_PAYMENT_RECOVERY_EXPIRED = 3208
+# Generator fee refusals the same proof can never overcome. 3201 (extrinsic not
+# found) is left out: an archive node that has not caught up yet reports it.
+_DEFINITIVE_GENERATOR_PAYMENT_CODES = frozenset(
+    {3202, 3203, 3204, 3205, 3206, 3207, 3208}
+)
 
 # Safe post-payment retry set. These statuses conventionally represent a
 # transient request, capacity, gateway, or service failure. Other 4xx responses
@@ -394,7 +400,14 @@ class ApiClient:
     def post_generator_submission(self, body: dict[str, Any]) -> dict[str, Any]:
         response = self._request("POST", "/api/v1/generator/submissions", json=body)
         if response.status_code != 200:
-            raise ApiResponseError(_format_error(response, prefix="generator upload"))
+            message = _format_error(response, prefix="generator upload")
+            if (
+                response.status_code == 402
+                and _safe_envelope(response).get("error_code")
+                in _DEFINITIVE_GENERATOR_PAYMENT_CODES
+            ):
+                raise GeneratorPaymentRejectedError(message)
+            raise ApiResponseError(message)
         result: dict[str, Any] = response.json()
         return result
 

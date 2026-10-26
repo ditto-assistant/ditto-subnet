@@ -62,11 +62,18 @@ function settingsRefusal(cause: unknown) {
 
 // Reads default a field an older Platform omits. A write must not use that
 // default to report a setting Platform silently dropped: an older Platform
-// ignores unknown fields and stores the revision without them.
-function droppedSettings(raw: unknown, requested: Record<string, unknown>) {
-  const stored = (raw as { settings?: unknown } | null)?.settings
-  const storedFields = stored !== null && typeof stored === 'object' ? stored : {}
-  return Object.keys(requested).filter((field) => !(field in storedFields))
+// ignores unknown fields and stores the revision without them. A dropped field
+// whose requested value equals that default changed nothing and is fine.
+function droppedSettings(
+  raw: unknown,
+  requested: Record<string, unknown>,
+  stored: Record<string, unknown>,
+) {
+  const returned = (raw as { settings?: unknown } | null)?.settings
+  const returnedFields = returned !== null && typeof returned === 'object' ? returned : {}
+  return Object.keys(requested).filter(
+    (field) => !(field in returnedFields) && requested[field] !== stored[field],
+  )
 }
 
 export async function setGeneratorSettings(rawInput: unknown, actor: string) {
@@ -91,7 +98,7 @@ export async function setGeneratorSettings(rawInput: unknown, actor: string) {
     throw settingsRefusal(cause) ?? cause
   }
   const created = generatorSettingsRevisionSchema.parse(raw)
-  const dropped = droppedSettings(raw, input.settings)
+  const dropped = droppedSettings(raw, input.settings, created.settings)
   if (dropped.length > 0) {
     throw new Error(
       `Platform stored revision ${created.revision} without ${dropped.join(', ')}: it predates `

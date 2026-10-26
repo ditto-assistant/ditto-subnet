@@ -38,6 +38,7 @@ from ditto.miner_cli.errors import (
     AgentNotFoundError,
     ApiResponseError,
     AttestationRejectedError,
+    GeneratorPaymentRejectedError,
     HotkeyAgentNotFoundError,
     LoginRejectedError,
     LoginRequiredError,
@@ -80,6 +81,27 @@ def _envelope_response(
 
 
 class TestGeneratorUploadTerms:
+    @pytest.mark.parametrize(
+        ("status", "code", "definitive"),
+        [
+            (402, 3203, True),
+            (402, 3207, True),
+            (402, 3208, True),
+            (402, 3201, False),
+            (402, 3002, False),
+            (503, 3000, False),
+        ],
+    )
+    def test_upload_maps_definitive_payment_refusals(
+        self, status: int, code: int, definitive: bool
+    ) -> None:
+        with (
+            make_client(lambda _r: _envelope_response(status, code, "no")) as client,
+            pytest.raises(ApiResponseError) as caught,
+        ):
+            client.post_generator_submission({})
+        assert isinstance(caught.value, GeneratorPaymentRejectedError) is definitive
+
     def test_terms_pass_the_hotkey_and_digest(self) -> None:
         seen: list[httpx.Request] = []
 

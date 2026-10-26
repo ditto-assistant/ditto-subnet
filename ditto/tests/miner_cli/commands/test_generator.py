@@ -14,7 +14,11 @@ import bittensor
 import pytest
 
 from ditto.miner_cli.commands import generator as gen_cmd
-from ditto.miner_cli.errors import ApiResponseError, MinerCliError
+from ditto.miner_cli.errors import (
+    ApiResponseError,
+    GeneratorPaymentRejectedError,
+    MinerCliError,
+)
 from ditto.miner_cli.models import PaymentReceipt
 from ditto.miner_cli.preferences import load_pending_payments_for_hotkey
 
@@ -88,6 +92,7 @@ class _FakeClient:
     # None models an older Platform with no terms endpoint.
     terms: dict[str, Any] | None = None
     reject: Exception | None = None
+    malformed = False
 
     def __init__(self, **_kwargs: Any) -> None:
         pass
@@ -106,6 +111,8 @@ class _FakeClient:
         _FakeClient.posted.append(body)
         if _FakeClient.reject is not None:
             raise _FakeClient.reject
+        if _FakeClient.malformed:
+            return {"status": "active"}
         return {
             "submission_id": "00000000-0000-4000-8000-000000000001",
             "status": "active",
@@ -138,6 +145,7 @@ def _install_wallet(monkeypatch: pytest.MonkeyPatch, key: bittensor.Keypair) -> 
     _FakeClient.posted = []
     _FakeClient.terms = None
     _FakeClient.reject = None
+    _FakeClient.malformed = False
 
 
 def test_upload_signs_the_exact_bytes(
@@ -310,6 +318,7 @@ def test_a_failed_upload_after_payment_keeps_the_proof(
     # and a confirmed upload clears it.
     paid = len(calls)
     _FakeClient.reject = None
+    _FakeClient.malformed = False
     _FakeClient.posted = []
     assert gen_cmd.run(_upload_args(archive)) == 0
     assert len(calls) == paid
@@ -317,6 +326,44 @@ def test_a_failed_upload_after_payment_keeps_the_proof(
     _FakeClient.posted = []
     assert gen_cmd.run(_upload_args(archive)) == 0
     assert len(calls) == paid + 3
+
+
+def test_a_malformed_success_keeps_the_saved_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    calls = _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = dict(_FEE_TERMS)
+    _FakeClient.malformed = True
+    with pytest.raises(KeyError):
+        gen_cmd.run(_upload_args(archive))
+    _FakeClient.malformed = False
+    _FakeClient.posted = []
+    assert gen_cmd.run(_upload_args(archive)) == 0
+    assert len(calls) == 3  # paid once; the rerun reused the saved proof
+    assert _FakeClient.posted[0]["payment_block_hash"] == _BLOCK
+
+
+def test_a_definitively_refused_proof_is_forgotten_and_repaid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    calls = _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = dict(_FEE_TERMS)
+    _FakeClient.reject = GeneratorPaymentRejectedError(
+        "generator upload failed: HTTP 402 code=3208 payment recovery expired"
+    )
+    with pytest.raises(GeneratorPaymentRejectedError):
+        gen_cmd.run(_upload_args(archive))
+    assert "removed from local storage" in capsys.readouterr().err
+    # The rerun reads the terms and pays again rather than resending the proof.
+    _FakeClient.reject = None
+    assert gen_cmd.run(_upload_args(archive)) == 0
+    assert [next(iter(c)) for c in calls] == ["preflight", "confirm", "pay"] * 2
 
 
 def test_recovery_flags_reuse_a_proof_without_paying(

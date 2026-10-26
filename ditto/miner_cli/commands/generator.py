@@ -41,7 +41,7 @@ import bittensor
 from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.commands.upload import _recovery_receipt_from_args
 from ditto.miner_cli.confirm import confirm_payment
-from ditto.miner_cli.errors import MinerCliError
+from ditto.miner_cli.errors import GeneratorPaymentRejectedError, MinerCliError
 from ditto.miner_cli.models import PaymentReceipt, WalletHandle
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
@@ -396,24 +396,39 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
             )
         try:
             result = client.post_generator_submission(body)
+            submission_id = result["submission_id"]
+            status = result["status"]
+            source_sha256 = result["source_sha256"]
+        except GeneratorPaymentRejectedError:
+            # This proof can never fund the upload. Forget the saved copy so a
+            # rerun reads current terms and pays again instead of resending it.
+            if receipt is not None and recovery is None:
+                clear_pending_payment(**pending, payment=receipt)
+                print(
+                    "\nplatform refused the payment proof; it was removed from "
+                    "local storage. Rerunning upload reads the current fee and "
+                    "asks before paying again.",
+                    file=sys.stderr,
+                )
+            raise
         except BaseException:
-            # Any failure after paying, including a malformed response or an
-            # interrupt, must leave the miner the proof.
+            # Any other failure after paying (transport, server error, a
+            # malformed response, an interrupt) keeps the proof for a retry.
             if receipt is not None:
                 print(_recovery_hint(receipt), file=sys.stderr)
             raise
-    if receipt is not None:
-        clear_pending_payment(**pending, payment=receipt)
-    print(result["submission_id"])
+    print(submission_id)
     superseded = result.get("superseded") or []
     print(
-        f"generator {result['status']}: {info.get('files')} files, module "
-        f"{info.get('module')}, sha256 {result['source_sha256']}"
+        f"generator {status}: {info.get('files')} files, module "
+        f"{info.get('module')}, sha256 {source_sha256}"
         + (
             f"; superseded {len(superseded)} earlier generator(s)" if superseded else ""
         ),
         file=sys.stderr,
     )
+    if receipt is not None:
+        clear_pending_payment(**pending, payment=receipt)
     return 0
 
 

@@ -283,6 +283,18 @@ describe('generator competition MCP tools', () => {
       const text = (dropped.content as Array<{ text: string }>)[0].text
       expect(text).toContain('revision 2 without upload_fee_required')
       expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      // Sending the default value (fee off) changes nothing on an older
+      // Platform, so that write succeeds.
+      const unchanged = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1, settings: { ...settings, upload_fee_required: false },
+          reason: 'raise the cooldown only', confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(unchanged.isError).toBeFalsy()
+      expect(json(unchanged)).toMatchObject({ revision: 2, settings: { upload_fee_required: false } })
     } finally {
       await client.close()
       await server.close()
