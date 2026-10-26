@@ -5471,6 +5471,18 @@ describe('emission allocation', () => {
     ).toBe('APPLY EMISSION ALLOCATION burn=4500 memory=3500 generator=1500 gamma:gm=500')
   })
 
+  it('orders Gamma buckets by codepoint like Platform', () => {
+    expect(
+      emissionAllocationConfirmation([
+        { kind: 'burn', bps: 4000 },
+        live[1],
+        live[2],
+        { kind: 'gamma', bucket: 'gm2', bps: 600 },
+        { kind: 'gamma', bucket: 'gm_2', bps: 400 },
+      ]),
+    ).toBe('APPLY EMISSION ALLOCATION burn=4000 memory=3500 generator=1500 gamma:gm2=600 gamma:gm_2=400')
+  })
+
   it.each([
     ['sum short of 10000', [live[0], live[1], { kind: 'track', id: 'generator', bps: 1400 }]],
     ['duplicate', [...live, { kind: 'track', id: 'memory', bps: 0 }]],

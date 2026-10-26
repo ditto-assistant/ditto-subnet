@@ -1957,7 +1957,9 @@ export function canonicalEmissionEntries(entries: EmissionAllocationEntry[]) {
   return [...entries].sort((left, right) => {
     const a = emissionEntryOrder(left)
     const b = emissionEntryOrder(right)
-    return a[0] - b[0] || a[1] - b[1] || a[2].localeCompare(b[2])
+    // Codepoint order, like Platform's sorted(): locale collation can put
+    // gm_2 and gm2 the other way round and break the exact phrase.
+    return a[0] - b[0] || a[1] - b[1] || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0)
   })
 }
 
