@@ -53,7 +53,7 @@ _BucketId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,47}$")]
 class EmissionAllocationEntry(BaseModel):
     """One destination of total miner emission."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     kind: Literal["burn", "track", "gamma"]
     id: str | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -90,7 +90,7 @@ class EmissionAllocationEntry(BaseModel):
 class EmissionAllocation(BaseModel):
     """A complete allocation, stored in canonical order."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     entries: Annotated[
         list[EmissionAllocationEntry], Field(min_length=3, max_length=32)
