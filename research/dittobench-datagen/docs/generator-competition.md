@@ -499,7 +499,7 @@ operator ruling.
 
 ## Rollout
 
-1. **Shadow (now).**
+1. **Shadow** (2026-10-23 to 2026-10-26).
    - Settings `mode=shadow`. Register the public default generator and let it
      qualify. Set `validator_rounds_enabled=true`.
    - Every ledger entry is `weight_eligible: false` and the validator track is
@@ -508,7 +508,9 @@ operator ruling.
 2. **Compare.** Run the matrix in shadow alongside the canonical benchmark.
    Compare crown stability, copy and collusion signals, and how agents rank on
    the matrix versus the benchmark.
-3. **Enforce.**
+3. **Enforce** (live since epoch 25962, 2026-10-26: generator settings
+   revision 6, track shares `memory=7000 generator=3000` of the post-burn pool,
+   burn 0.5, so burn 50% / memory 35% / generator 15% of total emission).
    - Operators set a generator track share through governance, and the ledger
      marks entries eligible. The upload fee (`upload_fee_required`, see
      "Upload fee") is switched on at the same time.

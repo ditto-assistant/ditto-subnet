@@ -6,9 +6,13 @@ that answer DittoBench cases. Generator miners are paid for **generators**:
 CPU-only programs whose cases the best agents still get wrong. Those cases must
 be valid, solvable, and discriminating, on seeds nobody sees in advance.
 
-The generator competition is **shadow-only** for now. Every ledger entry is
-`weight_eligible=false`, and the validator registers the `generator` track at
-0 bps. Generators are scored and published, but they do not move weights yet.
+The generator competition is **paid**. Since epoch 25962 (2026-10-26) the
+generator track earns a governed share of emission: 15% of total emission,
+next to 35% for the agent competition and 50% burn. Qualified generators' ledger
+entries are `weight_eligible=true`, and validators split the generator share by
+rank on the latest round score (40/25/15/12/8%, renormalized when fewer than
+five generators qualify). The live split is in Platform's track-share settings
+and may change by governance.
 
 The full design is in
 [`research/dittobench-datagen/docs/generator-competition.md`](../../research/dittobench-datagen/docs/generator-competition.md).
@@ -45,7 +49,8 @@ The full design is in
    later fails its round seed is rejected too, including when it cannot fill a
    raised `cases_per_seed`, so make sure yours fills 80 cases on every seed.
 4. **Rounds.** Qualified generators compete in rounds on the chain's epoch
-   counter (one round per 4 subnet epochs). Each round:
+   counter (`epochs_per_round` subnet epochs per round; one epoch, about 72
+   minutes, today). Each round:
    - opens on a seed nobody could know in advance. It comes from a secret
      Platform committed a round earlier, on Platform and on chain, and the
      block the round opened at.
