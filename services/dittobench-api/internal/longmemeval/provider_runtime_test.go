@@ -966,10 +966,10 @@ func TestOfficialJudgeRejectsMalformedProviderResponses(t *testing.T) {
 		status int
 		body   string
 	}{
-		"HTTP failure":  {http.StatusServiceUnavailable, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1,"cost":0}}`},
-		"no choices":    {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
-		"two choices":   {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","choices":[{"message":{"content":"yes"}},{"message":{"content":"no"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
-		"empty content": {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","choices":[{"message":{"content":" "}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
+		"HTTP failure":  {http.StatusServiceUnavailable, `{"id":"j1","model":"deepseek/deepseek-v4.1-flash","provider":"Together","usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1,"cost":0}}`},
+		"no choices":    {http.StatusOK, `{"id":"j1","model":"deepseek/deepseek-v4.1-flash","provider":"Together","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
+		"two choices":   {http.StatusOK, `{"id":"j1","model":"deepseek/deepseek-v4.1-flash","provider":"Together","choices":[{"message":{"content":"yes"}},{"message":{"content":"no"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
+		"empty content": {http.StatusOK, `{"id":"j1","model":"deepseek/deepseek-v4.1-flash","provider":"Together","choices":[{"message":{"content":" "}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
 	}
 	for name, testCase := range tests {
 		t.Run(name, func(t *testing.T) {

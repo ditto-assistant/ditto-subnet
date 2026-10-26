@@ -1051,7 +1051,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	}
 	if len(profile.ProviderLanes) != 2 ||
 		profile.ProviderLanes[0].Model != "deepseek/deepseek-v4.1-flash" ||
-		profile.ProviderLanes[0].RouteProvider != "azure" ||
+		profile.ProviderLanes[0].RouteProvider != "together" ||
 		profile.ProviderLanes[1].Model != "openai/gpt-oss-20b" ||
 		profile.ProviderLanes[1].RouteProvider != "throughput" {
 		t.Fatalf("unexpected provider lanes: %+v", profile.ProviderLanes)
@@ -1255,7 +1255,7 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 				"fixture-reader-v1", llm.HarnessModelForVersion(9),
 			),
 			longmemeval.JudgeLane: grant(
-				longmemeval.JudgeLane, provider.URL+"/api/v1/chat/completions", "openrouter", "azure", "Azure",
+				longmemeval.JudgeLane, provider.URL+"/api/v1/chat/completions", "openrouter", "together", "Together",
 				"longmemeval-deepseek-v41-flash-together-v1", "deepseek/deepseek-v4.1-flash",
 			),
 			"embedding": grant(
