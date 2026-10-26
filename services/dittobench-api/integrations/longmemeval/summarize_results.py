@@ -71,6 +71,55 @@ OFFICIAL_JUDGE_SHORT_NAME = judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME
 OFFICIAL_JUDGE_OPENROUTER_MODEL = "openai/gpt-4o-2024-08-06"
 OFFICIAL_JUDGE_PROFILE_REVISION = judge_evaluator.OFFICIAL_JUDGE_PROFILE_REVISION
 
+# Judges whose full identity this script already knows. Naming only
+# --judge-model would otherwise leave the short name, the OpenRouter id and the
+# profile revision on their official defaults, so a substituted run would read
+# its artifacts from the wrong filename and publish metadata describing a judge
+# that never ran. For a judge that is not in this table, every field has to be
+# supplied; see resolve_judge.
+KNOWN_JUDGES = {
+    OFFICIAL_JUDGE_MODEL: {
+        "short_name": OFFICIAL_JUDGE_SHORT_NAME,
+        "openrouter_model": OFFICIAL_JUDGE_OPENROUTER_MODEL,
+        "profile_revision": OFFICIAL_JUDGE_PROFILE_REVISION,
+    },
+    judge_evaluator.JUDGE_MODEL: {
+        "short_name": judge_evaluator.JUDGE_SHORT_NAME,
+        "openrouter_model": judge_evaluator.JUDGE_MODEL,
+        "profile_revision": judge_evaluator.JUDGE_PROFILE_REVISION,
+    },
+}
+
+
+def resolve_judge(
+    judge_model: str,
+    short_name: str | None = None,
+    openrouter_model: str | None = None,
+    profile_revision: str | None = None,
+) -> dict[str, str]:
+    """Complete one judge identity, or say exactly what is missing.
+
+    Every field is either given explicitly or filled from a judge this script
+    knows. An unknown judge with anything omitted is an error rather than a
+    report carrying someone else's provenance.
+    """
+    known = KNOWN_JUDGES.get(judge_model, {})
+    resolved = {
+        "model": judge_model,
+        "short_name": short_name or known.get("short_name"),
+        "openrouter_model": openrouter_model or known.get("openrouter_model"),
+        "profile_revision": profile_revision or known.get("profile_revision"),
+    }
+    missing = sorted(key for key, value in resolved.items() if not value)
+    if missing:
+        raise ValueError(
+            f"judge {judge_model!r} is not a known judge, so "
+            + ", ".join(f"--judge-{key.replace('_', '-')}" for key in missing)
+            + " must be given explicitly rather than defaulting to another "
+            "judge's identity"
+        )
+    return resolved
+
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -149,15 +198,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--judge-short-name",
-        default=OFFICIAL_JUDGE_SHORT_NAME,
-        help="evaluator short name, which names the .eval-results-* artifacts",
+        help=(
+            "evaluator short name, which names the .eval-results-* artifacts; "
+            "defaults to the known identity for --judge-model"
+        ),
     )
-    parser.add_argument(
-        "--judge-openrouter-model", default=OFFICIAL_JUDGE_OPENROUTER_MODEL
-    )
-    parser.add_argument(
-        "--judge-profile-revision", default=OFFICIAL_JUDGE_PROFILE_REVISION
-    )
+    parser.add_argument("--judge-openrouter-model")
+    parser.add_argument("--judge-profile-revision")
     parser.add_argument("--answer-model-id", default="qwen/qwen3-32b")
     parser.add_argument("--answer-model-provider", default="openrouter")
     parser.add_argument(
@@ -173,6 +220,15 @@ def main() -> None:
         help="optional aggregate-only JSON captured from the trusted proxies",
     )
     args = parser.parse_args()
+    try:
+        judge = resolve_judge(
+            args.judge_model,
+            args.judge_short_name,
+            args.judge_openrouter_model,
+            args.judge_profile_revision,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     dataset_path = Path(args.dataset)
     references_list = json.loads(dataset_path.read_text())
@@ -184,13 +240,13 @@ def main() -> None:
         hypothesis_path = results_dir / f"agent-{rank}.jsonl"
         evaluation_path = results_dir / (
             f"agent-{rank}.jsonl"
-            + judge_evaluator.evaluation_suffix(args.judge_short_name)
+            + judge_evaluator.evaluation_suffix(judge["short_name"])
         )
         aggregate = summarize_agent(
             read_jsonl(hypothesis_path),
             read_jsonl(evaluation_path),
             references,
-            judge_model=args.judge_model,
+            judge_model=judge["model"],
         )
         agents.append(
             {
@@ -226,9 +282,9 @@ def main() -> None:
         },
         "public_harness_revision": "c3caa8e2c19f8a41a0610b9f7db774f97643dd9c",
         "judge": {
-            "official_model": args.judge_model,
-            "openrouter_model": args.judge_openrouter_model,
-            "profile_revision": args.judge_profile_revision,
+            "official_model": judge["model"],
+            "openrouter_model": judge["openrouter_model"],
+            "profile_revision": judge["profile_revision"],
         },
         "agents": agents,
     }

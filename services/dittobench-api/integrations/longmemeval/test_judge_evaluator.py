@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import re
 import hashlib
 import io
 import json
@@ -29,6 +30,26 @@ EVALUATOR_DIR = REPO_ROOT / "docs" / "longmemeval-benchmark" / "judge-evaluator"
 UPSTREAM_EVALUATOR = EVALUATOR_DIR / "upstream" / "evaluate_qa.py"
 DITTO_EVALUATOR = EVALUATOR_DIR / "ditto" / "evaluate_qa.py"
 DELTA_PATCH = EVALUATOR_DIR / "ditto-judge-v1.patch"
+PROVIDER_RUNTIME = (
+    REPO_ROOT
+    / "services"
+    / "dittobench-api"
+    / "internal"
+    / "longmemeval"
+    / "provider_runtime.go"
+)
+_GO_CONSTANT = re.compile(r"^\s*(officialJudge\w+)\s*=\s*(.+?)\s*$", re.MULTILINE)
+
+
+def go_judge_constants() -> dict[str, object]:
+    """The production judge lane's constants, read out of the Go runtime."""
+    values: dict[str, object] = {}
+    for name, literal in _GO_CONSTANT.findall(PROVIDER_RUNTIME.read_text()):
+        if literal.startswith('"') and literal.endswith('"'):
+            values[name] = literal[1:-1]
+        elif literal.isdigit():
+            values[name] = int(literal)
+    return values
 
 
 def sha256(path: Path) -> str:
@@ -197,6 +218,67 @@ class RecordedEvaluatorTests(unittest.TestCase):
         self.assertEqual(len(judge_evaluator.FORK_REVISION), 40)
         self.assertNotEqual(
             judge_evaluator.UPSTREAM_REVISION, judge_evaluator.FORK_REVISION
+        )
+
+
+class ProductionParityTests(unittest.TestCase):
+    """The rehearsal judge must BE the production judge, not resemble it.
+
+    judge_evaluator.py says it mirrors provider_runtime.go. An unchecked
+    comment is how the divergence this fork closes appeared in the first place:
+    production moved to a new judge and the rehearsal kept scoring with the old
+    one, with nothing failing. These read the Go constants and compare.
+    """
+
+    def setUp(self):
+        self.constants = go_judge_constants()
+        self.assertTrue(
+            PROVIDER_RUNTIME.is_file(), f"missing {PROVIDER_RUNTIME}"
+        )
+
+    def test_every_judge_constant_was_found(self):
+        # A regex that silently matched nothing would make every comparison
+        # below vacuous, so the parse is asserted before it is trusted.
+        for name in (
+            "officialJudgeModel",
+            "officialJudgeMaxTokens",
+            "officialJudgeRevision",
+            "officialJudgeRouteProvider",
+            "officialJudgeReceiptProvider",
+        ):
+            self.assertIn(name, self.constants)
+
+    def test_the_rehearsal_judge_matches_the_production_lane(self):
+        self.assertEqual(
+            {
+                "model": self.constants["officialJudgeModel"],
+                "max_tokens": self.constants["officialJudgeMaxTokens"],
+                "revision": self.constants["officialJudgeRevision"],
+                "route_provider": self.constants["officialJudgeRouteProvider"],
+                "receipt_provider": self.constants["officialJudgeReceiptProvider"],
+            },
+            {
+                "model": judge_evaluator.JUDGE_MODEL,
+                "max_tokens": judge_evaluator.JUDGE_MAX_COMPLETION_TOKENS,
+                "revision": judge_evaluator.JUDGE_PROFILE_REVISION,
+                "route_provider": judge_evaluator.JUDGE_ROUTE_PROVIDER,
+                "receipt_provider": judge_evaluator.JUDGE_RECEIPT_PROVIDER,
+            },
+            "the rehearsal judge and the production judge lane have diverged; "
+            "miners would rehearse against a grader that does not score them",
+        )
+
+    def test_the_forked_evaluator_can_run_the_production_judge(self):
+        """Parity is worthless if the evaluator cannot invoke that judge."""
+        zoo = module_constant(DITTO_EVALUATOR, "model_zoo")
+        bounds = module_constant(DITTO_EVALUATOR, "max_tokens_zoo")
+        production_model = self.constants["officialJudgeModel"]
+        entries = [name for name, e in zoo.items() if e[0] == production_model]
+        self.assertEqual(
+            len(entries), 1, f"{production_model} is not registered in model_zoo"
+        )
+        self.assertEqual(
+            bounds.get(entries[0]), self.constants["officialJudgeMaxTokens"]
         )
 
 

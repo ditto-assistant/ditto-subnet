@@ -34,7 +34,7 @@ from openrouter_reader_proxy import (
 from openrouter_reader_proxy import (
     rewrite_request as rewrite_reader_request,
 )
-from summarize_results import summarize_agent
+from summarize_results import resolve_judge, summarize_agent
 
 
 def fixture_entry():
@@ -316,6 +316,56 @@ class SummaryTests(unittest.TestCase):
                 evaluations,
                 references,
                 judge_model=judge_evaluator.OFFICIAL_JUDGE_MODEL,
+            )
+
+
+class JudgeMetadataTests(unittest.TestCase):
+    """Naming one judge field must not leave the rest describing another judge."""
+
+    def test_the_official_judge_resolves_to_its_own_identity(self):
+        self.assertEqual(
+            resolve_judge(judge_evaluator.OFFICIAL_JUDGE_MODEL),
+            {
+                "model": judge_evaluator.OFFICIAL_JUDGE_MODEL,
+                "short_name": judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME,
+                "openrouter_model": "openai/gpt-4o-2024-08-06",
+                "profile_revision": judge_evaluator.OFFICIAL_JUDGE_PROFILE_REVISION,
+            },
+        )
+
+    def test_the_production_judge_resolves_without_repeating_its_identity(self):
+        resolved = resolve_judge(judge_evaluator.JUDGE_MODEL)
+        self.assertEqual(resolved["short_name"], judge_evaluator.JUDGE_SHORT_NAME)
+        self.assertEqual(
+            resolved["profile_revision"], judge_evaluator.JUDGE_PROFILE_REVISION
+        )
+        # The failure this guards: resolving to gpt-4o's short name would read
+        # `.eval-results-gpt-4o` for a DeepSeek-judged run.
+        self.assertNotEqual(
+            resolved["short_name"], judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME
+        )
+
+    def test_an_unknown_judge_must_supply_its_whole_identity(self):
+        with self.assertRaisesRegex(ValueError, "not a known judge"):
+            resolve_judge("some/unreviewed-judge")
+
+    def test_an_unknown_judge_is_accepted_once_fully_described(self):
+        self.assertEqual(
+            resolve_judge(
+                "some/unreviewed-judge",
+                "unreviewed",
+                "some/unreviewed-judge",
+                "unreviewed-v1",
+            )["profile_revision"],
+            "unreviewed-v1",
+        )
+
+    def test_a_partially_described_unknown_judge_names_what_is_missing(self):
+        with self.assertRaisesRegex(ValueError, "--judge-profile-revision"):
+            resolve_judge(
+                "some/unreviewed-judge",
+                "unreviewed",
+                "some/unreviewed-judge",
             )
 
 
