@@ -9159,6 +9159,60 @@ class BurnSettingsRevision(Base):
     )
 
 
+class TrackShareSettingsRevision(Base):
+    """Append-only operator split of emission across competition tracks.
+
+    Shaped exactly like :class:`BurnSettingsRevision`: one policy object the
+    scoring ledger serves to every validator as ``track_shares_bps``. Unset
+    (no row, or a row whose map is null) leaves validators on their compiled
+    memory-only split. See :mod:`ditto.api_models.track_share_settings`.
+    """
+
+    __tablename__ = "track_share_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="track_share_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="track_share_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="track_share_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="track_share_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="track_share_settings_actor_check",
+        ),
+        Index(
+            "track_share_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="track_share_settings_scope_parent_key",
+        ),
+    )
+
+
 class EmissionEligibilitySettingsRevision(Base):
     """Append-only operator posture binding emissions to a terminal review.
 

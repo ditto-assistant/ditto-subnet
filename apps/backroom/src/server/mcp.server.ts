@@ -182,6 +182,7 @@ import {
   ownerFootprintLookupInputSchema,
   agentEmissionEligibilityInputSchema,
   setBurnSettingsInputSchema,
+  setTrackShareSettingsInputSchema,
   setEfficiencyBonusSettingsInputSchema,
   setContinualRetestSettingsInputSchema,
   setInferenceConcurrencySettingsInputSchema,
@@ -376,6 +377,8 @@ import {
   fetchBurnSettings,
   fetchEmissionEligibility,
   setBurnSettings,
+  fetchTrackShareSettings,
+  setTrackShareSettings,
   fetchSubmissionSettingsControl,
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
@@ -542,6 +545,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'record_bounty_evaluation',
   'decide_bounty_evaluation',
   'set_burn_settings',
+  'set_track_share_settings',
   'set_confirmation_bundle_settings',
   'authorize_confirmation_bundle_retest',
 ])
@@ -1026,6 +1030,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Change burn weights with CAS/reason/confirmation. MOVES TAO. See tool help.',
   get_burn_settings:
     'Read burn, miner remainder, revision and fleet fold. Optional history, default 0.',
+  get_track_share_settings:
+    'Read per-track emission split, what validators fold now, v33 gate, generator mode; history opt-in.',
+  set_track_share_settings:
+    'Set memory/generator emission split with CAS and exact split phrase. MOVES TAO. See tool help.',
   get_emission_eligibility_policy:
     'Read emission gates, fleet fold, revision, windows and shadow withheld count; optional history.',
   get_treasury_settings: 'Read shadow buckets/history; no weights or funds.',
@@ -1772,14 +1780,14 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_competition_settings', {
     title: 'Get generator competition settings',
-    description: 'Read the shadow DittoBench generator competition policy: mode (off refuses uploads, leases nothing and opens no rounds; shadow runs the lane at zero emission); the score (panel_size top agent owners, min_panel, min_solver_owners, solve_threshold, champion_bonus); qualification (seeds_per_run secret seeds of exactly cases_per_seed cases, copy_overlap_threshold on the probe, upload cooldown, lease TTL, max_attempts, retry backoff); rounds (epochs_per_round chain epochs per round, counted_columns, challenger_columns, reference_agent_ids added to every panel as independent solvers, privacy_window_rounds before a round is revealed, onchain_commitment, validator_rounds_enabled which lets validators run panel agents); and window_days for the ledger. Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
+    description: 'Read the DittoBench generator competition policy: mode (off refuses uploads, leases nothing and opens no rounds; shadow runs the lane with every ledger entry weight_eligible=false; enforce marks qualified miner generators eligible, which pays only with a served generator track share); the score (panel_size top agent owners, min_panel, min_solver_owners, solve_threshold, champion_bonus); qualification (seeds_per_run secret seeds of exactly cases_per_seed cases, copy_overlap_threshold on the probe, upload cooldown, lease TTL, max_attempts, retry backoff); rounds (epochs_per_round chain epochs per round, counted_columns, challenger_columns, reference_agent_ids added to every panel as independent solvers, privacy_window_rounds before a round is revealed, onchain_commitment, validator_rounds_enabled which lets validators run panel agents); and window_days for the ledger. Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
     inputSchema: MCP_SETTINGS_HISTORY_INPUT, annotations: toolAnnotations('read'),
   }, async ({ historyLimit, historyOffset }) =>
     result(compacted(pageRevisionHistory(await fetchGeneratorSettings(), historyLimit, historyOffset), REVISION_LISTS)))
 
   registerTool('set_generator_competition_settings', {
     title: 'Set generator competition settings',
-    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel, min_panel above the round panel (panel_size plus reference agents), duplicate reference agents, and more than 8 columns. To start rounds: mode=shadow, a registered and qualified default generator (register_default_generator), then validator_rounds_enabled=true; check preview_generator_round first. Returns the revision this write created. There is no enforcing mode: every ledger entry stays weight_eligible=false and the validator track stays SHADOW. Requires backroom:write.',
+    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel, min_panel above the round panel (panel_size plus reference agents), duplicate reference agents, and more than 8 columns. To start rounds: mode=shadow, a registered and qualified default generator (register_default_generator), then validator_rounds_enabled=true; check preview_generator_round first. Returns the revision this write created. mode=enforce (confirmation APPLY GENERATOR COMPETITION ENFORCE) runs the lane exactly like shadow but marks qualified miner generators weight_eligible on the ledger; validators pay them only from a generator share served by set_track_share_settings, and hand an unpaid generator share back to memory, so enforce alone moves no emission. Requires backroom:write.',
     inputSchema: setGeneratorSettingsInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => setGeneratorSettings(input, props.session.email)))
 
@@ -3702,6 +3710,24 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_track_share_settings',
+    {
+      title: 'Get track share settings',
+      description:
+        'Read the operator-governed per-track emission split Platform serves on the scoring ledger as track_shares_bps (memory agents and the DittoBench generator competition; coding and router may only appear at 0). effective.settings.track_shares_bps is null by default: nothing is served and every validator folds its compiled split (memory 10000 bps). effective.in_force_bps is what validators fold now: the configured map only when effective.served is true, which needs every recently-live weight setter on protocol 33 (required_protocol), otherwise memory-only. unallocated_bps of a served map burn. generator_mode shows the generator competition mode beside the split: a generator share pays only ledger entries that mode=enforce marks weight_eligible, and a protocol-33 validator hands an unpaid generator share back to memory, so a share served before enforce changes no weight. confirmation_hint is the phrase that re-applies the configured split. History is newest-first and opt-in with historyLimit (default 0). Requires backroom:read and changes nothing.',
+      inputSchema: MCP_SETTINGS_HISTORY_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ historyLimit, historyOffset }) =>
+      result(
+        compacted(
+          pageRevisionHistory(await fetchTrackShareSettings(), historyLimit, historyOffset),
+          REVISION_LISTS,
+        ),
+      ),
+  )
+
+  registerTool(
     'get_emission_eligibility_policy',
     {
       title: 'Get terminal-review emission eligibility policy',
@@ -3888,6 +3914,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => setBurnSettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'set_track_share_settings',
+    {
+      title: 'Set track share settings',
+      description:
+        'Apply one append-only revision of the per-track emission split validators fold, with no validator release. settings.track_shares_bps is a map of basis points, e.g. {memory: 9000, generator: 1000}, or null to clear it (validators return to their compiled memory-only split). Platform refuses unknown track ids, a map without memory (validators would read a missing memory share as the full pool), a nonzero share for coding or router (no shipped validator pays them), and a sum above 10000 (anything short of 10000 burns). Supply expectedRevision exactly as get_track_share_settings reports it, a reason, and the confirmation that spells out every nonzero share in track order: "APPLY TRACK SHARES memory=9000 generator=1000", or "CLEAR TRACK SHARES" for null. Platform serves the map only once every recently-live weight setter reports protocol 33; check effective.served. A generator share pays only ledger entries the generator competition marks weight_eligible (set_generator_competition_settings mode=enforce); until then validators hand it back to memory. Takes effect at the next ledger read or epoch pin, so budget roughly an epoch subnet-wide. Requires backroom:write.',
+      inputSchema: setTrackShareSettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => setTrackShareSettings(input, props.session.email)),
   )
 
   registerTool(

@@ -717,6 +717,31 @@ class TestRoundLifecycle:
         }
         assert all(e["round_index"] == 3 for e in ledger["entries"])
         assert all(e["weight_eligible"] is False for e in ledger["entries"])
+        # ``enforce`` marks the same qualified miner generators eligible and
+        # changes nothing else about the ledger.
+        await _apply_settings(client, mode="enforce")
+        enforced = (await client.get("/api/v1/generator/board")).json()
+        assert enforced["mode"] == "enforce"
+        assert [(e["miner_hotkey"], e["score"]) for e in enforced["entries"]] == [
+            (e["miner_hotkey"], e["score"]) for e in ledger["entries"]
+        ]
+        assert all(e["weight_eligible"] is True for e in enforced["entries"])
+        # An unqualified generator is never paid, even with a scored column.
+        async with session_maker() as session:
+            a = await session.get(GeneratorSubmission, miner_a)
+            assert a is not None
+            qualified_at, a.qualified_at = a.qualified_at, None
+            await session.commit()
+        unqualified = (await client.get("/api/v1/generator/board")).json()
+        assert {
+            e["miner_hotkey"]: e["weight_eligible"] for e in unqualified["entries"]
+        } == {"5GenMinerA": False, "5GenMinerB": True}
+        async with session_maker() as session:
+            a = await session.get(GeneratorSubmission, miner_a)
+            assert a is not None
+            a.qualified_at = qualified_at
+            await session.commit()
+        await _apply_settings(client, mode="shadow")
         public = (await client.get("/api/v1/generator/rounds/3")).json()
         assert len(public["standings"]) == 3
         assert public["columns"][2]["miner_hotkey"] is None

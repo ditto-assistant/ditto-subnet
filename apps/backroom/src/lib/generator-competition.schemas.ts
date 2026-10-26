@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { auditReasonSchema } from './admin.schemas'
 
-// Shadow DittoBench generator competition. Miners submit CPU-only Go generator
+// DittoBench generator competition. Miners submit CPU-only Go generator
 // source; the scorer qualifies it (build, valid packs on secret seeds,
 // determinism, probe copy check), and qualified generators compete in
 // chain-epoch rounds whose cases validators run against the top agents. These
@@ -32,9 +32,14 @@ export function generatorSettingsConfirmation(mode: string) {
   return `APPLY GENERATOR COMPETITION ${mode.toUpperCase()}`
 }
 
+// off | shadow | enforce. enforce marks qualified miner generators
+// weight_eligible on the ledger; it pays nothing until track-share governance
+// also serves a generator share (get_track_share_settings).
+export const GENERATOR_MODES = ['off', 'shadow', 'enforce'] as const
+
 // Required, never defaulted: a revision stores the whole policy.
 export const generatorCompetitionSettingsSchema = z.object({
-  mode: z.enum(['off', 'shadow']),
+  mode: z.enum(GENERATOR_MODES),
   panel_size: z.number().int().min(3).max(16),
   min_panel: z.number().int().min(2).max(32),
   min_solver_owners: z.number().int().min(1).max(32),
@@ -253,7 +258,7 @@ export const generatorBoardSchema = z.object({
   ),
   count: z.number().int(),
   window_days: z.number().int(),
-  mode: z.enum(['off', 'shadow']),
+  mode: z.enum(GENERATOR_MODES),
   generated_at: z.string(),
 })
 

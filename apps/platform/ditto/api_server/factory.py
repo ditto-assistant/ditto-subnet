@@ -98,6 +98,7 @@ from ditto.api_server.endpoints import (
     admin_submission_deposit_address_router,
     admin_submission_settings_router,
     admin_traces_router,
+    admin_track_share_settings_router,
     admin_transcript_mirror_settings_router,
     admin_treasury_quote_router,
     admin_treasury_receipts_router,
@@ -194,6 +195,7 @@ from ditto.api_server.screener_policy_activation import (
 )
 from ditto.api_server.source_emission_collector import SourceEmissionCollector
 from ditto.api_server.storage import create_storage_client
+from ditto.api_server.track_share_settings import TrackShareSettingsResolver
 from ditto.api_server.validator_names import create_validator_names
 from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
 from ditto.api_server.validator_slot_settings import ValidatorSlotSettingsResolver
@@ -586,6 +588,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Served on the scoring ledger, so a change reaches the fleet on its next
     # poll instead of on a validator release.
     app.state.burn_settings = BurnSettingsResolver()
+    # Operator-owned per-track emission split (memory / generator). Unset by
+    # default, so the ledger omits it and validators keep their compiled split.
+    app.state.track_share_settings = TrackShareSettingsResolver()
     app.state.emission_eligibility = EmissionEligibilityResolver()
     app.state.continual_retest_settings = ContinualRetestSettingsResolver()
     app.state.queue_policy_settings = QueuePolicySettingsResolver()
@@ -776,6 +781,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_claim_provenance_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
+    app.include_router(admin_track_share_settings_router, prefix="/api/v1")
     app.include_router(admin_emission_eligibility_router, prefix="/api/v1")
     app.include_router(admin_treasury_settings_router, prefix="/api/v1")
     from ditto.api_server.endpoints.admin_treasury_runtime import (

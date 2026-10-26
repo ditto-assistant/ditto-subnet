@@ -827,3 +827,156 @@ def test_served_rank_shares_accepts_only_a_curve_the_fleet_would_fold() -> None:
         [0.5, 0.2, 0.13, 0.1, "x"],
     ):
         assert served_rank_shares({"rank_shares": bad}) is None
+
+
+class TestTrackSharesInPins:
+    _SPLIT = {"memory": 9000, "generator": 1000}
+
+    def _pin(self, draft: Any) -> LedgerPin:
+        return LedgerPin(
+            netuid=draft.netuid,
+            epoch_index=draft.epoch_index,
+            last_epoch_block=draft.last_epoch_block,
+            pinned_block=draft.pinned_block,
+            pinned_block_hash=draft.pinned_block_hash,
+            pinned_at=draft.pinned_at,
+            bench_version=draft.bench_version,
+            entries=(),
+            context=draft.context,
+            ledger_digest=draft.ledger_digest,
+        )
+
+    def test_absent_split_keeps_the_legacy_digest_and_replays_empty(self) -> None:
+        legacy = build_pin_draft(
+            _schedule(),
+            snapshot=_snapshot([]),
+            previous_pin=None,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+        unset = build_pin_draft(
+            _schedule(),
+            snapshot=_snapshot([], track_shares_bps=None),
+            previous_pin=None,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+        assert unset.ledger_digest == legacy.ledger_digest
+        assert "track_shares_bps" not in unset.context["served"]
+        replay = response_from_pin(self._pin(unset), stale=False, now=_NOW)
+        assert replay.track_shares_bps == {}
+
+    def test_a_served_split_is_frozen_in_the_digest_and_replayed(self) -> None:
+        legacy = build_pin_draft(
+            _schedule(),
+            snapshot=_snapshot([]),
+            previous_pin=None,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+        draft = build_pin_draft(
+            _schedule(),
+            snapshot=_snapshot([], track_shares_bps=dict(self._SPLIT)),
+            previous_pin=None,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+        assert draft.context["served"]["track_shares_bps"] == self._SPLIT
+        assert draft.ledger_digest != legacy.ledger_digest
+        replay = response_from_pin(self._pin(draft), stale=True, now=_NOW)
+        assert replay.track_shares_bps == self._SPLIT
+
+
+def test_served_track_shares_accepts_only_a_map_validators_would_fold() -> None:
+    from ditto.api_server.ledger_pin import pin_generator_fraction, served_track_shares
+
+    split = {"memory": 9000, "generator": 1000}
+    assert served_track_shares({}) == {}
+    assert served_track_shares({"track_shares_bps": split}) == split
+    for bad in (
+        {"memory": 9000, "generator": 1001.0},
+        {"memory": 9500, "generator": 1000},
+        {"memory": True},
+        {"memory": -1},
+        [9000, 1000],
+    ):
+        assert served_track_shares({"track_shares_bps": bad}) == {}
+    assert pin_generator_fraction({"track_shares_bps": split}) == pytest.approx(0.1)
+    assert pin_generator_fraction({"track_shares_bps": {"memory": 10000}}) == 0.0
+    assert pin_generator_fraction({}) == 0.0
+
+
+class TestClassifyWithGeneratorShare:
+    _EXPECTED = {_HOTKEY_A: 0.75, _HOTKEY_B: 0.25}
+
+    def test_memory_only_vector_still_matches_exactly(self) -> None:
+        assert (
+            classify_vector_against_pins(
+                {_HOTKEY_A: 75, _HOTKEY_B: 25, "burn": 10},
+                expected_current=self._EXPECTED,
+                expected_previous=None,
+                burn_hotkey="burn",
+                generator_current=0.1,
+            )
+            == "current"
+        )
+
+    def test_generator_paid_vector_matches_its_memory_slice(self) -> None:
+        generator = "5Gen" + "x" * 44
+        vector = {_HOTKEY_A: 0.9 * 0.75, _HOTKEY_B: 0.9 * 0.25, generator: 0.1}
+        assert (
+            classify_vector_against_pins(
+                vector,
+                expected_current=self._EXPECTED,
+                expected_previous=None,
+                burn_hotkey=None,
+                generator_current=0.1,
+            )
+            == "current"
+        )
+        # Without the served share the same vector is a divergence.
+        assert (
+            classify_vector_against_pins(
+                vector,
+                expected_current=self._EXPECTED,
+                expected_previous=None,
+                burn_hotkey=None,
+            )
+            == "diverged"
+        )
+        # A generator slot on a memory hotkey only adds to that hotkey.
+        overlapping = {_HOTKEY_A: 0.9 * 0.75 + 0.1, _HOTKEY_B: 0.9 * 0.25}
+        assert (
+            classify_vector_against_pins(
+                overlapping,
+                expected_current=self._EXPECTED,
+                expected_previous=None,
+                burn_hotkey=None,
+                generator_current=0.1,
+            )
+            == "current"
+        )
+
+    def test_a_swapped_memory_tail_still_diverges(self) -> None:
+        generator = "5Gen" + "x" * 44
+        swapped = {_HOTKEY_A: 0.9 * 0.25, _HOTKEY_B: 0.9 * 0.75, generator: 0.1}
+        assert (
+            classify_vector_against_pins(
+                swapped,
+                expected_current=self._EXPECTED,
+                expected_previous=None,
+                burn_hotkey=None,
+                generator_current=0.1,
+            )
+            == "diverged"
+        )
+
+    def test_expected_burn_accounts_for_a_paid_generator_slice(self) -> None:
+        unpaid = {_HOTKEY_A: 0.35}  # an unpaid incumbent left 65% of memory
+        assert pin_expected_burn(0.2, unpaid) == pytest.approx(1 - 0.8 * 0.35)
+        assert pin_expected_burn(0.2, unpaid, generator_fraction=0.1) == pytest.approx(
+            1 - 0.8 * (0.9 * 0.35 + 0.1)
+        )
+        assert pin_expected_burn(0.2, None, generator_fraction=0.1) == pytest.approx(
+            0.2
+        )

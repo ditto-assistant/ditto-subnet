@@ -543,6 +543,7 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_rollout_control',
         'get_benchmark_rollout_qualification',
         'get_burn_settings',
+        'get_track_share_settings',
         'get_copy_court_settings',
         'get_confirmation_seed_anchors',
         'get_copy_review_source_diff',
@@ -599,6 +600,7 @@ describe('Backroom MCP tools', () => {
         'get_validator_capacity',
         'list_confirmation_bundles',
         'set_burn_settings',
+        'set_track_share_settings',
         'set_continual_retest_settings',
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
@@ -3810,6 +3812,145 @@ describe('Backroom MCP tools', () => {
           reason: 'owner-approved emission burn change',
           actor: 'peyton@omniaura.ai',
           confirmation: 'APPLY BURN SETTINGS',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the track split and tolerates an older Platform that omits new fields', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const control = {
+      current: [],
+      history: [],
+      default: { track_shares_bps: null },
+      effective: {
+        revision: 0,
+        scope: '*',
+        settings: { track_shares_bps: null },
+        checksum: '',
+        source: 'default',
+        max_age_seconds: 5,
+        in_force_bps: { memory: 10000 },
+        unallocated_bps: 0,
+      },
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({ name: 'get_track_share_settings', arguments: {} })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: {
+        settings: { track_shares_bps: null },
+        in_force_bps: { memory: 10000 },
+        served: null,
+        required_protocol: 33,
+        generator_mode: null,
+      },
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/track-share-settings',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('applies the generator activation split with the exact split phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const split = { memory: 9000, generator: 1000 }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          revision: 1,
+          parent_revision: 0,
+          scope: '*',
+          settings: { track_shares_bps: split },
+          reason: 'pay the generator competition 10%',
+          actor: 'peyton@omniaura.ai',
+          created_at: '2026-10-25T12:00:00Z',
+          checksum: 'ab'.repeat(32),
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          current: [],
+          history: [],
+          default: { track_shares_bps: null },
+          effective: {
+            revision: 1,
+            scope: '*',
+            settings: { track_shares_bps: split },
+            checksum: 'ab'.repeat(32),
+            source: 'revision',
+            max_age_seconds: 5,
+            in_force_bps: split,
+            unallocated_bps: 0,
+            served: true,
+            required_protocol: 33,
+            live_validator_count: 4,
+            generator_mode: 'enforce',
+            confirmation_hint: 'APPLY TRACK SHARES memory=9000 generator=1000',
+          },
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const refused = await client.callTool({
+      name: 'set_track_share_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { track_shares_bps: split },
+        reason: 'pay the generator competition 10%',
+        confirmation: 'APPLY TRACK SHARES',
+      },
+    })
+    expect(refused.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    const unpaid = await client.callTool({
+      name: 'set_track_share_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { track_shares_bps: { memory: 9000, router: 1000 } },
+        reason: 'pay the router track 10%',
+        confirmation: 'APPLY TRACK SHARES memory=9000 router=1000',
+      },
+    })
+    expect(unpaid.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const response = await client.callTool({
+      name: 'set_track_share_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { track_shares_bps: split },
+        reason: 'pay the generator competition 10%',
+        confirmation: 'APPLY TRACK SHARES memory=9000 generator=1000',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: { revision: 1, in_force_bps: split, served: true },
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/track-share-settings',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          scope: '*',
+          expected_revision: 0,
+          settings: { track_shares_bps: split },
+          reason: 'pay the generator competition 10%',
+          actor: 'peyton@omniaura.ai',
+          confirmation: 'APPLY TRACK SHARES memory=9000 generator=1000',
         }),
       }),
     )

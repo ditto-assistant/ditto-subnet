@@ -1789,6 +1789,116 @@ export type BurnSettings = z.infer<typeof burnSettingsSchema>
 export type BurnSettingsWrite = z.infer<typeof burnSettingsWriteSchema>
 export type BurnSettingsControl = z.infer<typeof burnSettingsControlSchema>
 
+// ─── Track-share governance (generator competition activation) ──────────────
+// The per-track emission split Platform serves on the scoring ledger as
+// track_shares_bps. Unset (null) is the default and leaves every validator on
+// its compiled memory-only split. Mirrors
+// apps/platform/ditto/api_models/track_share_settings.py; Platform stays the
+// authority on every refusal.
+export const TRACK_SHARE_TRACKS = ['memory', 'coding', 'router', 'generator'] as const
+export const TRACK_SHARE_PAYABLE = new Set<string>(['memory', 'generator'])
+export const TRACK_SHARE_BASIS_POINTS = 10_000
+export const TRACK_SHARES_CLEAR_CONFIRMATION = 'CLEAR TRACK SHARES'
+
+export function trackSharesConfirmation(shares: Record<string, number> | null | undefined) {
+  if (!shares || Object.keys(shares).length === 0) return TRACK_SHARES_CLEAR_CONFIRMATION
+  const parts = TRACK_SHARE_TRACKS.filter((track) => (shares[track] ?? 0) > 0).map(
+    (track) => `${track}=${shares[track]}`,
+  )
+  return `APPLY TRACK SHARES ${parts.join(' ')}`
+}
+
+const trackSharesMapSchema = z.record(
+  z.string(),
+  z.number().int().min(0).max(TRACK_SHARE_BASIS_POINTS),
+)
+
+// Reads stay permissive so a stored revision always renders.
+export const trackShareSettingsSchema = z.object({
+  track_shares_bps: trackSharesMapSchema.nullable().default(null),
+})
+
+export const trackShareSettingsWriteSchema = z
+  .object({ track_shares_bps: trackSharesMapSchema.nullable() })
+  .superRefine((settings, ctx) => {
+    const shares = settings.track_shares_bps
+    if (shares === null) return
+    const issue = (message: string) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['track_shares_bps'], message })
+    const unknown = Object.keys(shares).filter(
+      (track) => !(TRACK_SHARE_TRACKS as readonly string[]).includes(track),
+    )
+    if (unknown.length > 0) issue(`unknown track ids ${unknown.join(', ')}`)
+    if (!('memory' in shares)) {
+      issue('track_shares_bps must name memory: validators read a missing memory share as the full pool')
+    }
+    const unpaid = Object.entries(shares)
+      .filter(([track, bps]) => bps > 0 && !TRACK_SHARE_PAYABLE.has(track))
+      .map(([track]) => track)
+    if (unpaid.length > 0) {
+      issue(`no shipped validator pays ${unpaid.join(', ')}; only memory and generator may hold a nonzero share`)
+    }
+    const total = Object.values(shares).reduce((sum, bps) => sum + bps, 0)
+    if (total > TRACK_SHARE_BASIS_POINTS) issue(`track shares sum to ${total} bps, above 10000`)
+  })
+
+export const trackShareSettingsRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: trackShareSettingsSchema,
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+})
+
+export const effectiveTrackShareSettingsSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: trackShareSettingsSchema,
+  checksum: z.string().regex(/^(?:[0-9a-f]{64})?$/),
+  source: z.enum(['revision', 'default']),
+  max_age_seconds: z.number().nonnegative(),
+  // The split validators fold now: the served map, or memory-only while
+  // nothing is served (unset, or the protocol-33 fleet gate).
+  in_force_bps: trackSharesMapSchema,
+  unallocated_bps: z.number().int(),
+  served: z.boolean().nullable().default(null),
+  required_protocol: z.number().int().default(33),
+  live_validator_count: z.number().int().nonnegative().nullable().default(null),
+  generator_mode: z.string().nullable().default(null),
+  confirmation_hint: z.string().nullable().default(null),
+})
+
+export const trackShareSettingsControlSchema = z.object({
+  current: z.array(trackShareSettingsRevisionSchema),
+  history: z.array(trackShareSettingsRevisionSchema),
+  default: trackShareSettingsSchema,
+  effective: effectiveTrackShareSettingsSchema,
+})
+
+export const setTrackShareSettingsInputSchema = z
+  .object({
+    scope: z.literal('*').default('*'),
+    expectedRevision: z.number().int().nonnegative(),
+    settings: trackShareSettingsWriteSchema,
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, ctx) => {
+    const expected = trackSharesConfirmation(input.settings.track_shares_bps)
+    if (input.confirmation !== expected) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['confirmation'],
+        message: `confirmation must be exactly ${expected}, naming the split this revision applies`,
+      })
+    }
+  })
+
+export type TrackShareSettingsControl = z.infer<typeof trackShareSettingsControlSchema>
+
 // ─── Terminal-review emission eligibility (ditto-subnet #2041) ──────────────
 // Read-only here. The gate decides which scored artifacts the validator fold may
 // pay, and it ships `off`: a posture that reads `off` / `source: "default"` is a

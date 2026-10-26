@@ -47,6 +47,10 @@ from ditto.api_models.continual_retest_settings import (
 from ditto.api_models.emission_eligibility import AgentEmissionEligibility
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.router_ledger import RouterLedgerResponse
+from ditto.api_models.track_share_settings import (
+    TRACK_SHARES_PROTOCOL,
+    TrackShareSettings,
+)
 from ditto.api_models.upload import _SS58_PATTERN
 from ditto.api_models.validator import (
     ConfirmationSeedAnchorPin,
@@ -186,6 +190,11 @@ _STATISTICAL_BAND_CAP_PROTOCOL = 29
 # payout curve. Withheld until every recently-live weight setter reports it, or
 # a mixed fleet would fold two curves in one epoch.
 _RANK_SHARES_PROTOCOL = RANK_SHARES_PROTOCOL
+# The first validator protocol that pays the generator track a served
+# ``track_shares_bps`` share. A protocol-32 validator folds the generator in
+# shadow and would burn that share, so the map is withheld until every
+# recently-live weight setter reports it.
+_TRACK_SHARES_PROTOCOL = TRACK_SHARES_PROTOCOL
 
 
 def _fleet_safe_efficiency_adjustments(
@@ -232,6 +241,10 @@ class _LedgerSnapshot:
     rank_shares: tuple[float, ...] | None = None
     """The operator payout curve served to the fleet, or ``None`` for the frozen
     curve. Replayed on the stale path like ``burn_share``."""
+    track_shares_bps: dict[str, int] | None = None
+    """The operator per-track split served to the fleet, or ``None`` to omit it
+    (validators fold their compiled memory-only split). Replayed on the stale
+    path like ``burn_share``."""
     continual_retest_cohort_size: int = 5
     requesting_validator_hotkey: str | None = None
     context: _LedgerContext | None = None
@@ -272,6 +285,7 @@ class _LedgerPolicy:
     rather than be answered from a snapshot taken under the previous one. The
     whole resolved policy, not just the settings, so the revision and checksum a
     withheld artifact's record is bound to come from the same read."""
+    track_shares: TrackShareSettings = TrackShareSettings()
 
 
 @dataclass(frozen=True)
@@ -289,6 +303,7 @@ class _LedgerContext:
     crown_incumbent_fleet_ready: bool = False
     reward_eligibility_fleet_ready: bool = False
     rank_shares_fleet_ready: bool = False
+    track_shares_fleet_ready: bool = False
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -423,6 +438,12 @@ async def _resolve_ledger_policy(app_state: Any) -> _LedgerPolicy:
     efficiency = await app_state.efficiency_settings.resolve(session_maker)
     continual_retest = await app_state.continual_retest_settings.resolve(session_maker)
     burn = await app_state.burn_settings.resolve(session_maker)
+    track_share_resolver = getattr(app_state, "track_share_settings", None)
+    track_shares = (
+        await track_share_resolver.resolve(session_maker)
+        if track_share_resolver is not None
+        else TrackShareSettings()
+    )
     resolver = getattr(app_state, "emission_eligibility", None)
     eligibility = (
         await resolver.resolve(session_maker)
@@ -434,6 +455,7 @@ async def _resolve_ledger_policy(app_state: Any) -> _LedgerPolicy:
         continual_retest=continual_retest,
         burn=burn,
         reward_eligibility=eligibility,
+        track_shares=track_shares,
     )
 
 
@@ -486,6 +508,14 @@ async def resolve_ledger_context(
     rank_shares_fleet_ready = await live_weight_setter_fleet_supports_protocol(
         session, minimum_protocol=_RANK_SHARES_PROTOCOL, now=now
     )
+    # Read only while a split is configured: unset is the default and serves
+    # nothing whatever the fleet runs.
+    track_shares_fleet_ready = (
+        policy.track_shares.track_shares_bps is not None
+        and await live_weight_setter_fleet_supports_protocol(
+            session, minimum_protocol=_TRACK_SHARES_PROTOCOL, now=now
+        )
+    )
     crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
         minimum_protocol=_CROWN_INCUMBENT_PROTOCOL,
@@ -510,6 +540,7 @@ async def resolve_ledger_context(
         crown_incumbent_fleet_ready=crown_incumbent_fleet_ready,
         reward_eligibility_fleet_ready=reward_eligibility_fleet_ready,
         rank_shares_fleet_ready=rank_shares_fleet_ready,
+        track_shares_fleet_ready=track_shares_fleet_ready,
     )
 
 
@@ -600,6 +631,7 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         ),
         continual_retest_cohort_size=snapshot.continual_retest_cohort_size,
         burn_share=snapshot.burn_share,
+        track_shares_bps=dict(snapshot.track_shares_bps or {}),
         # A live read carries the fleet's crown mode so the marker's readiness
         # is visible, but never an incumbent: only a pin has a previous epoch.
         crown_mode=None,
@@ -1185,6 +1217,12 @@ async def materialize_ledger_snapshot(
             if ledger_context.rank_shares_fleet_ready
             else None
         ),
+        track_shares_bps=(
+            dict(ledger_context.policy.track_shares.track_shares_bps)
+            if ledger_context.track_shares_fleet_ready
+            and ledger_context.policy.track_shares.track_shares_bps is not None
+            else None
+        ),
         continual_retest_cohort_size=continual_settings.retest_cohort_size,
         requesting_validator_hotkey=requesting_validator_hotkey,
         context=ledger_context,
@@ -1212,6 +1250,7 @@ async def materialize_ledger_snapshot(
             "crown_incumbent": ledger_context.crown_incumbent_fleet_ready,
             "reward_eligibility": ledger_context.reward_eligibility_fleet_ready,
             "rank_shares": ledger_context.rank_shares_fleet_ready,
+            "track_shares": ledger_context.track_shares_fleet_ready,
         },
     )
 
@@ -1347,7 +1386,10 @@ async def _require_statistical_cap_requester(
     # rejoiner would ignore the field and fold the frozen curve, and dropping
     # the curve on replay would mix curves inside the v31 fleet mid-epoch.
     curved = ledger.rank_shares is not None
-    if not capped and not curved:
+    # Likewise a served track split: a sub-33 rejoiner folds the generator in
+    # shadow and would burn its share instead of paying generators or memory.
+    split = bool(ledger.track_shares_bps)
+    if not capped and not curved and not split:
         return ledger
     heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
     seen_at = heartbeat.seen_at if heartbeat is not None else None
@@ -1368,6 +1410,11 @@ async def _require_statistical_cap_requester(
         raise HTTPException(
             status_code=428,
             detail="validator protocol 31 is required for the pinned payout curve",
+        )
+    if split and protocol < _TRACK_SHARES_PROTOCOL:
+        raise HTTPException(
+            status_code=428,
+            detail="validator protocol 33 is required for the pinned track split",
         )
     return ledger
 
@@ -1757,6 +1804,11 @@ def _serve_last_known(
             status_code=503,
             detail="scoring ledger unavailable; cannot verify protocol-31 requester",
         ) from error
+    if snapshot is not None and getattr(snapshot, "track_shares_bps", None):
+        raise HTTPException(
+            status_code=503,
+            detail="scoring ledger unavailable; cannot verify protocol-33 requester",
+        ) from error
     if snapshot is None:
         logger.warning(
             "validator=%s ledger read failed and no cached snapshot to serve: %s",
@@ -1833,6 +1885,7 @@ def _serve_last_known(
         age_seconds=max(0, age),
         # Replayed, not re-resolved: see _LedgerSnapshot.burn_share.
         burn_share=snapshot.burn_share,
+        track_shares_bps=dict(snapshot.track_shares_bps or {}),
         # Chain facts pinned once per reign; replaying them cannot go stale.
         confirmation_seed_anchors=list(snapshot.confirmation_seed_anchors),
     )

@@ -4208,6 +4208,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/track-share-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_v1_admin_track_share_settings_get"];
+        put?: never;
+        /** Create Settings Revision */
+        post: operations["create_settings_revision_api_v1_admin_track_share_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/transcript-mirror-settings": {
         parameters: {
             query?: never;
@@ -14496,6 +14514,35 @@ export interface components {
             /** Target Validator Hotkey */
             target_validator_hotkey: string;
         };
+        /** AdminTrackShareSettingsRequest */
+        AdminTrackShareSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["TrackShareSettings"];
+        };
+        /** AdminTrackShareSettingsResponse */
+        AdminTrackShareSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["TrackShareSettingsRevision"][];
+            default: components["schemas"]["TrackShareSettings"];
+            effective: components["schemas"]["EffectiveTrackShareSettings"];
+            /** History */
+            history: components["schemas"]["TrackShareSettingsRevision"][];
+        };
         /** AdminTranscriptMirrorSettingsRequest */
         AdminTranscriptMirrorSettingsRequest: {
             /**
@@ -20636,6 +20683,42 @@ export interface components {
             scope: string;
             settings: components["schemas"]["ScreenerReviewSettings"];
         };
+        /** EffectiveTrackShareSettings */
+        EffectiveTrackShareSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Confirmation Hint */
+            confirmation_hint?: string | null;
+            /** Generator Mode */
+            generator_mode?: string | null;
+            /** In Force Bps */
+            in_force_bps: {
+                [key: string]: number;
+            };
+            /** Live Validator Count */
+            live_validator_count?: number | null;
+            /** Max Age Seconds */
+            max_age_seconds: number;
+            /**
+             * Required Protocol
+             * @default 33
+             */
+            required_protocol: number;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            /** Served */
+            served?: boolean | null;
+            settings: components["schemas"]["TrackShareSettings"];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
+            /** Unallocated Bps */
+            unallocated_bps: number;
+        };
         /**
          * EffectiveValidatorSlotSettings
          * @description What the dispatch path actually reads: the latest revision (or the
@@ -21360,7 +21443,7 @@ export interface components {
              * @default off
              * @enum {string}
              */
-            mode: "off" | "shadow";
+            mode: "off" | "shadow" | "enforce";
             /**
              * Onchain Commitment
              * @default true
@@ -21445,7 +21528,7 @@ export interface components {
             submission_id: string;
             /**
              * Weight Eligible
-             * @description Whether this result may contribute emissions. Always False while the competition is in shadow; the validator's track state is the authority and this is a defensive echo.
+             * @description Whether this result may contribute emissions. False in ``shadow``; under ``enforce``, True for qualified miner generators. Validators pay only eligible entries, and only from a governed generator track share.
              * @default false
              */
             weight_eligible: boolean;
@@ -21466,7 +21549,7 @@ export interface components {
              * @default off
              * @enum {string}
              */
-            mode: "off" | "shadow";
+            mode: "off" | "shadow" | "enforce";
             /**
              * Window Days
              * @default 0
@@ -24517,7 +24600,7 @@ export interface components {
             tie_weighting_mode?: "pool" | null;
             /**
              * Track Shares Bps
-             * @description Optional per-track emission share in basis points (0-10000), keyed by track id (``memory``/``coding``/``router``). The operator-owned governance knob for the multi-competition split, resolved here and served already-decided like ``burn_share`` so the whole fleet folds one allocation. Empty (the default, and what an older platform's omission means) leaves the validator on its compiled ``TRACK_SHARES_BPS`` single-pool split, so a validator that ignores this field folds exactly as it did.
+             * @description Optional per-track emission share in basis points (0-10000), keyed by track id (``memory``/``coding``/``router``/``generator``). The operator-owned governance knob for the multi-competition split, resolved here and served already-decided like ``burn_share`` so the whole fleet folds one allocation. Empty (the default, and what an older platform's omission means) leaves the validator on its compiled ``TRACK_SHARES_BPS`` single-pool split, so a validator that ignores this field folds exactly as it did. Served only once every recently-live weight setter reports protocol 33.
              */
             track_shares_bps?: {
                 [key: string]: number;
@@ -36443,6 +36526,37 @@ export interface components {
             status?: string | null;
             /** Validator Hotkey */
             validator_hotkey?: string | null;
+        };
+        /**
+         * TrackShareSettings
+         * @description Complete track-share policy stored per revision.
+         */
+        TrackShareSettings: {
+            /** Track Shares Bps */
+            track_shares_bps?: {
+                [key: string]: number;
+            } | null;
+        };
+        /** TrackShareSettingsRevision */
+        TrackShareSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["TrackShareSettings"];
         };
         /** TranscriptMirrorSettingsRevision */
         TranscriptMirrorSettingsRevision: {
@@ -48790,6 +48904,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TracePeekResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_track_share_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTrackShareSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_track_share_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTrackShareSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackShareSettingsRevision"];
                 };
             };
             /** @description Validation Error */

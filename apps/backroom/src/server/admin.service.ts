@@ -438,6 +438,9 @@ import {
   agentEmissionEligibilityInputSchema,
   agentEmissionEligibilitySchema,
   burnSettingsControlSchema,
+  trackShareSettingsControlSchema,
+  trackShareSettingsRevisionSchema,
+  setTrackShareSettingsInputSchema,
   emissionEligibilityControlSchema,
   burnSettingsRevisionSchema,
   setBurnSettingsInputSchema,
@@ -1439,6 +1442,50 @@ export async function setBurnSettings(rawInput: unknown, actor: string) {
     throw burnSettingsConflict(cause) ?? cause
   }
   return fetchBurnSettings()
+}
+
+const TRACK_SHARE_SETTINGS_PATH = '/api/v1/admin/track-share-settings'
+
+export async function fetchTrackShareSettings() {
+  const payload = await platformAdminRequest(TRACK_SHARE_SETTINGS_PATH)
+  return trackShareSettingsControlSchema.parse(payload)
+}
+
+function trackShareSettingsConflict(cause: unknown) {
+  const message = cause instanceof Error ? cause.message : String(cause)
+  if (/track share settings changed/i.test(message)) {
+    return new Error(
+      `${message}. Nothing was applied: re-read get_track_share_settings and resubmit with the revision it reports.`,
+    )
+  }
+  if (/confirmation must be exactly/i.test(message)) {
+    return new Error(
+      `${message}. Nothing was applied: the confirmation spells out every nonzero share in track order, e.g. "APPLY TRACK SHARES memory=9000 generator=1000", or "CLEAR TRACK SHARES" to unset.`,
+    )
+  }
+  return null
+}
+
+export async function setTrackShareSettings(rawInput: unknown, actor: string) {
+  const input = setTrackShareSettingsInputSchema.parse(rawInput)
+  try {
+    const payload = await platformAdminRequest(TRACK_SHARE_SETTINGS_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        scope: input.scope,
+        expected_revision: input.expectedRevision,
+        settings: input.settings,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+    trackShareSettingsRevisionSchema.parse(payload)
+  } catch (cause) {
+    throw trackShareSettingsConflict(cause) ?? cause
+  }
+  return fetchTrackShareSettings()
 }
 
 const CONFIRMATION_BUNDLE_SETTINGS_PATH = '/api/v1/admin/confirmation-bundle-settings'

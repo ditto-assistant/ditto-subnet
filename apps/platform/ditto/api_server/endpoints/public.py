@@ -292,6 +292,7 @@ from ditto.api_server.koth import (
 from ditto.api_server.ledger_pin import (
     classify_vector_against_pins,
     pin_expected_shares,
+    pin_generator_fraction,
     pin_provisional_incumbent,
     served_rank_shares,
 )
@@ -847,6 +848,11 @@ def _decorate_vectors_with_pins(
             )
             return None, True
 
+    def generator_fraction(pin: LedgerEpochSnapshot | None) -> float:
+        context = getattr(pin, "context", None) if pin is not None else None
+        served = context.get("served") if isinstance(context, dict) else None
+        return pin_generator_fraction(served) if isinstance(served, dict) else 0.0
+
     expected_current, invalid_current = expected(current)
     expected_previous, invalid_previous = expected(previous)
     decorated: list[PublicValidatorWeightVector] = []
@@ -857,6 +863,8 @@ def _decorate_vectors_with_pins(
             expected_current=expected_current,
             expected_previous=expected_previous,
             burn_hotkey=burn_hotkey,
+            generator_current=generator_fraction(current),
+            generator_previous=generator_fraction(previous),
         )
         if invalid_current or invalid_previous and verdict != "current":
             # A valid current match is independently meaningful. A failed

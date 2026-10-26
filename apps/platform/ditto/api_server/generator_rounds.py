@@ -1225,9 +1225,14 @@ async def build_round_ledger(
 ) -> GeneratorLedgerResponse:
     """Each hotkey's latest round column score within the freshness window.
 
-    Shadow only: every entry is ``weight_eligible=False``. The public default
-    generator and rejected generators never appear; ``mode=off`` serves an
-    empty ledger, which folds to zero generator emission.
+    ``shadow`` marks every entry ``weight_eligible=False``. ``enforce`` marks an
+    entry eligible when its generator qualified (a scored round column implies
+    it did, but the check is explicit so an unqualified row can never be paid).
+    A superseded generator stays eligible: its last round score keeps counting
+    until the hotkey's new generator is scored. The public default generator
+    and rejected generators never appear; ``mode=off`` serves an empty ledger,
+    which folds to zero generator emission. Eligibility alone pays nothing:
+    validators pay the generator track only from a governed share.
     """
     settings = resolved.settings
     if settings.mode == "off":
@@ -1280,7 +1285,9 @@ async def build_round_ledger(
                 miner_hotkey=sub.miner_hotkey,
                 submission_id=sub.submission_id,
                 round_index=rnd.round_index,
-                weight_eligible=False,
+                weight_eligible=(
+                    settings.mode == "enforce" and sub.qualified_at is not None
+                ),
                 score=float(column["pack"]["score"]),
                 discriminating_cases=int(column["pack"]["discriminating"]),
                 first_seen=sub.submitted_at,

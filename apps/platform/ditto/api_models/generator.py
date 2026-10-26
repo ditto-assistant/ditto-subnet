@@ -1,4 +1,4 @@
-"""Wire models for the shadow DittoBench generator competition.
+"""Wire models for the DittoBench generator competition.
 
 Generator miners upload the Go source of a CPU-only **generator**: a program
 that reads a ``GenerateRequest`` (a secret seed, the miner hotkey, a case
@@ -12,8 +12,12 @@ chain-epoch **rounds** (:mod:`ditto.api_models.generator_rounds`): the top
 generators' cases are run by validators against the top agents, and the
 weight-zero ledger publishes each generator's latest round score.
 
-Everything here is shadow: ledger entries are ``weight_eligible=False`` and the
-settings ``mode`` has no enforcing value yet.
+Settings ``mode`` is ``off``, ``shadow`` or ``enforce``. In ``shadow`` every
+ledger entry is ``weight_eligible=False``. In ``enforce`` the ledger marks
+qualified miner generators eligible, which still pays nothing until the
+operator also serves a generator track share through track-share governance
+(:mod:`ditto.api_models.track_share_settings`). Every other behavior of the
+lane is identical in ``shadow`` and ``enforce``.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ MIN_PACK_CASES = 8
 MAX_CASES_PER_SEED = 32
 SOURCE_SIGNATURE_DOMAIN = "ditto-generator-v1"
 
-GeneratorMode = Literal["off", "shadow"]
+GeneratorMode = Literal["off", "shadow", "enforce"]
 SubmissionStatus = Literal["active", "superseded", "rejected"]
 RunStatus = Literal[
     "leased",
@@ -87,7 +91,10 @@ class GeneratorCompetitionSettings(BaseModel):
 
     mode: GeneratorMode = "off"
     """``off`` refuses uploads, leases nothing, and opens no rounds; ``shadow``
-    runs the lane with zero emission."""
+    runs the lane with every ledger entry ``weight_eligible=False``;
+    ``enforce`` runs it identically but marks qualified miner generators
+    ``weight_eligible``. Validators pay those entries only from a governed
+    generator track share, so ``enforce`` alone moves no emission."""
     panel_size: Annotated[int, Field(ge=3, le=16)] = 5
     """Top-ranked agent owners (one agent each) every round runs."""
     min_panel: Annotated[int, Field(ge=2, le=32)] = 3

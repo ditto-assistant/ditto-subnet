@@ -420,5 +420,18 @@ operator ruling.
 3. **Enforce.**
    - Operators set a generator track share through governance, and the ledger
      marks entries eligible. An upload fee is added at the same time.
+   - Settings `mode=enforce` (confirmation `APPLY GENERATOR COMPETITION
+     ENFORCE`) runs the lane exactly like shadow but marks each qualified miner
+     generator's ledger entry `weight_eligible: true`. The public default
+     generator never appears on the ledger.
+   - The share is the revisioned Platform setting `track_shares_bps` (Backroom
+     `set_track_share_settings`, confirmation spelling out the split, for
+     example `APPLY TRACK SHARES memory=9000 generator=1000`). The scoring
+     ledger serves it to validators only once every recently-live weight
+     setter reports protocol 33, and an epoch pin freezes it.
+   - Validators (protocol 33) pay the generator track its share, split by the
+     generator rank curve, only to eligible entries. A generator share with no
+     eligible entry falls back to the memory track, so either switch alone
+     leaves weights byte-identical to the memory-only fold.
    - A new bench version draws its memory cases from the round matrix, so the
      agent competition is judged on the generators' cases.

@@ -21,6 +21,7 @@ from ditto.api_server.ledger_pin import (
     pin_expected_burn,
     pin_expected_shares,
     pin_expected_treasury_vector,
+    pin_generator_fraction,
 )
 from ditto.chain.models import (
     ChainMinerEarning,
@@ -1036,7 +1037,12 @@ class SourceEmissionCollector:
                     for hotkey in set(weights) | set(prescribed)
                 ):
                     return None
-        burn = pin.context.get("served", {}).get("burn_share")
+        served = pin.context.get("served", {})
+        burn = served.get("burn_share")
+        # A served generator share pays generators the pin did not freeze; the
+        # memory part still has to match, and the burn is either the
+        # memory-only one (no eligible generator) or the generator-paid one.
+        generator = pin_generator_fraction(served) if isinstance(served, dict) else 0.0
         if receipt.schema_version == 1 and (
             not isinstance(burn, (int, float)) or not 0 <= burn < 1
         ):
@@ -1048,18 +1054,19 @@ class SourceEmissionCollector:
                     expected_current=expected,
                     expected_previous=None,
                     burn_hotkey=payout.owner_hotkey,
+                    generator_current=generator,
                 )
                 != "current"
             ):
                 return None
             total = sum(weights.values())
-            if (
-                total <= 0
-                or abs(
+            if total <= 0 or all(
+                abs(
                     weights.get(payout.owner_hotkey, 0) / total
-                    - pin_expected_burn(burn, expected)
+                    - pin_expected_burn(burn, expected, generator_fraction=fraction)
                 )
                 > 0.002
+                for fraction in {0.0, generator}
             ):
                 return None
         entry = next(

@@ -1,11 +1,13 @@
-"""Generator-track ledger relayed to validators (shadow, weight-zero).
+"""Generator-track ledger relayed to validators.
 
 Platform is the generator competition's system of record: generators compete
 in chain-epoch rounds (their cases run by validators against the top agents),
 and Platform folds every hotkey to its latest round column score within the
 freshness window. Validators read this ledger through
-``GET /scoring/generator-ledger`` and fold it as the ``generator`` track, which
-ships in ``SHADOW`` at 0 bps. Field discipline mirrors
+``GET /scoring/generator-ledger`` and fold it as the ``generator`` track. From
+validator protocol 33 the track pays, but only the share the operator serves
+through ``LedgerResponse.track_shares_bps`` and only to entries marked
+``weight_eligible`` (settings ``mode=enforce``). Field discipline mirrors
 ``ditto.api_models.router_ledger``: unknown fields are ignored, ``score`` is the
 raw double, and an empty ledger folds to zero emission.
 """
@@ -35,9 +37,10 @@ class GeneratorLedgerEntry(GeneratorLedgerModel):
         bool,
         Field(
             description=(
-                "Whether this result may contribute emissions. Always False "
-                "while the competition is in shadow; the validator's track "
-                "state is the authority and this is a defensive echo."
+                "Whether this result may contribute emissions. False in "
+                "``shadow``; under ``enforce``, True for qualified miner "
+                "generators. Validators pay only eligible entries, and only "
+                "from a governed generator track share."
             )
         ),
     ] = False
@@ -53,5 +56,5 @@ class GeneratorLedgerResponse(GeneratorLedgerModel):
     entries: list[GeneratorLedgerEntry] = Field(default_factory=list)
     count: int
     window_days: int = 0
-    mode: Literal["off", "shadow"] = "off"
+    mode: Literal["off", "shadow", "enforce"] = "off"
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

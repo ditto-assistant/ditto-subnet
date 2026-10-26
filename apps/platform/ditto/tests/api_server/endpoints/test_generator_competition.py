@@ -327,6 +327,31 @@ class TestSettings:
             await client.post(_SETTINGS_URL, headers=_ADMIN, json=incoherent)
         ).status_code == 422
 
+    async def test_enforce_needs_its_own_confirmation(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        assert generator_settings_confirmation("enforce") == (
+            "APPLY GENERATOR COMPETITION ENFORCE"
+        )
+        body = {
+            "expected_revision": 0,
+            "settings": _settings(mode="enforce"),
+            "reason": "mark qualified generators weight-eligible",
+            "confirmation": generator_settings_confirmation("shadow"),
+        }
+        refused = await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
+        assert refused.status_code == 409
+        assert "APPLY GENERATOR COMPETITION ENFORCE" in refused.text
+        body["confirmation"] = generator_settings_confirmation("enforce")
+        ok = await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
+        assert ok.status_code == 200, ok.text
+        board = (await client.get(_SETTINGS_URL, headers=_ADMIN)).json()
+        assert board["effective"]["settings"]["mode"] == "enforce"
+
 
 class TestUpload:
     async def test_closed_lane_refuses_uploads(

@@ -27,6 +27,7 @@ from ditto.api_models.queue_policy_settings import QueuePolicySettings
 from ditto.api_models.scoring_lease_settings import ScoringLeaseSettings
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.track_share_settings import TrackShareSettings
 from ditto.api_models.treasury_settings import TreasurySettings, public_wallet_address
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.db.models import AdminActivity, AdminActivityOutcome
@@ -121,6 +122,10 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
         ),
     ),
     "burn-settings": (BurnSettings, frozenset(("burn_share",))),
+    "track-share-settings": (
+        TrackShareSettings,
+        frozenset(("track_shares_bps",)),
+    ),
     "scoring-lease-settings": (
         ScoringLeaseSettings,
         frozenset(("scoring_ticket_ttl_minutes",)),
