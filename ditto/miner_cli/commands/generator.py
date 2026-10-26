@@ -277,8 +277,10 @@ def _pay_fee(
         chain_endpoint=chain_endpoint,
     )
     print(
-        f"payment finalised: block={receipt.block_number} "
-        f"ext_idx={receipt.extrinsic_index}",
+        # The whole proof, so the recovery flags can be rebuilt from this line
+        # alone even if saving it locally fails and the process then dies.
+        f"payment finalised: block_hash={receipt.block_hash} "
+        f"block={receipt.block_number} ext_idx={receipt.extrinsic_index}",
         file=sys.stderr,
     )
     return receipt

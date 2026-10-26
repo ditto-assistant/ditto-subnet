@@ -258,13 +258,17 @@ def test_upload_pays_nothing_when_the_fee_is_off(
 
 
 def test_upload_pays_the_quoted_fee_and_attaches_the_proof(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     _install_wallet(monkeypatch, _KEY)
     calls = _install_payment(monkeypatch)
     archive = _fake_archive(tmp_path, monkeypatch)
     _FakeClient.terms = dict(_FEE_TERMS)
     assert gen_cmd.run(_upload_args(archive)) == 0
+    # The finalized line alone carries the full recovery proof.
+    assert f"block_hash={_BLOCK} block=77 ext_idx=3" in capsys.readouterr().err
     pay = next(c["pay"] for c in calls if "pay" in c)
     assert pay["amount_rao"] == 40_000_000
     assert pay["dest_address"] == "5FeeAddress"
