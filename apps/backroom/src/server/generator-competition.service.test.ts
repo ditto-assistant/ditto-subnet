@@ -8,7 +8,10 @@ import {
   createBackroomMcpServer,
   type McpGrantProps,
 } from './mcp.server'
-import { generatorRunDetailSchema } from '../lib/generator-competition.schemas'
+import {
+  generatorCompetitionSettingsSchema,
+  generatorRunDetailSchema,
+} from '../lib/generator-competition.schemas'
 
 const session = {
   version: 2 as const,
@@ -137,6 +140,15 @@ describe('generator competition MCP tools', () => {
     } finally {
       await client.close()
       await server.close()
+    }
+  })
+
+  it('accepts cases_per_seed up to the pack contract cap of 80 and no further', () => {
+    for (const cases of [8, 70, 80]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, cases_per_seed: cases }).success).toBe(true)
+    }
+    for (const cases of [7, 81]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, cases_per_seed: cases }).success).toBe(false)
     }
   })
 

@@ -46,7 +46,8 @@ export const generatorCompetitionSettingsSchema = z.object({
   solve_threshold: z.number().gt(0).max(1),
   champion_bonus: z.number().min(0).max(2),
   seeds_per_run: z.number().int().min(1).max(4),
-  cases_per_seed: z.number().int().min(8).max(32),
+  // Platform MAX_CASES_PER_SEED, the Go pack contract's challenge.MaxCases.
+  cases_per_seed: z.number().int().min(8).max(80),
   window_days: z.number().int().min(1).max(30),
   copy_overlap_threshold: z.number().min(0.2).max(1),
   upload_cooldown_seconds: z.number().int().min(60).max(86_400),

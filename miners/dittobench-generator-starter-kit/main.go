@@ -7,7 +7,7 @@
 // from stdout. Rehearse exactly that path locally:
 //
 //	cd ../../research/dittobench-datagen
-//	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -seeds 3 -cases 16
+//	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -seeds 3 -cases 80
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -sandbox docker
 //
 // and submit the source with `uv run ditto generator upload --dir .`.
@@ -30,12 +30,15 @@ import (
 // Name and Version identify this generator in the pack's provenance.
 const (
 	Name    = "starter-kit"
-	Version = "2"
+	Version = "3"
 )
 
 // MaxCases is the most cases the starter pools can fill without reusing a
-// value (eight rounds of the four default families).
-const MaxCases = 32
+// value (twenty rounds of the four default families). It matches the pack
+// contract's challenge.MaxCases, the most cases_per_seed Platform can set, so
+// the kit can fill any round column. A generator that cannot fill the live
+// cases_per_seed fails its round seed and is rejected.
+const MaxCases = 80
 
 // Generate builds the pack for one request: the default families in rotation,
 // with a filler pair after every round that has room for both of its cases,

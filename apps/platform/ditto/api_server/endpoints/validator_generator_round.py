@@ -37,6 +37,7 @@ from sqlalchemy import select
 
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.generator_round_validator import (
+    LEGACY_ROUND_COLUMN_CASES,
     GeneratorRoundCommitmentJobRequest,
     GeneratorRoundCommitmentJobResponse,
     GeneratorRoundCommitmentReportRequest,
@@ -53,7 +54,6 @@ from ditto.api_models.validator import ValidatorCapabilities
 from ditto.api_server.endpoints import validator as v
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import (
-    ROUND_LEASE_CUTOFF,
     CommitmentReportRejected,
     RoundSubmissionRejected,
     active_panel,
@@ -63,7 +63,9 @@ from ditto.api_server.generator_rounds import (
     record_commitment_report,
     record_panel_result,
     round_case_ids,
+    round_column_cases,
     round_for_dataset,
+    round_lease_cutoff,
     round_seconds_left,
     running_round,
     validate_round_results,
@@ -104,25 +106,36 @@ def _no_work() -> Response:
     return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
-def _round_capable(heartbeat: ValidatorHeartbeat | None, *, now: datetime) -> bool:
+def _round_column_capacity(
+    heartbeat: ValidatorHeartbeat | None, *, now: datetime
+) -> int | None:
+    """The largest round column this validator can run, or None for none.
+
+    A scorer that does not advertise ``generator_round_max_cases`` predates
+    columns above the legacy size: its validator refuses a larger job (the old
+    8 x 32 case bound) and its scorer a larger pack, so it gets only rounds of
+    at most ``LEGACY_ROUND_COLUMN_CASES`` per column.
+    """
     if heartbeat is None or not heartbeat_supports_version(
         heartbeat, now=now, version=13
     ):
-        return False
+        return None
     try:
         capabilities = ValidatorCapabilities.model_validate(heartbeat.capabilities)
     except ValidationError:
-        return False
+        return None
     scorer = capabilities.scorer_benchmarks
     # Round runs carry their own dataset bytes; they do not need the private
     # V13 transport (``private_datasets``), which stays off fleet-wide.
-    return bool(
+    if not (
         capabilities.ticket_inference
         and capabilities.sandbox_memory_limit
         and scorer is not None
         and scorer.status == "fresh_verified"
         and scorer.generator_rounds
-    )
+    ):
+        return None
+    return scorer.generator_round_max_cases or LEGACY_ROUND_COLUMN_CASES
 
 
 async def _verify_signed(
@@ -212,7 +225,7 @@ async def request_generator_round_job(
         if settings.mode == "off" or not settings.validator_rounds_enabled:
             return _no_work()
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
-        if not _round_capable(heartbeat, now=now):
+        if _round_column_capacity(heartbeat, now=now) is None:
             return _no_work()
     # The nonce is consumed and committed above. Read the chain head for the
     # lease cutoff only for a request that passed the cheap rejections, and
@@ -233,13 +246,19 @@ async def request_generator_round_job(
         if settings.mode == "off" or not settings.validator_rounds_enabled:
             return _no_work()
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
-        if not _round_capable(heartbeat, now=now):
+        capacity = _round_column_capacity(heartbeat, now=now)
+        if capacity is None:
             return _no_work()
         # Locked so concurrent polls pick pending agents one at a time: the
         # second sees the first's committed attempt instead of leasing the
         # same panel agent.
         row = await running_round(session, for_update=True)
         if row is None or row.dataset_sha256 is None:
+            return _no_work()
+        if round_column_cases(row) > capacity:
+            # A validator (or scorer) released before this column size would
+            # refuse the job; leasing it would strand the panel agent until
+            # the ticket expired.
             return _no_work()
         # A panel agent banned or held since the round opened is dropped
         # (never leased), which may void or close the round outright.
@@ -262,7 +281,8 @@ async def request_generator_round_job(
             return _no_work()
         left = round_seconds_left(row, head)
         # A head the round cannot place (before it opened) declines too.
-        if left is None or left < ROUND_LEASE_CUTOFF.total_seconds():
+        cutoff = round_lease_cutoff(len(round_case_ids(row)))
+        if left is None or left < cutoff.total_seconds():
             return _no_work()
         ticket: ValidatorTicket | None = None
         for agent_id in await pending_panel_agents(session, row, now=now):

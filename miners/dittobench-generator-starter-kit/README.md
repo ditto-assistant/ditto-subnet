@@ -32,7 +32,8 @@ The full design is in
 3. **Validation.** Every pack must pass `challenge.ValidateGenerated`, which
    you can run locally:
    - The pack echoes the request's seed and hotkey and has exactly the
-     requested number of cases.
+     requested number of cases: the competition's `cases_per_seed`, which
+     Platform can set anywhere from 8 to 80 and may raise between rounds.
    - Every accepted answer appears in the case's named evidence pairs.
    - No answer appears in the question.
    - The production v13 memory grader gives the gold answer full credit.
@@ -40,7 +41,9 @@ The full design is in
      question, every distractor, and a dump of the user's entire memory.
 
    One failed seed, a crash, a timeout, or nondeterministic output rejects the
-   upload. A generator that passes is qualified.
+   upload. A generator that passes is qualified. A qualified generator that
+   later fails its round seed is rejected too, including when it cannot fill a
+   raised `cases_per_seed`, so make sure yours fills 80 cases on every seed.
 4. **Rounds.** Qualified generators compete in rounds on the chain's epoch
    counter (one round per 4 subnet epochs). Each round:
    - opens on a seed nobody could know in advance. It comes from a secret
@@ -84,7 +87,7 @@ Copying does not pay:
 cd research/dittobench-datagen
 # Build and run exactly as the scorer does: three seeds, validation, determinism.
 go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
-  -hotkey "$MY_HOTKEY" -seeds 3 -cases 16
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 80
 # The scorer's actual sandbox: pinned images, no network, the same limits (needs Docker).
 go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
   -hotkey "$MY_HOTKEY" -sandbox docker -out-dir /tmp/packs
@@ -110,7 +113,7 @@ settings, and score your generator against them:
 ```bash
 cd services/dittobench-api
 go run ./cmd/challenge-scorer run -dir ../../miners/dittobench-generator-starter-kit \
-  -hotkey "$MY_HOTKEY" -seeds 2 -cases 16 \
+  -hotkey "$MY_HOTKEY" -seeds 2 -cases 80 \
   -agent a=http://127.0.0.1:7070,owner=alice,champion \
   -agent b=http://127.0.0.1:7071,owner=bob \
   -agent c=http://127.0.0.1:7072,owner=carol \
@@ -127,7 +130,7 @@ discriminate and which are trivial.
 | `main.go` | Reads the request, builds the pack from the family mix, and refuses to write an invalid one |
 | `families/builder.go` | Haystack builder: waves, pair IDs, timestamps, collision-free value picks, all seeded by the request |
 | `families/families.go` | The case families and the `Default` mix |
-| `families/pools.go` | Value pools (their sizes cap `MaxCases` at 32) |
+| `families/pools.go` | Value pools (sized so `MaxCases` reaches the contract's 80) |
 
 The four starter families are:
 
@@ -147,7 +150,8 @@ The four starter families are:
   range over a Go map into your output. Any of these breaks the determinism
   check.
 - **Work on every seed.** The scorer picks seeds you never saw. Test many seeds:
-  `TestEverySeedValidates` here checks 16 seeds at several pack sizes.
+  `TestEverySizeFills` here fills every pack size from 8 to 80 on 16 seeds,
+  and `TestEverySeedValidates` validates the sizes up to the cap.
 - **Ground everything.** In v1 every accepted answer form must appear in the
   evidence text. Hard cases come from resolution, joins, supersession,
   aggregation, and interference, not from answers the haystack never states.

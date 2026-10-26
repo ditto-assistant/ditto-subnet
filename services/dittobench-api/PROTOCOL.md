@@ -176,6 +176,14 @@ operator kill switch. A round request carries the exact round dataset bytes
 Its report goes to Platform's round endpoint and never enters the agent score
 ledger.
 
+Alongside it the scorer advertises `generator-round-max-cases-<n>`, the
+largest column (cases per pack) it runs: the pack contract's
+`challenge.MaxCases`, currently 80. The validator forwards it as
+`scorer_benchmarks.generator_round_max_cases`, and Platform leases a round only
+to a validator whose value covers the round's largest column. A scorer without
+the feature is treated as running 32-case columns, the bound earlier
+validators enforce on a round job.
+
 ### Private V13 control-plane transport (default off)
 
 `DITTOBENCH_ALLOW_PRIVATE_DATASETS=1` enables the `platform-private-v1`

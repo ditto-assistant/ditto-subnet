@@ -49,7 +49,7 @@ this case".
 
 ```bash
 go run ./cmd/challenge-scorer run -dir ../../miners/dittobench-generator-starter-kit \
-  -hotkey 5Grw... -seeds 2 -cases 16 -sandbox docker \
+  -hotkey 5Grw... -seeds 2 -cases 80 -sandbox docker \
   -agent mine=http://127.0.0.1:7070,owner=me \
   -agent baseline=http://127.0.0.1:7071,owner=ops,champion \
   -agent other=http://127.0.0.1:7072,owner=other \

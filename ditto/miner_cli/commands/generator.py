@@ -80,7 +80,16 @@ def add_subparser(
     rehearse.add_argument("dir", type=Path)
     rehearse.add_argument("--ss58", dest="ss58", help="Hotkey the packs bind to.")
     rehearse.add_argument("--seeds", type=int, default=3)
-    rehearse.add_argument("--cases", type=int, default=16)
+    rehearse.add_argument(
+        "--cases",
+        type=int,
+        default=80,
+        help=(
+            "Cases per pack. Platform's cases_per_seed can be raised to 80 "
+            "between rounds, and a generator that cannot fill it is rejected, "
+            "so rehearse at the cap (the default)."
+        ),
+    )
     rehearse.add_argument(
         "--sandbox",
         choices=("local", "docker"),

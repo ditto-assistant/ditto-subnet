@@ -23,6 +23,15 @@ import (
 // endpoint; the report never enters the agent score ledger.
 const generatorRoundMode = "generator-round-v1"
 
+// generatorRoundMaxCasesFeature advertises the largest round column (cases
+// per pack) this scorer runs: the pack contract's challenge.MaxCases. The
+// validator forwards it to Platform as generator_round_max_cases, and Platform
+// leases a round only to validators whose scorer can run its column size. A
+// scorer without the feature is assumed to run the legacy 32-case column.
+func generatorRoundMaxCasesFeature() string {
+	return fmt.Sprintf("generator-round-max-cases-%d", challenge.MaxCases)
+}
+
 func validateGeneratorRoundRequest(req submitRequest, enabled bool) error {
 	if !enabled || req.BenchVersion != protocol.BenchVersionV13 {
 		return errors.New("generator round mode unavailable")

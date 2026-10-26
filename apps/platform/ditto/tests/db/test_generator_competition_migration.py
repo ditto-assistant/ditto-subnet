@@ -219,3 +219,49 @@ async def test_round_downgrade_keeps_qualification_runs_unscored(
     finally:
         await _clear(engine)
         _alembic("upgrade", "head")
+
+
+async def test_generator_runs_accept_up_to_eighty_cases(engine: AsyncEngine) -> None:
+    """cases_per_seed may reach the pack contract's 80, and no further; the
+    downgrade to 8..64 refuses while a wider run exists."""
+    run_sql = (
+        "INSERT INTO generator_runs (run_id, submission_id, attempt, seeds, "
+        "probe_epoch, cases_per_seed, panel, settings_revision, status) VALUES "
+        "(gen_random_uuid(), CAST(:sub AS uuid), :attempt, '[]', :epoch, :cases, "
+        "'[]', 1, 'leased')"
+    )
+    try:
+        await _clear(engine)
+        submission = await _insert_submission(engine)
+        async with engine.begin() as connection:
+            epoch = await connection.scalar(
+                text(
+                    "INSERT INTO generator_probe_epochs (seed, reason, actor) "
+                    "VALUES (repeat('e', 64), 'initial', 'test') RETURNING epoch"
+                )
+            )
+        params = {"sub": submission, "epoch": epoch}
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(run_sql), {**params, "attempt": 1, "cases": 80}
+            )
+        for attempt, cases in ((2, 81), (3, 7)):
+            with pytest.raises(IntegrityError):
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        text(run_sql), {**params, "attempt": attempt, "cases": cases}
+                    )
+        with pytest.raises(subprocess.CalledProcessError) as refused:
+            _alembic("downgrade", "4f8c2d6a9e17")
+        assert "more than 64 cases" in refused.value.stderr
+        async with engine.begin() as connection:
+            await connection.execute(text("DELETE FROM generator_runs"))
+        _alembic("downgrade", "4f8c2d6a9e17")
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(run_sql), {**params, "attempt": 4, "cases": 65}
+                )
+    finally:
+        await _clear(engine)
+        _alembic("upgrade", "head")

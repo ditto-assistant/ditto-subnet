@@ -4253,7 +4253,7 @@ CREATE TABLE public.generator_runs (
     scorer_version text,
     leased_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
-    CONSTRAINT ck_generator_runs_generator_runs_cases_check CHECK (((cases_per_seed >= 8) AND (cases_per_seed <= 64))),
+    CONSTRAINT ck_generator_runs_generator_runs_cases_check CHECK (((cases_per_seed >= 8) AND (cases_per_seed <= 80))),
     CONSTRAINT ck_generator_runs_generator_runs_finished_check CHECK (((status = 'leased'::text) = (finished_at IS NULL))),
     CONSTRAINT ck_generator_runs_generator_runs_score_check CHECK (((status = 'scored'::text) = (score IS NOT NULL))),
     CONSTRAINT ck_generator_runs_generator_runs_status_check CHECK ((status = ANY (ARRAY['leased'::text, 'scored'::text, 'qualified'::text, 'invalid'::text, 'insufficient_panel'::text, 'copy'::text, 'abandoned'::text])))

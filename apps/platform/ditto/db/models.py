@@ -13472,7 +13472,7 @@ class GeneratorRun(Base):
             name="generator_runs_score_check",
         ),
         CheckConstraint(
-            "cases_per_seed BETWEEN 8 AND 64", name="generator_runs_cases_check"
+            "cases_per_seed BETWEEN 8 AND 80", name="generator_runs_cases_check"
         ),
         Index("generator_runs_submission_idx", "submission_id", text("leased_at DESC")),
         Index(

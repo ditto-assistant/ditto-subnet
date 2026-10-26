@@ -7859,6 +7859,19 @@
             "default": false,
             "type": "boolean"
           },
+          "generator_round_max_cases": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "generator_rounds": {
             "default": false,
             "type": "boolean"

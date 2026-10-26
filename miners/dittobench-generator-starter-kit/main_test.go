@@ -14,20 +14,63 @@ func request(seed int64, cases int) challenge.GenerateRequest {
 	return challenge.NewGenerateRequest(challenge.SeedFromInt64(seed), testHotkey, cases)
 }
 
+// Validation grades a full-memory dump per case, so its cost grows with the
+// square of the pack size (about 5 s for an 80-case pack on one core). The
+// sweep covers every small size on one seed and the sizes near each pool
+// boundary and the cap on several.
 func TestEverySeedValidates(t *testing.T) {
-	for seed := int64(1); seed <= 4; seed++ {
+	type sweep struct {
+		seeds []int64
+		sizes []int
+	}
+	var small []int
+	for cases := challenge.MinCases; cases <= 32; cases++ {
+		small = append(small, cases)
+	}
+	sweeps := []sweep{
+		{seeds: []int64{1}, sizes: small},
+		{seeds: []int64{1, 2, 3}, sizes: []int{33, 48, 64, 70, MaxCases - 1, MaxCases}},
+	}
+	for _, s := range sweeps {
+		for _, seed := range s.seeds {
+			for _, cases := range s.sizes {
+				req := request(seed, cases)
+				pack, err := Generate(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, _ := json.Marshal(pack)
+				if r := challenge.ValidateGenerated(raw, req); !r.Valid {
+					b, _ := json.MarshalIndent(r.Issues, "", "  ")
+					t.Fatalf("seed %d cases %d invalid:\n%s", seed, cases, b)
+				}
+			}
+		}
+	}
+}
+
+// Generation itself is cheap; every seed must fill every size without
+// exhausting a pool (Builder.Pick panics when one runs dry).
+func TestEverySizeFills(t *testing.T) {
+	for seed := int64(1); seed <= 16; seed++ {
 		for cases := challenge.MinCases; cases <= MaxCases; cases++ {
-			req := request(seed, cases)
-			pack, err := Generate(req)
+			pack, err := Generate(request(seed, cases))
 			if err != nil {
 				t.Fatal(err)
 			}
-			raw, _ := json.Marshal(pack)
-			if r := challenge.ValidateGenerated(raw, req); !r.Valid {
-				b, _ := json.MarshalIndent(r.Issues, "", "  ")
-				t.Fatalf("seed %d cases %d invalid:\n%s", seed, cases, b)
+			if len(pack.Cases) != cases {
+				t.Fatalf("seed %d: asked for %d cases, got %d", seed, cases, len(pack.Cases))
 			}
 		}
+	}
+}
+
+// The kit must fill every pack size the contract allows, so the operator can
+// raise cases_per_seed to the cap without the public default generator
+// dropping its columns.
+func TestMaxCasesMatchesTheContract(t *testing.T) {
+	if MaxCases != challenge.MaxCases {
+		t.Fatalf("starter kit fills %d cases; the contract allows %d", MaxCases, challenge.MaxCases)
 	}
 }
 

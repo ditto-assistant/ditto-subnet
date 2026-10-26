@@ -1152,9 +1152,46 @@ async def record_round_score(
 # A panel run must finish before its round closes: closing expires the round's
 # tickets and revokes their inference grants, so a run leased minutes before
 # the boundary loses inference mid-seed and faults every case. No lease is
-# issued once less than this remains.
+# issued once less than ``round_lease_cutoff`` remains.
+#
+# The cutoff scales with the round's size. Measured lease-to-result times: an
+# 80-case round (5 x 16) took about 3.3 minutes; round 25948 (4 valid columns x
+# 32 = 128 cases) took 4.3, 4.5, 4.8, 5.0 and 6.0 minutes for its five panel
+# runs. That fits ~80 s of fixed work (image fetch, sandbox start, a memory
+# seeding per column, dataset checks) plus ~1.5 s per case, with the slowest
+# run at ~2.8 s per case all-in. Budgeting 5 minutes plus 4 s per case keeps
+# at least a 1.6x margin over that slowest rate:
+#
+#   cases  cutoff   expected run (fit .. slowest rate)
+#   160    20 min   ~5-7.5 min     (5 x 32: the floor applies)
+#   350    28 min   ~10-16 min     (5 x 70)
+#   400    32 min   ~11-19 min     (5 x 80)
+#   640    48 min   ~17-30 min     (8 x 80, the cap)
+#
+# A one-epoch round (~72 min) opens with ~2.5 minutes of generation, so at 70
+# per column it still leases panel runs for ~40 minutes. At the 640-case cap
+# only ~20 minutes remain, so a round that large wants epochs_per_round >= 2.
 ROUND_LEASE_CUTOFF = timedelta(minutes=20)
+"""The cutoff floor: no round is leased with less than this left."""
+ROUND_LEASE_OVERHEAD = timedelta(minutes=5)
+ROUND_LEASE_SECONDS_PER_CASE = 4.0
 CHAIN_BLOCK_SECONDS = 12
+
+
+def round_lease_cutoff(case_count: int) -> timedelta:
+    """Time a round must have left before a panel run of ``case_count`` cases
+    is leased: the floor, or the run's budgeted length when that is longer."""
+    budget = ROUND_LEASE_OVERHEAD + timedelta(
+        seconds=ROUND_LEASE_SECONDS_PER_CASE * max(0, case_count)
+    )
+    return max(ROUND_LEASE_CUTOFF, budget)
+
+
+def round_column_cases(row: GeneratorRound) -> int:
+    """The largest column in a generated round: what a validator's scorer must
+    be able to run. Falls back to the frozen ``cases_per_column``."""
+    sizes = [len(refs) for refs in (row.column_cases or {}).values()]
+    return max(sizes, default=row.cases_per_column or 0)
 
 
 def round_seconds_left(row: GeneratorRound, head: EpochSchedule) -> float | None:

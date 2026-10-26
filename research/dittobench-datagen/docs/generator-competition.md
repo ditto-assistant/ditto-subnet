@@ -109,7 +109,7 @@ It writes one `GenerateRequest` to stdin:
 
 ```json
 {"contract": "dittobench-generator/v1", "seed": "<64 hex>",
- "miner_hotkey": "<ss58>", "cases": 16, "grading_bench_version": 13}
+ "miner_hotkey": "<ss58>", "cases": 32, "grading_bench_version": 13}
 ```
 
 and reads one pack from stdout (at most 4 MiB). Stderr is diagnostic only. The
@@ -132,8 +132,11 @@ A generator's output, defined in `challenge/pack.go`. A pack contains:
 - `generator`: name, version, and `seed`, which must echo the request's seed.
 - `memory_waves`: the haystack. These are ordinary `protocol.SeedRequest` waves
   (up to 4 users, 8 waves, 2,000 pairs).
-- `cases`: exactly the request's `cases` count of `protocol.MemoryCase` values.
-  Each case adds `user_id`, `run_after_wave`, and `evidence_pair_ids`.
+- `cases`: exactly the request's `cases` count of `protocol.MemoryCase` values,
+  8 to 80 (`challenge.MaxCases`). Each case adds `user_id`, `run_after_wave`,
+  and `evidence_pair_ids`. The request's count is Platform's `cases_per_seed`,
+  which operators can raise between rounds; a generator that cannot fill it
+  fails its next seed and is rejected, so a generator should fill 80.
 
 A case's identity across packs is its **fingerprint**: the SHA-256 of its
 normalized question, gold answer, and list items.
@@ -322,11 +325,57 @@ The shipped parameters are:
 | `min_solver_owners` | 2 |
 | `solve_threshold` | 0.5 |
 | `champion_bonus` | 0.5 |
-| `cases_per_seed` | 16 |
+| `cases_per_seed` | 16 (8..80; production runs 32) |
 | `epochs_per_round` | 4 |
 | `counted_columns` | 5 |
 | `challenger_columns` | 1 |
 | `privacy_window_rounds` | 6 |
+
+### Round size and timing
+
+`cases_per_seed` is the exact case count of every qualification seed and every
+round column, and the score's `target_cases`. Its cap is 80 so that about 70
+per column over 5 counted columns gives a round the ~350 memory cases a
+canonical bench v13 run has. The limits that bound a round at that size:
+
+| Limit | Value | Where |
+|---|---|---|
+| Cases per pack | 8..80 | `challenge.MaxCases`; Platform `MAX_CASES_PER_SEED`; Backroom schema |
+| Columns per round | 8 | `challenge.MaxRoundColumns`; Platform `MAX_COLUMNS` |
+| Cases per round job | 640 (8 x 80) | `MAX_ROUND_CASES` in the validator and Platform round models |
+| Round dataset | 32 MiB | `challenge.MaxRoundDatasetBytes`, the validator's private dataset fetch |
+| Pack | 4 MiB, 2,000 pairs | `challenge.MaxPackBytes`, `challenge.MaxPairs` |
+| Generation | 60 s, 1 GiB, 1 CPU per seed | `challenge.GenerateTimeoutSeconds`, `genrun.DefaultLimits` |
+| Round ticket | 90 minutes | Platform `ROUND_TICKET_TTL` |
+| Lease cutoff | 20 min, or 5 min + 4 s per round case | Platform `round_lease_cutoff` |
+
+A panel run is one sandboxed agent answering every column in turn. Measured
+lease-to-result times: about 3.3 minutes for 80 cases (5 x 16), and 4.3 to 6.0
+minutes for the five panel runs of a 128-case round (4 x 32). That fits about
+80 s of fixed work plus 1.5 s per case, with the slowest run at 2.8 s per case
+all-in. A 350-case round (5 x 70) therefore takes about 10 to 16 minutes per
+panel run. That is well inside the 90-minute ticket and the validator's
+15-minute no-progress guard, since progress advances after each column (~70
+cases, 2 to 3 minutes). Its lease cutoff is 5 min + 350 x 4 s ≈ 28 minutes. A
+one-epoch round (~72 minutes) spends ~2.5 minutes generating, so it still leases
+panel runs for about 40 minutes. Round 25948's packs were ~5.8 KB per case, so a
+350-case dataset is ~2 MB, far below the 32 MiB cap.
+
+Two gates protect a rollout of a larger size:
+
+- **Validators.** The scorer advertises `generator-round-max-cases-80` and the
+  validator forwards it as `generator_round_max_cases`. Platform leases a round
+  only to validators whose value covers its largest column. A validator from
+  before this change advertises nothing and is treated as 32, the column its
+  job model accepts, so it is offered no larger round instead of stranding the
+  panel agent on a job it refuses.
+- **Generators.** Raising `cases_per_seed` rejects, at its next round seed,
+  every miner generator that cannot fill the new size. Forks of the starter kit
+  from before this change stop at 32 (or less), and generators vendor the
+  `challenge` package, so one built against the old 64-case contract refuses a
+  larger request. Announce the change before applying it. The current starter
+  kit (version 3) fills 80, so the public default generator keeps its columns
+  once it is re-registered.
 
 Why each term is there:
 

@@ -4,7 +4,7 @@
 //
 // Usage:
 //
-//	challenge rehearse -dir ./my-generator -hotkey 5Grw... [-seeds 3] [-cases 16] \
+//	challenge rehearse -dir ./my-generator -hotkey 5Grw... [-seeds 3] [-cases 80] \
 //	    [-sandbox local|docker] [-out-dir packs/]       # exit 1 when invalid
 //	challenge pack -dir ./my-generator -out generator.tar.gz
 //	challenge inspect generator.tar.gz                   # archive identity and checks
@@ -111,7 +111,7 @@ func runRehearse(args []string) error {
 	hotkey := fs.String("hotkey", "", "SS58 hotkey the packs are bound to (required)")
 	seeds := fs.Int("seeds", 3, "seeds to run (1..8)")
 	firstSeed := fs.Int64("seed", 1, "first rehearsal seed; seeds are derived with challenge.SeedFromInt64")
-	cases := fs.Int("cases", 16, "cases per pack (the competition's cases_per_seed)")
+	cases := fs.Int("cases", challenge.MaxCases, "cases per pack: the competition's cases_per_seed, which Platform can set up to challenge.MaxCases (the default), so rehearse at the cap")
 	sandbox := fs.String("sandbox", "local", "local (host toolchain, no isolation) or docker (the scorer's sandbox)")
 	outDir := fs.String("out-dir", "", "write each seed's pack here as <seed>.json")
 	asJSON := fs.Bool("json", false, "print the evaluation as JSON")

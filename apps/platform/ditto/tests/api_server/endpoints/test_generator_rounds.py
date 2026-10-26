@@ -35,6 +35,7 @@ import ditto.db.queries.tickets as tickets_mod
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.generator import generator_settings_confirmation
 from ditto.api_models.generator_round_validator import (
+    MAX_ROUND_COLUMN_CASES,
     GeneratorRoundCaseResult,
     GeneratorRoundFailRequest,
     GeneratorRoundJobRequest,
@@ -59,6 +60,7 @@ from ditto.api_server.generator_rounds import (
     get_round,
     round_column_seed,
     round_commitment,
+    round_lease_cutoff,
     round_seconds_left,
     round_seed,
 )
@@ -324,7 +326,9 @@ def _patch_lane(monkeypatch: pytest.MonkeyPatch) -> None:
     import ditto.api_server.v13_scorer_cohort as cohort_mod
 
     monkeypatch.setattr(cohort_mod, "pinned_validator_allowed", _allowed)
-    monkeypatch.setattr(lane_mod, "_round_capable", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        lane_mod, "_round_column_capacity", lambda *_a, **_k: MAX_ROUND_COLUMN_CASES
+    )
     monkeypatch.setattr(lane_mod.v, "_assert_validator_compatible", _compatible)
     monkeypatch.setattr(lane_mod.v, "_idle_retest_slot", _slot)
     monkeypatch.setattr(lane_mod, "ensure_inference_grant", _grant)
@@ -998,6 +1002,74 @@ class TestRoundLifecycle:
                 )
             ).all()
             assert {a.status for a in attempts} == {"failed"}
+
+    async def test_a_seventy_case_column_round_leases_only_where_it_fits(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """At 70 cases per column a round is 350 cases: it is leased only to a
+        validator whose scorer runs 70-case columns, and only while the round
+        has the scaled cutoff (~28 minutes) left."""
+        chain = _install(app, session_maker)
+        await _apply_settings(client, validator_rounds_enabled=True, cases_per_seed=70)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 9)
+        await _advance(session_maker, 12)
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        assert work["cases_per_column"] == 70 and len(work["columns"]) == 5
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work),
+        )
+        assert resp.status_code == 200, resp.text
+        async with session_maker() as session:
+            row = await get_round(session, 3)
+            assert row is not None and row.open_block is not None
+        close_block = row.open_block + row.epochs_per_round * 360
+        last_epoch = row.round_index * row.epochs_per_round + row.epochs_per_round - 1
+
+        def _left(minutes: int) -> AsyncMock:
+            return AsyncMock(
+                return_value=_head(
+                    epoch=last_epoch,
+                    last_epoch_block=close_block - 360,
+                    block=close_block - minutes * 60 // 12,
+                )
+            )
+
+        async def _request() -> httpx.Response:
+            return await client.post(
+                "/api/v1/validator/generator-round-job",
+                headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
+                json=_signed_job(),
+            )
+
+        # A validator released with the 32-case column gets nothing.
+        chain.read_epoch_schedule = _left(60)
+        monkeypatch.setattr(lane_mod, "_round_column_capacity", lambda *_a, **_k: 32)
+        assert (await _request()).status_code == 204
+        monkeypatch.setattr(
+            lane_mod,
+            "_round_column_capacity",
+            lambda *_a, **_k: MAX_ROUND_COLUMN_CASES,
+        )
+        # 25 minutes clears the 20-minute floor but not this round's cutoff.
+        chain.read_epoch_schedule = _left(25)
+        assert (await _request()).status_code == 204
+        chain.read_epoch_schedule = _left(30)
+        job = await _request()
+        assert job.status_code == 200, job.text
+        assert job.json()["case_count"] == 350
 
     async def test_a_round_reached_after_its_first_epoch_is_void(
         self,
@@ -1719,9 +1791,36 @@ def test_round_capability_does_not_need_the_private_v13_transport() -> None:
     scorer = heartbeat.capabilities["scorer_benchmarks"]
     scorer["private_datasets"] = False
     scorer["generator_rounds"] = True
-    assert lane_mod._round_capable(heartbeat, now=now)
+    assert lane_mod._round_column_capacity(heartbeat, now=now) is not None
     scorer["generator_rounds"] = False
-    assert not lane_mod._round_capable(heartbeat, now=now)
+    assert lane_mod._round_column_capacity(heartbeat, now=now) is None
+
+
+def test_round_column_capacity_defaults_to_the_legacy_column() -> None:
+    """A scorer that does not advertise its column size runs only the legacy
+    32-case column: its validator refuses a job above the old 8 x 32 bound."""
+    from ditto.tests.db.queries.test_benchmark_rollout import _heartbeat
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    heartbeat = _heartbeat("5" + "C" * 47, now, versions=[7, 13], protocol_version=18)
+    assert heartbeat.capabilities is not None
+    heartbeat.capabilities["sandbox_memory_limit"] = True
+    scorer = heartbeat.capabilities["scorer_benchmarks"]
+    scorer["generator_rounds"] = True
+    assert lane_mod._round_column_capacity(heartbeat, now=now) == 32
+    scorer["generator_round_max_cases"] = 80
+    assert lane_mod._round_column_capacity(heartbeat, now=now) == 80
+
+
+def test_round_lease_cutoff_scales_with_the_round() -> None:
+    """Small rounds keep the 20-minute floor; a round of 70 cases per column
+    over five columns needs 5 min + 350 x 4 s, about 28 minutes."""
+    assert round_lease_cutoff(0) == ROUND_LEASE_CUTOFF
+    assert round_lease_cutoff(160) == ROUND_LEASE_CUTOFF  # 32 x 5
+    assert round_lease_cutoff(350) == timedelta(minutes=5, seconds=1400)
+    assert round_lease_cutoff(400) == timedelta(minutes=5, seconds=1600)
+    # The 8 x 80 cap still leaves a one-epoch round (~72 min) a lease window.
+    assert round_lease_cutoff(8 * 80) < timedelta(minutes=50)
 
 
 def _head(

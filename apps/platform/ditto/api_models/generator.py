@@ -32,7 +32,11 @@ GENERATOR_SETTINGS_SCOPE = "*"
 GENERATOR_CONTRACT_V1 = "dittobench-generator/v1"
 MAX_SOURCE_ARCHIVE_BYTES = 4 << 20
 MIN_PACK_CASES = 8
-MAX_CASES_PER_SEED = 32
+# The pack contract's challenge.MaxCases. 80 lets a round reach ~70 cases per
+# column, so five counted columns give about the 350 memory cases of a bench
+# v13 run. A validator runs a round only when its scorer advertises at least
+# the round's column size (see ``generator_round_validator``).
+MAX_CASES_PER_SEED = 80
 SOURCE_SIGNATURE_DOMAIN = "ditto-generator-v1"
 
 GeneratorMode = Literal["off", "shadow", "enforce"]

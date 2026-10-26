@@ -28,12 +28,15 @@ import bittensor
 import httpx
 import pytest
 from fastapi import FastAPI
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.generator import (
+    MAX_CASES_PER_SEED,
     PROBE_ROTATION_CONFIRMATION,
     REJECT_SUBMISSION_CONFIRMATION,
+    GeneratorCompetitionSettings,
     generator_settings_confirmation,
     source_signature_payload,
 )
@@ -282,6 +285,18 @@ def test_signature_payload_is_the_pinned_wire_format() -> None:
     )
     expected = f"ditto-generator-v1:{_MINER.ss58_address}:{'ab' * 32}"
     assert payload == f"{expected}:1700000000:{nonce}".encode()
+
+
+def test_cases_per_seed_reaches_the_pack_contract_cap() -> None:
+    """``cases_per_seed`` may be set to the Go pack contract's ``MaxCases``
+    (80, enough for ~350 cases over five counted columns) and no higher."""
+    assert MAX_CASES_PER_SEED == 80
+    settings = GeneratorCompetitionSettings.model_validate(_settings(cases_per_seed=80))
+    assert settings.score_params()["target_cases"] == 80
+    GeneratorCompetitionSettings.model_validate(_settings(cases_per_seed=70))
+    for bad in (7, 81):
+        with pytest.raises(ValidationError):
+            GeneratorCompetitionSettings.model_validate(_settings(cases_per_seed=bad))
 
 
 class TestSettings:

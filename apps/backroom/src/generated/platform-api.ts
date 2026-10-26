@@ -33309,6 +33309,8 @@ export interface components {
              * @default false
              */
             deterministic_v13_datasets: boolean;
+            /** Generator Round Max Cases */
+            generator_round_max_cases?: number | null;
             /**
              * Generator Rounds
              * @default false
