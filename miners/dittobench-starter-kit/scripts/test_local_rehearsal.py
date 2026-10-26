@@ -249,7 +249,7 @@ class LocalRehearsalTest(unittest.TestCase):
             row = {
                 "question_id": "q-1",
                 "autoeval_label": {
-                    "model": "deepseek-v4.1-flash",
+                    "model": "gpt-4o-2024-08-06",
                     "label": True,
                 },
             }
@@ -264,14 +264,14 @@ class LocalRehearsalTest(unittest.TestCase):
                 {
                     "question_id": "q-1",
                     "autoeval_label": {
-                        "model": "deepseek-v4.1-flash",
+                        "model": "gpt-4o-2024-08-06",
                         "label": True,
                     },
                 },
                 {
                     "question_id": "q-2_abs",
                     "autoeval_label": {
-                        "model": "deepseek-v4.1-flash",
+                        "model": "gpt-4o-2024-08-06",
                         "label": False,
                     },
                 },

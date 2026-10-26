@@ -544,7 +544,7 @@ def summarize_longmem(
         autoeval = row.get("autoeval_label")
         if (
             not isinstance(autoeval, dict)
-            or autoeval.get("model") != "deepseek-v4.1-flash"
+            or autoeval.get("model") != "gpt-4o-2024-08-06"
         ):
             raise RehearsalError(
                 "LongMemEval output is not from the pinned official judge"
@@ -564,8 +564,8 @@ def summarize_longmem(
         "source_revision": LONGMEM_SOURCE_REVISION,
         "reader_model": "openai/gpt-4.1",
         "reader_profile": "longmemeval-openrouter-gpt41-reader-v1",
-        "judge_model": "deepseek-v4.1-flash",
-        "judge_profile": "longmemeval-deepseek-v41-flash-openrouter-v1",
+        "judge_model": "gpt-4o-2024-08-06",
+        "judge_profile": "longmemeval-official-gpt4o-openrouter-v1",
         "n": len(labels),
         "correct": sum(labels),
         "accuracy": round(sum(labels) / len(labels), 6),

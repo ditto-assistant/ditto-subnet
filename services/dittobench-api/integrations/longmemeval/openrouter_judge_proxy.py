@@ -12,8 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 
-OFFICIAL_MODEL = "deepseek-v4.1-flash"
-OPENROUTER_MODEL = "deepseek/deepseek-v4.1-flash"
+OFFICIAL_MODEL = "gpt-4o-2024-08-06"
+OPENROUTER_MODEL = "openai/gpt-4o-2024-08-06"
 UPSTREAM = "https://openrouter.ai/api/v1/chat/completions"
 MAX_BODY_BYTES = 1024 * 1024
 
@@ -53,7 +53,7 @@ class Handler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             {
                 "status": "ok",
-                "profile_revision": "longmemeval-deepseek-v41-flash-openrouter-v1",
+                "profile_revision": "longmemeval-official-gpt4o-openrouter-v1",
                 "official_model": OFFICIAL_MODEL,
                 "upstream_model": OPENROUTER_MODEL,
             },
