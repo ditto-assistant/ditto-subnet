@@ -1028,7 +1028,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	const installationSHA = "62c5daa7326166ade81cea09eb4486bcb0e82f8e8552f2154a8219d16b1ae26c"
+	const installationSHA = "a030d095ba74543fd22e0ea905b787bdd857ea9ad2f077cb839d4196b8ad4436"
 	if digestBytes(installationRaw) != installationSHA {
 		t.Fatalf("installation digest = %s", digestBytes(installationRaw))
 	}
