@@ -473,7 +473,10 @@ async def advance_rounds(
     per = settings.epochs_per_round
     current = round_index_for(position.subnet_epoch_index, per)
 
-    # 1. Close every earlier round still in flight.
+    # 1. Close every earlier round still in flight. Every multi-round lock in
+    # this module is taken in ascending round_index order (see
+    # claim_commitment_publication), so a tick and a validator poll that lock
+    # overlapping rounds cannot deadlock.
     stale = list(
         await session.scalars(
             select(GeneratorRound)
@@ -481,6 +484,7 @@ async def advance_rounds(
                 GeneratorRound.round_index < current,
                 GeneratorRound.status.in_(("committed", "generating", "running")),
             )
+            .order_by(GeneratorRound.round_index)
             .with_for_update()
         )
     )
@@ -547,6 +551,7 @@ async def advance_rounds(
             GeneratorRound.status.in_(("scored", "void")),
             GeneratorRound.revealed_at.is_(None),
         )
+        .order_by(GeneratorRound.round_index)
         .with_for_update()
     )
     for revealed in reveal:
@@ -1663,6 +1668,7 @@ async def settle_commitment_publications(session: AsyncSession) -> list[str]:
                 GeneratorRound.commitment_publication == "pending",
                 GeneratorRound.status != "committed",
             )
+            .order_by(GeneratorRound.round_index)
             .with_for_update()
         )
     )
