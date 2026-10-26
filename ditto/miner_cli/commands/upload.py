@@ -1158,7 +1158,8 @@ def _retire_rejected_saved_payment(
     elif receipt_source == "explicit":
         # Several saved credits must be chosen by proof flags. A rejected one
         # named that way leaves the saved list too, or every later upload stops
-        # at "multiple unconsumed payments" again.
+        # at "multiple unconsumed payments" again. The hash flag accepts either
+        # hex case, so match it without regard to case.
         retired = [
             clear_pending_payment(
                 network=saved.network,
@@ -1170,7 +1171,9 @@ def _retire_rejected_saved_payment(
             for saved in load_pending_payments_for_hotkey(
                 network=network, hotkey=hotkey
             )
-            if saved.payment == payment
+            if saved.payment.block_hash.lower() == payment.block_hash.lower()
+            and saved.payment.block_number == payment.block_number
+            and saved.payment.extrinsic_index == payment.extrinsic_index
         ]
         cleared = all(retired)
     else:

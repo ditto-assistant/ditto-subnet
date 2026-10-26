@@ -1339,6 +1339,54 @@ class TestUploadFailurePaths:
         ]
         pay.assert_called_once()
 
+    def test_spent_proof_flags_match_its_saved_copy_in_any_hex_case(
+        self, good_tar: Path
+    ) -> None:
+        # The hash flag accepts either hex case, so a proof typed in capitals
+        # still names the saved credit and retires it.
+        spent = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=_payment_receipt(),
+        )
+        other = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="beta",
+            sha256="12" * 32,
+            payment=PaymentReceipt(
+                block_hash="0x" + "34" * 32, block_number=44, extrinsic_index=2
+            ),
+        )
+
+        rc, _client, clear, pay = self._replayed_run(
+            good_tar,
+            saved=(spent, other),
+            checks=[
+                PaymentReplayedError("payment proof already used"),
+                self._bound_check(),
+            ],
+            pay_again=True,
+            payment_block_hash="0x" + spent.payment.block_hash[2:].upper(),
+            payment_block_number=spent.payment.block_number,
+            payment_extrinsic_index=spent.payment.extrinsic_index,
+        )
+
+        assert rc == 0
+        assert clear.call_args_list[0] == call(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=spent.payment,
+        )
+        assert other.payment not in [
+            each.kwargs["payment"] for each in clear.call_args_list
+        ]
+        pay.assert_called_once()
+
     def test_pay_again_does_not_override_other_precheck_failures(
         self, good_tar: Path
     ) -> None:
