@@ -1805,7 +1805,7 @@ export function trackSharesConfirmation(shares: Record<string, number> | null | 
   const parts = TRACK_SHARE_TRACKS.filter((track) => (shares[track] ?? 0) > 0).map(
     (track) => `${track}=${shares[track]}`,
   )
-  return `APPLY TRACK SHARES ${parts.join(' ')}`
+  return ['APPLY TRACK SHARES', ...parts].join(' ')
 }
 
 const trackSharesMapSchema = z.record(
@@ -1839,6 +1839,7 @@ export const trackShareSettingsWriteSchema = z
       issue(`no shipped validator pays ${unpaid.join(', ')}; only memory and generator may hold a nonzero share`)
     }
     const total = Object.values(shares).reduce((sum, bps) => sum + bps, 0)
+    if (total <= 0) issue('an all-zero split pays no miner; stop emissions with the burn settings instead')
     if (total > TRACK_SHARE_BASIS_POINTS) issue(`track shares sum to ${total} bps, above 10000`)
   })
 

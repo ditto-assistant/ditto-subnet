@@ -898,6 +898,7 @@ def test_served_track_shares_accepts_only_a_map_validators_would_fold() -> None:
         {"memory": 9500, "generator": 1000},
         {"memory": True},
         {"memory": -1},
+        {"generator": 1000},
         [9000, 1000],
     ):
         assert served_track_shares({"track_shares_bps": bad}) == {}

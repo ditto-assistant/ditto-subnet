@@ -83,6 +83,7 @@ def test_confirmation_phrase_spells_out_the_split() -> None:
         "APPLY TRACK SHARES memory=9000 generator=1000"
     )
     assert track_shares_confirmation(None) == "CLEAR TRACK SHARES"
+    assert track_shares_confirmation({"memory": 0}) == "APPLY TRACK SHARES"
 
 
 @pytest.mark.parametrize(
@@ -97,6 +98,8 @@ def test_confirmation_phrase_spells_out_the_split() -> None:
         {"memory": 9000, "generator": -1},
         {"memory": 9000, "generator": 1000.0},
         {"memory": 9000, "generator": True},
+        {"memory": 0},
+        {"memory": 0, "generator": 0},
     ],
 )
 def test_incoherent_splits_are_refused(shares: dict[str, object]) -> None:

@@ -125,6 +125,8 @@ import {
   v9ContractRetestListSchema,
   publicLeaderboardSchema,
   validatorFleetObservabilityMemberSchema,
+  setTrackShareSettingsInputSchema,
+  trackSharesConfirmation,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -5416,5 +5418,32 @@ describe('targeted validator retry input', () => {
     expect(retryValidationInputSchema.safeParse({ ...input, targetValidatorHotkey: '   ' }).success).toBe(false)
     expect(retryValidationInputSchema.parse({ ...input, targetValidatorHotkey: '  validator-3  ' }).targetValidatorHotkey).toBe('validator-3')
     expect(retryValidationInputSchema.parse(input).targetValidatorHotkey).toBeUndefined()
+  })
+})
+
+describe('track share settings', () => {
+  it('spells out the split, with no trailing space and a clear phrase for null', () => {
+    expect(trackSharesConfirmation({ generator: 1000, memory: 9000 })).toBe(
+      'APPLY TRACK SHARES memory=9000 generator=1000',
+    )
+    expect(trackSharesConfirmation({ memory: 0 })).toBe('APPLY TRACK SHARES')
+    expect(trackSharesConfirmation(null)).toBe('CLEAR TRACK SHARES')
+  })
+
+  it('mirrors the Platform refusals', () => {
+    const base = { expectedRevision: 0, reason: 'activate generator emissions' }
+    const parse = (shares: Record<string, number> | null) =>
+      setTrackShareSettingsInputSchema.safeParse({
+        ...base,
+        settings: { track_shares_bps: shares },
+        confirmation: trackSharesConfirmation(shares),
+      }).success
+    expect(parse({ memory: 9000, generator: 1000 })).toBe(true)
+    expect(parse(null)).toBe(true)
+    expect(parse({ generator: 1000 })).toBe(false)
+    expect(parse({ memory: 9000, router: 1000 })).toBe(false)
+    expect(parse({ memory: 9500, generator: 1000 })).toBe(false)
+    expect(parse({ memory: 0 })).toBe(false)
+    expect(parse({ memory: 9000, bogus: 0 })).toBe(false)
   })
 })

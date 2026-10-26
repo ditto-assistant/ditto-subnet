@@ -237,6 +237,10 @@ def served_track_shares(served: dict[str, Any]) -> dict[str, int]:
         shares[track] = bps
     if sum(shares.values()) > 10_000:
         return {}
+    # A validator reads a missing memory share as the full pool, so any other
+    # positive share is over the cap and folds the compiled split instead.
+    if "memory" not in shares and any(bps > 0 for bps in shares.values()):
+        return {}
     return shares
 
 

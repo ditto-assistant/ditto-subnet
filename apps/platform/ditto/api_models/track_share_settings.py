@@ -68,7 +68,7 @@ def track_shares_confirmation(track_shares_bps: dict[str, int] | None) -> str:
         for track in KNOWN_TRACKS
         if track_shares_bps.get(track, 0) > 0
     ]
-    return "APPLY TRACK SHARES " + " ".join(parts)
+    return " ".join(["APPLY TRACK SHARES", *parts])
 
 
 class TrackShareSettings(BaseModel):
@@ -110,6 +110,11 @@ class TrackShareSettings(BaseModel):
                 f"Only {sorted(PAYABLE_TRACKS)} may hold a nonzero share"
             )
         total = sum(value.values())
+        if total <= 0:
+            raise ValueError(
+                "an all-zero split pays no miner; stop emissions with the burn "
+                "settings instead"
+            )
         if total > BASIS_POINT_SCALE:
             raise ValueError(
                 f"track shares sum to {total} bps, above {BASIS_POINT_SCALE}"
