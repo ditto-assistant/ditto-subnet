@@ -1,8 +1,8 @@
 """add append-only track share settings
 
 Revision ID: 4f8c2d6a9e17
-Revises: b7e4c2a9d1f3
-Create Date: 2026-10-25
+Revises: c3f8a1d5e7b9
+Create Date: 2026-10-26
 """
 
 from collections.abc import Sequence
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "4f8c2d6a9e17"
-down_revision: str | Sequence[str] | None = "b7e4c2a9d1f3"
+down_revision: str | Sequence[str] | None = "c3f8a1d5e7b9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

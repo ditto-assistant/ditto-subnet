@@ -6429,6 +6429,47 @@ CREATE TABLE public.submission_source_reviews (
 
 
 --
+-- Name: track_share_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.track_share_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__1ff4 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__3a5f CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__a93e CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__b1ff CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__d7e4 CHECK ((scope = '*'::text))
+);
+
+
+--
+-- Name: track_share_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.track_share_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: track_share_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.track_share_settings_revisions_revision_seq OWNED BY public.track_share_settings_revisions.revision;
+
+
+--
 -- Name: transcript_mirror_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7543,6 +7584,13 @@ ALTER TABLE ONLY public.submission_deposit_address_revisions ALTER COLUMN revisi
 --
 
 ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.submission_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: track_share_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.track_share_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -9780,6 +9828,14 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 
 --
+-- Name: track_share_settings_revisions pk_track_share_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions
+    ADD CONSTRAINT pk_track_share_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: transcript_mirror_settings_revisions pk_transcript_mirror_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10281,6 +10337,14 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 ALTER TABLE ONLY public.screening_verification_replays
     ADD CONSTRAINT svrp_request_id_key UNIQUE (request_id);
+
+
+--
+-- Name: track_share_settings_revisions track_share_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions
+    ADD CONSTRAINT track_share_settings_scope_parent_key UNIQUE (scope, parent_revision);
 
 
 --
@@ -12110,6 +12174,13 @@ CREATE UNIQUE INDEX svrr_replay_code_idx ON public.screening_verification_replay
 --
 
 CREATE UNIQUE INDEX svrso_replay_check_idx ON public.screening_verification_replay_signed_observations USING btree (replay_id, check_code);
+
+
+--
+-- Name: track_share_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX track_share_settings_scope_revision_idx ON public.track_share_settings_revisions USING btree (scope, revision);
 
 
 --
