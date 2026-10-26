@@ -21,10 +21,10 @@ import (
 const (
 	chatUpstreamURL      = "https://openrouter.ai/api/v1/chat/completions"
 	readerModel          = "openai/gpt-4.1"
-	officialJudgeModel   = "gpt-4o-2024-08-06"
-	openRouterJudgeModel = "openai/gpt-4o-2024-08-06"
+	officialJudgeModel   = "deepseek-v4.1-flash"
+	openRouterJudgeModel = "deepseek/deepseek-v4.1-flash"
 	readerRevision       = "longmemeval-openrouter-gpt41-reader-v1"
-	judgeRevision        = "longmemeval-official-gpt4o-openrouter-v1"
+	judgeRevision        = "longmemeval-deepseek-v41-flash-openrouter-v1"
 	maximumBody          = 4 << 20
 	maximumResponse      = 16 << 20
 	maximumAttempts      = 1
@@ -57,7 +57,12 @@ func profileFor(name string) (profile, error) {
 	case "judge":
 		return profile{
 			Name: "judge", Revision: judgeRevision, AcceptedModel: officialJudgeModel,
-			UpstreamModel: openRouterJudgeModel, ProviderOrder: []string{"openai"},
+			// Pinned to the same single provider as the production judge lane
+			// (internal/longmemeval/provider_runtime.go). AllowFallback stays
+			// false, so this must name a provider that actually serves the
+			// model: Together returned zero errors over a 346-probe pinned
+			// pilot, while Baidu 429'd on 43% of calls.
+			UpstreamModel: openRouterJudgeModel, ProviderOrder: []string{"together"},
 			AllowFallback: false, DefaultPort: 18436,
 			AllowedPaths: map[string]bool{"/v1/chat/completions": true},
 			HTTPReferer:  "https://github.com/xiaowu0162/LongMemEval",

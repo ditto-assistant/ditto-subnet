@@ -208,14 +208,38 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
             ProviderLanePolicy(
                 lane="judge",
                 provider="openrouter",
-                route_provider="azure",
-                receipt_provider="Azure",
-                profile_revision="longmemeval-official-gpt4o-azure-zdr-v2",
-                model="openai/gpt-4o-2024-08-06",
+                # Pinned to one provider with allow_fallbacks=false, so the
+                # provider is part of the frozen contract. Together returned
+                # zero truncations and zero errors over a 346-probe pinned
+                # pilot. Baidu is excluded: 43% HTTP 429 under the same pin,
+                # and one 429 ends a bundle when fallbacks are off.
+                route_provider="together",
+                receipt_provider="Together",
+                profile_revision="longmemeval-deepseek-v41-flash-together-v1",
+                model="deepseek/deepseek-v4.1-flash",
                 max_requests=48,
-                max_prompt_tokens=80_000,
-                max_completion_tokens=24_000,
-                max_total_tokens=104_000,
+                # The judge is a reasoning model, so these rails are sized from
+                # the measured completion distribution rather than the 10-token
+                # bound the upstream evaluator assumes. See
+                # officialJudgeMaxTokens in internal/longmemeval/provider_runtime.go.
+                #
+                # reserveProviderBudget reserves the FULL per-call cap while a
+                # call is in flight, and the executor judges serially, so the
+                # binding condition is (worst-case actual) + (one 8,192 cap).
+                # Worst observed completion was 2,907 tokens on a probe set
+                # enriched for exactly the cases that truncate: 48 x 2,907 +
+                # 8,192 = 147,728. 200,000 leaves ~35% margin.
+                #
+                # Prompt reservation uses len(body) in BYTES as a token proxy
+                # (~1,500 per judge request), so 48 requests need ~72,000 --
+                # the previous 80,000 rail had under 11% headroom. Raised to
+                # 160,000.
+                max_prompt_tokens=160_000,
+                max_completion_tokens=200_000,
+                max_total_tokens=400_000,
+                # Unchanged, and now far oversized: 48 calls bill about
+                # $0.0032 at deepseek-v4.1-flash pricing versus $0.0153 for
+                # gpt-4o. Left generous so the cap cannot falsely exhaust.
                 max_cost_usd_micros=4_000_000,
             ),
         ),

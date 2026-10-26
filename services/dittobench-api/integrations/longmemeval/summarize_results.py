@@ -53,7 +53,7 @@ AGENTS = [
         "image_id": "sha256:ac4e0eb2f4bf83165d64a83a4774dd93febd9ed8f14fc4f3b95dc8dc8178b31b",
     },
 ]
-JUDGE_MODEL = "gpt-4o-2024-08-06"
+JUDGE_MODEL = "deepseek-v4.1-flash"
 
 
 def sha256(path: Path) -> str:
@@ -182,8 +182,8 @@ def main() -> None:
         "public_harness_revision": "c3caa8e2c19f8a41a0610b9f7db774f97643dd9c",
         "judge": {
             "official_model": JUDGE_MODEL,
-            "openrouter_model": "openai/gpt-4o-2024-08-06",
-            "profile_revision": "longmemeval-official-gpt4o-openrouter-v1",
+            "openrouter_model": "deepseek/deepseek-v4.1-flash",
+            "profile_revision": "longmemeval-deepseek-v41-flash-openrouter-v1",
         },
         "agents": agents,
     }

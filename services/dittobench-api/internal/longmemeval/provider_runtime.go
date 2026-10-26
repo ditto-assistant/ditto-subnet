@@ -26,11 +26,41 @@ const (
 	maxProviderResponseBytes        = 16 << 20
 	readerRejectionProvenanceHeader = "X-Ditto-Reader-Rejection-Provenance"
 	readerRejectionPreReservation   = "pre-reservation"
-	officialJudgeMaxTokens          = 10
-	officialJudgeModel              = "openai/gpt-4o-2024-08-06"
-	officialJudgeRevision           = "longmemeval-official-gpt4o-azure-zdr-v2"
-	officialJudgeRouteProvider      = "azure"
-	officialJudgeReceiptProvider    = "Azure"
+	// officialJudgeMaxTokens is the per-call completion bound for the judge.
+	//
+	// LongMemEval rev 9e0b455f pins max_tokens=10, which is correct only for a
+	// non-reasoning judge: gpt-4o answers this prompt in 1-2 tokens. A reasoning
+	// judge spends the budget on reasoning tokens and returns content="" with
+	// finish_reason="length" -- upstream then scores 'yes' in "" as false, so
+	// every case silently becomes "no". This runtime refuses that response as
+	// malformed instead (see officialProviderJudge.Judge), which converts the
+	// silent bias into a loud bundle failure, so the bound has to be large
+	// enough that truncation does not happen.
+	//
+	// 8192 is set from measurement, not convention. Over the 76 probes that
+	// truncated deepseek-v4.1-flash at a 1024 bound, re-run at 8192 x3 reps,
+	// the observed completion maximum was 2907 tokens with zero truncations
+	// (docs/longmemeval-benchmark/judge-study/). 8192 is ~2.8x that worst case
+	// on a worst-case-enriched probe set. The bound is a cap, not a charge:
+	// mean observed completion is 62 tokens, so cost is unchanged. It does
+	// consume lane reservation headroom -- reserveProviderBudget reserves the
+	// full cap per in-flight call -- which is why the judge lane's
+	// max_completion_tokens in scripts/generate_confirmation_installation.py
+	// is sized for it.
+	officialJudgeMaxTokens = 8192
+	officialJudgeModel     = "deepseek/deepseek-v4.1-flash"
+	officialJudgeRevision  = "longmemeval-deepseek-v41-flash-together-v1"
+	// Routing is pinned to exactly one provider with allow_fallbacks=false, so
+	// the provider is part of the frozen contract. OpenRouter served this model
+	// from 23 distinct providers when fallbacks were left on; agreement with
+	// gpt-4o ranged 95.3%-100% across them, so an unpinned measurement does not
+	// describe any lane we actually run. Together was selected on operational
+	// grounds: over a 346-probe pinned pilot it returned zero truncations and
+	// zero errors, and its agreement sat within 0.6pp of every other working
+	// provider. Baidu is specifically excluded -- it returned HTTP 429 on 43%
+	// of pinned calls, and with allow_fallbacks=false a single 429 ends a bundle.
+	officialJudgeRouteProvider   = "together"
+	officialJudgeReceiptProvider = "Together"
 	platformConfirmationChatPath    = "/api/v1/inference/confirmation/chat/completions"
 )
 

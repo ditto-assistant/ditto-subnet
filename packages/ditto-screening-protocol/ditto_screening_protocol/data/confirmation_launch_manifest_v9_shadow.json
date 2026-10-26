@@ -5,7 +5,7 @@
     "minimum_base_score_micros": 950000,
     "mode": "score_threshold"
   },
-  "execution_profile_checksum": "8e5be01e3efd17dbf6cc21e79b9d53d82d842b1563d403b0318f2a272d6297af",
+  "execution_profile_checksum": "525c20daac264360b78431f46bb557fd831671f54c1e93ffe8af4db46cdb0a35",
   "execution_profile_revision": "v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8",
   "guarantees": {
     "changes_canonical_scores": false,
@@ -18,7 +18,7 @@
     "daily_bundles": 1,
     "daily_cost_microusd": 14000000,
     "requests_per_bundle": 21200,
-    "tokens_per_bundle": 36808000
+    "tokens_per_bundle": 37104000
   },
   "longmem_dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
   "mode": "shadow",

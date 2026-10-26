@@ -10,10 +10,13 @@ import (
 
 func TestProfilesRewriteOnlyFrozenModels(t *testing.T) {
 	tests := []struct {
-		name, inputModel, upstreamModel string
+		name, inputModel, upstreamModel, provider string
 	}{
-		{"reader", readerModel, readerModel},
-		{"judge", officialJudgeModel, openRouterJudgeModel},
+		{"reader", readerModel, readerModel, "openai"},
+		// The judge pins Together, not OpenAI: the frozen judge is
+		// deepseek-v4.1-flash and allow_fallbacks is false, so naming a
+		// provider that does not serve the model would fail every call.
+		{"judge", officialJudgeModel, openRouterJudgeModel, "together"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -33,8 +36,8 @@ func TestProfilesRewriteOnlyFrozenModels(t *testing.T) {
 			if provider["allow_fallbacks"] != false || provider["data_collection"] != "deny" {
 				t.Fatalf("provider=%#v", provider)
 			}
-			if only, _ := provider["only"].([]any); len(only) != 1 || only[0] != "openai" {
-				t.Fatalf("provider order=%#v", provider["only"])
+			if only, _ := provider["only"].([]any); len(only) != 1 || only[0] != test.provider {
+				t.Fatalf("provider order=%#v want=%q", provider["only"], test.provider)
 			}
 			if _, err := rewriteRequest(selected, []byte(`{"model":"other","messages":[]}`)); err == nil {
 				t.Fatal("unreviewed model accepted")

@@ -14,7 +14,7 @@
     "ablation_projection_key_sha256": "8a00a865d6d36f3e92f39a138ac6eabc627d4d9915440e589805a3d2677b668f",
     "ablation_selection_key_sha256": "2744541342deb53d3504556838313ba27d3bfca625db939054043f5e495b3831",
     "ablation_threshold_manifest_sha256": "fa0ad000b263d3660ad60d6a509573b3154fad8490a16320f34d99c72eaa0c21",
-    "checksum": "8e5be01e3efd17dbf6cc21e79b9d53d82d842b1563d403b0318f2a272d6297af",
+    "checksum": "525c20daac264360b78431f46bb557fd831671f54c1e93ffe8af4db46cdb0a35",
     "composite": {
       "base_weight_bps": 7000,
       "checksum": "1ce77c31a1b6f146c4eb79c2422f066441c0eaff6cf3ca67fa13989a87c8101f",
@@ -60,7 +60,7 @@
     "longmem_cases_per_capability": 8,
     "longmem_dataset_revision": "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc",
     "longmem_dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
-    "longmem_profile_checksum": "e4dfae840f57a2e89e212748cda5130f97c644e80b8830a3a9a7b8daec465255",
+    "longmem_profile_checksum": "1d1b61688cb830ee3f6118d8445155f41fbedd14a6ad69903c9de72cc1175f04",
     "longmem_profile_revision": "longmemeval-s-v9-shadow-48-zdr-v4",
     "longmem_projection_key_sha256": "8b228aa55a4d37004649554158309f3526b8a0c4454d96cd49ed1b5cc2fec09b",
     "longmem_seed_batch_pairs": 32,
@@ -69,16 +69,16 @@
     "provider_lanes": [
       {
         "lane": "judge",
-        "max_completion_tokens": 24000,
+        "max_completion_tokens": 200000,
         "max_cost_usd_micros": 4000000,
-        "max_prompt_tokens": 80000,
+        "max_prompt_tokens": 160000,
         "max_requests": 48,
-        "max_total_tokens": 104000,
-        "model": "openai/gpt-4o-2024-08-06",
-        "profile_revision": "longmemeval-official-gpt4o-azure-zdr-v2",
+        "max_total_tokens": 400000,
+        "model": "deepseek/deepseek-v4.1-flash",
+        "profile_revision": "longmemeval-deepseek-v41-flash-together-v1",
         "provider": "openrouter",
-        "receipt_provider": "Azure",
-        "route_provider": "azure"
+        "receipt_provider": "Together",
+        "route_provider": "together"
       },
       {
         "lane": "reader",
@@ -98,7 +98,7 @@
     "schema_version": 1
   },
   "launch_manifest_path": "/opt/ditto/confirmation/confirmation_launch_manifest_v9_shadow.json",
-  "launch_manifest_sha256": "709a3cc42476c9c2a4e7fc439658bd91380858cf08fae16b01c8fdbeddc5d21d",
+  "launch_manifest_sha256": "a1caadb48d3b50ae7e76d14d72d4bf31a448345c6f3171e409e8405ea5f60e56",
   "longmem_dataset_path": "/opt/ditto/confirmation/longmemeval_s_cleaned.json",
   "sandbox_health_timeout_ms": 180000,
   "schema_version": 1

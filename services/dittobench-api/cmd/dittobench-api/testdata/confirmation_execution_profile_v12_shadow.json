@@ -75,11 +75,11 @@
       "max_prompt_tokens": 80000,
       "max_requests": 48,
       "max_total_tokens": 104000,
-      "model": "openai/gpt-4o-2024-08-06",
-      "profile_revision": "longmemeval-official-gpt4o-azure-zdr-v2",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "profile_revision": "longmemeval-deepseek-v41-flash-together-v1",
       "provider": "openrouter",
-      "receipt_provider": "Azure",
-      "route_provider": "azure"
+      "receipt_provider": "Together",
+      "route_provider": "together"
     },
     {
       "lane": "reader",
